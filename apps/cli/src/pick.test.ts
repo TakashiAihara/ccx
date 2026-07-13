@@ -10,14 +10,14 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Readable, Writable } from "node:stream";
 import { join } from "node:path";
 
 import type { RepodirInfo } from "@ccx/core";
 
-import { candidateLine, pickByNumber, pickRepodir, resolveSelection } from "./pick.ts";
+import { candidateLine, openTty, pickByNumber, pickRepodir, resolveSelection } from "./pick.ts";
 
 let bin: string;
 let emptyBin: string;
@@ -166,4 +166,60 @@ test("番号選択で範囲外を打ったら repodir を返さずエラー", as
 test("番号選択で空入力なら null (選ばなかった)", async () => {
   const { tty } = fakeTty("");
   expect(await pickByNumber([info("01AAA", "a"), info("01BBB", "b")], tty)).toBeNull();
+});
+
+test("制御端末が無ければ openTty は意図したエラーにする (生の ENXIO を漏らさない)", () => {
+  const noTty = () => {
+    throw Object.assign(new Error("ENXIO: no such device or address, open '/dev/tty'"), {
+      code: "ENXIO",
+    });
+  };
+
+  expect(() => openTty(noTty)).toThrow("no fzf and no tty: cannot pick a repodir interactively");
+});
+
+/**
+ * fzf も端末も無い状態で本物の CLI を起動する。
+ *
+ * openTty の失敗は「stream を作った後に 'error' イベントで飛ぶ」形だと未処理例外になり、生の
+ * ENXIO スタックが吐かれる。それを掴めるのはプロセス境界の外だけなので、ここだけは実プロセスを
+ * 立てる。CI / cron / `ssh host cmd` / `docker exec` が踏む経路そのもの。
+ */
+test("端末も fzf も無い環境で、未処理例外ではなく意図したエラーで終わる", async () => {
+  // setsid / bun は絶対パスで起動する。PATH を空にするのは fzf を消すためであって、
+  // ランナー自身を消すためではない。
+  const setsid = Bun.which("setsid");
+  const bun = Bun.which("bun") ?? process.execPath;
+  if (!setsid) return; // 制御端末を外せない環境ではこの検証はできない
+
+  const root = await mkdtemp(join(tmpdir(), "ccx-notty-root-"));
+  // picker まで到達させるには候補が 2 つ要る (1 つなら picker を出さずに返してしまう)
+  for (const id of ["01KXDT8ZV5E008", "01KXDT8ZV5E009"]) {
+    const rd = join(root, "github.com", "o", "r", id);
+    await mkdir(rd, { recursive: true });
+    await Bun.spawn(["git", "init", "--quiet", rd], { stdout: "ignore", stderr: "ignore" }).exited;
+  }
+
+  const cli = join(import.meta.dir, "index.ts");
+  const proc = Bun.spawn([setsid, bun, "run", cli, "repodir", "cd"], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      CCX_ROOT: root,
+      PATH: emptyBin, // fzf の無い PATH (ランナーは絶対パスで起動している)
+    },
+  });
+
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  expect(err).toContain("no fzf and no tty");
+  expect(err).not.toContain("ENXIO"); // 生の syscall エラーを人間に見せない
+  expect(out.trim()).toBe(""); // path を出さない = cd が起きない
+  expect(code).not.toBe(0);
 });

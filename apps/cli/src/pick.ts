@@ -16,7 +16,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, openSync } from "node:fs";
 
 import type { RepodirInfo } from "@ccx/core";
 
@@ -115,12 +115,30 @@ export type Tty = {
   output: NodeJS.WritableStream;
 };
 
-function openTty(): Tty {
+/**
+ * /dev/tty を開く。制御端末が無ければ、意図したエラーにして投げる。
+ *
+ * `createReadStream("/dev/tty")` では駄目だった。あれは open を遅延させるので、端末が無くても
+ * 同期的には何も起きず、ENXIO は後から 'error' イベントで飛んでくる。try/catch は素通りし、
+ * 未処理の例外として生スタックが吐かれる。fzf も端末も無い環境 (CI / cron / `ssh host cmd` /
+ * `docker exec` — つまり並列自動実行というこのツールの本来の用途) はまさにそこを踏む。
+ *
+ * openSync は同期で throw するので、失敗を掴める場所が open の呼び出し点に戻る。
+ */
+export function openTty(open: (path: string, flags: string) => number = openSync): Tty {
+  let inFd: number;
+  let outFd: number;
   try {
-    return { input: createReadStream("/dev/tty"), output: createWriteStream("/dev/tty") };
+    inFd = open("/dev/tty", "r");
+    outFd = open("/dev/tty", "w");
   } catch {
     throw new Error("no fzf and no tty: cannot pick a repodir interactively");
   }
+
+  return {
+    input: createReadStream("", { fd: inFd }),
+    output: createWriteStream("", { fd: outFd }),
+  };
 }
 
 /** fzf が無い環境用。番号で選ばせる。 */
