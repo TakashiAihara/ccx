@@ -350,6 +350,23 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     );
   });
 
+  test("ignored が多いときは総数と『他 N 件』を出し、全件は ignored に載せる", async () => {
+    // 人間が --allow-ignored に何を書くかを決めるには、blocker 文言の 3 件では足りない。
+    const dir = await clone("many-ignored");
+    await Bun.write(join(dir, ".gitignore"), "a\nb\nc\nd\ne\n");
+    await git(["add", ".gitignore"], dir);
+    await git(["commit", "--quiet", "-m", "ignore"], dir);
+    await git(["push", "--quiet", "origin", "HEAD:refs/heads/many-ignored"], dir);
+    for (const n of ["a", "b", "c", "d", "e"]) await Bun.write(join(dir, n), "x\n");
+
+    const info = await scanOne(dir);
+
+    expect(info.ignored).toEqual(["a", "b", "c", "d", "e"]);
+    expect(blockers(info)).toContain(
+      "5 ignored path(s) that git cannot restore (a, b, c, and 2 more)",
+    );
+  });
+
   test("repodir は ignored を持っていても止まらない (ccx が作った使い捨て)", async () => {
     const r = await createRepodir(cfg, spec(), {}, "0.1.0");
     await Bun.write(join(r.path, ".gitignore"), "node_modules\n");

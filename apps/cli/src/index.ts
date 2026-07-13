@@ -250,6 +250,25 @@ repodir
     }
 
     if (!o.yes) {
+      // ignored で止まったものは、何を捨ててよいか人間が名指しすれば回収できる。
+      // その材料 (どの path が何件を止めているか) を出す。判断は人間が下す。
+      const blocking = new Map<string, number>();
+      for (const c of p.keep) {
+        for (const path of c.info.ignored ?? []) {
+          blocking.set(path, (blocking.get(path) ?? 0) + 1);
+        }
+      }
+
+      if (blocking.size > 0) {
+        console.error("\nignored paths git cannot restore, and how many dirs each one holds back:");
+        for (const [path, n] of [...blocking].sort((a, b) => b[1] - a[1])) {
+          console.error(`  ${String(n).padStart(4)}  ${path}`);
+        }
+        console.error(
+          "Name the ones you are willing to lose with --allow-ignored to reclaim those dirs.",
+        );
+      }
+
       console.error(
         `\n${p.remove.length} repodir(s) would be removed, ${p.keep.length} kept. ` +
           "Nothing was deleted — pass --yes to do it.",

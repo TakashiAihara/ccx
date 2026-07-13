@@ -39,6 +39,12 @@ export type ScannedDir = RepodirInfo & {
   foreign?: boolean;
   /** foreign dir の走査でのみ検出できる追加の blocker */
   extraBlockers?: string[];
+  /**
+   * git が復元できない ignored path のうち、まだ名指しで許されていないもの (全件)。
+   * blocker の文言は先頭 3 件しか出さない。人間が --allow-ignored に何を書くかを
+   * 決めるには全件が要るので、ここに持たせて --json に出す。
+   */
+  ignored?: string[];
 };
 
 /**
@@ -304,11 +310,11 @@ async function readForeign(
   defaultHost: string,
   allowIgnored: string[],
 ): Promise<ScannedDir> {
-  const [g, s, spec, extra, created, meta, state] = await Promise.all([
+  const [g, s, spec, risks, created, meta, state] = await Promise.all([
     foreignGitState(path),
     foreignSessionState(path, idleMs),
     foreignSpec(path, defaultHost),
-    foreignExtraBlockers(path, allowIgnored),
+    foreignRisks(path, allowIgnored),
     createdAt(path),
     readMeta(path).catch((): RepodirMeta | null => null),
     readState(path).catch((): RepodirState | null => null),
@@ -326,7 +332,8 @@ async function readForeign(
     git: g,
     session: s,
     foreign: true,
-    extraBlockers: extra,
+    extraBlockers: risks.blockers,
+    ignored: risks.ignored,
   };
 }
 
@@ -401,7 +408,10 @@ async function foreignSessionState(path: string, idleMs: number): Promise<Sessio
  * mirror から復元できるものしか無い。foreign dir は人間と他のツールが何年もかけて
  * 育てたもので、git が知らない実体を抱えている。
  */
-async function foreignExtraBlockers(path: string, allowIgnored: string[]): Promise<string[]> {
+async function foreignRisks(
+  path: string,
+  allowIgnored: string[],
+): Promise<{ blockers: string[]; ignored: string[] }> {
   const out: string[] = [];
 
   try {
@@ -413,15 +423,17 @@ async function foreignExtraBlockers(path: string, allowIgnored: string[]): Promi
     // worktree を列挙できない = git が読めない。unpushed 側が null になって止まる。
   }
 
-  const ignored = await ignoredPaths(path);
-  const kept = ignored.filter((p) => !allowIgnored.includes(p));
-  if (kept.length > 0) {
-    const shown = kept.slice(0, 3).join(", ");
-    const rest = kept.length > 3 ? `, +${kept.length - 3} more` : "";
-    out.push(`${kept.length} ignored path(s) that git cannot restore (${shown}${rest})`);
-  }
+  const all = await ignoredPaths(path);
+  const kept = all.filter((p) => !allowIgnored.includes(p));
+  if (kept.length > 0) out.push(`${kept.length} ignored path(s) that git cannot restore (${summarise(kept)})`);
 
-  return out;
+  return { blockers: out, ignored: kept };
+}
+
+/** 先頭 3 件 + 残りの件数。総数は呼ぶ側が文言の頭に出す。全件は ScannedDir.ignored。 */
+function summarise(paths: string[]): string {
+  const shown = paths.slice(0, 3).join(", ");
+  return paths.length > 3 ? `${shown}, and ${paths.length - 3} more` : shown;
 }
 
 /**
