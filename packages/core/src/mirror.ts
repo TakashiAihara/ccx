@@ -6,8 +6,9 @@
  * .git の pack が hardlink 共有され、ディスク消費が実質ゼロになる。
  */
 
-import { join } from "node:path";
-import { stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.ts";
 import { git } from "./git.ts";
@@ -85,19 +86,29 @@ export type EnsureMirrorResult = {
 export async function ensureMirror(
   cfg: Config,
   spec: RepoSpec,
-  opts: { force?: boolean; protocol?: Protocol } = {},
+  opts: { force?: boolean; protocol?: Protocol; warn?: (message: string) => void } = {},
 ): Promise<EnsureMirrorResult> {
   const path = mirrorPath(cfg, spec);
   const url = cloneUrl(spec, opts.protocol ?? cfg.protocol);
+  const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
 
   if (!(await exists(path))) {
-    await git(["clone", "--mirror", "--quiet", url, path]);
-    return { path, created: true, updated: false };
+    const created = await cloneMirror(url, path);
+    return { path, created, updated: false };
   }
 
   // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
   // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
-  await syncOrigin(path, url);
+  //
+  // ただし origin の付け替えは fetch の下準備でしかない。並行実行で .git/config のロックを
+  // 取り損ねたときに、それだけで repodir の生成そのものを諦めるのは割に合わない。失敗しても
+  // 警告に留めて進み、fetch は (古い protocol の origin で) 続行する。
+  try {
+    await syncOrigin(path, url);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
+  }
 
   const fetched = await lastFetchedAt(path);
   const stale = opts.force || !fetched || Date.now() - fetched.getTime() > cfg.mirrorMaxAgeMs;
@@ -105,4 +116,32 @@ export async function ensureMirror(
 
   await git(["remote", "update", "--prune"], path);
   return { path, created: false, updated: true };
+}
+
+/**
+ * mirror を作る。作れたら true、他のプロセスに先を越されていたら false。
+ *
+ * 同じ repo に対して rd new を同時に 2 本走らせるのは、並列エージェントを立てるという
+ * この道具の中心的な使い方そのもの。path へ直接 clone すると、負けた側が
+ * "destination path already exists" で落ちる (5 並列で 2 本が exit 1 になることを実測)。
+ *
+ * lock file は置かない (プロセスが死ぬと残り、次回以降を巻き添えにする)。代わりに temp へ
+ * clone してから rename で差し込む。同一ファイルシステム上の rename は atomic なので、
+ * 勝者がひとつだけ残る。負けた側は自分の temp を捨てて、勝者の mirror をそのまま使う。
+ * 二重に clone する分の無駄はあるが、これは「同じ repo の mirror がまだ無い」初回だけ。
+ */
+async function cloneMirror(url: string, path: string): Promise<boolean> {
+  const tmp = `${path}.tmp-${randomUUID()}`;
+  await mkdir(dirname(path), { recursive: true });
+  await git(["clone", "--mirror", "--quiet", url, tmp]);
+
+  try {
+    await rename(tmp, path);
+    return true;
+  } catch (e) {
+    await rm(tmp, { recursive: true, force: true });
+    // 先を越されただけなら、相手の mirror を使えばよい。それ以外は本物の失敗なので投げる。
+    if (await exists(path)) return false;
+    throw e;
+  }
 }

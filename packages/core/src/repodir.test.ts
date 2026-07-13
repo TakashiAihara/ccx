@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -250,6 +250,48 @@ describe("protocol", () => {
     const r = await createRepodir(c, spec(), { protocol: "ssh" }, "0.1.0");
 
     expect(await git(["config", "--get", "remote.origin.url"], r.path)).toBe(SSH_REMOTE);
+  });
+
+  test("mirror がまだ無い repo に同時に repodir を作っても、誰も落ちない", async () => {
+    // 同じ repo に並列でエージェントを立てるのは、この道具の中心的な使い方そのもの。
+    // mirror path へ直接 clone していた頃は、負けた側が destination path already exists で
+    // 落ちていた (5 並列で 2 本 exit 1 を実測)。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-race"), mirrorRoot: join(tmp, "mirror-race") };
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => createRepodir(c, spec(), {}, "0.1.0")),
+    );
+
+    // mirror を作れたのはちょうど 1 人。残りは勝者の mirror から生える
+    expect(results.filter((r) => r.mirror.created)).toHaveLength(1);
+    expect(new Set(results.map((r) => r.path)).size).toBe(5);
+    for (const r of results) {
+      expect(await Bun.file(join(r.path, "README.md")).exists()).toBe(true);
+    }
+
+    // 敗者の temp が残っていない
+    const leftovers = [
+      ...new Bun.Glob("*.tmp-*").scanSync({ cwd: join(tmp, "mirror-race", "github.com", "test-owner"), onlyFiles: false }),
+    ];
+    expect(leftovers).toBeEmpty();
+  });
+
+  test("origin の付け替えに失敗しても、repodir の生成そのものは諦めない", async () => {
+    // 並行実行で .git/config のロックを取り損ねる状況を、config を書けなくして再現する。
+    // origin の付け替えは fetch の下準備でしかなく、それだけで生成を諦めるのは割に合わない。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-lock"), mirrorRoot: join(tmp, "mirror-lock") };
+    await createRepodir(c, spec(), {}, "0.1.0");
+
+    const mirror = mirrorPath(c, spec());
+    await chmod(join(mirror, "config"), 0o444);
+
+    try {
+      // protocol を変えて set-url を必ず走らせる。書けないので失敗するが、落ちてはいけない
+      const r = await createRepodir({ ...c, protocol: "ssh" }, spec(), {}, "0.1.0");
+      expect(await Bun.file(join(r.path, "README.md")).exists()).toBe(true);
+    } finally {
+      await chmod(join(mirror, "config"), 0o644);
+    }
   });
 
   test("origin を失った mirror でも、落ちずに origin を作り直して使える", async () => {
