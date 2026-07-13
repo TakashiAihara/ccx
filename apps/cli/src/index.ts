@@ -3,9 +3,14 @@
 import { Command } from "commander";
 
 import {
+  blockers,
   createRepodir,
   loadConfig,
+  parseDuration,
   parseRepoSpec,
+  plan,
+  reclaim,
+  scanRepodirs,
   specToSlug,
   type Goal,
   type PrIntent,
@@ -91,6 +96,141 @@ repodir
     console.error(notes.join("\n"));
     console.log(r.path);
   });
+
+repodir
+  .command("ls")
+  .description("List repodirs and what each one is for")
+  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option("--json", "print as JSON")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const infos = await scanRepodirs(cfg, { filter: o.repo });
+
+    if (o.json) {
+      console.log(JSON.stringify(infos, null, 2));
+      return;
+    }
+
+    if (infos.length === 0) {
+      console.error("no repodirs");
+      return;
+    }
+
+    const rows = infos.map((i) => ({
+      repo: `${i.spec.owner}/${i.spec.repo}`,
+      branch: i.git.branch ?? "-",
+      flags: [
+        i.session.active ? "session" : "",
+        i.git.dirty ? "dirty" : "",
+        i.git.unpushed ? `+${i.git.unpushed}` : "",
+        i.git.stashes ? `stash:${i.git.stashes}` : "",
+        i.state?.done ? "done" : "",
+      ].filter(Boolean).join(","),
+      age: humanAge(i.created),
+      task: i.meta?.initialTask ?? (i.metaError ? `!! ${i.metaError}` : "-"),
+    }));
+
+    const w = (k: keyof (typeof rows)[number]) =>
+      Math.max(...rows.map((r) => r[k].length));
+    const pad = (s: string, n: number) => s.padEnd(n);
+
+    for (const r of rows) {
+      console.log(
+        [
+          pad(r.repo, w("repo")),
+          pad(r.branch, w("branch")),
+          pad(r.flags, w("flags")),
+          pad(r.age, w("age")),
+          r.task,
+        ].join("  ").trimEnd(),
+      );
+    }
+  });
+
+repodir
+  .command("gc")
+  .description("Reclaim repodirs that hold no work. Dry run unless --yes is given.")
+  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option("--finished-only", "only reclaim repodirs that are marked done, or whose goal is closed")
+  .option("--check-goal", "ask gh whether the linked issue is closed / the PR is merged")
+  .option("--min-age <duration>", "keep repodirs younger than this (e.g. 1h, 7d... as ms/s/m/h)")
+  .option("-y, --yes", "actually delete. Without this, nothing is removed.")
+  .option("--json", "print as JSON")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const infos = await scanRepodirs(cfg, { filter: o.repo });
+
+    const p = await plan(infos, {
+      finishedOnly: o.finishedOnly,
+      checkGoal: o.checkGoal,
+      minAgeMs: o.minAge ? parseDuration(o.minAge) : undefined,
+    });
+
+    if (o.json && !o.yes) {
+      console.log(JSON.stringify(p, null, 2));
+      return;
+    }
+
+    for (const c of p.keep) {
+      console.error(`keep    ${c.info.dirId}  ${c.blockers.join("; ")}`);
+    }
+    for (const c of p.remove) {
+      const why = c.finished ? ` (${c.finished})` : "";
+      console.error(`remove  ${c.info.dirId}  ${c.info.spec.owner}/${c.info.spec.repo}${why}`);
+    }
+
+    if (!o.yes) {
+      console.error(
+        `\n${p.remove.length} repodir(s) would be removed, ${p.keep.length} kept. ` +
+          "Nothing was deleted — pass --yes to do it.",
+      );
+      return;
+    }
+
+    const removed = await reclaim(p.remove);
+    console.error(`\nremoved ${removed.length} repodir(s)`);
+    for (const path of removed) console.log(path);
+  });
+
+repodir
+  .command("rm")
+  .description("Remove one repodir, refusing to destroy work")
+  .argument("<selector>", "a dir-id (or a unique prefix of one)")
+  .option("-f, --force", "remove even if it holds uncommitted or unpushed work")
+  .action(async (selector: string, o) => {
+    const cfg = await loadConfig();
+    const infos = await scanRepodirs(cfg);
+
+    const hits = infos.filter((i) => i.dirId.startsWith(selector.toUpperCase()));
+    if (hits.length === 0) throw new Error(`no repodir matches "${selector}"`);
+    if (hits.length > 1) {
+      throw new Error(
+        `"${selector}" matches ${hits.length} repodirs: ${hits.map((h) => h.dirId).join(", ")}`,
+      );
+    }
+
+    const info = hits[0]!;
+    const b = blockers(info);
+
+    if (b.length > 0 && !o.force) {
+      throw new Error(
+        `refusing to remove ${info.dirId}: ${b.join("; ")}\n` +
+          "Pass --force if you mean to lose this.",
+      );
+    }
+
+    await reclaim([{ info, blockers: o.force ? [] : b, finished: null }]);
+    console.error(`removed ${info.dirId}${o.force && b.length ? " (forced)" : ""}`);
+    console.log(info.path);
+  });
+
+function humanAge(d: Date): string {
+  const s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
