@@ -18,7 +18,7 @@
 import { createInterface } from "node:readline/promises";
 import { createReadStream, createWriteStream, openSync } from "node:fs";
 
-import type { RepodirInfo } from "@ccx/core";
+import { summarizeProblems, type RepodirInfo } from "@ccx/core";
 
 /**
  * 候補行のプロトコルは「1 候補 = 1 行、フィールド区切りは TAB」。initialTask は人間が書いた
@@ -31,14 +31,19 @@ function oneLine(s: string): string {
 
 /** fzf に渡す 1 行。先頭フィールドは dir-id で、表示からは隠す (--with-nth=2..)。 */
 export function candidateLine(info: RepodirInfo): string {
+  // ls と同じ 1 行表現に揃える。壊れた repodir を候補から落とさないのは、選べないと
+  // 直せないため。何のための dir か言えないこと自体が、選ぶ側に必要な情報になる。
+  const problem = summarizeProblems(info.problems);
+
   const flags = [
     info.session.active ? "session" : "",
     info.git.dirty ? "dirty" : "",
     info.git.unpushed ? `+${info.git.unpushed}` : "",
     info.state?.done ? "done" : "",
+    problem ? "broken" : "",
   ].filter(Boolean).join(",");
 
-  const task = info.meta?.initialTask ?? (info.metaError ? `!! ${info.metaError}` : "-");
+  const task = info.meta?.initialTask ?? (problem ? `!! ${problem}` : "-");
 
   return [
     info.dirId,

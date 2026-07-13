@@ -48,7 +48,7 @@ function info(dirId: string, task: string | undefined, over: Partial<RepodirInfo
     created: new Date(0),
     meta: task === undefined ? null : ({ initialTask: task } as RepodirInfo["meta"]),
     state: null,
-    metaError: null,
+    problems: [],
     git: { branch: "main", dirty: false, unpushed: 0, hasUpstream: true, stashes: 0 },
     session: { active: false, lastActivity: null, transcripts: 0 },
     ...over,
@@ -84,9 +84,30 @@ test("改行を含む task でも dir-id で引き当てられる (行が割れ�
   expect(resolveSelection(infos, lines[1]!)?.dirId).toBe("01BBB");
 });
 
-test("壊れた ccx.json は隠さず候補行に出す", () => {
-  const line = candidateLine(info("01AAA", undefined, { metaError: "unexpected token" }));
-  expect(line.split("\t").at(-1)).toBe("!! unexpected token");
+test("壊れた ccx.json は隠さず候補行に出す。broken と分かる形で選べる", () => {
+  const line = candidateLine(
+    info("01AAA", undefined, {
+      problems: [{ file: "ccx.json", kind: "unreadable", message: "unexpected token" }],
+    }),
+  );
+  const fields = line.split("\t");
+
+  expect(fields[3]).toContain("broken"); // flags
+  expect(fields.at(-1)).toBe("!! unexpected token");
+});
+
+test("problems が複数あっても 1 行に畳む (ls と同じ summarizeProblems 表現)", () => {
+  const line = candidateLine(
+    info("01AAA", undefined, {
+      problems: [
+        { file: "ccx.json", kind: "unreadable", message: "unexpected token" },
+        { file: "ccx.state", kind: "missing", message: "ccx.state is missing" },
+      ],
+    }),
+  );
+
+  expect(line.split("\n")).toHaveLength(1);
+  expect(line.split("\t").at(-1)).toBe("!! unexpected token (+1 more)");
 });
 
 test("選択は表示テキストではなく dir-id で引き当てる", () => {
