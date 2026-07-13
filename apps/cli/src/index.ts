@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 
+import { stat } from "node:fs/promises";
+import { relative, resolve } from "node:path";
+
 import { Command } from "commander";
 
 import {
   blockers,
   createRepodir,
+  expandTilde,
   loadConfig,
   parseDuration,
   parseRepoSpec,
   plan,
   reclaim,
   scanRepodirs,
+  scanTree,
   specToSlug,
+  unsafeRoot,
   type Goal,
   type PrIntent,
+  type ScannedDir,
 } from "@ccx/core";
 
 export const VERSION = "0.1.0";
@@ -151,14 +158,46 @@ repodir
   .command("gc")
   .description("Reclaim repodirs that hold no work. Dry run unless --yes is given.")
   .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option(
+    "--root <path>",
+    "scan this directory tree instead of the repodir root. Use it to drain clones ccx " +
+      "did not create (they are never moved: their session history is keyed by their path). " +
+      "The same safety checks apply.",
+  )
   .option("--finished-only", "only reclaim repodirs that are marked done, or whose goal is closed")
   .option("--check-goal", "ask gh whether the linked issue is closed / the PR is merged")
   .option("--min-age <duration>", "keep repodirs younger than this (e.g. 1h, 7d... as ms/s/m/h)")
+  .option(
+    "--session-idle <duration>",
+    "treat a session touched within this window as active (default: 15m)",
+  )
   .option("-y, --yes", "actually delete. Without this, nothing is removed.")
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const infos = await scanRepodirs(cfg, { filter: o.repo });
+    const idleMs = o.sessionIdle ? parseDuration(o.sessionIdle) : undefined;
+
+    let infos: ScannedDir[];
+    let foreignRoot: string | null = null;
+
+    if (o.root) {
+      foreignRoot = resolve(expandTilde(o.root));
+
+      // root の指定を 1 つ間違えれば home ごと舐める。走査する前に弾く。
+      const unsafe = unsafeRoot(foreignRoot);
+      if (unsafe) throw new Error(`--root ${foreignRoot}: ${unsafe}`);
+      if (!(await stat(foreignRoot).then((s) => s.isDirectory()).catch(() => false))) {
+        throw new Error(`--root ${foreignRoot}: not a directory`);
+      }
+
+      infos = await scanTree(foreignRoot, {
+        filter: o.repo,
+        idleMs,
+        defaultHost: cfg.defaultHost,
+      });
+    } else {
+      infos = await scanRepodirs(cfg, { filter: o.repo, idleMs });
+    }
 
     const p = await plan(infos, {
       finishedOnly: o.finishedOnly,
@@ -171,12 +210,24 @@ repodir
       return;
     }
 
+    if (foreignRoot) {
+      console.error(
+        `scanning ${foreignRoot} — these directories were not created by ccx. ` +
+          "They have no done marker, so --finished-only will keep all of them; " +
+          "--check-goal asks gh about the branch instead.\n",
+      );
+    }
+
+    // foreign dir に dir-id は無い。root からの相対パスのほうが引き当てやすい。
+    const label = (c: (typeof p.keep)[number]) =>
+      foreignRoot ? relative(foreignRoot, c.info.path) : c.info.dirId;
+
     for (const c of p.keep) {
-      console.error(`keep    ${c.info.dirId}  ${c.blockers.join("; ")}`);
+      console.error(`keep    ${label(c)}  ${c.blockers.join("; ")}`);
     }
     for (const c of p.remove) {
       const why = c.finished ? ` (${c.finished})` : "";
-      console.error(`remove  ${c.info.dirId}  ${c.info.spec.owner}/${c.info.spec.repo}${why}`);
+      console.error(`remove  ${label(c)}  ${c.info.spec.owner}/${c.info.spec.repo}${why}`);
     }
 
     if (!o.yes) {
