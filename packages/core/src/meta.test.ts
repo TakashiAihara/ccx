@@ -130,17 +130,22 @@ describe("validateMeta", () => {
     expect(r.problems[0]?.message).toContain("ISO-8601");
   });
 
-  test("goal / pr の中身も見る", () => {
+  test("goal / pr の中身も見る。指摘には親の名前を被せる", () => {
     const r = validateMeta({
       ...validMeta,
       goal: { issue: 123 },
-      pr: { reviewers: ["ok", 5] },
+      pr: { milestone: 5, reviewers: ["ok", ""] },
     });
     expect(r.value).toBeNull();
 
-    const messages = r.problems.map((p) => p.message).join("\n");
-    expect(messages).toContain("issue must be a non-empty string");
-    expect(messages).toContain("pr.reviewers must be an array of non-empty strings");
+    // "issue must be ..." だけでは goal 配下か top-level か読み手に判別できない
+    const messages = r.problems.map((p) => p.message);
+    expect(messages).toContain("ccx.json: goal.issue must be a non-empty string");
+    expect(messages).toContain("ccx.json: pr.milestone must be a non-empty string");
+    expect(messages).toContain("ccx.json: pr.reviewers must be an array of non-empty strings");
+
+    // 親の名前は checkNested が 1 度だけ被せる (pr.pr.reviewers にならない)
+    expect(messages.some((m) => m.includes("pr.pr."))).toBe(false);
   });
 
   test("goal が object でなければ弾く", () => {

@@ -149,7 +149,14 @@ function checkIsoDate(obj: Record<string, unknown>, field: string, errs: string[
   }
 }
 
-/** 未知のキーは弾かない。前方互換のため無視する (schema 番号が破壊的変更を担う) */
+/**
+ * ネストしたオブジェクトを検証する。中の指摘には必ず親の名前を被せる。
+ *
+ * "issue must be a non-empty string" だけでは、それが goal 配下なのか top-level なのか
+ * 読み手に判別できず、「壊れ方ごとに理由が言える」という本来の目的を損なう。
+ *
+ * 未知のキーは弾かない。前方互換のため無視する (schema 番号が破壊的変更を担う)。
+ */
 function checkNested(
   obj: Record<string, unknown>,
   field: string,
@@ -162,7 +169,10 @@ function checkNested(
     errs.push(`${field} must be an object`);
     return;
   }
-  check(v, errs);
+
+  const nested: string[] = [];
+  check(v, nested);
+  errs.push(...nested.map((e) => `${field}.${e}`));
 }
 
 /**
@@ -216,7 +226,8 @@ export function validateMeta(raw: unknown, expected: number = META_SCHEMA): Load
     const { reviewers } = pr;
     if (reviewers !== undefined) {
       if (!Array.isArray(reviewers) || reviewers.some((r) => typeof r !== "string" || r === "")) {
-        e.push("pr.reviewers must be an array of non-empty strings");
+        // 親の名前は checkNested が被せる。ここで "pr." を書くと二重になる
+        e.push("reviewers must be an array of non-empty strings");
       }
     }
   });
