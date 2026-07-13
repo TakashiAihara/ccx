@@ -132,6 +132,20 @@ restarts at zero every millisecond, so two machines creating their first repodir
 millisecond produce the same 14-character prefix. Anything that spans machines must key on
 `machine + path`, never on the id alone.
 
+### Nobody types the id
+
+An opaque id is only affordable if a human never has to reproduce one. So `ccx rd cd` selects on
+`initialTask` — the sentence you wrote down when you created the repodir — and the id stays an
+implementation detail that happens to be visible in `pwd`. Selecting on the task is not a nicety
+layered on top of the id scheme; it is the thing that pays for it.
+
+The picker is delegated to `fzf`, with a numbered prompt when it is absent. ccx does not grow a TUI
+of its own, and whatever fzf configuration the user already has keeps working. Both draw their UI on
+the terminal rather than stdout, which is what allows the chosen path to be the command's stdout —
+the same contract `new` already had, and the reason `cd "$(ccx rd cd)"` works at all. Picking nothing
+must exit non-zero: a `cd` with an empty argument goes to `$HOME`, so silence here would be a
+destination.
+
 ## Metadata
 
 Two files, both under `.git/`. That location means they never appear in `git status`, they can never

@@ -17,6 +17,8 @@ import {
   type PrIntent,
 } from "@ccx/core";
 
+import { pickRepodir } from "./pick.ts";
+
 export const VERSION = "0.1.0";
 
 const program = new Command();
@@ -238,6 +240,27 @@ repodir
     await reclaim([{ info, blockers: o.force ? [] : b, finished: null }]);
     console.error(`removed ${info.dirId}${o.force && b.length ? " (forced)" : ""}`);
     console.log(info.path);
+  });
+
+repodir
+  .command("cd")
+  .description("Pick a repodir by what it was created for, and print its path")
+  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const infos = await scanRepodirs(cfg, { filter: o.repo });
+
+    const picked = await pickRepodir(infos);
+
+    // 選ばなかった (ESC / Ctrl-C) のはエラーではない。ただし何も出力しないまま 0 で終わると
+    // `cd "$(ccx rd cd)"` が HOME に飛んでしまうので、非 0 で抜けて cd 自体を起こさせない。
+    if (!picked) {
+      console.error("nothing picked");
+      process.exit(130);
+    }
+
+    console.error(`${picked.spec.owner}/${picked.spec.repo}  ${picked.meta?.initialTask ?? "-"}`);
+    console.log(picked.path);
   });
 
 function humanAge(d: Date): string {
