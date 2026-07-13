@@ -11,7 +11,7 @@ import { stat } from "node:fs/promises";
 
 import type { Config } from "./config.ts";
 import { git } from "./git.ts";
-import { cloneUrl, type RepoSpec } from "./repospec.ts";
+import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
 
 export function mirrorPath(cfg: Config, spec: RepoSpec): string {
   return join(cfg.mirrorRoot, spec.host, spec.owner, `${spec.repo}.git`);
@@ -38,6 +38,18 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
   return null;
 }
 
+/** mirror の origin を url に合わせる。既に一致していれば何もしない。 */
+async function syncOrigin(path: string, url: string): Promise<void> {
+  let current: string | null = null;
+  try {
+    // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
+    current = await git(["config", "--get", "remote.origin.url"], path);
+  } catch {
+    // origin が無い mirror は想定外だが、set-url で復旧できるので握る
+  }
+  if (current !== url) await git(["remote", "set-url", "origin", url], path);
+}
+
 export type EnsureMirrorResult = {
   path: string;
   created: boolean;
@@ -53,14 +65,19 @@ export type EnsureMirrorResult = {
 export async function ensureMirror(
   cfg: Config,
   spec: RepoSpec,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; protocol?: Protocol } = {},
 ): Promise<EnsureMirrorResult> {
   const path = mirrorPath(cfg, spec);
+  const url = cloneUrl(spec, opts.protocol ?? cfg.protocol);
 
   if (!(await exists(path))) {
-    await git(["clone", "--mirror", "--quiet", cloneUrl(spec), path]);
+    await git(["clone", "--mirror", "--quiet", url, path]);
     return { path, created: true, updated: false };
   }
+
+  // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
+  // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
+  await syncOrigin(path, url);
 
   const fetched = await lastFetchedAt(path);
   const stale = opts.force || !fetched || Date.now() - fetched.getTime() > cfg.mirrorMaxAgeMs;

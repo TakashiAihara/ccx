@@ -30,6 +30,7 @@ beforeAll(async () => {
       'defaultHost = "file.example.com"',
       'defaultOwner = "file-owner"',
       'mirrorMaxAge = "1h"',
+      'protocol = "ssh"',
       "",
       "[defaults]",
       'agent = "file-agent"',
@@ -54,6 +55,7 @@ describe("設定の解決", () => {
     expect(cfg.defaultHost).toBe("github.com");
     expect(cfg.defaultOwner).toBeUndefined();
     expect(cfg.defaults.agent).toBe("claude");
+    expect(cfg.protocol).toBe("https");
     expect(cfg.hub).toBeUndefined();
   });
 
@@ -64,6 +66,7 @@ describe("設定の解決", () => {
     expect(cfg.defaultHost).toBe("file.example.com");
     expect(cfg.defaultOwner).toBe("file-owner");
     expect(cfg.mirrorMaxAgeMs).toBe(3_600_000);
+    expect(cfg.protocol).toBe("ssh");
     expect(cfg.defaults.agent).toBe("file-agent");
     expect(cfg.hub?.url).toBe("nats://file.example:4222");
   });
@@ -120,6 +123,29 @@ describe("設定の解決", () => {
     expect(cfg.defaults.agent).toBe("opencode");
     expect(cfg.defaults.model).toBe("sonnet-5");
     expect(cfg.hub?.url).toBe("nats://env:4222");
+  });
+
+  test("protocol も 4 段の優先順位に乗る (env > git config > ファイル > 既定値)", async () => {
+    const file = { env: { CCX_CONFIG: cfgFile }, git: noGit };
+    expect((await loadConfig(file)).protocol).toBe("ssh");
+
+    const fromGit = await loadConfig({
+      env: { CCX_CONFIG: cfgFile },
+      git: gitStub({ "ccx.protocol": "https" }),
+    });
+    expect(fromGit.protocol).toBe("https");
+
+    const fromEnv = await loadConfig({
+      env: { CCX_CONFIG: cfgFile, CCX_PROTOCOL: "ssh" },
+      git: gitStub({ "ccx.protocol": "https" }),
+    });
+    expect(fromEnv.protocol).toBe("ssh");
+  });
+
+  test("読めない protocol は理由を添えて失敗する", async () => {
+    expect(loadConfig({ env: { CCX_PROTOCOL: "git" }, git: noGit })).rejects.toThrow(
+      /invalid protocol/,
+    );
   });
 });
 
