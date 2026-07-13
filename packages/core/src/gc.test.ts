@@ -11,7 +11,17 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
-import { blockers, isSafeToRemove, plan, reclaim, scanTree, unsafePath, unsafeRoot } from "./gc.ts";
+import {
+  blockers,
+  isSafeToRemove,
+  plan,
+  reclaim,
+  repoMatches,
+  scanTree,
+  unsafePath,
+  unsafeRoot,
+  type GitRun,
+} from "./gc.ts";
 import { git } from "./git.ts";
 import { writeState } from "./meta.ts";
 import { createRepodir } from "./repodir.ts";
@@ -220,7 +230,7 @@ describe("foreign tree (ccx が作っていない clone)", () => {
   };
 
   const scanOne = async (path: string) => {
-    const infos = await scanTree(legacy, { defaultHost: "github.com" });
+    const infos = await scanTree(legacy, { match: "**", defaultHost: "github.com" });
     return infos.find((i) => i.path === path)!;
   };
 
@@ -341,7 +351,7 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     await Bun.write(join(secret, ".serena", "cache.json"), "{}\n");
     await Bun.write(join(secret, ".env"), "SECRET=1\n");
 
-    const infos = await scanTree(legacy, { allowIgnored: [".serena/"] });
+    const infos = await scanTree(legacy, { match: "**", allowIgnored: [".serena/"] });
     const one = (p: string) => infos.find((i) => i.path === p)!;
 
     expect(blockers(one(cache))).toEqual([]);
@@ -404,7 +414,7 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     const nested = join(outer, "vendor", "nested");
     await git(["init", "--quiet", nested]);
 
-    const paths = (await scanTree(legacy)).map((i) => i.path);
+    const paths = (await scanTree(legacy, { match: "**" })).map((i) => i.path);
     expect(paths).toContain(outer);
     expect(paths).not.toContain(nested);
   });
@@ -413,7 +423,7 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     const notARepo = join(legacy, "github.com", "test-owner", "just-a-dir");
     await Bun.write(join(notARepo, "notes.md"), "hello\n");
 
-    const paths = (await scanTree(legacy)).map((i) => i.path);
+    const paths = (await scanTree(legacy, { match: "**" })).map((i) => i.path);
     expect(paths).not.toContain(notARepo);
   });
 
@@ -422,7 +432,7 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     const risky = await clone("reclaim-risky");
     await commit(risky, "precious.txt");
 
-    const infos = (await scanTree(legacy)).filter(
+    const infos = (await scanTree(legacy, { match: "**" })).filter(
       (i) => i.path === safe || i.path === risky,
     );
     const p = await plan(infos, {});
@@ -460,5 +470,141 @@ describe("path そのものが危険なら消さない", () => {
     expect(blockers({ ...info, path: "/tmp" })).toContain(
       "path is too shallow to be a repository (/tmp)",
     );
+  });
+});
+
+/**
+ * 名指ししたものだけが消える。
+ *
+ * foreign tree では、これが唯一の安全弁になる場面がある。canonical clone は clean で
+ * push 済みなのが普通なので blockers を素通りする。部分一致で拾ってしまえば、そのまま
+ * 消える。
+ */
+describe("名指し (selector)", () => {
+  let legacy: string;
+
+  const cloneAs = async (name: string, origin: string): Promise<string> => {
+    const dest = join(legacy, "github.com", "test-owner", name);
+    await git(["clone", "--quiet", REMOTE, dest]);
+    await git(["remote", "set-url", "origin", origin], dest);
+    return dest;
+  };
+
+  beforeAll(() => {
+    legacy = join(tmp, "selector");
+  });
+
+  test("repo は部分一致しない。demo を名指ししても demo-notes は巻き込まれない", async () => {
+    const demo = await cloneAs("demo", "https://github.com/test-owner/demo.git");
+    const notes = await cloneAs("demo-notes", "https://github.com/test-owner/demo-notes.git");
+
+    const paths = (await scanTree(legacy, { repo: "test-owner/demo" })).map((i) => i.path);
+
+    expect(paths).toContain(demo);
+    expect(paths).not.toContain(notes);
+  });
+
+  test("selector が無ければ走査そのものを拒む", async () => {
+    expect(scanTree(legacy)).rejects.toThrow(/requires a selector/);
+  });
+
+  test("match は path の glob。family を掃くときは明示的に書く", async () => {
+    const v2 = await cloneAs("vault2", "https://github.com/test-owner/vault.git");
+    const v10 = await cloneAs("vault10", "https://github.com/test-owner/vault.git");
+    // 同じ repo の clone だが、これは現役の canonical。dir 名で外せなければならない。
+    const notes = await cloneAs("vault-notes", "https://github.com/test-owner/vault.git");
+
+    const paths = (
+      await scanTree(legacy, { repo: "test-owner/vault", match: "*/*/vault[0-9]*" })
+    ).map((i) => i.path);
+
+    expect(paths.sort()).toEqual([v10, v2].sort());
+    expect(paths).not.toContain(notes);
+  });
+
+  test("repoMatches は segment 境界にアンカーされる", () => {
+    const spec = { host: "github.com", owner: "test-owner", repo: "vault" };
+
+    expect(repoMatches(spec, "test-owner/vault")).toBe(true);
+    expect(repoMatches(spec, "github.com/test-owner/vault")).toBe(true);
+    expect(repoMatches(spec, "vault")).toBe(false);
+    expect(repoMatches(spec, "test-owner/vault-notes")).toBe(false);
+    expect(repoMatches(spec, "other-owner/vault")).toBe(false);
+  });
+});
+
+/**
+ * probe が失敗したら「危険なし」ではなく「判定できない」。
+ *
+ * git status は working tree を歩くので、submodule が壊れた clone では非ゼロ終了しうる
+ * (この repo 自身がその修正を通っている: 7399288)。一方 rev-list は object DB と ref
+ * しか見ないので、同じ clone で成功して 0 を返す。status の失敗を dirty=false に潰すと、
+ * blockers が空になって未コミットの作業が消える。
+ */
+describe("probe の失敗は fail-closed", () => {
+  let legacy: string;
+
+  const clone = async (name: string): Promise<string> => {
+    const dest = join(legacy, "github.com", "test-owner", name);
+    await git(["clone", "--quiet", REMOTE, dest]);
+    await git(["remote", "set-url", "origin", REMOTE], dest);
+    return dest;
+  };
+
+  /** 名指しした git サブコマンドだけを失敗させる。他は本物に通す。 */
+  const failing = (...fail: string[]): GitRun => {
+    return (args, cwd) => {
+      const cmd = args.filter((a) => !a.startsWith("-")).slice(0, 2).join(" ");
+      if (fail.some((f) => cmd.startsWith(f))) {
+        return Promise.reject(new Error(`git ${args.join(" ")} failed (exit 128)`));
+      }
+      return git(args, cwd);
+    };
+  };
+
+  const scanOne = async (path: string, run: GitRun) => {
+    const infos = await scanTree(legacy, { match: "**", run });
+    return infos.find((i) => i.path === path)!;
+  };
+
+  beforeAll(() => {
+    legacy = join(tmp, "failing");
+  });
+
+  test("status が読めなければ、dirty ではなく『判定できない』", async () => {
+    const dir = await clone("broken-status");
+
+    // rev-list は成功する = 未 push は本当に 0。status だけが落ちる。
+    const info = await scanOne(dir, failing("status"));
+
+    expect(info.git.unpushed).toBe(0);
+    expect(info.git.dirty).toBe(false);
+    expect(blockers(info)).toContain("cannot determine whether the working tree is dirty");
+    expect(blockers(info)).toContain("cannot determine whether ignored files exist");
+    expect(isSafeToRemove(info)).toBe(false);
+  });
+
+  test("stash list が読めなければ止める", async () => {
+    const dir = await clone("broken-stash");
+    const info = await scanOne(dir, failing("stash"));
+
+    expect(info.git.stashes).toBe(0);
+    expect(blockers(info)).toContain("cannot determine whether there are stashes");
+  });
+
+  test("worktree list が読めなければ止める", async () => {
+    const dir = await clone("broken-worktree");
+    const info = await scanOne(dir, failing("worktree"));
+
+    expect(blockers(info)).toContain("cannot determine whether other worktrees are registered");
+  });
+
+  test("probe が全部落ちても、削除対象にはならない", async () => {
+    const dir = await clone("broken-all");
+    const info = await scanOne(dir, failing("status", "stash", "worktree", "rev-list"));
+
+    const p = await plan([info], {});
+    expect(p.remove).toHaveLength(0);
+    expect(await Bun.file(join(dir, "README.md")).exists()).toBe(true);
   });
 });

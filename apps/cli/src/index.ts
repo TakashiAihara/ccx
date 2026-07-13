@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import { Command } from "commander";
@@ -157,13 +157,24 @@ repodir
 repodir
   .command("gc")
   .description("Reclaim repodirs that hold no work. Dry run unless --yes is given.")
-  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option(
+    "-r, --repo <owner/repo>",
+    "the repository to reclaim. Without --root this is a substring filter over repodir " +
+      "paths; with --root it must name the repository exactly (from its origin remote), " +
+      "because there a wrong match deletes a directory ccx did not create.",
+  )
+  .option(
+    "--match <glob>",
+    "with --root: a glob over each directory's path relative to --root, e.g. " +
+      "'*/*/vault[0-9]*'. This is the explicit way to sweep a family of clones. " +
+      "Combined with --repo, both must match.",
+  )
   .option(
     "--root <path>",
     "scan this directory tree instead of the repodir root. Use it to drain clones ccx " +
       "did not create (they are never moved: their session history is keyed by their path). " +
-      "Requires --repo: a tree ccx does not own also holds canonical clones, so what gets " +
-      "reclaimed must be named. The same safety checks apply, plus ignored files.",
+      "Requires --repo or --match: a tree ccx does not own also holds canonical clones, so " +
+      "what gets reclaimed must be named. The same safety checks apply, plus ignored files.",
   )
   .option(
     "--allow-ignored <path...>",
@@ -187,29 +198,35 @@ repodir
     let foreignRoot: string | null = null;
 
     if (o.root) {
-      foreignRoot = resolve(expandTilde(o.root));
-
       // ccx が所有していないツリーには、使い捨ての clone と canonical な clone が
       // 混ざって住んでいる (~/.ghq の 194 repo のうち、連番 clone は 55 個だけ)。
       // canonical clone は clean で push 済みなのが普通で、blockers では止まらない。
       // だから「何を回収するか」を名指しさせる。一括走査は許さない。
-      if (!o.repo) {
+      if (!o.repo && !o.match) {
         throw new Error(
-          "--root requires --repo. A tree ccx does not own also holds canonical clones, " +
-            "which are clean and pushed and would therefore be reclaimed. " +
-            "Name what you are draining, e.g. --repo owner/legacy-clone",
+          "--root requires --repo or --match. A tree ccx does not own also holds canonical " +
+            "clones, which are clean and pushed and would therefore be reclaimed. " +
+            "Name what you are draining, e.g. --repo owner/repo or --match '*/*/vault[0-9]*'",
         );
       }
 
       // root の指定を 1 つ間違えれば home ごと舐める。走査する前に弾く。
+      // 字句解決のガードは symlink を見抜けないので、実体に直してから掛ける。
+      const asked = resolve(expandTilde(o.root));
+      foreignRoot = await realpath(asked).catch(() => asked);
+
       const unsafe = unsafeRoot(foreignRoot);
-      if (unsafe) throw new Error(`--root ${foreignRoot}: ${unsafe}`);
+      if (unsafe) {
+        const via = foreignRoot === asked ? "" : ` (${asked} resolves to it)`;
+        throw new Error(`--root ${foreignRoot}${via}: ${unsafe}`);
+      }
       if (!(await stat(foreignRoot).then((s) => s.isDirectory()).catch(() => false))) {
         throw new Error(`--root ${foreignRoot}: not a directory`);
       }
 
       infos = await scanTree(foreignRoot, {
-        filter: o.repo,
+        repo: o.repo,
+        match: o.match,
         idleMs,
         allowIgnored: o.allowIgnored,
         defaultHost: cfg.defaultHost,

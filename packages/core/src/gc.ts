@@ -13,9 +13,9 @@
  * ディレクトリツリーも走査できる (scanTree)。
  */
 
-import { readdir, rm, stat } from "node:fs/promises";
+import { readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 import { git } from "./git.ts";
 import { readMeta, readState, type RepodirMeta, type RepodirState } from "./meta.ts";
@@ -220,7 +220,13 @@ export async function reclaim(candidates: Candidate[]): Promise<string[]> {
   for (const c of candidates) {
     // 二重チェック。plan から実行までの間に session が立ち上がっている可能性がある。
     if (blockers(c.info).length > 0) continue;
-    await rm(c.info.path, { recursive: true, force: true });
+
+    // unsafePath は字句解決しかしない (blockers は同期関数なので filesystem に触れない)。
+    // 実際に rm する直前は実体で見る。home を指す symlink を渡されても、ここで止まる。
+    const real = await realpath(c.info.path).catch(() => c.info.path);
+    if (unsafePath(real)) continue;
+
+    await rm(real, { recursive: true, force: true });
     removed.push(c.info.path);
   }
 
@@ -241,11 +247,35 @@ export async function reclaim(candidates: Candidate[]): Promise<string[]> {
 // 少なく見積もって消すより、多く見積もって残すほうが安い。
 // ---------------------------------------------------------------------------
 
-export type TreeScanOptions = {
-  /** path に含まれる文字列で絞る */
-  filter?: string;
+/**
+ * git を叩く口。既定は git.ts の git()。
+ *
+ * probe の失敗を「危険なし」ではなく「判定できない」に落とすことが安全の要なので、
+ * その分岐はテストで固定しなければならない (status だけが失敗し rev-list は成功する、
+ * という状況を実物で作るのは難しい)。差し替え口はそのために置いてある。
+ */
+export type GitRun = (args: string[], cwd: string) => Promise<string>;
+
+/**
+ * 何を回収するかの名指し。foreign tree では、これが唯一の安全弁になる場面がある:
+ * canonical clone は clean で push 済みなのが普通で、blockers では止まらないので、
+ * 「名指ししたものだけが消える」を実装で保証しなければならない。
+ *
+ * だから部分一致はしない。repo は完全一致、path は glob。どちらも境界にアンカーされる。
+ * "vault" と書いて "vault-notes" が巻き込まれるようなことは起こらない。
+ */
+export type TreeSelector = {
+  /** "<owner>/<repo>" または "<host>/<owner>/<repo>"。完全一致。remote origin から引く */
+  repo?: string;
+  /** root からの相対パスに対する glob。family を意図して一括で掃くときの明示的な口 */
+  match?: string;
+};
+
+export type TreeScanOptions = TreeSelector & {
   /** 失っても構うと人間が名指しした ignored path (例: ".serena/") */
   allowIgnored?: string[];
+  /** git を叩く口の差し替え (テスト用)。既定は git() */
+  run?: GitRun;
   /** session が生きているとみなす最終更新からの時間 (ミリ秒) */
   idleMs?: number;
   /** root から何階層まで潜って .git を探すか */
@@ -256,23 +286,49 @@ export type TreeScanOptions = {
 
 const DEFAULT_MAX_DEPTH = 4;
 
+/** spec が名指しに一致するか。segment 境界にアンカーされた完全一致。 */
+export function repoMatches(spec: RepoSpec, named: string): boolean {
+  const want = named.replace(/\.git$/, "").replace(/\/+$/, "");
+  return want === `${spec.owner}/${spec.repo}` || want === `${spec.host}/${spec.owner}/${spec.repo}`;
+}
+
 /**
- * root 配下の git working tree をすべて読む。repodir の 4 階層構造も ccx.json も
- * 前提にしない。repo を 1 つ見つけたらその中には潜らない (submodule を別個の回収対象に
- * しないため)。
+ * root 配下の git working tree を読む。repodir の 4 階層構造も ccx.json も前提にしない。
+ * repo を 1 つ見つけたらその中には潜らない (submodule を別個の回収対象にしないため)。
+ *
+ * 名指し (repo / match) は必須。ccx が所有しないツリーを丸ごと舐めることは、この層では
+ * そもそもできない。
  */
 export async function scanTree(root: string, opts: TreeScanOptions = {}): Promise<ScannedDir[]> {
+  if (!opts.repo && !opts.match) {
+    throw new Error("scanTree requires a selector: name a repo, or a path glob");
+  }
+
   const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const defaultHost = opts.defaultHost ?? "github.com";
   const allowIgnored = opts.allowIgnored ?? [];
+  const run: GitRun = opts.run ?? git;
+
+  // root 自体を実体に解決してから歩く。文字列比較のガード (unsafeRoot) は symlink を
+  // 見抜けないが、実体に直してから歩けば、辿り着く先も実体になる。
+  const base = await realpath(resolve(root)).catch(() => resolve(root));
 
   const paths: string[] = [];
-  await walk(resolve(root), 0, maxDepth, paths);
+  await walk(base, 0, maxDepth, paths);
 
-  const hits = opts.filter ? paths.filter((p) => p.includes(opts.filter!)) : paths;
+  const glob = opts.match ? new Bun.Glob(opts.match) : null;
+  const selected: string[] = [];
+
+  for (const p of paths) {
+    if (glob && !glob.match(relative(base, p))) continue;
+    // spec は remote origin から引く。dir 名ではないので、vault40 も TakashiAihara/vault。
+    if (opts.repo && !repoMatches(await foreignSpec(p, defaultHost, run), opts.repo)) continue;
+    selected.push(p);
+  }
+
   const all = await Promise.all(
-    hits.map((p) => readForeign(p, idleMs, defaultHost, allowIgnored)),
+    selected.map((p) => readForeign(p, idleMs, defaultHost, allowIgnored, run)),
   );
 
   return all.sort((a, b) => a.created.getTime() - b.created.getTime());
@@ -289,6 +345,8 @@ async function walk(dir: string, depth: number, maxDepth: number, out: string[])
 
   await Promise.all(
     entries
+      // symlink は辿らない。isDirectory() は symlink に対して false を返す。
+      // 辿ると、root の外 (home や別の repo) に出た先を回収対象にしかねない。
       .filter((e) => e.isDirectory() && !e.name.startsWith("."))
       .map((e) => walk(join(dir, e.name), depth + 1, maxDepth, out)),
   );
@@ -309,12 +367,13 @@ async function readForeign(
   idleMs: number,
   defaultHost: string,
   allowIgnored: string[],
+  run: GitRun,
 ): Promise<ScannedDir> {
   const [g, s, spec, risks, created, meta, state] = await Promise.all([
-    foreignGitState(path),
+    foreignGitState(path, run),
     foreignSessionState(path, idleMs),
-    foreignSpec(path, defaultHost),
-    foreignRisks(path, allowIgnored),
+    foreignSpec(path, defaultHost, run),
+    foreignRisks(path, allowIgnored, run),
     createdAt(path),
     readMeta(path).catch((): RepodirMeta | null => null),
     readState(path).catch((): RepodirState | null => null),
@@ -329,26 +388,52 @@ async function readForeign(
     meta,
     state,
     metaError: null,
-    git: g,
+    git: g.state,
     session: s,
     foreign: true,
-    extraBlockers: risks.blockers,
+    extraBlockers: [...g.problems, ...risks.blockers],
     ignored: risks.ignored,
   };
 }
 
-async function foreignGitState(path: string): Promise<GitState> {
-  const [branch, status, stash] = await Promise.all([
-    git(["branch", "--show-current"], path).catch(() => ""),
-    git(["status", "--porcelain"], path).catch(() => ""),
+/**
+ * 危険を探る probe。すべて fail-closed。
+ *
+ * probe が失敗したら「危険なし」ではなく「判定できない」。判定できないものは消さない。
+ * git status は working tree を歩くので、submodule が壊れた clone では非ゼロ終了しうる
+ * (この repo 自身がその修正を通っている: 7399288)。一方 rev-list は object DB と ref
+ * しか見ないので、同じ clone で成功して 0 を返す。ここで status の失敗を dirty=false に
+ * 潰すと、blockers が空になって未コミットの作業が消える。
+ */
+async function foreignGitState(
+  path: string,
+  run: GitRun,
+): Promise<{ state: GitState; problems: string[] }> {
+  const problems: string[] = [];
+
+  // branch は表示用。判らなくても危険ではない。
+  const branch = await run(["branch", "--show-current"], path).catch(() => "");
+
+  let dirty = false;
+  try {
+    dirty = (await run(["status", "--porcelain"], path)).trim() !== "";
+  } catch {
+    problems.push("cannot determine whether the working tree is dirty");
+  }
+
+  let stashes = 0;
+  try {
     // %gd で reflog selector (stash@{0}) だけを出させる。行数を数えるので、git が
     // 空のときに人間向けの文言を足しても誤検出しない。
-    git(["stash", "list", "--format=%gd"], path).catch(() => ""),
-  ]);
+    const stash = await run(["stash", "list", "--format=%gd"], path);
+    stashes = stash.split("\n").filter((l) => l.startsWith("stash@{")).length;
+  } catch {
+    problems.push("cannot determine whether there are stashes");
+  }
 
   let hasUpstream = false;
   try {
-    await git(["rev-parse", "--abbrev-ref", "@{upstream}"], path);
+    await run(["rev-parse", "--abbrev-ref", "@{upstream}"], path);
     hasUpstream = true;
   } catch {
     hasUpstream = false;
@@ -359,22 +444,25 @@ async function foreignGitState(path: string): Promise<GitState> {
     // ローカルの全ブランチ + HEAD (detached 対応) のうち、どのリモートにも無い commit。
     // remote が 1 つも無ければ全 commit が数えられ、結果として必ず blocker になる。
     const [branches, head] = await Promise.all([
-      git(["rev-list", "--count", "--branches", "--not", "--remotes"], path),
-      git(["rev-list", "--count", "HEAD", "--not", "--remotes"], path),
+      run(["rev-list", "--count", "--branches", "--not", "--remotes"], path),
+      run(["rev-list", "--count", "HEAD", "--not", "--remotes"], path),
     ]);
     unpushed = Math.max(Number(branches), Number(head));
     if (!Number.isFinite(unpushed)) unpushed = null;
   } catch {
-    // commit が 1 つも無い / git が読めない。判らないなら消さない。
+    // commit が 1 つも無い / git が読めない。判らないなら消さない (blockers が止める)。
     unpushed = null;
   }
 
   return {
-    branch: branch || null,
-    dirty: status.trim() !== "",
-    unpushed,
-    hasUpstream,
-    stashes: stash.split("\n").filter((l) => l.startsWith("stash@{")).length,
+    state: {
+      branch: branch || null,
+      dirty,
+      unpushed,
+      hasUpstream,
+      stashes,
+    },
+    problems,
   };
 }
 
@@ -411,19 +499,27 @@ async function foreignSessionState(path: string, idleMs: number): Promise<Sessio
 async function foreignRisks(
   path: string,
   allowIgnored: string[],
+  run: GitRun,
 ): Promise<{ blockers: string[]; ignored: string[] }> {
   const out: string[] = [];
 
   try {
-    const list = await git(["worktree", "list", "--porcelain"], path);
+    const list = await run(["worktree", "list", "--porcelain"], path);
     // 自分自身が 1 件目。2 件目以降は、この dir を消すと壊れる別の working tree。
     const n = list.split("\n").filter((l) => l.startsWith("worktree ")).length - 1;
     if (n > 0) out.push(`${n} registered worktree(s)`);
   } catch {
-    // worktree を列挙できない = git が読めない。unpushed 側が null になって止まる。
+    out.push("cannot determine whether other worktrees are registered");
   }
 
-  const all = await ignoredPaths(path);
+  let all: string[];
+  try {
+    all = await ignoredPaths(path, run);
+  } catch {
+    // ここを握り潰すと、そのために新設した .env の guard が黙って無効になる。
+    return { blockers: [...out, "cannot determine whether ignored files exist"], ignored: [] };
+  }
+
   const kept = all.filter((p) => !allowIgnored.includes(p));
   if (kept.length > 0) out.push(`${kept.length} ignored path(s) that git cannot restore (${summarise(kept)})`);
 
@@ -448,24 +544,19 @@ function summarise(paths: string[]): string {
  * 消すということ。だから既定は止める側に倒し、捨ててよい path は allowIgnored で
  * 名指しさせる。何を捨てるかは、いつでも人間が名指しする。
  */
-async function ignoredPaths(path: string): Promise<string[]> {
-  try {
-    const st = await git(["status", "--porcelain", "--ignored"], path);
-    return st
-      .split("\n")
-      .filter((l) => l.startsWith("!! "))
-      .map((l) => l.slice(3).trim());
-  } catch {
-    // git が読めない。unpushed 側が null になって止まる。
-    return [];
-  }
+async function ignoredPaths(path: string, run: GitRun): Promise<string[]> {
+  const st = await run(["status", "--porcelain", "--ignored"], path);
+  return st
+    .split("\n")
+    .filter((l) => l.startsWith("!! "))
+    .map((l) => l.slice(3).trim());
 }
 
-async function foreignSpec(path: string, defaultHost: string): Promise<RepoSpec> {
+async function foreignSpec(path: string, defaultHost: string, run: GitRun): Promise<RepoSpec> {
   try {
     // get-url ではなく生の設定値。get-url は insteadOf の書き換えを適用してしまい、
     // 「どこの repo か」ではなく「どこから取るか」を返す。
-    const url = await git(["config", "--get", "remote.origin.url"], path);
+    const url = await run(["config", "--get", "remote.origin.url"], path);
     if (url) return parseRepoSpec(url, { defaultHost });
   } catch {
     // remote が無い / 解釈できない URL。path から埋める
