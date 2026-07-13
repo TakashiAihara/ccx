@@ -38,16 +38,36 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
   return null;
 }
 
-/** mirror の origin を url に合わせる。既に一致していれば何もしない。 */
+/**
+ * mirror の origin を url に合わせる。既に一致していれば何もしない。
+ *
+ * origin が無い mirror に対して `git remote set-url` は使えない。remote を作る機能は無く、
+ * "No such remote 'origin'" で終了コード 2 を返すだけで、mirror は origin 不在のまま残る。
+ * その状態では以降の remote update も通らないので、無ければ設定を直接書いて作り直す。
+ *
+ * remote add ではなく config を直接書くのは、bare mirror の origin が普通の remote と違う
+ * ためで、mirror が要求する refspec (+refs/*:refs/*) と mirror フラグを remote add は与えない。
+ * clone --mirror が書くのと同じ 3 つを、同じ形で書く。
+ */
 async function syncOrigin(path: string, url: string): Promise<void> {
   let current: string | null = null;
   try {
     // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
     current = await git(["config", "--get", "remote.origin.url"], path);
   } catch {
-    // origin が無い mirror は想定外だが、set-url で復旧できるので握る
+    // origin 不在。下で作り直す
   }
-  if (current !== url) await git(["remote", "set-url", "origin", url], path);
+
+  if (current === url) return;
+
+  if (current === null) {
+    await git(["config", "remote.origin.url", url], path);
+    await git(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
+    await git(["config", "--bool", "remote.origin.mirror", "true"], path);
+    return;
+  }
+
+  await git(["remote", "set-url", "origin", url], path);
 }
 
 export type EnsureMirrorResult = {

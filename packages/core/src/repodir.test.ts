@@ -252,6 +252,25 @@ describe("protocol", () => {
     expect(await git(["config", "--get", "remote.origin.url"], r.path)).toBe(SSH_REMOTE);
   });
 
+  test("origin を失った mirror でも、落ちずに origin を作り直して使える", async () => {
+    // git remote set-url は remote を作れない (No such remote 'origin' で終わる)。origin が
+    // 消えた mirror を掴んだとき、set-url に頼っていると mirror ごと使えなくなる。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-noorigin"), mirrorRoot: join(tmp, "mirror-noorigin") };
+    await createRepodir(c, spec(), {}, "0.1.0");
+
+    const mirror = mirrorPath(c, spec());
+    await git(["remote", "remove", "origin"], mirror);
+
+    const r = await createRepodir(c, spec(), { refresh: true }, "0.1.0");
+
+    expect(r.mirror.updated).toBe(true);
+    expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(REMOTE);
+    // bare mirror の origin は普通の remote と違う。refspec と mirror フラグまで戻っていないと
+    // 次の remote update が期待どおりに動かない
+    expect(await git(["config", "--get", "remote.origin.fetch"], mirror)).toBe("+refs/*:refs/*");
+    expect(await git(["config", "--get", "remote.origin.mirror"], mirror)).toBe("true");
+  });
+
   test("既存 mirror の origin は、protocol を切り替えると追従する", async () => {
     const c: Config = { ...cfg, root: join(tmp, "repodirs-switch"), mirrorRoot: join(tmp, "mirror-switch") };
 
