@@ -391,7 +391,7 @@ async function readForeign(
     git: g.state,
     session: s,
     foreign: true,
-    extraBlockers: [...g.problems, ...risks.blockers],
+    extraBlockers: [...g.unknowns, ...risks.blockers],
     ignored: risks.ignored,
   };
 }
@@ -408,8 +408,11 @@ async function readForeign(
 async function foreignGitState(
   path: string,
   run: GitRun,
-): Promise<{ state: GitState; problems: string[] }> {
-  const problems: string[] = [];
+): Promise<{ state: GitState; unknowns: string[] }> {
+  // 「判定できない」の一覧。metadata (ccx.json) の破損とは別物なので名前も分ける:
+  // 壊れた metadata は回収を妨げてはならない (壊れた dir こそ residue として残る)。
+  // ここで数えるのは git が答えられなかった安全上の問いだけ。
+  const unknowns: string[] = [];
 
   // branch は表示用。判らなくても危険ではない。
   const branch = await run(["branch", "--show-current"], path).catch(() => "");
@@ -418,7 +421,7 @@ async function foreignGitState(
   try {
     dirty = (await run(["status", "--porcelain"], path)).trim() !== "";
   } catch {
-    problems.push("cannot determine whether the working tree is dirty");
+    unknowns.push("cannot determine whether the working tree is dirty");
   }
 
   let stashes = 0;
@@ -428,7 +431,7 @@ async function foreignGitState(
     const stash = await run(["stash", "list", "--format=%gd"], path);
     stashes = stash.split("\n").filter((l) => l.startsWith("stash@{")).length;
   } catch {
-    problems.push("cannot determine whether there are stashes");
+    unknowns.push("cannot determine whether there are stashes");
   }
 
   let hasUpstream = false;
@@ -462,7 +465,7 @@ async function foreignGitState(
       hasUpstream,
       stashes,
     },
-    problems,
+    unknowns,
   };
 }
 

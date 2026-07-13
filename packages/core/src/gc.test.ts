@@ -599,6 +599,21 @@ describe("probe の失敗は fail-closed", () => {
     expect(blockers(info)).toContain("cannot determine whether other worktrees are registered");
   });
 
+  test("壊れた metadata は回収を妨げない (git が答えられなかった問いだけが blocker)", async () => {
+    // 「判定できない」と「読めない metadata」は別物。ccx.json が壊れているからといって
+    // 消せなくすると、壊れた dir こそが residue として永久に残る (issue #13 の罠)。
+    const dir = await clone("broken-meta");
+    await Bun.write(join(dir, ".git", "ccx.json"), "{ this is not json\n");
+    await Bun.write(join(dir, ".git", "ccx.state"), "also not json\n");
+
+    const info = await scanOne(dir, git);
+
+    expect(info.meta).toBeNull();
+    expect(info.state).toBeNull();
+    expect(blockers(info)).toEqual([]);
+    expect(isSafeToRemove(info)).toBe(true);
+  });
+
   test("probe が全部落ちても、削除対象にはならない", async () => {
     const dir = await clone("broken-all");
     const info = await scanOne(dir, failing("status", "stash", "worktree", "rev-list"));
