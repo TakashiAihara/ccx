@@ -36,6 +36,8 @@ export type NewRepodirOptions = {
   model?: string;
   /** mirror の鮮度を問わず必ず remote update する */
   refresh?: boolean;
+  /** submodule を初期化する (既定 true) */
+  recurseSubmodules?: boolean;
 };
 
 export type NewRepodirResult = {
@@ -72,6 +74,16 @@ export async function createRepodir(
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
   await git(["remote", "set-url", "origin", cloneUrl(spec)], path);
+
+  // submodule は origin を直した「後」に取る。相対 URL (../foo.git) は origin を基準に
+  // 解決されるため、順序を逆にすると mirror のローカル path を基準に解決してしまう。
+  //
+  // mirror は superproject の object しか持たないので submodule 本体は network から取る。
+  // --reference で mirror を参照させれば速いが alternates による結合が生まれ、repodir の
+  // 疎結合という前提を壊すため採らない。
+  if (opts.recurseSubmodules ?? true) {
+    await git(["submodule", "update", "--init", "--recursive", "--quiet"], path);
+  }
 
   const meta: RepodirMeta = {
     schema: META_SCHEMA,
