@@ -162,7 +162,13 @@ repodir
     "--root <path>",
     "scan this directory tree instead of the repodir root. Use it to drain clones ccx " +
       "did not create (they are never moved: their session history is keyed by their path). " +
-      "The same safety checks apply.",
+      "Requires --repo: a tree ccx does not own also holds canonical clones, so what gets " +
+      "reclaimed must be named. The same safety checks apply, plus ignored files.",
+  )
+  .option(
+    "--allow-ignored <path...>",
+    "ignored paths that are safe to lose, e.g. .serena/ — with --root, any other ignored " +
+      "path (a .env, a credential) blocks removal, because git cannot restore it",
   )
   .option("--finished-only", "only reclaim repodirs that are marked done, or whose goal is closed")
   .option("--check-goal", "ask gh whether the linked issue is closed / the PR is merged")
@@ -183,6 +189,18 @@ repodir
     if (o.root) {
       foreignRoot = resolve(expandTilde(o.root));
 
+      // ccx が所有していないツリーには、使い捨ての clone と canonical な clone が
+      // 混ざって住んでいる (~/.ghq の 194 repo のうち、連番 clone は 55 個だけ)。
+      // canonical clone は clean で push 済みなのが普通で、blockers では止まらない。
+      // だから「何を回収するか」を名指しさせる。一括走査は許さない。
+      if (!o.repo) {
+        throw new Error(
+          "--root requires --repo. A tree ccx does not own also holds canonical clones, " +
+            "which are clean and pushed and would therefore be reclaimed. " +
+            "Name what you are draining, e.g. --repo owner/legacy-clone",
+        );
+      }
+
       // root の指定を 1 つ間違えれば home ごと舐める。走査する前に弾く。
       const unsafe = unsafeRoot(foreignRoot);
       if (unsafe) throw new Error(`--root ${foreignRoot}: ${unsafe}`);
@@ -193,6 +211,7 @@ repodir
       infos = await scanTree(foreignRoot, {
         filter: o.repo,
         idleMs,
+        allowIgnored: o.allowIgnored,
         defaultHost: cfg.defaultHost,
       });
     } else {

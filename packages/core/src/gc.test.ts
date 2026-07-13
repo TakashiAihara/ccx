@@ -296,6 +296,75 @@ describe("foreign tree (ccx が作っていない clone)", () => {
     expect(blockers(await scanOne(dir))).toContain("a session is active");
   });
 
+  test("ignored ファイルがあれば止める (git status には出ない)", async () => {
+    // clean で push 済みでも、.env のように git がどこにも持っていない実体は残りうる。
+    // 消したら二度と戻らない。repodir は ccx が作った使い捨てなので該当しないが、
+    // foreign dir は人間と他のツールが育てたものなので、ここを見ないと .env が飛ぶ。
+    const dir = await clone("with-ignored");
+    await Bun.write(join(dir, ".gitignore"), ".env\n");
+    await git(["add", ".gitignore"], dir);
+    await git(["commit", "--quiet", "-m", "ignore .env"], dir);
+    // main は他の clone の起点なので触らない。commit がどこかの remote から到達
+    // できれば「push 済み」になる。
+    await git(["push", "--quiet", "origin", "HEAD:refs/heads/with-ignored"], dir);
+    await Bun.write(join(dir, ".env"), "SECRET=1\n");
+
+    const info = await scanOne(dir);
+    expect(info.git.dirty).toBe(false);
+    expect(info.git.unpushed).toBe(0);
+    expect(blockers(info)).toContain("1 ignored path(s) that git cannot restore (.env)");
+  });
+
+  test("ignored が無ければ、その guard は回収を妨げない", async () => {
+    const dir = await clone("no-ignored");
+
+    expect(blockers(await scanOne(dir))).toEqual([]);
+  });
+
+  test("捨ててよい ignored を名指しすれば回収できるが、名指ししていないものは残る", async () => {
+    // 実測: 旧 clone 55 個のうち 50 個が .serena/ (ツールが再生成するキャッシュ) だけを
+    // 抱えていた。素朴に「ignored があれば止める」では回収が成立しない。かといって
+    // ccx が「キャッシュらしき名前」を推測して捨てるのは、推測で消すということ。
+    // 捨ててよいものは人間が名指しする。
+    const cache = await clone("cache-only");
+    await Bun.write(join(cache, ".gitignore"), ".serena/\n.env\n");
+    await git(["add", ".gitignore"], cache);
+    await git(["commit", "--quiet", "-m", "ignore"], cache);
+    await git(["push", "--quiet", "origin", "HEAD:refs/heads/cache-only"], cache);
+    await Bun.write(join(cache, ".serena", "cache.json"), "{}\n");
+
+    const secret = await clone("cache-and-secret");
+    await Bun.write(join(secret, ".gitignore"), ".serena/\n.env\n");
+    await git(["add", ".gitignore"], secret);
+    await git(["commit", "--quiet", "-m", "ignore"], secret);
+    await git(["push", "--quiet", "origin", "HEAD:refs/heads/cache-and-secret"], secret);
+    await Bun.write(join(secret, ".serena", "cache.json"), "{}\n");
+    await Bun.write(join(secret, ".env"), "SECRET=1\n");
+
+    const infos = await scanTree(legacy, { allowIgnored: [".serena/"] });
+    const one = (p: string) => infos.find((i) => i.path === p)!;
+
+    expect(blockers(one(cache))).toEqual([]);
+    expect(blockers(one(secret))).toContain(
+      "1 ignored path(s) that git cannot restore (.env)",
+    );
+  });
+
+  test("repodir は ignored を持っていても止まらない (ccx が作った使い捨て)", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    await Bun.write(join(r.path, ".gitignore"), "node_modules\n");
+    await git(["config", "user.email", "t@example.com"], r.path);
+    await git(["config", "user.name", "t"], r.path);
+    await git(["add", ".gitignore"], r.path);
+    await git(["commit", "--quiet", "-m", "ignore"], r.path);
+    await git(["push", "--quiet", "origin", "HEAD:refs/heads/ignored-test"], r.path);
+    await git(["branch", "--quiet", "--set-upstream-to", "origin/ignored-test"], r.path);
+    await Bun.write(join(r.path, "node_modules", "x.js"), "//\n");
+
+    const info = find(await scanRepodirs(cfg), r.path);
+    expect(blockers(info)).toEqual([]);
+  });
+
   test("worktree が登録されていれば止める", async () => {
     const dir = await clone("with-worktree");
     await git(["worktree", "add", "--quiet", "--detach", join(tmp, "wt")], dir);

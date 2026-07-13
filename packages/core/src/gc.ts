@@ -238,6 +238,8 @@ export async function reclaim(candidates: Candidate[]): Promise<string[]> {
 export type TreeScanOptions = {
   /** path に含まれる文字列で絞る */
   filter?: string;
+  /** 失っても構うと人間が名指しした ignored path (例: ".serena/") */
+  allowIgnored?: string[];
   /** session が生きているとみなす最終更新からの時間 (ミリ秒) */
   idleMs?: number;
   /** root から何階層まで潜って .git を探すか */
@@ -257,12 +259,15 @@ export async function scanTree(root: string, opts: TreeScanOptions = {}): Promis
   const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const defaultHost = opts.defaultHost ?? "github.com";
+  const allowIgnored = opts.allowIgnored ?? [];
 
   const paths: string[] = [];
   await walk(resolve(root), 0, maxDepth, paths);
 
   const hits = opts.filter ? paths.filter((p) => p.includes(opts.filter!)) : paths;
-  const all = await Promise.all(hits.map((p) => readForeign(p, idleMs, defaultHost)));
+  const all = await Promise.all(
+    hits.map((p) => readForeign(p, idleMs, defaultHost, allowIgnored)),
+  );
 
   return all.sort((a, b) => a.created.getTime() - b.created.getTime());
 }
@@ -293,12 +298,17 @@ async function isGitWorkTree(dir: string): Promise<boolean> {
   }
 }
 
-async function readForeign(path: string, idleMs: number, defaultHost: string): Promise<ScannedDir> {
+async function readForeign(
+  path: string,
+  idleMs: number,
+  defaultHost: string,
+  allowIgnored: string[],
+): Promise<ScannedDir> {
   const [g, s, spec, extra, created, meta, state] = await Promise.all([
     foreignGitState(path),
     foreignSessionState(path, idleMs),
     foreignSpec(path, defaultHost),
-    foreignExtraBlockers(path),
+    foreignExtraBlockers(path, allowIgnored),
     createdAt(path),
     readMeta(path).catch((): RepodirMeta | null => null),
     readState(path).catch((): RepodirState | null => null),
@@ -384,8 +394,14 @@ async function foreignSessionState(path: string, idleMs: number): Promise<Sessio
   };
 }
 
-/** foreign dir でだけ起きうる危険。repodir は生成直後の clone なので該当しない。 */
-async function foreignExtraBlockers(path: string): Promise<string[]> {
+/**
+ * foreign dir でだけ起きうる危険。repodir は ccx が作った使い捨てなので該当しない。
+ *
+ * repodir と foreign dir の決定的な違いは、誰が作ったか。repodir の中身は ccx が
+ * mirror から復元できるものしか無い。foreign dir は人間と他のツールが何年もかけて
+ * 育てたもので、git が知らない実体を抱えている。
+ */
+async function foreignExtraBlockers(path: string, allowIgnored: string[]): Promise<string[]> {
   const out: string[] = [];
 
   try {
@@ -397,7 +413,40 @@ async function foreignExtraBlockers(path: string): Promise<string[]> {
     // worktree を列挙できない = git が読めない。unpushed 側が null になって止まる。
   }
 
+  const ignored = await ignoredPaths(path);
+  const kept = ignored.filter((p) => !allowIgnored.includes(p));
+  if (kept.length > 0) {
+    const shown = kept.slice(0, 3).join(", ");
+    const rest = kept.length > 3 ? `, +${kept.length - 3} more` : "";
+    out.push(`${kept.length} ignored path(s) that git cannot restore (${shown}${rest})`);
+  }
+
   return out;
+}
+
+/**
+ * git status は ignored を見ない。つまり dirty でも未 push でもない repo に、git の
+ * どこにも存在しない実体 (.env / 認証情報 / ローカル設定) が残りうる。「git 的に失う
+ * ものが無い」と「実際に失うものが無い」は違う。消したら二度と戻らない。
+ *
+ * ただし ignored には、失うと困るもの (.env) と、ツールが再生成するだけのもの
+ * (.serena/ , node_modules/) が混ざる。実測では旧 clone 55 個のうち 50 個が .serena/
+ * だけを抱えており、素朴に「ignored があれば止める」とすると回収が成立しない。
+ * かといって「キャッシュらしき名前」を ccx が推測して捨てるのは、捨てる側の推測で
+ * 消すということ。だから既定は止める側に倒し、捨ててよい path は allowIgnored で
+ * 名指しさせる。何を捨てるかは、いつでも人間が名指しする。
+ */
+async function ignoredPaths(path: string): Promise<string[]> {
+  try {
+    const st = await git(["status", "--porcelain", "--ignored"], path);
+    return st
+      .split("\n")
+      .filter((l) => l.startsWith("!! "))
+      .map((l) => l.slice(3).trim());
+  } catch {
+    // git が読めない。unpushed 側が null になって止まる。
+    return [];
+  }
 }
 
 async function foreignSpec(path: string, defaultHost: string): Promise<RepoSpec> {
