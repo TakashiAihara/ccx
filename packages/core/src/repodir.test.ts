@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -215,6 +215,17 @@ describe("createRepodir", () => {
   test("--refresh で mirror を強制更新する", async () => {
     const r = await createRepodir(cfg, spec(), { refresh: true }, "0.1.0");
     expect(r.mirror.updated).toBe(true);
+  });
+
+  test("--no-refresh は鮮度チェックを飛ばす (mirror が古くても remote に触らない)", async () => {
+    const mirror = mirrorPath(cfg, spec());
+    const old = new Date(Date.now() - 10 * cfg.mirrorMaxAgeMs);
+    for (const f of ["FETCH_HEAD", "packed-refs", "HEAD"]) {
+      await utimes(join(mirror, f), old, old).catch(() => {});
+    }
+
+    const r = await createRepodir(cfg, spec(), { refresh: false }, "0.1.0");
+    expect(r.mirror).toMatchObject({ created: false, updated: false, stale: false });
   });
 
   test("存在しないブランチを指定したら失敗する", async () => {

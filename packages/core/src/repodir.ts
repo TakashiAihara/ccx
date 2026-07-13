@@ -34,7 +34,10 @@ export type NewRepodirOptions = {
   pr?: PrIntent;
   agent?: string;
   model?: string;
-  /** mirror の鮮度を問わず必ず remote update する */
+  /**
+   * mirror の鮮度チェックの上書き。
+   *   未指定 = cfg.mirrorMaxAgeMs で判定 / true = 必ず更新 / false = チェックごと飛ばす
+   */
   refresh?: boolean;
   /** clone / origin に使う protocol。省略時は cfg.protocol */
   protocol?: Protocol;
@@ -46,7 +49,7 @@ export type NewRepodirResult = {
   path: string;
   dirId: string;
   meta: RepodirMeta;
-  mirror: { created: boolean; updated: boolean };
+  mirror: { created: boolean; updated: boolean; stale: boolean };
 };
 
 export async function createRepodir(
@@ -56,7 +59,7 @@ export async function createRepodir(
   version: string,
 ): Promise<NewRepodirResult> {
   const protocol = opts.protocol ?? cfg.protocol;
-  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol });
+  const mirror = await ensureMirror(cfg, spec, { refresh: opts.refresh, protocol });
 
   const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
   await mkdir(parent, { recursive: true });
@@ -105,5 +108,10 @@ export async function createRepodir(
   await writeMeta(path, meta);
   await writeState(path, { desired: "stopped", done: null });
 
-  return { path, dirId, meta, mirror: { created: mirror.created, updated: mirror.updated } };
+  return {
+    path,
+    dirId,
+    meta,
+    mirror: { created: mirror.created, updated: mirror.updated, stale: mirror.stale },
+  };
 }
