@@ -273,12 +273,27 @@ repodir
     console.log(picked.path);
   });
 
-/** mirror に何が起きたか。stale は「更新できず古いまま使った」で、警告は core が stderr に出す。 */
-function mirrorNote(m: { created: boolean; updated: boolean; stale: boolean }): string {
+/**
+ * mirror に何が起きたか。
+ *
+ * 「確認して新鮮だった (cached)」と「そもそも確認していない (unchecked)」を同じ表示にすると、
+ * --no-refresh で 1 週間前の mirror を使っていても新鮮に見えてしまう。年齢を添えて区別する。
+ * stale は「更新を試みたが失敗し、古いまま使った」で、警告そのものは core が stderr に出す。
+ */
+function mirrorNote(m: {
+  created: boolean;
+  updated: boolean;
+  stale: boolean;
+  checked: boolean;
+  ageMs: number | null;
+}): string {
   if (m.created) return "created";
   if (m.updated) return "updated";
-  if (m.stale) return "stale (update failed)";
-  return "cached";
+
+  const age = m.ageMs === null ? "unknown age" : `last fetched ${humanAge(new Date(Date.now() - m.ageMs))} ago`;
+  if (m.stale) return `stale — update failed, ${age}`;
+  if (!m.checked) return `unchecked — ${age}`;
+  return `cached — ${age}`;
 }
 
 function humanAge(d: Date): string {

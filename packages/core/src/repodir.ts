@@ -49,7 +49,13 @@ export type NewRepodirResult = {
   path: string;
   dirId: string;
   meta: RepodirMeta;
-  mirror: { created: boolean; updated: boolean; stale: boolean };
+  mirror: {
+    created: boolean;
+    updated: boolean;
+    stale: boolean;
+    checked: boolean;
+    ageMs: number | null;
+  };
 };
 
 export async function createRepodir(
@@ -112,6 +118,12 @@ export async function createRepodir(
     path,
     dirId,
     meta,
-    mirror: { created: mirror.created, updated: mirror.updated, stale: mirror.stale },
+    mirror: {
+      created: mirror.created,
+      updated: mirror.updated,
+      stale: mirror.stale,
+      checked: mirror.checked,
+      ageMs: mirror.ageMs,
+    },
   };
 }

@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, utimes } from "node:fs/promises";
+import { chmod, mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -209,5 +209,87 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
     const missing = parseRepoSpec("test-owner/missing", { defaultHost: "github.com" });
 
     expect(ensureMirror(cfg, missing)).rejects.toThrow();
+  });
+});
+
+describe("並行実行", () => {
+  test("mirror がまだ無い repo に同時に rd new を撃っても、誰も落ちない", async () => {
+    // 同じ repo に並列でエージェントを立てるのは、この道具の中心的な使い方そのもの。
+    // path へ直接 clone すると、負けた側が destination path already exists で落ちる。
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => ensureMirror(cfg, spec())),
+    );
+
+    // 作れたのはちょうど 1 人。残りは勝者の mirror をそのまま使う
+    expect(results.filter((r) => r.created)).toHaveLength(1);
+    for (const r of results) {
+      expect(r.path).toBe(mirrorPath(cfg, spec()));
+      expect(await git(["rev-parse", "--verify", "refs/heads/main"], r.path)).toBeTruthy();
+    }
+
+    // 敗者の temp が残っていない
+    const leftovers = [...new Bun.Glob("*.tmp-*").scanSync({ cwd: cfg.mirrorRoot, onlyFiles: false })];
+    expect(leftovers).toBeEmpty();
+  });
+
+  test("既存 mirror に同時に rd new を撃っても、誰も落ちない (更新の競合は stale に落ちる)", async () => {
+    const first = await ensureMirror(cfg, spec());
+    await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
+
+    const c = capture();
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => ensureMirror(cfg, spec(), { refresh: true, warn: c.warn })),
+    );
+
+    // 更新できたか stale かは競合次第。決めているのは「誰も throw しない」こと
+    for (const r of results) expect(r.updated || r.stale).toBe(true);
+    expect(await git(["rev-parse", "--is-bare-repository"], first.path)).toBe("true");
+  });
+
+  test("origin の付け替えに失敗しても落とさず、古いまま使う (config のロック競合を想定)", async () => {
+    // 並行実行時の .git/config ロック競合を、config を書けなくすることで決定的に再現する。
+    // set-url は remote update と同じく remote に出るための下準備なので、同じ扱いに落ちる。
+    const first = await ensureMirror(cfg, spec());
+    await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
+    await chmod(join(first.path, "config"), 0o444);
+
+    const c = capture();
+    try {
+      // protocol を変えて set-url を必ず走らせる
+      const r = await ensureMirror(cfg, spec(), { protocol: "ssh", warn: c.warn });
+
+      expect(r.stale).toBe(true);
+      expect(c.lines.join("\n")).toContain("could not update the mirror");
+    } finally {
+      await chmod(join(first.path, "config"), 0o644);
+    }
+  });
+});
+
+describe("鮮度を確認していないことを、新鮮と偽らない", () => {
+  test("--no-refresh は checked: false と実年齢を返す (呼び手が古さを表示できる)", async () => {
+    const first = await ensureMirror(cfg, spec());
+    await ageMirror(first.path, 7 * 86_400_000);
+
+    const r = await ensureMirror(cfg, spec(), { refresh: false });
+
+    expect(r.checked).toBe(false);
+    expect(r.stale).toBe(false);
+    expect(r.ageMs).toBeGreaterThan(6 * 86_400_000);
+  });
+
+  test("確認して新鮮だったときは checked: true (--no-refresh と区別できる)", async () => {
+    await ensureMirror(cfg, spec());
+    const r = await ensureMirror(cfg, spec());
+
+    expect(r.checked).toBe(true);
+    expect(r.ageMs).toBeLessThan(cfg.mirrorMaxAgeMs);
+  });
+
+  test("更新した直後の年齢は 0", async () => {
+    await ensureMirror(cfg, spec());
+    const r = await ensureMirror(cfg, spec(), { refresh: true });
+
+    expect(r).toMatchObject({ updated: true, checked: true, ageMs: 0 });
   });
 });

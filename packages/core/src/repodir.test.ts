@@ -340,15 +340,20 @@ describe("protocol", () => {
     expect(await git(["config", "--get", "remote.origin.mirror"], mirror)).toBe("true");
   });
 
-  test("protocol を切り替えると、新しい URL で実際に fetch し直す", async () => {
+  test("protocol を切り替えると、次に remote へ出るときに新しい URL で fetch し直す", async () => {
     const c: Config = { ...cfg, root: join(tmp, "repodirs-switch"), mirrorRoot: join(tmp, "mirror-switch") };
 
     await createRepodir(c, spec(), {}, "0.1.0");
     const mirror = mirrorPath(c, spec());
     expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(REMOTE);
 
-    // origin が新 URL に変わったことだけを見ても、その URL で本当に取ってこられるかは分からない。
-    // forge に新しい commit を積み、ssh で引き直して、それが mirror に届くところまでを通す。
+    // origin は fetch にしか効かないので、remote に出ない限り触らない (--no-refresh は
+    // 「mirror に一切触らない」ことが売りで、set-url もその「触る」に含む)
+    await createRepodir({ ...c, protocol: "ssh" }, spec(), { refresh: false }, "0.1.0");
+    expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(REMOTE);
+
+    // forge に新しい commit を積む。origin の URL 文字列が変わったことだけを見ても、その URL で
+    // 本当に取ってこられるかは分からないので、mirror と repodir に届くところまでを通す。
     await git(["switch", "--quiet", "main"], join(tmp, "work"));
     await Bun.write(join(tmp, "work", "after-switch.md"), "new\n");
     await git(["add", "after-switch.md"], join(tmp, "work"));
@@ -356,7 +361,7 @@ describe("protocol", () => {
     await git(["push", "--quiet", source, "main"], join(tmp, "work"));
     const head = await git(["rev-parse", "main"], join(tmp, "work"));
 
-    // refresh: true で鮮度チェックを外し、実際に remote update を走らせる
+    // remote に出る番になったら追従し、その URL で実際に取ってくる
     const r = await createRepodir({ ...c, protocol: "ssh" }, spec(), { refresh: true }, "0.1.0");
 
     expect(r.mirror.updated).toBe(true);

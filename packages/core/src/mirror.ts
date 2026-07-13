@@ -73,12 +73,27 @@ async function syncOrigin(path: string, url: string): Promise<void> {
   await git(["remote", "set-url", "origin", url], path);
 }
 
+/** mirror の最終 fetch からの経過 (ミリ秒)。時刻が取れなければ null。 */
+async function age(path: string): Promise<number | null> {
+  const fetched = await lastFetchedAt(path);
+  return fetched ? Date.now() - fetched.getTime() : null;
+}
+
 export type EnsureMirrorResult = {
   path: string;
   created: boolean;
   updated: boolean;
   /** 更新すべきだったが失敗し、古い mirror をそのまま使っている */
   stale: boolean;
+  /**
+   * 鮮度を確認したか。--no-refresh のときだけ false になる。
+   *
+   * 「確認して新鮮だった」と「そもそも確認していない」を混ぜると、1 週間前の mirror が
+   * 新鮮なものと同じ顔で出てくる。呼び手が両者を区別できるよう、別の値として持つ。
+   */
+  checked: boolean;
+  /** 最終 fetch からの経過 (ミリ秒)。更新した直後は 0、時刻が取れなければ null。 */
+  ageMs: number | null;
 };
 
 export type EnsureMirrorOptions = {
@@ -140,38 +155,36 @@ export async function ensureMirror(
 
   if (!(await exists(path))) {
     const created = await cloneMirror(url, path);
-    return { path, created, updated: false, stale: false };
+    const ageMs = created ? 0 : await age(path);
+    return { path, created, updated: false, stale: false, checked: true, ageMs };
   }
 
-  // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
-  // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
-  //
-  // ただし origin の付け替えは fetch の下準備でしかない。並行実行で .git/config のロックを
-  // 取り損ねたときに、それだけで repodir の生成そのものを諦めるのは割に合わない。失敗しても
-  // 警告に留めて進み、fetch は (古い protocol の origin で) 続行する。
-  try {
-    await syncOrigin(path, url);
-  } catch (e) {
-    const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
-    warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
+  const ageMs = await age(path);
+
+  // --no-refresh は「mirror に一切触らない」ことが売りなので、ここで打ち切る。origin の
+  // 追従 (syncOrigin) も remote に出るときにしか要らないので、この後ろに置いてある。
+  // 鮮度は見ていないので checked: false。呼び手はこれを「新鮮」と混同してはいけない。
+  if (opts.refresh === false) {
+    return { path, created: false, updated: false, stale: false, checked: false, ageMs };
   }
 
-  if (opts.refresh === false) return { path, created: false, updated: false, stale: false };
-
-  const fetched = await lastFetchedAt(path);
-  const ageMs = fetched ? Date.now() - fetched.getTime() : null;
   const needsUpdate = opts.refresh === true || ageMs === null || ageMs > cfg.mirrorMaxAgeMs;
-  if (!needsUpdate) return { path, created: false, updated: false, stale: false };
+  if (!needsUpdate) return { path, created: false, updated: false, stale: false, checked: true, ageMs };
 
   try {
+    // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
+    // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
+    //
+    // set-url も fetch と同じく失敗しうる (並行実行時の .git/config のロック競合など) ので、
+    // 更新一式をまとめて try で囲む。ここから先の失敗は全て「古いまま使う」に落とす。
+    await syncOrigin(path, url);
     await git(["remote", "update", "--prune"], path);
-    return { path, created: false, updated: true, stale: false };
+    return { path, created: false, updated: true, stale: false, checked: true, ageMs: 0 };
   } catch (e) {
-    const age = ageMs === null ? "unknown age" : `last fetched ${humanAge(ageMs)} ago`;
-    const reason = failureReason(e);
-    warn(`ccx: warning: could not update the mirror (${age}): ${reason}`);
+    const when = ageMs === null ? "unknown age" : `last fetched ${humanAge(ageMs)} ago`;
+    warn(`ccx: warning: could not update the mirror (${when}): ${failureReason(e)}`);
     warn(`ccx: using the existing mirror as-is; the repodir may be behind ${specToSlug(spec)}`);
-    return { path, created: false, updated: false, stale: true };
+    return { path, created: false, updated: false, stale: true, checked: true, ageMs };
   }
 }
 
