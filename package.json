@@ -2,9 +2,13 @@
   "name": "ccx-monorepo",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "build": "bun build apps/cli/src/index.ts --compile --outfile ccx",
+    "install:local": "bun run build && mkdir -p \"${CCX_INSTALL_DIR:-$HOME/.local/bin}\" && install -m 755 ccx \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx\" && echo \"installed to ${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx\"",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
