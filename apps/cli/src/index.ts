@@ -12,6 +12,7 @@ import {
   reclaim,
   scanRepodirs,
   specToSlug,
+  summarizeProblems,
   type Goal,
   type PrIntent,
 } from "@ccx/core";
@@ -116,19 +117,24 @@ repodir
       return;
     }
 
-    const rows = infos.map((i) => ({
-      repo: `${i.spec.owner}/${i.spec.repo}`,
-      branch: i.git.branch ?? "-",
-      flags: [
-        i.session.active ? "session" : "",
-        i.git.dirty ? "dirty" : "",
-        i.git.unpushed ? `+${i.git.unpushed}` : "",
-        i.git.stashes ? `stash:${i.git.stashes}` : "",
-        i.state?.done ? "done" : "",
-      ].filter(Boolean).join(","),
-      age: humanAge(i.created),
-      task: i.meta?.initialTask ?? (i.metaError ? `!! ${i.metaError}` : "-"),
-    }));
+    const rows = infos.map((i) => {
+      const problem = summarizeProblems(i.problems);
+      return {
+        repo: `${i.spec.owner}/${i.spec.repo}`,
+        branch: i.git.branch ?? "-",
+        flags: [
+          i.session.active ? "session" : "",
+          i.git.dirty ? "dirty" : "",
+          i.git.unpushed ? `+${i.git.unpushed}` : "",
+          i.git.stashes ? `stash:${i.git.stashes}` : "",
+          i.state?.done ? "done" : "",
+          problem ? "broken" : "",
+        ].filter(Boolean).join(","),
+        age: humanAge(i.created),
+        // 壊れた repodir は task 欄に理由を出す。何のための dir か言えないこと自体が情報
+        task: i.meta?.initialTask ?? (problem ? `!! ${problem}` : "-"),
+      };
+    });
 
     const w = (k: keyof (typeof rows)[number]) =>
       Math.max(...rows.map((r) => r[k].length));
@@ -144,6 +150,16 @@ repodir
           r.task,
         ].join("  ").trimEnd(),
       );
+    }
+
+    // 表の 1 行に収まらない詳細は stderr に全部出す。stdout の表形式は壊さない
+    const broken = infos.filter((i) => i.problems.length > 0);
+    if (broken.length > 0) {
+      console.error(`\n${broken.length} repodir(s) with unreadable metadata:`);
+      for (const i of broken) {
+        console.error(`  ${i.dirId}  ${i.path}`);
+        for (const p of i.problems) console.error(`    ${p.message}`);
+      }
     }
   });
 

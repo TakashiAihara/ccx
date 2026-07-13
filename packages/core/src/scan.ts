@@ -13,7 +13,13 @@ import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { dirIdToDate, isDirId } from "./dirid.ts";
 import { git } from "./git.ts";
-import { readMeta, readState, type RepodirMeta, type RepodirState } from "./meta.ts";
+import {
+  loadMeta,
+  loadState,
+  type MetaProblem,
+  type RepodirMeta,
+  type RepodirState,
+} from "./meta.ts";
 import type { RepoSpec } from "./repospec.ts";
 
 /** この時間だけ session の JSONL が更新されていなければ、生きていないとみなす */
@@ -39,10 +45,16 @@ export type RepodirInfo = {
   dirId: string;
   spec: RepoSpec;
   created: Date;
+  /** 検証を通ったメタデータ。通らなければ null。半端に読めた値は渡さない */
   meta: RepodirMeta | null;
   state: RepodirState | null;
-  /** ccx.json が壊れている / 読めない場合の理由。壊れていても黙って飛ばさない */
-  metaError: string | null;
+  /**
+   * ccx.json / ccx.state の検証で見つかった問題。空なら健全。
+   *
+   * 壊れた repodir を黙って飛ばすと、正体不明のディレクトリが残る。それは各 dir に
+   * メタデータを持たせた理由そのものなので、読めなかったことを必ず持ち上げる。
+   */
+  problems: MetaProblem[];
   git: GitState;
   session: SessionState;
 };
@@ -120,35 +132,22 @@ async function readOne(
   dirId: string,
   idleMs: number,
 ): Promise<RepodirInfo> {
-  let meta: RepodirMeta | null = null;
-  let metaError: string | null = null;
-  try {
-    meta = await readMeta(path);
-    if (meta && typeof meta.schema !== "number") {
-      metaError = "ccx.json has no schema";
-      meta = null;
-    }
-  } catch (e) {
-    metaError = `ccx.json is unreadable: ${e instanceof Error ? e.message : String(e)}`;
-  }
-
-  let state: RepodirState | null = null;
-  try {
-    state = await readState(path);
-  } catch {
-    // state が壊れていても致命ではない。desired 不明として扱う
-  }
-
-  const [g, s] = await Promise.all([gitState(path), sessionState(path, idleMs)]);
+  const [meta, state, g, s] = await Promise.all([
+    loadMeta(path),
+    loadState(path),
+    gitState(path),
+    sessionState(path, idleMs),
+  ]);
 
   return {
     path,
     dirId,
     spec,
-    created: meta?.created ? new Date(meta.created) : dirIdToDate(dirId),
-    meta,
-    state,
-    metaError,
+    // 生成時刻は meta が正なら meta から、壊れていれば dir-id から導出する
+    created: meta.value ? new Date(meta.value.created) : dirIdToDate(dirId),
+    meta: meta.value,
+    state: state.value,
+    problems: [...meta.problems, ...state.problems],
     git: g,
     session: s,
   };

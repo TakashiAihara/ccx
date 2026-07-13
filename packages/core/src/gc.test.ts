@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { blockers, isSafeToRemove, plan, reclaim } from "./gc.ts";
 import { git } from "./git.ts";
-import { writeState } from "./meta.ts";
+import { metaPath, statePath, writeState } from "./meta.ts";
 import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
 import { scanRepodirs, type RepodirInfo } from "./scan.ts";
@@ -149,6 +149,45 @@ describe("done マーカーは許可ではない", () => {
 
     expect(p.remove).toHaveLength(0);
     expect(p.keep[0]!.blockers).toContain("not finished");
+  });
+});
+
+describe("壊れた metadata は回収を妨げない", () => {
+  // 検証を足したことで「壊れた dir こそ消せない」罠が生まれると、issue #13 が防ごうと
+  // した「正体不明のディレクトリが溜まる」状態を、逆に固定してしまう。gc の判断材料は
+  // あくまで作業の有無 (blockers) であって、metadata が読めるかどうかではない。
+  test("ccx.json が壊れていても、作業が無ければ回収できる", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    await Bun.write(metaPath(r.path), '{ "schema": 1, "agent"');
+    await rm(statePath(r.path));
+
+    const info = find(await scanRepodirs(cfg), r.path);
+
+    // 壊れていることは見えている。それでも回収は妨げない
+    expect(info.meta).toBeNull();
+    expect(info.state).toBeNull();
+    expect(info.problems).not.toEqual([]);
+    expect(blockers(info)).toEqual([]);
+
+    const p = await plan([info], {});
+    expect(p.remove).toHaveLength(1);
+
+    const removed = await reclaim(p.remove);
+    expect(removed).toEqual([r.path]);
+    expect(await Bun.file(join(r.path, "README.md")).exists()).toBe(false);
+  });
+
+  test("metadata が壊れていても、作業を持っていれば守る", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    await Bun.write(metaPath(r.path), "not json at all");
+    await Bun.write(join(r.path, "precious.txt"), "do not lose me\n");
+
+    const info = find(await scanRepodirs(cfg), r.path);
+    expect(blockers(info)).toContain("the working tree is dirty");
+
+    const p = await plan([info], {});
+    expect(p.remove).toHaveLength(0);
+    expect(await Bun.file(join(r.path, "precious.txt")).exists()).toBe(true);
   });
 });
 
