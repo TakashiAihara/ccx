@@ -252,8 +252,12 @@ repodir
 
     const picked = await pickRepodir(infos);
 
-    // 選ばなかった (ESC / Ctrl-C) のはエラーではない。ただし何も出力しないまま 0 で終わると
-    // `cd "$(ccx rd cd)"` が HOME に飛んでしまうので、非 0 で抜けて cd 自体を起こさせない。
+    // 選ばなかった (ESC / Ctrl-C) のはエラーではないが、成功でもない。
+    //
+    // 注意: この終了コードは `cd "$(ccx rd cd)"` の外側の cd には伝わらない (コマンド置換は
+    // 終了コードを捨てる)。だから 130 は「cd を止める」ためのものではなく、呼び出し側が
+    // 中断を検知できるようにするためのもの。空文字を cd に渡さない責任は呼び出し側にあり、
+    // README はそのための ccd() を示している。
     if (!picked) {
       console.error("nothing picked");
       process.exit(130);

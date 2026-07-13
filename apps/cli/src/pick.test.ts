@@ -68,6 +68,22 @@ test("task が無い repodir も候補から落とさない", () => {
   expect(candidateLine(info("01AAA", undefined)).split("\t").at(-1)).toBe("-");
 });
 
+test("initialTask の改行・TAB は潰す。1 候補 = 1 行 / TAB 区切りが選択のプロトコルなので", () => {
+  const line = candidateLine(info("01AAA", "fix the\nflaky\ttest\n\nin scan.ts"));
+
+  expect(line.split("\n")).toHaveLength(1);
+  expect(line.split("\t")).toHaveLength(5); // 列が増えていない
+  expect(line.split("\t").at(-1)).toBe("fix the flaky test in scan.ts");
+});
+
+test("改行を含む task でも dir-id で引き当てられる (行が割れていない証拠)", () => {
+  const infos = [info("01AAA", "a"), info("01BBB", "multi\nline\ttask")];
+  const lines = infos.map(candidateLine).join("\n").split("\n");
+
+  expect(lines).toHaveLength(2);
+  expect(resolveSelection(infos, lines[1]!)?.dirId).toBe("01BBB");
+});
+
 test("壊れた ccx.json は隠さず候補行に出す", () => {
   const line = candidateLine(info("01AAA", undefined, { metaError: "unexpected token" }));
   expect(line.split("\t").at(-1)).toBe("!! unexpected token");

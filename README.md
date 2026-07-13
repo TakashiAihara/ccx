@@ -52,20 +52,22 @@ cd "$(ccx repodir new owner/repo --task 'fix the flaky test')"
 ccx rd new owner/repo --from develop --issue owner/repo#123 --reviewer someone
 
 # Go back to one. Pick it by what it was created for — the id is never typed.
-cd "$(ccx rd cd)"
+ccd() {
+  local dir
+  dir="$(ccx rd cd)" || return   # nothing picked: stop here, do not cd
+  cd "$dir"
+}
 ```
 
-`cd` prints the chosen path on stdout and everything else on stderr, which is what lets you wrap it
-in `cd "$(...)"`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your
-own fzf keybindings and layout apply — and a numbered prompt when it is not. Both draw on the
-terminal, not on stdout, so capturing the output does not break the display. Choosing nothing exits
-non-zero, so an abandoned pick never sends you to `$HOME`.
+`cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
+hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own
+fzf keybindings and layout apply — and a numbered prompt when it is not. Both draw on the terminal,
+not on stdout, so capturing the output does not break the display.
 
-If you want a shorter word for it, that belongs in your shell, not in ccx:
-
-```bash
-ccd() { cd "$(ccx rd cd)" || return; }
-```
+Abandoning the pick exits `130`, and the wrapper above is written to honour that. Note that
+`cd "$(ccx rd cd)"` would **not**: command substitution discards the exit status, so `cd` still runs,
+with an empty argument. No common shell treats that as `$HOME` — bash errors, zsh and dash stay put —
+so it is not dangerous, merely silent. Checking the status is still the honest way to write it.
 
 Repodirs live under a path that carries the meaning, so the directory id itself can be opaque:
 

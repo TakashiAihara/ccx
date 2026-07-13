@@ -20,6 +20,15 @@ import { createReadStream, createWriteStream } from "node:fs";
 
 import type { RepodirInfo } from "@ccx/core";
 
+/**
+ * 候補行のプロトコルは「1 候補 = 1 行、フィールド区切りは TAB」。initialTask は人間が書いた
+ * 自由文なので、改行も TAB も入りうる。そのまま流すと 1 候補が複数行に割れ、TAB は列を増やす
+ * ので、選択そのものが壊れる。ここで潰すのは表示の都合ではなくプロトコルの都合。
+ */
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
 /** fzf に渡す 1 行。先頭フィールドは dir-id で、表示からは隠す (--with-nth=2..)。 */
 export function candidateLine(info: RepodirInfo): string {
   const flags = [
@@ -34,9 +43,9 @@ export function candidateLine(info: RepodirInfo): string {
   return [
     info.dirId,
     `${info.spec.owner}/${info.spec.repo}`,
-    info.git.branch ?? "-",
+    oneLine(info.git.branch ?? "-"),
     flags || "-",
-    task,
+    oneLine(task) || "-",
   ].join("\t");
 }
 

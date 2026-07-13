@@ -142,9 +142,19 @@ layered on top of the id scheme; it is the thing that pays for it.
 The picker is delegated to `fzf`, with a numbered prompt when it is absent. ccx does not grow a TUI
 of its own, and whatever fzf configuration the user already has keeps working. Both draw their UI on
 the terminal rather than stdout, which is what allows the chosen path to be the command's stdout —
-the same contract `new` already had, and the reason `cd "$(ccx rd cd)"` works at all. Picking nothing
-must exit non-zero: a `cd` with an empty argument goes to `$HOME`, so silence here would be a
-destination.
+the same contract `new` already had.
+
+Abandoning the pick exits `130` rather than printing nothing and succeeding. This does not, by
+itself, stop a `cd`: `cd "$(ccx rd cd)"` throws the exit status away and runs `cd` with an empty
+argument regardless. That turns out to be harmless — no common shell reads an empty argument as
+`$HOME`; bash refuses it and zsh and dash stay where they are — so the exit code is not load-bearing
+for safety. It is there so that a caller *can* tell "the user chose nothing" from "the user chose
+something", which a wrapper has to do to avoid a pointless `cd`. The shell function in the README is
+written that way, and is the form we document.
+
+Selection travels one candidate per line, fields separated by tabs. `initialTask` is free text a
+human typed, so it may contain both — sanitising it is a requirement of the protocol, not a display
+nicety.
 
 ## Metadata
 
