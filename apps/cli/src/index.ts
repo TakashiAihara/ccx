@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 
+import { realpath, stat } from "node:fs/promises";
+import { relative, resolve } from "node:path";
+
 import { Command } from "commander";
 
 import {
   blockers,
   createRepodir,
+  expandTilde,
   loadConfig,
   parseDuration,
   parseRepoSpec,
   plan,
   reclaim,
   scanRepodirs,
+  scanTree,
   specToSlug,
+  unsafeRoot,
   type Goal,
   type PrIntent,
+  type ScannedDir,
 } from "@ccx/core";
 
 export const VERSION = "0.1.0";
@@ -150,15 +157,83 @@ repodir
 repodir
   .command("gc")
   .description("Reclaim repodirs that hold no work. Dry run unless --yes is given.")
-  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option(
+    "-r, --repo <owner/repo>",
+    "the repository to reclaim. Without --root this is a substring filter over repodir " +
+      "paths; with --root it must name the repository exactly (from its origin remote), " +
+      "because there a wrong match deletes a directory ccx did not create.",
+  )
+  .option(
+    "--match <glob>",
+    "with --root: a glob over each directory's path relative to --root, e.g. " +
+      "'*/*/vault[0-9]*'. This is the explicit way to sweep a family of clones. " +
+      "Combined with --repo, both must match.",
+  )
+  .option(
+    "--root <path>",
+    "scan this directory tree instead of the repodir root. Use it to drain clones ccx " +
+      "did not create (they are never moved: their session history is keyed by their path). " +
+      "Requires --repo or --match: a tree ccx does not own also holds canonical clones, so " +
+      "what gets reclaimed must be named. The same safety checks apply, plus ignored files.",
+  )
+  .option(
+    "--allow-ignored <path...>",
+    "ignored paths that are safe to lose, e.g. .serena/ — with --root, any other ignored " +
+      "path (a .env, a credential) blocks removal, because git cannot restore it",
+  )
   .option("--finished-only", "only reclaim repodirs that are marked done, or whose goal is closed")
   .option("--check-goal", "ask gh whether the linked issue is closed / the PR is merged")
   .option("--min-age <duration>", "keep repodirs younger than this (e.g. 1h, 7d... as ms/s/m/h)")
+  .option(
+    "--session-idle <duration>",
+    "treat a session touched within this window as active (default: 15m)",
+  )
   .option("-y, --yes", "actually delete. Without this, nothing is removed.")
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const infos = await scanRepodirs(cfg, { filter: o.repo });
+    const idleMs = o.sessionIdle ? parseDuration(o.sessionIdle) : undefined;
+
+    let infos: ScannedDir[];
+    let foreignRoot: string | null = null;
+
+    if (o.root) {
+      // ccx が所有していないツリーには、使い捨ての clone と canonical な clone が
+      // 混ざって住んでいる (~/.ghq の 194 repo のうち、連番 clone は 55 個だけ)。
+      // canonical clone は clean で push 済みなのが普通で、blockers では止まらない。
+      // だから「何を回収するか」を名指しさせる。一括走査は許さない。
+      if (!o.repo && !o.match) {
+        throw new Error(
+          "--root requires --repo or --match. A tree ccx does not own also holds canonical " +
+            "clones, which are clean and pushed and would therefore be reclaimed. " +
+            "Name what you are draining, e.g. --repo owner/repo or --match '*/*/vault[0-9]*'",
+        );
+      }
+
+      // root の指定を 1 つ間違えれば home ごと舐める。走査する前に弾く。
+      // 字句解決のガードは symlink を見抜けないので、実体に直してから掛ける。
+      const asked = resolve(expandTilde(o.root));
+      foreignRoot = await realpath(asked).catch(() => asked);
+
+      const unsafe = unsafeRoot(foreignRoot);
+      if (unsafe) {
+        const via = foreignRoot === asked ? "" : ` (${asked} resolves to it)`;
+        throw new Error(`--root ${foreignRoot}${via}: ${unsafe}`);
+      }
+      if (!(await stat(foreignRoot).then((s) => s.isDirectory()).catch(() => false))) {
+        throw new Error(`--root ${foreignRoot}: not a directory`);
+      }
+
+      infos = await scanTree(foreignRoot, {
+        repo: o.repo,
+        match: o.match,
+        idleMs,
+        allowIgnored: o.allowIgnored,
+        defaultHost: cfg.defaultHost,
+      });
+    } else {
+      infos = await scanRepodirs(cfg, { filter: o.repo, idleMs });
+    }
 
     const p = await plan(infos, {
       finishedOnly: o.finishedOnly,
@@ -171,15 +246,46 @@ repodir
       return;
     }
 
+    if (foreignRoot) {
+      console.error(
+        `scanning ${foreignRoot} — these directories were not created by ccx. ` +
+          "They have no done marker, so --finished-only will keep all of them; " +
+          "--check-goal asks gh about the branch instead.\n",
+      );
+    }
+
+    // foreign dir に dir-id は無い。root からの相対パスのほうが引き当てやすい。
+    const label = (c: (typeof p.keep)[number]) =>
+      foreignRoot ? relative(foreignRoot, c.info.path) : c.info.dirId;
+
     for (const c of p.keep) {
-      console.error(`keep    ${c.info.dirId}  ${c.blockers.join("; ")}`);
+      console.error(`keep    ${label(c)}  ${c.blockers.join("; ")}`);
     }
     for (const c of p.remove) {
       const why = c.finished ? ` (${c.finished})` : "";
-      console.error(`remove  ${c.info.dirId}  ${c.info.spec.owner}/${c.info.spec.repo}${why}`);
+      console.error(`remove  ${label(c)}  ${c.info.spec.owner}/${c.info.spec.repo}${why}`);
     }
 
     if (!o.yes) {
+      // ignored で止まったものは、何を捨ててよいか人間が名指しすれば回収できる。
+      // その材料 (どの path が何件を止めているか) を出す。判断は人間が下す。
+      const blocking = new Map<string, number>();
+      for (const c of p.keep) {
+        for (const path of c.info.ignored ?? []) {
+          blocking.set(path, (blocking.get(path) ?? 0) + 1);
+        }
+      }
+
+      if (blocking.size > 0) {
+        console.error("\nignored paths git cannot restore, and how many dirs each one holds back:");
+        for (const [path, n] of [...blocking].sort((a, b) => b[1] - a[1])) {
+          console.error(`  ${String(n).padStart(4)}  ${path}`);
+        }
+        console.error(
+          "Name the ones you are willing to lose with --allow-ignored to reclaim those dirs.",
+        );
+      }
+
       console.error(
         `\n${p.remove.length} repodir(s) would be removed, ${p.keep.length} kept. ` +
           "Nothing was deleted — pass --yes to do it.",
