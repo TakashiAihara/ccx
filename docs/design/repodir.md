@@ -36,25 +36,66 @@ paid off separately, below.
 `git clone <local path>` shares `.git` pack files with the source **via hardlinks** when both are on
 the same filesystem. So `ccx` keeps one **bare mirror** per repository and clones repodirs from it.
 
-The mirror is bare on purpose: it is never checked out, never becomes dirty, and can be repacked
-safely. It is owned by `ccx`, not borrowed from some other tool's clone.
+A bare mirror is a clone with no working tree — just the contents of `.git` — configured to replicate
+the remote's ref namespace exactly (`remote.origin.mirror = true`, `fetch = +refs/*:refs/*`). One
+`git remote update` brings it level with the forge, deletions included.
 
-Measured on a 32 MB repository:
+It is bare on purpose. Nothing is ever checked out in it, so it never goes dirty, never sits on some
+half-finished branch, and can be repacked safely. It is owned by `ccx` rather than borrowed from
+another tool's clone, because a clone that someone works in is a clone whose state you cannot rely on.
 
-| | network clone | clone from bare mirror |
+Measured on two real repositories:
+
+| | 8 MB repo | 117 MB repo |
 |---|---|---|
-| Time to create a repodir | 2.81 s | **0.10 s** |
-| Pack file inode | separate | **shared with the mirror** |
-| Marginal cost per repodir | 31 MB | **19 MB** (only the working tree) |
-| Same branch checked out twice | yes | **yes** |
+| Network clone | 2.81 s | **19.49 s** |
+| Clone from the bare mirror | 0.10 s | **0.07 s** |
+| `.git` transferred per repodir | 13 MB | **120 MB → 0** |
+| Marginal disk per repodir | 31 → 19 MB | 139 → 19 MB |
 
-This is a hardlink, not `--shared`/alternates: there is no `objects/info/alternates` pointing at the
-mirror, so deleting the mirror cannot corrupt a repodir. Hardlinked packs are immutable, and `git gc`
-in either place writes new files rather than mutating shared ones.
+### Speed is not a comfort. It is what makes reclamation possible.
 
-The one thing this requires care about: cloning from the mirror leaves `origin` pointing at a local
-path. `ccx` rewrites it to the real remote immediately. Forgetting this would make `git push` write
-into the mirror instead of the forge, so it is pinned by a regression test.
+The disk saving is the *least* important of the three things the mirror buys, and taking it as the
+motivation gets the design backwards.
+
+What actually matters is that creating a repodir stops being a decision. If a new working copy of a
+real repository costs twenty seconds and a 120 MB download, people keep the ones they have — *"I'll
+need it again and it's slow to rebuild"*. **That instinct is precisely how 55 directories
+accumulated.** At 0.07 seconds there is nothing to hoard: throwing one away costs nothing, because
+getting it back costs nothing.
+
+So `gc` is only credible because creation is nearly free. The mirror is what buys that, and the
+ranking is:
+
+1. **Speed** — recreation is free, so deletion is not a loss.
+2. **No network** — N repodirs cost zero fetches. They can be created offline.
+3. **Disk** — real, but the smallest of the three.
+
+### The mirror's own costs
+
+It is an optimisation layer, and it is honest to say that repodirs would work without it. It brings:
+
+- **Staleness.** It has to be refreshed, which is why there is a `mirrorMaxAge` at all.
+- **Storage.** One copy of the history per repository — 120 MB for the large repo above.
+- **One more thing that can break.** A corrupt mirror is recoverable by deleting it, but nothing
+  currently detects one.
+
+### Two things to be careful about
+
+**Hardlinks only work within one filesystem.** If `mirrorRoot` is moved to a different mount point
+from `root`, git silently falls back to copying. Everything keeps working; the disk saving quietly
+disappears.
+
+**This is a hardlink, not `alternates`.** `--shared` / `--reference` would make the repodir *borrow*
+objects from the mirror, and deleting the mirror would corrupt every repodir pointing at it. A
+hardlink is just a second name for the same file: delete the mirror and the repodirs survive, with
+the refcount dropping. Since pack files are immutable, `git gc` on either side writes new files
+rather than mutating shared ones. Staying decoupled is the whole point of a repodir, and alternates
+would quietly undo it.
+
+Finally: cloning from the mirror leaves `origin` pointing at a local path. `ccx` rewrites it to the
+real remote immediately. Forgetting this would make `git push` write into the mirror instead of the
+forge, so it is pinned by a regression test.
 
 ## Layout
 
@@ -145,6 +186,21 @@ be more than a guess.
 `rd.json` must stay immutable, so anything that changes lives here. `desired` is the only input a
 resident agent has for deciding whether a session should be running: without it, the agent would
 either try to start a session for every repodir on the machine, or never restart one that died.
+
+## A repodir cannot be moved
+
+The agent's transcripts are stored under a path derived from the working directory they were created
+in. Move a repodir and its history is orphaned: the session that did the work can no longer be found
+from the place the work happened.
+
+**So the path is part of the repodir's identity, not just its address.** Two consequences fall out
+of this:
+
+- There is no `mv`, and there will not be one. Recreating a repodir is nearly free; relocating one
+  costs its history.
+- Directories that predate this tool are not migrated into the layout. Migration would keep the files
+  and lose the record of how they got that way, which is a bad trade for directories that already
+  work. They are left alone and retired as they finish.
 
 ## Reclamation
 

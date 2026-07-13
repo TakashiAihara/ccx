@@ -9,9 +9,17 @@ tethered to a parent directory.
 
 `ccx` takes the other road. A **repodir** is a full, independent clone — so the same branch can be
 checked out in as many repodirs as you like, submodules behave normally, and nothing is tethered.
+
 The cost that usually makes clones unattractive is paid off with a **bare mirror and hardlink
-clones**: `.git` objects are shared at the inode level, so an extra repodir costs only its working
-tree, and it is created in about a tenth of a second.
+clones**. One never-checked-out copy of the history per repository; every repodir clones from it
+locally, sharing `.git` objects at the inode level. A 117 MB repository takes 19 seconds to clone
+from a forge and **0.07 seconds** from its mirror.
+
+That speed is the point, and not for comfort. When a fresh working copy costs twenty seconds and a
+120 MB download, people keep the ones they have — which is exactly how the 55 directories that
+motivated this tool piled up. When it costs a tenth of a second, throwing one away costs nothing,
+because getting it back costs nothing. **Reclamation is only credible because creation is nearly
+free.**
 
 ## Install
 
