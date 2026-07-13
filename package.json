@@ -1,0 +1,15 @@
+{
+  "name": "ccx-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "bun build apps/cli/src/index.ts --compile --outfile ccx",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.2"
+  }
+}

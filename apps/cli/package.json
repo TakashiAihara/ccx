@@ -1,0 +1,10 @@
+{
+  "name": "@ccx/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ccx/core": "workspace:*",
+    "commander": "^13.1.0"
+  }
+}

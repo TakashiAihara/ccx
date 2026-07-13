@@ -1,0 +1,94 @@
+/**
+ * repodir の生成。
+ *
+ * 同一 repo の独立した作業コピーを複数持つための仕組み。worktree と違い完全な clone
+ * なので、同じブランチを 2 箇所で同時に checkout でき、submodule とも衝突せず、親
+ * ディレクトリとの紐付きも無い。
+ *
+ * ディスクと時間のコストは bare mirror からの hardlink clone で回収する。
+ */
+
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
+import type { Config } from "./config.ts";
+import { newDirId } from "./dirid.ts";
+import { defaultBranch, git, revParse } from "./git.ts";
+import {
+  detectCreatedBy,
+  META_SCHEMA,
+  writeMeta,
+  writeState,
+  type Goal,
+  type PrIntent,
+  type RepodirMeta,
+} from "./meta.ts";
+import { cloneUrl, type RepoSpec } from "./repospec.ts";
+import { ensureMirror } from "./mirror.ts";
+
+export type NewRepodirOptions = {
+  initialTask?: string;
+  /** 起点ブランチ。省略時は mirror の default branch */
+  from?: string;
+  goal?: Goal;
+  pr?: PrIntent;
+  agent?: string;
+  model?: string;
+  /** mirror の鮮度を問わず必ず remote update する */
+  refresh?: boolean;
+};
+
+export type NewRepodirResult = {
+  path: string;
+  dirId: string;
+  meta: RepodirMeta;
+  mirror: { created: boolean; updated: boolean };
+};
+
+export async function createRepodir(
+  cfg: Config,
+  spec: RepoSpec,
+  opts: NewRepodirOptions,
+  version: string,
+): Promise<NewRepodirResult> {
+  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh });
+
+  const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
+  await mkdir(parent, { recursive: true });
+
+  const branch = opts.from ?? (await defaultBranch(mirror.path));
+
+  // dir-id はマシン内で一意だが、念のため衝突時は取り直す
+  let dirId = newDirId();
+  let path = join(parent, dirId);
+  for (let i = 0; (await Bun.file(join(path, ".git", "HEAD")).exists()) && i < 5; i++) {
+    dirId = newDirId();
+    path = join(parent, dirId);
+  }
+
+  // hardlink clone。--no-checkout せず branch を直接指定する
+  await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+
+  // mirror から clone すると origin がローカル path になる。付け替えを忘れると
+  // push が mirror に飛ぶので、ここは必須。
+  await git(["remote", "set-url", "origin", cloneUrl(spec)], path);
+
+  const meta: RepodirMeta = {
+    schema: META_SCHEMA,
+    ...(opts.initialTask ? { initialTask: opts.initialTask } : {}),
+    ...(opts.goal && Object.keys(opts.goal).length ? { goal: opts.goal } : {}),
+    ...(opts.pr && Object.keys(opts.pr).length ? { pr: opts.pr } : {}),
+    agent: opts.agent ?? cfg.defaults.agent,
+    ...(opts.model ?? cfg.defaults.model ? { model: opts.model ?? cfg.defaults.model } : {}),
+    baseBranch: branch,
+    baseCommit: await revParse("HEAD", path),
+    created: new Date().toISOString(),
+    createdBy: detectCreatedBy(),
+    ccxVersion: version,
+  };
+
+  await writeMeta(path, meta);
+  await writeState(path, { desired: "stopped", done: null });
+
+  return { path, dirId, meta, mirror: { created: mirror.created, updated: mirror.updated } };
+}
