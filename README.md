@@ -15,12 +15,24 @@ tree, and it is created in about a tenth of a second.
 
 ## Install
 
+From source, which needs [Bun](https://bun.sh) but nothing else:
+
 ```bash
-curl -L https://github.com/TakashiAihara/ccx/releases/latest/download/ccx-linux-x64 -o ccx
-chmod +x ccx && mv ccx ~/.local/bin/ccx
+git clone https://github.com/TakashiAihara/ccx && cd ccx
+bun install
+bun run install:local          # builds, then installs to ~/.local/bin/ccx
 ```
 
-Prebuilt binaries have no runtime dependency — no Bun, no Node.
+Set `CCX_INSTALL_DIR` to put it somewhere else.
+
+Once a release is published, the compiled binary can be fetched directly — it carries no runtime
+dependency, so Bun is not needed on the target machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh
+```
+
+`CCX_VERSION` pins a version; `CCX_INSTALL_DIR` chooses the destination.
 
 ## Usage
 
@@ -76,18 +88,47 @@ to decide whether a session should be running.
 
 ## Configuration
 
-Everything environment-specific is a setting. `~/.config/ccx/config.toml`, all optional:
+Everything environment-specific is a setting, and every setting can come from three places. They
+are consulted in this order, so the one nearest to hand wins:
+
+```text
+1. environment      CCX_ROOT=/tmp/scratch ccx rd ls
+2. git config       git config --global ccx.root ~/work
+3. config file      ~/.config/ccx/config.toml
+4. built-in default ~/.repodirs
+```
+
+This mirrors how `ghq` treats `GHQ_ROOT` and `ghq.root`: the environment variable is there for the
+throwaway override, `git config` for the durable one, and neither requires you to remember where a
+config file lives.
+
+| setting | environment | git config | file |
+|---|---|---|---|
+| where repodirs go | `CCX_ROOT` | `ccx.root` | `root` |
+| where mirrors go | `CCX_MIRROR_ROOT` | `ccx.mirrorRoot` | `mirrorRoot` |
+| default forge | `CCX_DEFAULT_HOST` | `ccx.defaultHost` | `defaultHost` |
+| default owner | `CCX_DEFAULT_OWNER` | `ccx.defaultOwner` | `defaultOwner` |
+| mirror staleness | `CCX_MIRROR_MAX_AGE` | `ccx.mirrorMaxAge` | `mirrorMaxAge` |
+| agent to run | `CCX_AGENT` | `ccx.agent` | `defaults.agent` |
+| model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
+| hub to report to | `CCX_HUB_URL` | `ccx.hubUrl` | `hub.url` |
+
+Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.
+`mirrorRoot` follows `root` unless you set it separately.
 
 ```toml
+# ~/.config/ccx/config.toml — every key optional
 root = "~/.repodirs"
 defaultHost = "github.com"
-defaultOwner = "your-name"     # lets you write `ccx rd new myrepo`
-mirrorMaxAge = "10m"           # older mirrors are refreshed before a repodir is created
+defaultOwner = "your-name"
+mirrorMaxAge = "10m"
 
 [defaults]
 agent = "claude"
 model = "opus-4.8"
 ```
+
+With no configuration at all, `ccx rd new owner/repo` works.
 
 ## Status
 
