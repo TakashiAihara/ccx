@@ -16,7 +16,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { createReadStream, createWriteStream, openSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, openSync } from "node:fs";
 
 import { summarizeProblems, type RepodirInfo } from "@ccx/core";
 
@@ -118,6 +118,13 @@ async function pickWithFzf(infos: RepodirInfo[]): Promise<RepodirInfo | null> {
 export type Tty = {
   input: NodeJS.ReadableStream;
   output: NodeJS.WritableStream;
+  /**
+   * 後始末。自分で /dev/tty を開いたときだけ持つ。
+   *
+   * open した者が close する。注入された stream (テストの in-memory double や、将来
+   * 呼び出し側が持ち込む stream) を勝手に破棄すると、こちらが知らない寿命を壊す。
+   */
+  close?: () => void;
 };
 
 /**
@@ -130,19 +137,39 @@ export type Tty = {
  *
  * openSync は同期で throw するので、失敗を掴める場所が open の呼び出し点に戻る。
  */
-export function openTty(open: (path: string, flags: string) => number = openSync): Tty {
-  let inFd: number;
-  let outFd: number;
+export function openTty(
+  open: (path: string, flags: string) => number = openSync,
+  close: (fd: number) => void = closeSync,
+): Tty {
+  let inFd: number | undefined;
+  let outFd: number | undefined;
   try {
     inFd = open("/dev/tty", "r");
     outFd = open("/dev/tty", "w");
   } catch {
+    // 1 本目が開けて 2 本目が落ちた (EMFILE 等) なら、開いた方が宙に浮く。
+    if (inFd !== undefined) {
+      try {
+        close(inFd);
+      } catch {
+        // 閉じられなくても、ここで報告すべきは「端末が無い」ことの方
+      }
+    }
     throw new Error("no fzf and no tty: cannot pick a repodir interactively");
   }
 
+  const input = createReadStream("", { fd: inFd });
+  const output = createWriteStream("", { fd: outFd });
+
   return {
-    input: createReadStream("", { fd: inFd }),
-    output: createWriteStream("", { fd: outFd }),
+    input,
+    output,
+    // /dev/tty を掴んだままだと、選び終わってもプロセスが終わらない。readline を閉じても
+    // stream は生きていて epoll に残るので、掴んだ fd はここで手放す。
+    close: () => {
+      input.destroy();
+      output.destroy();
+    },
   };
 }
 
@@ -165,6 +192,9 @@ export async function pickByNumber(infos: RepodirInfo[], tty: Tty = openTty()): 
     return infos[n - 1]!;
   } finally {
     rl.close();
+    // rl.close() は readline を閉じるだけ。tty の fd は開いたままなので、閉じるまで
+    // プロセスが終わらない。選べたのにシェルが固まる、という形で出る。
+    tty.close?.();
   }
 }
 

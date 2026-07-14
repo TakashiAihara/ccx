@@ -189,6 +189,20 @@ test("番号選択で空入力なら null (選ばなかった)", async () => {
   expect(await pickByNumber([info("01AAA", "a"), info("01BBB", "b")], tty)).toBeNull();
 });
 
+test("openTty は 2 本目の open が失敗しても、1 本目の fd を宙に浮かせない", () => {
+  const closed: number[] = [];
+  let handed = 0;
+
+  const flaky = () => {
+    handed += 1;
+    if (handed === 2) throw Object.assign(new Error("EMFILE"), { code: "EMFILE" });
+    return 7; // 1 本目だけ成功する
+  };
+
+  expect(() => openTty(flaky, (fd) => closed.push(fd))).toThrow("no fzf and no tty");
+  expect(closed).toEqual([7]); // 開いた分は閉じている
+});
+
 test("制御端末が無ければ openTty は意図したエラーにする (生の ENXIO を漏らさない)", () => {
   const noTty = () => {
     throw Object.assign(new Error("ENXIO: no such device or address, open '/dev/tty'"), {
@@ -198,6 +212,64 @@ test("制御端末が無ければ openTty は意図したエラーにする (生
 
   expect(() => openTty(noTty)).toThrow("no fzf and no tty: cannot pick a repodir interactively");
 });
+
+/**
+ * 実 pty の下で番号選択を最後まで通し、プロセスが終わることを見る。
+ *
+ * これが無いと、ここは丸ごと穴になる。in-memory の tty double は destroy しなくても
+ * プロセスを止めないし、端末なしの実プロセステストは失敗パスしか踏まない。「選べたのに
+ * シェルが固まる」は成功パスでしか出ず、しかも README が案内している使い方そのもの
+ * (fzf を入れていない人の `ccd`) なので、成功パスを実 pty で踏む必要がある。
+ *
+ * pty の master 側を握ったまま待つのが要点。`script` のように stdin が EOF で pty ごと
+ * 畳まれると、掴みっぱなしの fd があっても子が道連れで終了してしまい、ハングが隠れる。
+ */
+test("実 pty で番号選択したあと、プロセスが速やかに終わる (tty を掴んだままにしない)", async () => {
+  const python = Bun.which("python3");
+  if (!python) return; // forkpty を持てない環境ではこの検証はできない
+
+  const root = await mkdtemp(join(tmpdir(), "ccx-pty-root-"));
+  for (const id of ["01KXDT8ZV5E008", "01KXDT8ZV5E009"]) {
+    const rd = join(root, "github.com", "o", "r", id);
+    await mkdir(rd, { recursive: true });
+    await Bun.spawn(["git", "init", "--quiet", rd], { stdout: "ignore", stderr: "ignore" }).exited;
+  }
+
+  const driver = join(await mkdtemp(join(tmpdir(), "ccx-pty-drv-")), "drive.py");
+  await writeFile(
+    driver,
+    [
+      "import os, pty, sys, time, signal",
+      "bun, cli, root, empty = sys.argv[1:5]",
+      "pid, fd = os.forkpty()",
+      "if pid == 0:",
+      "    os.environ['PATH'] = empty",  // fzf の無い PATH
+      "    os.environ['CCX_ROOT'] = root",
+      "    os.execv(bun, [bun, 'run', cli, 'rd', 'cd'])",
+      "time.sleep(1.5)",
+      "os.write(fd, b'1\\n')",
+      "deadline = time.time() + 10",
+      "while time.time() < deadline:",
+      "    p, s = os.waitpid(pid, os.WNOHANG)",
+      "    if p:",
+      "        print('EXITED', os.waitstatus_to_exitcode(s))",
+      "        sys.exit(0)",
+      "    time.sleep(0.2)",
+      "os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)",
+      "print('HUNG')",
+      "sys.exit(1)",
+    ].join("\n"),
+  );
+
+  const proc = Bun.spawn(
+    [python, driver, Bun.which("bun") ?? process.execPath, join(import.meta.dir, "index.ts"), root, emptyBin],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+
+  expect(out).toContain("EXITED"); // HUNG なら /dev/tty を掴んだまま
+  expect(code).toBe(0);
+}, 30_000);
 
 /**
  * fzf も端末も無い状態で本物の CLI を起動する。
