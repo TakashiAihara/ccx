@@ -2,21 +2,21 @@
 
 A resident agent pulls messages from a broker. It then has to hand one to a Claude Code session that is already running — and have that session act on it, with nobody at the keyboard.
 
-This is the hard part of the whole system. Everything else (repodirs, mirrors, reclamation) is solved. This is not.
+This was the hard part of the whole system. Everything else (repodirs, mirrors, reclamation) was already solved. This is now measured, end to end, and the answer is settled.
 
-## What is being used today, and why it does not work
+## What was being used, and why it does not work
 
-Sessions are driven by writing keystrokes into another session's terminal — `herdr pane run`, then `Enter`.
+Sessions were driven by writing keystrokes into another session's terminal — `herdr pane run`, then `Enter`.
 
-The prompt box is a shared resource, written to without synchronisation. Two things follow, and both were observed repeatedly during a single day of parallel development:
+The prompt box is a shared resource, written to without synchronisation. Two failures followed, both observed repeatedly during a single day of parallel development.
 
 ### The message lands in the box and never submits
 
 The text pastes in, the trailing `Enter` arrives before the terminal has finished ingesting the paste, and the message sits there unsent. The sender believes it delivered. The recipient never saw it.
 
-It does not look like a failure. It looks like the recipient chose not to act — so every inference downstream is made against a fiction. On one occasion a coordinator concluded its workers were idle and began reassigning them, when in fact its instructions had never arrived. It was about to pull a worker off a critical fix.
+It does not look like a failure. It looks like the recipient chose not to act — so every inference downstream is made against a fiction. A coordinator concluded its workers were idle and began reassigning them, when in fact its instructions had never arrived. It was about to pull a worker off a critical fix.
 
-The workaround — sleep, send `Enter` again, read the pane back to check — is a race being lost slowly rather than a fix. It held together all day only because a human was watching and pressed `Enter` by hand when it wedged.
+Note what does **not** fix this: making one agent the sole sender. On the day this happened there *was* only one sender. Serialising writes removes the interleaving between senders; it does nothing about the race between a paste and the terminal that is ingesting it. The workaround — sleep, send `Enter` again, read the pane back — is a race being lost slowly. It held together only because a human was watching and pressed `Enter` by hand when it wedged.
 
 ### A message with no newlines disappears
 
@@ -43,44 +43,38 @@ sequenceDiagram
     T->>S: message finally submitted
 ```
 
-## What the documentation actually allows
+## Channels: measured, working
 
-Verified against `code.claude.com/docs`. The distinction between quoted and inferred is kept explicit, because getting this wrong is how the current mess was reasoned into existence.
+A channel is an MCP server that pushes events into a running session. It was built for exactly this, and it does exactly this.
 
-| Mechanism | Can it wake an idle session? | Status |
-|---|---|---|
-| Channels (MCP push) | Yes | Documented. Purpose-built for this |
-| `asyncRewake` hook (exit code 2) | Yes | Documented |
-| Scheduled tasks | Yes, on a timer | Documented. Polling, not push |
-| `Stop` hook | No — it fires at the end of a turn | Documented as a "once per turn" event |
-| `SessionStart` hook | No — context is injected, the session still waits | Documented explicitly |
-| `UserPromptSubmit` hook | No — "external processes cannot trigger this hook" | Documented explicitly |
-| `Notification` hook | No — "does not initiate a model turn" | Documented explicitly |
-| `FileChanged` hook (+ `asyncRewake`) | No — measured, four ways, does not fire | Contradicts one AI-doc source; the measurement wins |
-| Writing keystrokes | Yes, unreliably | What is in use today |
-
-### Channels
-
-An MCP server that pushes events into a running session. It is what this architecture wants.
+The following was run, not read about. An external process wrote a line to a file; a channel server picked it up and pushed it; the session — with no keystroke sent to it at all — woke and answered:
 
 ```text
-<channel source="ccxd" severity="high" run_id="1234">
-rebase #60 onto main and re-run CI
-</channel>
+[user]      <channel source="ccxd-test" origin="ccxd">
+              channel 経由のテストです。届いたら CHANNEL OK とだけ返してください。
+            </channel>
+[assistant] CHANNEL OK
 ```
 
-- The server declares `capabilities.experimental['claude/channel']` and runs over stdio, like any MCP server.
-- It pushes with `mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })`.
-- An idle session takes a turn immediately. A busy one receives the events grouped on its next turn.
-- `source` is set automatically from the server's name. Keys in `meta` become further attributes.
-- Replying is a normal MCP tool on the same server.
-- Enabled per session: `claude --channels plugin:<name>@<marketplace>`.
+`source` is not a prefix somebody remembered to type. It is an attribute of the message, set from the server's name. Keys passed in `meta` become further attributes — `origin="ccxd"` above.
 
-Two things follow that matter more than they look:
+### It does not interrupt work in progress
 
-Nothing is written into a prompt box, so there is no race to lose. The delivery failure that stalled a whole day of work cannot occur.
+The session was put to work on a foreground tool call that blocked for forty seconds. A channel message was pushed while it was mid-turn. It was not interrupted. When the turn ended, the session answered both — the original task and the channel message — together, with no human input:
 
-`source` is an attribute of the message, not a prefix somebody remembered to type. The "I cannot find the message in the transcript" problem is not mitigated — it stops existing.
+```text
+01:16:47  [assistant] [tool:Bash]              ← blocks for 40s
+   ~01:17:00                                    ← channel push arrives here
+01:17:28  [user]      [tool_result]
+01:17:30  [assistant] FOREGROUND-DONE  BUSY2   ← both, in one turn
+```
+
+So the behaviour is:
+
+- Session idle → wakes immediately and takes a turn.
+- Session busy → does not interrupt. Delivered when the current turn ends, grouped, without waiting for a human.
+
+That is precisely the "don't disturb me mid-task, but do read it when you stop" requirement. **No separate mailbox tier is needed. It is already the default behaviour.**
 
 ```mermaid
 sequenceDiagram
@@ -92,40 +86,101 @@ sequenceDiagram
     B->>D: message for session X
     D->>C: notifications/claude/channel
     C->>S: <channel source="ccxd">…</channel>
-    Note over S: idle → takes a turn immediately<br/>busy → grouped onto the next turn
-    S->>S: does the work
+
+    alt session is idle
+        S->>S: wakes, takes a turn immediately
+    else session is mid-turn
+        Note over S: not interrupted
+        S->>S: finishes the current turn
+        S->>S: then handles the message
+    end
+
     S->>C: reply (MCP tool)
     C->>D: reply
     D->>B: ack + result
 ```
 
-### The constraints, stated plainly
+### The minimum that works
 
-Channels is a research preview. The flag syntax and the protocol contract may change. That is a real cost, not a footnote — see the tracking issue.
+```ts
+// initialize — this is what registers the notification listener
+capabilities: { experimental: { "claude/channel": {} } }
 
-It requires claude.ai or Console API authentication. It does not work on Bedrock, Vertex, or Foundry.
+// push
+{
+  jsonrpc: "2.0",
+  method: "notifications/claude/channel",
+  params: { content: "<body>", meta: { origin: "ccxd" } },
+}
+```
 
-Events only arrive while the session is open. A resident daemon does not make a session resident. Who starts the session, and who restarts it when it dies, is a separate problem — and it is the one `ccx repodir open` and session reclamation exist to solve.
+`content` is a plain string. `meta` is an optional flat map; keys may contain letters, digits and underscores — **keys with hyphens are silently dropped**.
 
-### `asyncRewake`, and why it is worth knowing about
+Launch with the single flag, and nothing else:
 
-A hook configured with `asyncRewake: true` runs in the background, and exiting with code 2 wakes Claude "immediately even when the session is idle" — quoted from the hook reference.
+```bash
+claude --dangerously-load-development-channels server:<name>
+```
 
-This is a documented way to wake an idle session that is not Channels. It is not a message transport (a hook is invoked by Claude Code, never by an external process), so a daemon cannot use it to *deliver* anything. But it can be used to *wake* a session that will then read a local inbox — which is precisely the mailbox tier.
+**Do not also pass `--channels`.** Combining them does not extend the bypass to the `--channels` entries. In practice the channel then fails to register and every push is discarded — with the server reporting success. That trap cost an hour here.
 
-### `Stop`, and why it is not the answer
+## The gap Channels does not close, and how hooks close it
 
-A `Stop` hook can return `decision: "block"` with a `reason`, and the turn continues instead of ending. That is real and documented, and it makes "drain the queue when the agent finishes" work.
+From the reference, verbatim:
 
-But `Stop` fires when a turn ends. A session that has already gone idle is not ending a turn, so nothing fires. It can extend a turn that is already happening; it cannot restart one that finished. And Claude Code "overrides the hook and ends the turn after 8 consecutive blocks" — an unbounded poll loop is capped by the engine.
+> Notifications are not acknowledged. The `await` on `mcp.notification()` resolves when the message is written to the transport, not when Claude has processed it. If the session hasn't loaded your server as a channel, or the organization policy blocks it, **events are dropped silently with no error returned to your server**.
 
-So it is a useful complement (drain on natural turn end), not a substitute.
+This is the same failure as send-keys wearing better clothes: the sender believes it delivered, and nothing contradicts it. It was hit here — the first push was silently discarded because of the flag trap above, while the server logged a successful send and the inbox drained. It took reading the session's own transcript to find out.
+
+**Changing transport does not remove the need to confirm delivery. It only changes what you are failing to confirm.**
+
+### Hooks fire for channel messages exactly as they do for a human
+
+Measured. A channel-delivered message and a typed prompt produce the identical hook sequence:
+
+```text
+channel push  → UserPromptSubmit → Stop
+human typing  → UserPromptSubmit → Stop
+```
+
+So `ccxd` gets its acknowledgements for free, from mechanisms that already exist:
+
+| Hook | What ccxd learns |
+|---|---|
+| `SessionStart` | the session came up |
+| `UserPromptSubmit` | **the message arrived** — receipt |
+| `PreToolUse` | what the session is about to do |
+| `PermissionRequest` | it is blocked, waiting for approval |
+| `Notification` | it went idle |
+| `Stop` | **the turn finished** — completion |
+
+Every hook payload carries `session_id`. A hook that writes to a local socket — which is all a hook should ever do (#18) — is therefore a complete delivery-and-progress feed, with no new machinery invented for it.
+
+This also retires `agent_status` as a source of truth. It is a lagging indicator; it was read five times in one day and gave the wrong answer each time. Hooks report what happened. Status reports what something inferred afterwards.
+
+## A session driven with no human present can still stall on a question
+
+An autonomously-driven session that calls `AskUserQuestion` stops and waits for someone to pick an option. A channel message cannot select an option — it is not a keystroke, and the choice is a terminal UI, not a message.
+
+`claude -p` disables these prompts so a headless session never stalls. That escape is unavailable, because `-p` is excluded (see below).
+
+The hook feed sees it, in full:
+
+```text
+tool_name:  AskUserQuestion
+tool_input: { "questions": [{
+    "question": "A と B、どちらを選びますか？",
+    "options": [ {"label": "A", …}, {"label": "B", …} ]
+}]}
+```
+
+So this is detectable — not merely as "something is stuck", but as *what is being asked and what the options are*. `PreToolUse` can also block, which leaves the door open for an orchestrator to answer on the session's behalf rather than merely notice.
+
+The stalling itself remains an open design question. Detection is solved; what to do about it is not.
 
 ## One door in
 
-Every mechanism above is a way into a session. Having several is worse than having one, even if each works — a message that can arrive by four routes is a message whose provenance, ordering and delivery guarantees are four different things.
-
-So the decision is: everything enters a session through the same door.
+Every mechanism is a way into a session. Having several is worse than having one, even if each works — a message that can arrive by four routes has four provenance stories, four orderings, and four ways to go missing.
 
 ```text
 human (own web UI) ─┐
@@ -133,48 +188,20 @@ another session     ├─→ hub → broker → ccxd → channel (MCP push) →
 CI, external events ─┘
 ```
 
-Deliberately excluded, and why:
+Deliberately excluded:
 
-`claude -p` / headless. It works, and it is being moved toward paid metering upstream. Depending on it means depending on someone else's pricing decision for a core path.
+`claude -p` / headless. It works, and it is being moved toward paid metering upstream. A core path should not depend on someone else's pricing decision.
 
-Sessions spawned by external events (web, chat integrations). A second way for work to arrive is a second set of failure modes, a second provenance story, and a second thing to reason about when something goes missing.
+Sessions spawned by external events (web, chat integrations). A second way for work to arrive is a second set of failure modes.
 
-`FileChanged` + `asyncRewake`. It looked like a way to reach a session without writing an MCP server at all — a daemon drops a file, the hook wakes the session. It does not work. Measured, four ways, below.
+`FileChanged` + `asyncRewake`. It would have let a daemon wake a session by dropping a file, with no MCP server at all. **It does not fire.** Tested four ways — project settings and user settings, with and without a `matcher`, on external writes and on a file the session had already read. A `PreToolUse` hook in the *same settings file* fired immediately, so hook loading was working; `FileChanged` simply did not respond. An AI documentation-QA tool stated confidently that it fires "regardless of whether the modification was made by Claude Code itself or an external process" — its own evidence was a plugin's `PostToolUse` config, and it noted in passing that implementations "might vary". Consulting a source and verifying a claim are different acts. Only the second one produced knowledge here.
 
-The single exception is safe-send, and it is not a delivery path. Terminal-level interrupts — pressing Escape to stop a session mid-thought — cannot be expressed as a channel message, because they are not messages. It stays for that, and for nothing else.
+The one thing that stays is not a delivery path. Terminal-level interruption — pressing Escape to stop a session mid-thought — cannot be a channel message, because it is not a message. `Esc` via keystroke remains, and it is a *single key* with no paste to race against, which is a materially different proposition from pasting a paragraph and hoping the `Enter` lands. It still must be confirmed rather than assumed.
 
-## `FileChanged` does not fire. Measured.
+## What is left to build
 
-A hook is invoked by Claude Code, never by an external process — so a daemon cannot use a hook to *deliver* a message. But `FileChanged` looked like a way to have a daemon *wake* a session: drop a file, the hook fires, `asyncRewake` exits 2, the session wakes and reads a local inbox. No MCP server required.
-
-It was worth checking, because Channels is a research preview with an authentication constraint, and a mechanism that needs neither would be a genuinely cheaper path.
-
-It does not fire.
-
-| Setup | Fired? |
-|---|---|
-| Project settings, `matcher: "*"`, external write to the working directory | No |
-| User settings (global), `matcher: "*"`, external write | No |
-| Project settings, no `matcher` (matching the shape already present in this machine's global config) | No |
-| A file the session had already read, then modified by an external process | No |
-
-The control experiment matters: a `PreToolUse` hook placed in the *same project settings file* fired immediately. Hook loading works. `FileChanged` specifically does not respond to any of the above.
-
-### On the source that said it would
-
-An AI documentation-QA tool was asked, and answered confidently:
-
-> The `FileChanged` hook is triggered when a file on disk is modified, regardless of whether the modification was made by Claude Code itself or an external process.
-
-That contradicts the measurement. Reading its answer closely, its evidence came from a plugin's `PostToolUse` configuration, and it noted in passing that "its specific implementation and usage might vary" — a confident sentence resting on an admission of uncertainty.
-
-The tool was the right tool to reach for. Its answer was still something to check, not something to believe. Consulting a source and verifying a claim are different acts, and only the second one produces knowledge.
-
-## The order this has to be built in
-
-Nothing here is a nice-to-have. The current transport failed, in production, repeatedly, on the day it was used.
-
-1. Pass the first instruction as a launch argument. `claude "<initialTask>"` submits and starts working with no keystroke sent at all — measured. Every session's opening message stops going through the box that drops it.
-2. Channels. The remaining messages stop going through it too.
-3. safe-send, as the floor. Verify submission rather than assume it; keep it for sessions with no channel, and for terminal-level interrupts a channel cannot express.
-4. The conversation view. A stalled exchange is invisible at the pane level and obvious at the conversation level — which is the whole reason the failure above went unnoticed for as long as it did.
+1. **The channel server, per session.** `ccxd` subscribes to the broker and pushes. The measured minimum above is most of it.
+2. **The hook feed.** Every session's hooks write to a local socket; `ccxd` forwards to the hub. Receipt, completion, tool activity, stalls — all of it, from hooks that already fire.
+3. **Group addressing** (#78). The sender names a group; `ccxd` fans out. Delivery is tracked per member, because "I told everyone" is the claim most often false and least often checked.
+4. **Priority.** The sender — the PM role — decides. `ccxd` routes. It does not judge.
+5. **A decision about stalled questions.** Detection is done. Whether an orchestrator answers on the session's behalf, or whether sessions are simply forbidden from asking, is not.
