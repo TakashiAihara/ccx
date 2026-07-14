@@ -209,14 +209,21 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
     const first = await ensureMirror(cfg, vanishSpec());
     await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
 
-    // pack の中身を潰す。HEAD の commit ではなく blob が壊れるので、安い健全性チェック
-    // (cat-file -e HEAD^{commit}) では検出できない。clone してみるまで分からない。
-    // mirror を読めなくする。object が pack にまとまっているか loose か、hardlink かは git の
-    // バージョンと設定で変わるので、レイアウトに依存しないよう object store ごと空にする。refs は
-    // 残るので「参照はあるが中身が読めない mirror」になり、そこからの clone は必ず落ちる。
+    // mirror を読めなくする。object が pack にまとまっているか loose のままかは git の
+    // バージョンと設定で変わる (CI では pack が無かった) ので、レイアウトに依存しないよう
+    // object store ごと空にする。refs は残るので「参照はあるが中身が読めない mirror」になる。
+    //
+    // これが模しているのは「object が読めない」ことであって、pack の bit 腐敗そのものではない。
+    // ccx から見ればどちらも「mirror からの clone が落ちる」に収束するので経路は同じだが、
+    // 破損の作り方が環境差で空振りすると、テストは意味を失ったまま緑になる。それを防ぐため、
+    // 破損が本当に成立していること (= 素の git clone が落ちること) をテスト自身で確かめる。
     const objects = join(first.path, "objects");
     await rm(objects, { recursive: true, force: true });
     await mkdir(objects, { recursive: true });
+
+    expect(
+      git(["clone", "--quiet", "--branch", "main", first.path, join(tmp, "corrupt-probe")]),
+    ).rejects.toThrow();
 
     await rm(vanish, { recursive: true, force: true });
 
