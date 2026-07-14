@@ -133,6 +133,7 @@ config file lives.
 | where mirrors go | `CCX_MIRROR_ROOT` | `ccx.mirrorRoot` | `mirrorRoot` |
 | default forge | `CCX_DEFAULT_HOST` | `ccx.defaultHost` | `defaultHost` |
 | default owner | `CCX_DEFAULT_OWNER` | `ccx.defaultOwner` | `defaultOwner` |
+| clone protocol | `CCX_PROTOCOL` | `ccx.protocol` | `protocol` |
 | mirror staleness | `CCX_MIRROR_MAX_AGE` | `ccx.mirrorMaxAge` | `mirrorMaxAge` |
 | agent to run | `CCX_AGENT` | `ccx.agent` | `defaults.agent` |
 | model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
@@ -141,11 +142,18 @@ config file lives.
 Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.
 `mirrorRoot` follows `root` unless you set it separately.
 
+`protocol` is `https` or `ssh`, and decides how the forge is reached: the bare mirror clones over
+it, and the repodir's `origin` is rewritten to it. On an SSH-only forge, set it once and everything
+downstream — fetches, pushes, submodules — follows. A single repodir can override it with
+`ccx rd new owner/repo --protocol ssh`. The SSH form is `git@host:owner/repo.git`; if your forge
+wants a different SSH user, express that in `~/.ssh/config` or git's `insteadOf` rather than here.
+
 ```toml
 # ~/.config/ccx/config.toml — every key optional
 root = "~/.repodirs"
 defaultHost = "github.com"
 defaultOwner = "your-name"
+protocol = "https"
 mirrorMaxAge = "10m"
 
 [defaults]

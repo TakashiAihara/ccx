@@ -18,6 +18,8 @@ import { parseRepoSpec } from "./repospec.ts";
 
 const SUPER = "https://github.com/test-owner/demo.git";
 const SUB = "https://github.com/test-owner/sub.git";
+const SSH_SUPER = "git@github.com:test-owner/demo.git";
+const SSH_SUB = "git@github.com:test-owner/sub.git";
 
 let tmp: string;
 let cfg: Config;
@@ -70,8 +72,10 @@ beforeAll(async () => {
     [
       `[url "file://${superSrc}"]`,
       `\tinsteadOf = ${SUPER}`,
+      `\tinsteadOf = ${SSH_SUPER}`,
       `[url "file://${subSrc}"]`,
       `\tinsteadOf = ${SUB}`,
+      `\tinsteadOf = ${SSH_SUB}`,
       `[protocol "file"]`,
       `\tallow = always`,
       "",
@@ -84,6 +88,7 @@ beforeAll(async () => {
     root: join(tmp, "repodirs"),
     mirrorRoot: join(tmp, "repodirs", ".mirror"),
     defaultHost: "github.com",
+    protocol: "https",
     mirrorMaxAgeMs: 600_000,
     defaults: { agent: "claude" },
   };
@@ -116,6 +121,25 @@ describe("submodules", () => {
     const resolved = await git(["config", "--get", "submodule.sub.url"], r.path);
     expect(resolved).not.toContain(".mirror");
     expect(resolved).toContain("sub");
+  });
+
+  test("protocol = ssh でも、相対 URL の submodule が ssh の実リモート基準で解決される", async () => {
+    // 相対 URL (../sub.git) は origin を基準に解決される。origin が scp-like (git@host:owner/repo)
+    // のときに正しく解決できるかは、実際に通してみないと分からない (URL の文法が https と違う)。
+    const c: Config = {
+      ...cfg,
+      root: join(tmp, "repodirs-ssh"),
+      mirrorRoot: join(tmp, "mirror-ssh"),
+      protocol: "ssh",
+    };
+
+    const r = await createRepodir(c, spec(), {}, "0.1.0");
+
+    expect(await Bun.file(join(r.path, "sub", "lib.txt")).exists()).toBe(true);
+
+    const resolved = await git(["config", "--get", "submodule.sub.url"], r.path);
+    expect(resolved).toBe(SSH_SUB);
+    expect(resolved).not.toContain(".mirror");
   });
 
   test("--no-recursive 相当を渡すと submodule を取らない", async () => {

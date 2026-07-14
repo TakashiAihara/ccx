@@ -23,7 +23,7 @@ import {
   type PrIntent,
   type RepodirMeta,
 } from "./meta.ts";
-import { cloneUrl, type RepoSpec } from "./repospec.ts";
+import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
 import { ensureMirror } from "./mirror.ts";
 
 export type NewRepodirOptions = {
@@ -36,6 +36,8 @@ export type NewRepodirOptions = {
   model?: string;
   /** mirror の鮮度を問わず必ず remote update する */
   refresh?: boolean;
+  /** clone / origin に使う protocol。省略時は cfg.protocol */
+  protocol?: Protocol;
   /** submodule を初期化する (既定 true) */
   recurseSubmodules?: boolean;
 };
@@ -53,7 +55,8 @@ export async function createRepodir(
   opts: NewRepodirOptions,
   version: string,
 ): Promise<NewRepodirResult> {
-  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh });
+  const protocol = opts.protocol ?? cfg.protocol;
+  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol });
 
   const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
   await mkdir(parent, { recursive: true });
@@ -73,7 +76,7 @@ export async function createRepodir(
 
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
-  await git(["remote", "set-url", "origin", cloneUrl(spec)], path);
+  await git(["remote", "set-url", "origin", cloneUrl(spec, protocol)], path);
 
   // submodule は origin を直した「後」に取る。相対 URL (../foo.git) は origin を基準に
   // 解決されるため、順序を逆にすると mirror のローカル path を基準に解決してしまう。

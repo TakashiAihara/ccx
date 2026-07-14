@@ -18,11 +18,15 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { parseProtocol, type Protocol } from "./repospec.ts";
+
 export type Config = {
   root: string;
   mirrorRoot: string;
   defaultHost: string;
   defaultOwner?: string;
+  /** mirror の clone と repodir の origin に使う protocol */
+  protocol: Protocol;
   /** これより古い mirror は repodir 生成前に remote update する (ミリ秒) */
   mirrorMaxAgeMs: number;
   defaults: {
@@ -70,6 +74,7 @@ export function defaultConfig(): Config {
     root,
     mirrorRoot: join(root, ".mirror"),
     defaultHost: "github.com",
+    protocol: "https",
     mirrorMaxAgeMs: DEFAULT_MIRROR_MAX_AGE_MS,
     defaults: { agent: "claude" },
   };
@@ -138,6 +143,7 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
 
   const mirrorRaw = await pick(s, "CCX_MIRROR_ROOT", "ccx.mirrorRoot", "mirrorRoot");
   const maxAgeRaw = await pick(s, "CCX_MIRROR_MAX_AGE", "ccx.mirrorMaxAge", "mirrorMaxAge");
+  const protocolRaw = await pick(s, "CCX_PROTOCOL", "ccx.protocol", "protocol");
 
   const agent =
     env.CCX_AGENT ?? (await readGit("ccx.agent")) ?? (fileDefaults.agent as string | undefined);
@@ -150,6 +156,7 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
     mirrorRoot: mirrorRaw ? expandTilde(mirrorRaw) : join(root, ".mirror"),
     defaultHost: (await pick(s, "CCX_DEFAULT_HOST", "ccx.defaultHost", "defaultHost")) ?? base.defaultHost,
     defaultOwner: (await pick(s, "CCX_DEFAULT_OWNER", "ccx.defaultOwner", "defaultOwner")) ?? undefined,
+    protocol: protocolRaw ? parseProtocol(protocolRaw) : base.protocol,
     mirrorMaxAgeMs: maxAgeRaw ? parseDuration(maxAgeRaw) : base.mirrorMaxAgeMs,
     defaults: {
       agent: agent || base.defaults.agent,

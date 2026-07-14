@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,7 @@ import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
+const SSH_REMOTE = "git@github.com:test-owner/demo.git";
 
 let tmp: string;
 let source: string;
@@ -48,9 +49,13 @@ beforeAll(async () => {
   await git(["clone", "--quiet", "--bare", work, source]);
   await git(["symbolic-ref", "HEAD", "refs/heads/main"], source);
 
-  // https://github.com/test-owner/demo.git を local bare repo に読み替えさせる
+  // https / ssh どちらの URL も local bare repo に読み替えさせる。ssh の口を塞がずに
+  // 「protocol を切り替えると clone URL と origin が両方 ssh になる」ことを検証するため。
   const gitconfig = join(tmp, "gitconfig");
-  await Bun.write(gitconfig, `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n`);
+  await Bun.write(
+    gitconfig,
+    `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n\tinsteadOf = ${SSH_REMOTE}\n`,
+  );
   originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
   process.env.GIT_CONFIG_GLOBAL = gitconfig;
 
@@ -58,6 +63,7 @@ beforeAll(async () => {
     root: join(tmp, "repodirs"),
     mirrorRoot: join(tmp, "repodirs", ".mirror"),
     defaultHost: "github.com",
+    protocol: "https",
     mirrorMaxAgeMs: 600_000,
     defaults: { agent: "claude" },
   };
@@ -213,5 +219,139 @@ describe("createRepodir", () => {
 
   test("存在しないブランチを指定したら失敗する", async () => {
     expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow();
+  });
+});
+
+describe("protocol", () => {
+  /** mirror を共有しないよう、protocol のテストは独立した root を使う */
+  const sshCfg = (): Config => ({
+    ...cfg,
+    root: join(tmp, "repodirs-ssh"),
+    mirrorRoot: join(tmp, "mirror-ssh"),
+    protocol: "ssh",
+  });
+
+  test("protocol = ssh なら mirror も repodir の origin も ssh URL になる", async () => {
+    const c = sshCfg();
+    const r = await createRepodir(c, spec(), {}, "0.1.0");
+
+    const origin = await git(["config", "--get", "remote.origin.url"], r.path);
+    expect(origin).toBe(SSH_REMOTE);
+
+    const mirrorOrigin = await git(
+      ["config", "--get", "remote.origin.url"],
+      mirrorPath(c, spec()),
+    );
+    expect(mirrorOrigin).toBe(SSH_REMOTE);
+  });
+
+  test("呼び出し単位で protocol を上書きできる (設定が https でも ssh で作れる)", async () => {
+    const c: Config = { ...sshCfg(), protocol: "https", mirrorRoot: join(tmp, "mirror-override") };
+    const r = await createRepodir(c, spec(), { protocol: "ssh" }, "0.1.0");
+
+    expect(await git(["config", "--get", "remote.origin.url"], r.path)).toBe(SSH_REMOTE);
+  });
+
+  test("mirror がまだ無い repo に同時に repodir を作っても、誰も落ちない", async () => {
+    // 同じ repo に並列でエージェントを立てるのは、この道具の中心的な使い方そのもの。
+    // mirror path へ直接 clone していた頃は、負けた側が destination path already exists で
+    // 落ちていた (5 並列で 2 本 exit 1 を実測)。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-race"), mirrorRoot: join(tmp, "mirror-race") };
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => createRepodir(c, spec(), {}, "0.1.0")),
+    );
+
+    // mirror を作れたのはちょうど 1 人。残りは勝者の mirror から生える
+    expect(results.filter((r) => r.mirror.created)).toHaveLength(1);
+    expect(new Set(results.map((r) => r.path)).size).toBe(5);
+    for (const r of results) {
+      expect(await Bun.file(join(r.path, "README.md")).exists()).toBe(true);
+    }
+
+    // 敗者の temp が残っていない
+    const leftovers = [
+      ...new Bun.Glob("*.tmp-*").scanSync({ cwd: join(tmp, "mirror-race", "github.com", "test-owner"), onlyFiles: false }),
+    ];
+    expect(leftovers).toBeEmpty();
+  });
+
+  test("origin の付け替えに失敗しても、repodir の生成そのものは諦めない", async () => {
+    // 並行実行で .git/config のロックを取り損ねる状況を、config を書けなくして再現する。
+    // origin の付け替えは fetch の下準備でしかなく、それだけで生成を諦めるのは割に合わない。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-lock"), mirrorRoot: join(tmp, "mirror-lock") };
+    await createRepodir(c, spec(), {}, "0.1.0");
+
+    const mirror = mirrorPath(c, spec());
+    await chmod(join(mirror, "config"), 0o444);
+
+    try {
+      // protocol を変えて set-url を必ず走らせる。書けないので失敗するが、落ちてはいけない
+      const r = await createRepodir({ ...c, protocol: "ssh" }, spec(), {}, "0.1.0");
+      expect(await Bun.file(join(r.path, "README.md")).exists()).toBe(true);
+    } finally {
+      await chmod(join(mirror, "config"), 0o644);
+    }
+  });
+
+  test("config が壊れた mirror を、origin 不在と誤読して黙って上書きしない", async () => {
+    // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config は 128 で落ちる。
+    // これを区別せずに握ると、読めなかった設定を origin 不在とみなして書き潰す。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-broken"), mirrorRoot: join(tmp, "mirror-broken") };
+    await createRepodir(c, spec(), {}, "0.1.0");
+
+    const configPath = join(mirrorPath(c, spec()), "config");
+    const before = await Bun.file(configPath).text();
+    await Bun.write(configPath, `${before}[core\n  broken\n`);
+
+    expect(createRepodir(c, spec(), { refresh: true }, "0.1.0")).rejects.toThrow();
+
+    // 壊れた config は壊れたまま残る (勝手に書き直していない)
+    expect(await Bun.file(configPath).text()).toContain("[core\n  broken");
+  });
+
+  test("origin を失った mirror でも、落ちずに origin を作り直して使える", async () => {
+    // git remote set-url は remote を作れない (No such remote 'origin' で終わる)。origin が
+    // 消えた mirror を掴んだとき、set-url に頼っていると mirror ごと使えなくなる。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-noorigin"), mirrorRoot: join(tmp, "mirror-noorigin") };
+    await createRepodir(c, spec(), {}, "0.1.0");
+
+    const mirror = mirrorPath(c, spec());
+    await git(["remote", "remove", "origin"], mirror);
+
+    const r = await createRepodir(c, spec(), { refresh: true }, "0.1.0");
+
+    expect(r.mirror.updated).toBe(true);
+    expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(REMOTE);
+    // bare mirror の origin は普通の remote と違う。refspec と mirror フラグまで戻っていないと
+    // 次の remote update が期待どおりに動かない
+    expect(await git(["config", "--get", "remote.origin.fetch"], mirror)).toBe("+refs/*:refs/*");
+    expect(await git(["config", "--get", "remote.origin.mirror"], mirror)).toBe("true");
+  });
+
+  test("protocol を切り替えると、新しい URL で実際に fetch し直す", async () => {
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-switch"), mirrorRoot: join(tmp, "mirror-switch") };
+
+    await createRepodir(c, spec(), {}, "0.1.0");
+    const mirror = mirrorPath(c, spec());
+    expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(REMOTE);
+
+    // origin が新 URL に変わったことだけを見ても、その URL で本当に取ってこられるかは分からない。
+    // forge に新しい commit を積み、ssh で引き直して、それが mirror に届くところまでを通す。
+    await git(["switch", "--quiet", "main"], join(tmp, "work"));
+    await Bun.write(join(tmp, "work", "after-switch.md"), "new\n");
+    await git(["add", "after-switch.md"], join(tmp, "work"));
+    await git(["commit", "--quiet", "-m", "after switch"], join(tmp, "work"));
+    await git(["push", "--quiet", source, "main"], join(tmp, "work"));
+    const head = await git(["rev-parse", "main"], join(tmp, "work"));
+
+    // refresh: true で鮮度チェックを外し、実際に remote update を走らせる
+    const r = await createRepodir({ ...c, protocol: "ssh" }, spec(), { refresh: true }, "0.1.0");
+
+    expect(r.mirror.updated).toBe(true);
+    expect(await git(["config", "--get", "remote.origin.url"], mirror)).toBe(SSH_REMOTE);
+    // ssh の URL 経由で新しい commit が mirror と repodir の両方に届いている
+    expect(await git(["rev-parse", "refs/heads/main"], mirror)).toBe(head);
+    expect(await Bun.file(join(r.path, "after-switch.md")).exists()).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import {
   createRepodir,
   loadConfig,
   parseDuration,
+  parseProtocol,
   parseRepoSpec,
   plan,
   reclaim,
@@ -46,6 +47,7 @@ repodir
   .option("--agent <name>", "agent to run later (claude / opencode / ...)")
   .option("--model <name>", "model to run later")
   .option("--refresh", "force-update the mirror regardless of its age")
+  .option("--protocol <name>", "clone protocol: https or ssh (default: config `protocol`)")
   .option("--no-recursive", "skip submodule initialisation")
   .option("--json", "print the result as JSON")
   .action(async (repository: string, o) => {
@@ -75,6 +77,7 @@ repodir
         agent: o.agent,
         model: o.model,
         refresh: o.refresh,
+        protocol: o.protocol ? parseProtocol(o.protocol) : undefined,
         // commander は --no-recursive を o.recursive = false として渡す
         recurseSubmodules: o.recursive,
       },

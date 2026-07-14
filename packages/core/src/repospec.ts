@@ -67,4 +67,30 @@ function fromPath(path: string, host: string): RepoSpec {
 
 export const specToSlug = (s: RepoSpec) => `${s.host}/${s.owner}/${s.repo}`;
 
-export const cloneUrl = (s: RepoSpec) => `https://${s.host}/${s.owner}/${s.repo}.git`;
+/**
+ * clone に使う protocol。https しか無いと SSH のみのフォージで使えない。
+ *
+ * ssh 側は scp-like (git@host:owner/repo.git) を採る。ssh://git@host/owner/repo.git でも
+ * 等価だが、フォージが UI に出す文字列は scp-like が多く、git の設定 (insteadOf 等) も
+ * この形を前提に書かれていることが多いため、見慣れた形に合わせる。
+ */
+export type Protocol = "https" | "ssh";
+
+export const PROTOCOLS: readonly Protocol[] = ["https", "ssh"];
+
+export function parseProtocol(v: string): Protocol {
+  const p = v.trim().toLowerCase();
+  if (p === "https" || p === "ssh") return p;
+  throw new Error(`invalid protocol: ${v} (expected ${PROTOCOLS.join(" or ")})`);
+}
+
+/**
+ * ssh のユーザ名は git 固定。GitHub / GitLab / Bitbucket / Gitea いずれも git であり、
+ * 例外的なフォージは ~/.ssh/config か git の insteadOf で吸収できる (ccx 側で持つと
+ * 設定キーが増えるだけで、git 側の既存の仕組みと二重管理になる)。
+ */
+export function cloneUrl(s: RepoSpec, protocol: Protocol = "https"): string {
+  return protocol === "ssh"
+    ? `git@${s.host}:${s.owner}/${s.repo}.git`
+    : `https://${s.host}/${s.owner}/${s.repo}.git`;
+}
