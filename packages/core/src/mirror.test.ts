@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, utimes } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -211,12 +211,12 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
 
     // pack の中身を潰す。HEAD の commit ではなく blob が壊れるので、安い健全性チェック
     // (cat-file -e HEAD^{commit}) では検出できない。clone してみるまで分からない。
-    const pack = [
-      ...new Bun.Glob("*.pack").scanSync({ cwd: join(first.path, "objects", "pack"), absolute: true }),
-    ][0]!;
-    const bytes = new Uint8Array(await Bun.file(pack).arrayBuffer());
-    bytes.set([0x43, 0x4f, 0x52, 0x52, 0x55, 0x50, 0x54], Math.floor(bytes.length / 2));
-    await Bun.write(pack, bytes);
+    // mirror を読めなくする。object が pack にまとまっているか loose か、hardlink かは git の
+    // バージョンと設定で変わるので、レイアウトに依存しないよう object store ごと空にする。refs は
+    // 残るので「参照はあるが中身が読めない mirror」になり、そこからの clone は必ず落ちる。
+    const objects = join(first.path, "objects");
+    await rm(objects, { recursive: true, force: true });
+    await mkdir(objects, { recursive: true });
 
     await rm(vanish, { recursive: true, force: true });
 
