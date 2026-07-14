@@ -17,6 +17,8 @@ import {
   type PrIntent,
 } from "@ccx/core";
 
+import { pickRepodir } from "./pick.ts";
+
 export const VERSION = "0.1.0";
 
 const program = new Command();
@@ -238,6 +240,31 @@ repodir
     await reclaim([{ info, blockers: o.force ? [] : b, finished: null }]);
     console.error(`removed ${info.dirId}${o.force && b.length ? " (forced)" : ""}`);
     console.log(info.path);
+  });
+
+repodir
+  .command("cd")
+  .description("Pick a repodir by what it was created for, and print its path")
+  .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const infos = await scanRepodirs(cfg, { filter: o.repo });
+
+    const picked = await pickRepodir(infos);
+
+    // 選ばなかった (ESC / Ctrl-C) のはエラーではないが、成功でもない。
+    //
+    // 注意: この終了コードは `cd "$(ccx rd cd)"` の外側の cd には伝わらない (コマンド置換は
+    // 終了コードを捨てる)。だから 130 は「cd を止める」ためのものではなく、呼び出し側が
+    // 中断を検知できるようにするためのもの。空文字を cd に渡さない責任は呼び出し側にあり、
+    // README はそのための ccd() を示している。
+    if (!picked) {
+      console.error("nothing picked");
+      process.exit(130);
+    }
+
+    console.error(`${picked.spec.owner}/${picked.spec.repo}  ${picked.meta?.initialTask ?? "-"}`);
+    console.log(picked.path);
   });
 
 function humanAge(d: Date): string {

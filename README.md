@@ -50,7 +50,24 @@ cd "$(ccx repodir new owner/repo --task 'fix the flaky test')"
 
 # rd is an alias
 ccx rd new owner/repo --from develop --issue owner/repo#123 --reviewer someone
+
+# Go back to one. Pick it by what it was created for — the id is never typed.
+ccd() {
+  local dir
+  dir="$(ccx rd cd)" || return   # nothing picked: stop here, do not cd
+  cd "$dir"
+}
 ```
+
+`cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
+hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own
+fzf keybindings and layout apply — and a numbered prompt when it is not. Both draw on the terminal,
+not on stdout, so capturing the output does not break the display.
+
+Abandoning the pick exits `130`, and the wrapper above is written to honour that. Note that
+`cd "$(ccx rd cd)"` would **not**: command substitution discards the exit status, so `cd` still runs,
+with an empty argument. No common shell treats that as `$HOME` — bash errors, zsh and dash stay put —
+so it is not dangerous, merely silent. Checking the status is still the honest way to write it.
 
 Repodirs live under a path that carries the meaning, so the directory id itself can be opaque:
 
@@ -140,7 +157,7 @@ With no configuration at all, `ccx rd new owner/repo` works.
 
 ## Status
 
-`ccx repodir new` works. `open`, `ls`, `cd`, `rm` and `gc`, the resident agent and the cross-machine
+`ccx repodir new`, `ls`, `cd`, `rm` and `gc` work. `open`, the resident agent and the cross-machine
 hub are next.
 
 ## License
