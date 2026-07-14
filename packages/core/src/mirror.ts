@@ -11,7 +11,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.ts";
-import { git } from "./git.ts";
+import { git, GitError } from "./git.ts";
 import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
 
 export function mirrorPath(cfg: Config, spec: RepoSpec): string {
@@ -55,8 +55,10 @@ async function syncOrigin(path: string, url: string): Promise<void> {
   try {
     // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
     current = await git(["config", "--get", "remote.origin.url"], path);
-  } catch {
-    // origin 不在。下で作り直す
+  } catch (e) {
+    // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config (128) や他の失敗まで
+    // 「origin が無い」と解釈すると、読めなかった設定を黙って上書きしてしまう。1 だけを握る。
+    if (!(e instanceof GitError) || e.code !== 1) throw e;
   }
 
   if (current === url) return;

@@ -74,6 +74,7 @@ credential stores and agent choices are configuration, never code.
 root = "~/.repodirs"
 defaultHost = "github.com"
 defaultOwner = "your-name"
+protocol = "https"        # or "ssh", for forges that only speak it
 mirrorMaxAge = "10m"
 
 [defaults]
