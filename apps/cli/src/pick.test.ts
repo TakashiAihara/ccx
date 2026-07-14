@@ -123,7 +123,7 @@ test("候補が 1 つなら picker を出さずにそれを返す", async () => 
 });
 
 test("候補ゼロは選択ではなくエラー", async () => {
-  expect(pickRepodir([])).rejects.toThrow("no repodirs");
+  await expect(pickRepodir([])).rejects.toThrow("no repodirs");
 });
 
 test("fzf が返した行の repodir を選ぶ", async () => {
@@ -145,7 +145,9 @@ test("fzf が何にもマッチせず終わった (exit 1) 場合も null", asyn
 
 test("fzf 自身が壊れて死んだ (tty が無い等) のは握り潰さない", async () => {
   await fakeFzf("exit 2");
-  expect(pickRepodir([info("01AAA", "a"), info("01BBB", "b")])).rejects.toThrow("fzf exited with 2");
+  await expect(pickRepodir([info("01AAA", "a"), info("01BBB", "b")])).rejects.toThrow(
+    "fzf exited with 2",
+  );
 });
 
 /** 番号選択の入出力を tty ではなくメモリに向ける。 */
@@ -181,7 +183,9 @@ test("fzf が無ければ番号選択に降り、選ばれた repodir を返す"
 
 test("番号選択で範囲外を打ったら repodir を返さずエラー", async () => {
   const { tty } = fakeTty("9");
-  expect(pickByNumber([info("01AAA", "a"), info("01BBB", "b")], tty)).rejects.toThrow("not a choice");
+  await expect(pickByNumber([info("01AAA", "a"), info("01BBB", "b")], tty)).rejects.toThrow(
+    "not a choice",
+  );
 });
 
 test("番号選択で空入力なら null (選ばなかった)", async () => {
@@ -267,7 +271,9 @@ test("実 pty で番号選択したあと、プロセスが速やかに終わる
   );
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 
-  expect(out).toContain("EXITED"); // HUNG なら /dev/tty を掴んだまま
+  // "EXITED" だけを見ると、選んだあとに CLI が異常終了しても通ってしまう。ハングしないことと
+  // 正常に終わることは別の主張なので、終了コードまで固定する。
+  expect(out.trim()).toBe("EXITED 0"); // HUNG なら /dev/tty を掴んだまま、EXITED 1 なら落ちている
   expect(code).toBe(0);
 }, 30_000);
 
