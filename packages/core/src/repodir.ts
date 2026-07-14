@@ -41,6 +41,8 @@ export type NewRepodirOptions = {
   refresh?: boolean;
   /** clone / origin に使う protocol。省略時は cfg.protocol */
   protocol?: Protocol;
+  /** mirror についての警告の出力先。既定は stderr */
+  warn?: (message: string) => void;
   /** submodule を初期化する (既定 true) */
   recurseSubmodules?: boolean;
 };
@@ -65,6 +67,7 @@ export async function createRepodir(
   version: string,
 ): Promise<NewRepodirResult> {
   const protocol = opts.protocol ?? cfg.protocol;
+  const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
   const mirror = await ensureMirror(cfg, spec, { refresh: opts.refresh, protocol });
 
   const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
@@ -81,7 +84,24 @@ export async function createRepodir(
   }
 
   // hardlink clone。--no-checkout せず branch を直接指定する
-  await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+  //
+  // 更新に失敗した mirror を使っている場合、ここで初めて「その mirror が本当に使えるか」が
+  // 分かる。壊れた object を踏めば落ちる。ensureMirror が警告を持ち帰るだけにしてあるのは、
+  // この結果を見てから口を開くため。
+  try {
+    await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+  } catch (e) {
+    if (!mirror.stale) throw e;
+    throw new Error(
+      [
+        `could not create a repodir from the mirror at ${mirror.path}`,
+        `the mirror could not be updated, and the copy on disk does not read back:`,
+        `  ${e instanceof Error ? e.message.split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? e.message.split("\n")[0] : String(e)}`,
+        `remove it and ccx will clone it again: rm -rf ${mirror.path}`,
+      ].join("\n"),
+      { cause: e },
+    );
+  }
 
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
@@ -113,6 +133,9 @@ export async function createRepodir(
 
   await writeMeta(path, meta);
   await writeState(path, { desired: "stopped", done: null });
+
+  // repodir が実際に生えた。ここまで来て初めて「古い mirror のまま続行した」と言える
+  for (const w of mirror.warnings) warn(w);
 
   return {
     path,

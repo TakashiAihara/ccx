@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { git } from "./git.ts";
 import { ensureMirror, mirrorPath } from "./mirror.ts";
+import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
@@ -32,12 +33,6 @@ let originalGitConfigGlobal: string | undefined;
 
 const spec = () => parseRepoSpec("test-owner/demo", { defaultHost: "github.com" });
 const vanishSpec = () => parseRepoSpec("test-owner/vanish", { defaultHost: "github.com" });
-
-/** 警告の宛先を捕まえる */
-const capture = () => {
-  const lines: string[] = [];
-  return { lines, warn: (m: string) => void lines.push(m) };
-};
 
 /** mirror の最終 fetch 時刻を過去にずらして「古い」状態を作る */
 async function ageMirror(path: string, ms: number): Promise<void> {
@@ -164,8 +159,7 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
   test("古い mirror の更新に失敗しても、落とさず古いまま使う", async () => {
     await mirrorThenGoOffline(cfg.mirrorMaxAgeMs + 60_000);
 
-    const c = capture();
-    const r = await ensureMirror(cfg, vanishSpec(), { warn: c.warn });
+    const r = await ensureMirror(cfg, vanishSpec());
 
     expect(r).toMatchObject({ created: false, updated: false, stale: true });
     // mirror は壊れておらず、object も残っている (repodir はここから生やせる)
@@ -176,10 +170,9 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
   test("古いまま使うときは警告する (黙って古い repodir を生やさない)", async () => {
     await mirrorThenGoOffline(3 * 3_600_000);
 
-    const c = capture();
-    await ensureMirror(cfg, vanishSpec(), { warn: c.warn });
+    const r = await ensureMirror(cfg, vanishSpec());
 
-    const out = c.lines.join("\n");
+    const out = r.warnings.join("\n");
     expect(out).toContain("could not update the mirror");
     expect(out).toContain("3h");
     expect(out).toContain("test-owner/vanish");
@@ -188,27 +181,58 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
   test("refresh: true でも、更新に失敗したら落とさず警告する", async () => {
     await mirrorThenGoOffline(0);
 
-    const c = capture();
-    const r = await ensureMirror(cfg, vanishSpec(), { refresh: true, warn: c.warn });
+    const r = await ensureMirror(cfg, vanishSpec(), { refresh: true });
 
     expect(r.stale).toBe(true);
-    expect(c.lines.join("\n")).toContain("could not update the mirror");
+    expect(r.warnings.join("\n")).toContain("could not update the mirror");
   });
 
   test("refresh: false ならオフラインでも警告すら出ない (remote に触らないため)", async () => {
     await mirrorThenGoOffline(cfg.mirrorMaxAgeMs * 10);
 
-    const c = capture();
-    const r = await ensureMirror(cfg, vanishSpec(), { refresh: false, warn: c.warn });
+    const r = await ensureMirror(cfg, vanishSpec(), { refresh: false });
 
     expect(r).toMatchObject({ updated: false, stale: false });
-    expect(c.lines).toBeEmpty();
+    expect(r.warnings).toBeEmpty();
   });
 
   test("mirror がまだ無いときの失敗は投げる (古い mirror すら無いので続行できない)", async () => {
     const missing = parseRepoSpec("test-owner/missing", { defaultHost: "github.com" });
 
     expect(ensureMirror(cfg, missing)).rejects.toThrow();
+  });
+
+  test("mirror が壊れているときは、続行を約束せずに落ちる (警告が嘘にならないように)", async () => {
+    // オフラインで古いだけなら続行してよい。だが mirror が壊れていれば、そこからの clone も
+    // 落ちる。「古いまま続行します」と言った直後に死ぬのがいちばん質が悪いので、警告は clone が
+    // 通ってから出す。壊れていた場合はここで落ち、直し方 (捨てて引き直す) を言う。
+    const first = await ensureMirror(cfg, vanishSpec());
+    await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
+
+    // pack の中身を潰す。HEAD の commit ではなく blob が壊れるので、安い健全性チェック
+    // (cat-file -e HEAD^{commit}) では検出できない。clone してみるまで分からない。
+    const pack = [
+      ...new Bun.Glob("*.pack").scanSync({ cwd: join(first.path, "objects", "pack"), absolute: true }),
+    ][0]!;
+    const bytes = new Uint8Array(await Bun.file(pack).arrayBuffer());
+    bytes.set([0x43, 0x4f, 0x52, 0x52, 0x55, 0x50, 0x54], Math.floor(bytes.length / 2));
+    await Bun.write(pack, bytes);
+
+    await rm(vanish, { recursive: true, force: true });
+
+    const said: string[] = [];
+    const attempt = createRepodir(
+      { ...cfg, root: join(tmp, "repodirs-corrupt") },
+      vanishSpec(),
+      { warn: (m) => void said.push(m) },
+      "0.1.0",
+    );
+
+    // 落ちる。かつ、直し方を言う
+    expect(attempt).rejects.toThrow(/rm -rf/);
+
+    // 「そのまま使う」とは言っていない (言った直後に死ぬくらいなら、言わない)
+    expect(said.join("\n")).not.toContain("using the existing mirror as-is");
   });
 });
 
@@ -236,9 +260,8 @@ describe("並行実行", () => {
     const first = await ensureMirror(cfg, spec());
     await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
 
-    const c = capture();
     const results = await Promise.all(
-      Array.from({ length: 8 }, () => ensureMirror(cfg, spec(), { refresh: true, warn: c.warn })),
+      Array.from({ length: 8 }, () => ensureMirror(cfg, spec(), { refresh: true })),
     );
 
     // 更新できたか stale かは競合次第。決めているのは「誰も throw しない」こと
@@ -253,13 +276,12 @@ describe("並行実行", () => {
     await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
     await chmod(join(first.path, "config"), 0o444);
 
-    const c = capture();
     try {
       // protocol を変えて set-url を必ず走らせる
-      const r = await ensureMirror(cfg, spec(), { protocol: "ssh", warn: c.warn });
+      const r = await ensureMirror(cfg, spec(), { protocol: "ssh" });
 
       expect(r.stale).toBe(true);
-      expect(c.lines.join("\n")).toContain("could not update the mirror");
+      expect(r.warnings.join("\n")).toContain("could not update the mirror");
     } finally {
       await chmod(join(first.path, "config"), 0o644);
     }

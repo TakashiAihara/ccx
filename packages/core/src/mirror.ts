@@ -94,6 +94,13 @@ export type EnsureMirrorResult = {
   checked: boolean;
   /** 最終 fetch からの経過 (ミリ秒)。更新した直後は 0、時刻が取れなければ null。 */
   ageMs: number | null;
+  /**
+   * ユーザーに伝えるべきこと。呼び手が repodir を作り終えてから出す。
+   *
+   * ここで即座に出さないのは、「古いまま続行します」と言った直後に、その mirror からの clone が
+   * 壊れた object を踏んで落ちることがあるため。約束は、果たせると分かってから口にする。
+   */
+  warnings: string[];
 };
 
 export type EnsureMirrorOptions = {
@@ -106,8 +113,6 @@ export type EnsureMirrorOptions = {
    */
   refresh?: boolean;
   protocol?: Protocol;
-  /** 既定は stderr。テスト用の差し替え口 */
-  warn?: (message: string) => void;
 };
 
 /**
@@ -151,12 +156,11 @@ export async function ensureMirror(
 ): Promise<EnsureMirrorResult> {
   const path = mirrorPath(cfg, spec);
   const url = cloneUrl(spec, opts.protocol ?? cfg.protocol);
-  const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
 
   if (!(await exists(path))) {
     const created = await cloneMirror(url, path);
     const ageMs = created ? 0 : await age(path);
-    return { path, created, updated: false, stale: false, checked: true, ageMs };
+    return { path, created, updated: false, stale: false, checked: true, ageMs, warnings: [] };
   }
 
   const ageMs = await age(path);
@@ -165,11 +169,13 @@ export async function ensureMirror(
   // 追従 (syncOrigin) も remote に出るときにしか要らないので、この後ろに置いてある。
   // 鮮度は見ていないので checked: false。呼び手はこれを「新鮮」と混同してはいけない。
   if (opts.refresh === false) {
-    return { path, created: false, updated: false, stale: false, checked: false, ageMs };
+    return { path, created: false, updated: false, stale: false, checked: false, ageMs, warnings: [] };
   }
 
   const needsUpdate = opts.refresh === true || ageMs === null || ageMs > cfg.mirrorMaxAgeMs;
-  if (!needsUpdate) return { path, created: false, updated: false, stale: false, checked: true, ageMs };
+  if (!needsUpdate) {
+    return { path, created: false, updated: false, stale: false, checked: true, ageMs, warnings: [] };
+  }
 
   try {
     // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
@@ -179,12 +185,24 @@ export async function ensureMirror(
     // 更新一式をまとめて try で囲む。ここから先の失敗は全て「古いまま使う」に落とす。
     await syncOrigin(path, url);
     await git(["remote", "update", "--prune"], path);
-    return { path, created: false, updated: true, stale: false, checked: true, ageMs: 0 };
+    return { path, created: false, updated: true, stale: false, checked: true, ageMs: 0, warnings: [] };
   } catch (e) {
+    // ここで warn せず、警告を持ち帰るだけにする。この mirror から clone できるかはまだ
+    // 分からない (壊れた object を踏めば呼び手の clone が落ちる)。「古いまま続行します」と
+    // 言った直後に死ぬのが、いちばん質が悪い。約束は、果たせると分かってから口にする。
     const when = ageMs === null ? "unknown age" : `last fetched ${humanAge(ageMs)} ago`;
-    warn(`ccx: warning: could not update the mirror (${when}): ${failureReason(e)}`);
-    warn(`ccx: using the existing mirror as-is; the repodir may be behind ${specToSlug(spec)}`);
-    return { path, created: false, updated: false, stale: true, checked: true, ageMs };
+    return {
+      path,
+      created: false,
+      updated: false,
+      stale: true,
+      checked: true,
+      ageMs,
+      warnings: [
+        `ccx: warning: could not update the mirror (${when}): ${failureReason(e)}`,
+        `ccx: using the existing mirror as-is; the repodir may be behind ${specToSlug(spec)}`,
+      ],
+    };
   }
 }
 
