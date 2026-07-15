@@ -7,12 +7,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
 import { git } from "./git.ts";
+import { mirrorPath } from "./mirror.ts";
 import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
 
@@ -140,6 +141,50 @@ describe("submodules", () => {
     const resolved = await git(["config", "--get", "submodule.sub.url"], r.path);
     expect(resolved).toBe(SSH_SUB);
     expect(resolved).not.toContain(".mirror");
+  });
+
+  test("clone 後の submodule 取得が失敗しても、mirror が古い旨の警告は握り潰さない", async () => {
+    // 警告を末尾で一括出力すると、その手前の submodule update / meta 書き込みが落ちたときに
+    // 警告が一度も出ない。失敗をデバッグするユーザーが一番欲しい「mirror が stale/offline
+    // だった」という文脈が剥ぎ取られる。警告は clone 成功直後に出すべき、を固定する。
+    const c: Config = {
+      ...cfg,
+      root: join(tmp, "repodirs-warn"),
+      mirrorRoot: join(tmp, "mirror-warn"),
+      mirrorMaxAgeMs: 1,
+    };
+
+    // superproject の mirror を作る (submodule は取らない)
+    await createRepodir(c, spec(), { recurseSubmodules: false }, "0.1.0");
+
+    // mirror を stale にする。remote update は成功するが「古かった」経路を通したいので、
+    // 最終 fetch 時刻を過去へずらして needsUpdate を強制する
+    const old = new Date(Date.now() - 3 * 3_600_000);
+    for (const f of ["FETCH_HEAD", "packed-refs", "HEAD"]) {
+      await utimes(join(mirrorPath(c, spec()), f), old, old).catch(() => {});
+    }
+
+    // super も sub も到達不能にする (insteadOf の読み替えを全て外す)。すると:
+    //   - ensureMirror の remote update が失敗 → stale=true、警告が生成される
+    //   - mirror 実体はディスク上に健全なので、そこからの clone (superproject) は成功する
+    //   - submodule update --init は ../sub.git を到達不能な https に解決して throw する
+    // これが「clone は通ったが、その後のステップが落ちる」= 警告が握り潰される条件。
+    const broken = join(tmp, "gitconfig-broken");
+    await Bun.write(broken, '[protocol "file"]\n\tallow = always\n');
+    const prev = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = broken;
+
+    const said: string[] = [];
+    try {
+      const attempt = createRepodir(c, spec(), { warn: (m) => void said.push(m) }, "0.1.0");
+      // submodule update が落ちるので reject する
+      await expect(attempt).rejects.toThrow();
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = prev;
+    }
+
+    // それでも「mirror が古い」警告は出ている (握り潰されていない)
+    expect(said.join("\n")).toContain("could not update the mirror");
   });
 
   test("--no-recursive 相当を渡すと submodule を取らない", async () => {

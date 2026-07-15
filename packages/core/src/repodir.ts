@@ -117,6 +117,13 @@ export async function createRepodir(
     throw e;
   }
 
+  // 警告は clone が通った「今」出す。末尾まで溜めると、この後の set-url / submodule /
+  // meta 書き込みのどれかが落ちたときに握り潰される。警告の意味は「clone した mirror が
+  // 古いかもしれない」であって、後続ステップの成否とは独立なので、ここで出すのが正しい。
+  // 失敗をデバッグするユーザーが一番欲しいのは、まさにこの「mirror が stale/offline だった」
+  // という文脈で、それを失敗のたびに剥ぎ取ってはいけない。
+  for (const w of mirror.warnings) warn(w);
+
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
   await git(["remote", "set-url", "origin", cloneUrl(spec, protocol)], path);
@@ -147,9 +154,6 @@ export async function createRepodir(
 
   await writeMeta(path, meta);
   await writeState(path, { desired: "stopped", done: null });
-
-  // repodir が実際に生えた。ここまで来て初めて「古い mirror のまま続行した」と言える
-  for (const w of mirror.warnings) warn(w);
 
   return {
     path,
