@@ -241,6 +241,53 @@ describe("更新に失敗しても repodir は作れる (オフライン耐性)"
     // 「そのまま使う」とは言っていない (言った直後に死ぬくらいなら、言わない)
     expect(said.join("\n")).not.toContain("using the existing mirror as-is");
   });
+
+  test("更新窓の内側で壊れた mirror (stale ではない) でも、破損として検出する", async () => {
+    // 更新した直後に disk 障害等で壊れることはある。その場合 mirror は fresh (stale=false) で、
+    // ensureMirror は更新を挟まない。それでも clone は落ちるので、破損として扱えなければならない。
+    const c: Config = { ...cfg, root: join(tmp, "repodirs-fresh-corrupt"), mirrorRoot: join(tmp, "mirror-fresh-corrupt") };
+    await createRepodir(c, spec(), {}, "0.1.0"); // fresh な mirror
+
+    // 更新窓の内側のまま (ageMirror しない = stale にしない) object store を壊す
+    const objects = join(mirrorPath(c, spec()), "objects");
+    await rm(objects, { recursive: true, force: true });
+    await mkdir(objects, { recursive: true });
+
+    const attempt = createRepodir(c, spec(), { warn: () => {} }, "0.1.0");
+    expect(attempt).rejects.toThrow(/corrupt/);
+    expect(attempt).rejects.toThrow(/rm -rf/);
+  });
+
+  test("mirror は健全なのに clone が別の理由で落ちたら、健全な mirror を消させない", async () => {
+    // stale な mirror からの clone 失敗を、原因を問わず「破損」と決めつけると、存在しない
+    // ブランチ指定・ディスク不足・権限といった無関係な失敗で、健全な mirror を rm -rf させる。
+    // fsck で本当に壊れているか確かめてからでないと、破損とは言わない。
+    const first = await ensureMirror(cfg, vanishSpec());
+    await ageMirror(first.path, cfg.mirrorMaxAgeMs + 60_000);
+    await rm(vanish, { recursive: true, force: true }); // stale にする (update は失敗する)
+
+    // mirror は無傷。だが存在しないブランチを指定して clone を落とす
+    const attempt = createRepodir(
+      { ...cfg, root: join(tmp, "repodirs-badbranch") },
+      vanishSpec(),
+      { from: "no-such-branch", warn: () => {} },
+      "0.1.0",
+    );
+
+    // git の本当の理由がそのまま出る。rm -rf を勧めない
+    expect(attempt).rejects.toThrow(/no-such-branch/);
+    expect(attempt).rejects.not.toThrow(/rm -rf/);
+
+    // mirror は消えず、健全なまま (別のブランチからは今も clone できる)
+    expect(await git(["rev-parse", "--is-bare-repository"], first.path)).toBe("true");
+    const ok = await createRepodir(
+      { ...cfg, root: join(tmp, "repodirs-badbranch-ok") },
+      vanishSpec(),
+      { warn: () => {} },
+      "0.1.0",
+    );
+    expect(await Bun.file(join(ok.path, "README.md")).exists()).toBe(true);
+  });
 });
 
 describe("並行実行", () => {

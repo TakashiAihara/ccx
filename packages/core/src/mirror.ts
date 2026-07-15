@@ -27,6 +27,27 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+/**
+ * mirror の object store が壊れているか。git fsck が object の SHA-1 まで検証するので、
+ * 空の object store も pack の bit 腐敗も捉える (前者は missing、後者は hash mismatch)。
+ *
+ * これは「mirror からの clone が落ちた」ときにだけ、その原因を切り分けるために呼ぶ。clone は
+ * 破損以外の理由でも落ちる (存在しないブランチ指定、ディスク不足、権限)。それらを破損と決めつけて
+ * 「rm -rf しろ」と言うと、健全な mirror を消させる。破損だと言い切れるのは、fsck が実際に
+ * 壊れていると言ったときだけ。fsck は大きな repo で高くつくが、ここは既に失敗して中断しようと
+ * している経路なので、一度だけなら許容できる。
+ */
+export async function mirrorIsBroken(path: string): Promise<boolean> {
+  try {
+    // --connectivity-only は付けない。それだと欠けている object は見つかるが、object の中身が
+    // 腐っている (SHA-1 が合わない) ケースを見逃す。full fsck は content まで検証する。
+    await git(["fsck", "--no-progress"], path);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /** mirror の最終 fetch 時刻。無ければ null。 */
 async function lastFetchedAt(path: string): Promise<Date | null> {
   for (const f of ["FETCH_HEAD", "packed-refs", "HEAD"]) {

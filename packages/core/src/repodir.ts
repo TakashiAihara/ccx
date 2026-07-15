@@ -24,7 +24,14 @@ import {
   type RepodirMeta,
 } from "./meta.ts";
 import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
-import { ensureMirror } from "./mirror.ts";
+import { ensureMirror, mirrorIsBroken } from "./mirror.ts";
+
+/** git のエラーメッセージから、コマンド行ではなく本当の理由 (fatal/error 行) を取り出す。 */
+function firstGitError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const lines = e.message.split("\n");
+  return lines.find((l) => /^(fatal|error):/.test(l.trim())) ?? lines[0] ?? e.message;
+}
 
 export type NewRepodirOptions = {
   initialTask?: string;
@@ -91,16 +98,23 @@ export async function createRepodir(
   try {
     await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
   } catch (e) {
-    if (!mirror.stale) throw e;
-    throw new Error(
-      [
-        `could not create a repodir from the mirror at ${mirror.path}`,
-        `the mirror could not be updated, and the copy on disk does not read back:`,
-        `  ${e instanceof Error ? e.message.split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? e.message.split("\n")[0] : String(e)}`,
-        `remove it and ccx will clone it again: rm -rf ${mirror.path}`,
-      ].join("\n"),
-      { cause: e },
-    );
+    // clone は破損以外の理由でも落ちる (存在しないブランチ、ディスク不足、権限)。それらを
+    // 破損と決めつけて「rm -rf しろ」と言うと、健全な mirror を消させる。実際に壊れていると
+    // fsck が言ったときだけ、そう言う。それ以外は git の本当のエラーをそのまま投げる。
+    //
+    // stale か否かは見ない。更新窓の内側で壊れた mirror (更新を挟まないので stale=false) でも、
+    // 壊れているなら壊れていると言うべき。破損の裁定は fsck ひとつに委ねる。
+    if (await mirrorIsBroken(mirror.path)) {
+      throw new Error(
+        [
+          `could not create a repodir: the mirror at ${mirror.path} is corrupt`,
+          `  ${firstGitError(e)}`,
+          `remove it and ccx will clone it again: rm -rf ${mirror.path}`,
+        ].join("\n"),
+        { cause: e },
+      );
+    }
+    throw e;
   }
 
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
