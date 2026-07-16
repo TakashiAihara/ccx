@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1;ccxv1";
+
+// 機械が集めた事実を ccx-center に入れる唯一の入り口。
+//
+// この契約は「運ぶ形」だけを定める。集めたものを解釈した形 (session ごと、hook
+// 種別ごと) は center が payload から導出し、別ファイルで定義する (#91)。
+// 境界をここに書いておくのは、どちら側がパースするかが設計判断そのものだから。
+//
+// なぜ ccxd がパースしないか:
+//
+//   1. forward path に中身依存の分岐が無いことが、grep で検証できる状態に保たれる
+//      (docs/design/scope.md — ccxd は COLLECT と CARRY のみ)。
+//   2. ccxd は他人のマシンで動く単一バイナリで、こちらから直せない。そこでパースを
+//      間違えれば、そのマシンのデータは間違った形のまま入り、後から直せない。center
+//      でパースするなら生バイトが常に残るので、パーサの誤りは後から読み直して直せる。
+service IngestService {
+  // 1 バッチは全件受理か全件拒否。部分成功は無い。
+  //
+  // 転送は at-least-once (ccxd は成功を確認してから spool を消す)。同じ event が
+  // 二度届くことは正常系であり、center は event_id で潰す。
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+}
+
+message IngestRequest {
+  // ccxd の spool の FIFO 順。
+  repeated Event events = 1;
+}
+
+message Event {
+  Origin origin = 1;
+
+  // ccxd が受信時に採番する UUIDv7。center 側の重複排除キー。
+  //
+  // 単調増加する seq ではなくこれを同一性の軸に置くのは、spool を作り直すと seq が
+  // ゼロに戻るため。seq は順序を語れるが、同一性は語れない。
+  string event_id = 2;
+
+  // ccxd の spool の rowid。(machine, user) の中で単調増加し、ccxd の再起動を跨いで
+  // 維持される。「center 復旧後に順序どおり届く」ことはこの値で検証する。
+  //
+  // spool を作り直すと 0 に戻る。順序の根拠であって、同一性の根拠ではない。
+  uint64 seq = 3;
+
+  // ccxd の時計。payload の中にある時刻ではない (それを読むにはパースが要る)。
+  google.protobuf.Timestamp received_at = 4;
+
+  // どう呼ばれたかで決まる。payload の中身を見て決めることはしない。
+  Producer producer = 5;
+
+  // hook の stdin をそのまま。ccxd はこれをパースしない。
+  //
+  // bytes であって string ではないのは、これが「ccxd にとって意味を持たない列」で
+  // あることを型で言うため。UTF-8 として妥当かどうかの判断すら ccxd はしない。
+  bytes payload = 6;
+}
+
+// すべて ccxd 自身の環境から埋まる。payload から読み出した値は 1 つも無い。
+message Origin {
+  // CCX_MACHINE、既定は hostname。
+  //
+  // ディレクトリ id は機械ごとにしか一意でないので、機械を跨ぐものは machine と
+  // 併せて鍵にする (docs/design/repodir.md)。
+  string machine = 1;
+
+  // ccxd の実行 UID の名前。ccxd はユーザ権限で動く (root では動かさない) ので、
+  // これは「誰の ccxd か」と同義。
+  string user = 2;
+}
+
+enum Producer {
+  PRODUCER_UNSPECIFIED = 0;
+
+  // `ccxd hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
+  PRODUCER_CLAUDE_CODE_HOOK = 1;
+}
+
+message IngestResponse {
+  // 情報用。成功は「バッチ全件が耐久化された」ことを意味し、この数では意味しない。
+  // 重複排除で捨てられた分は accepted に含まれない。
+  uint32 accepted = 1;
+}

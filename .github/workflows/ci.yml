@@ -22,3 +22,39 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+
+      - name: Lint
+        run: buf lint packages/proto
+
+      # 生成物は commit されている。手で直したもの、あるいは proto を変えて生成し
+      # 忘れたものは、ここで落とす。生成物と proto がずれた状態で緑になるのが
+      # いちばん困る (誰も気づかないまま「型が通っている」ことになる)。
+      - name: Generated code is in sync with the schema
+        run: |
+          buf generate packages/proto --template packages/proto/buf.gen.yaml -o packages/proto
+          git diff --exit-code -- packages/proto/gen
