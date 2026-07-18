@@ -273,8 +273,16 @@ func (x *Origin) GetUser() string {
 
 type IngestResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 情報用。成功は「バッチ全件が耐久化された」ことを意味し、この数では意味しない。
-	// 重複排除で捨てられた分は accepted に含まれない。
+	// 新規に保存された件数 = バッチのうち、重複排除で捨てられなかったもの。「受理数」
+	// ではない (受理と保存が食い違うのは重複のときで、そこを区別するための数だから)。
+	//
+	// 例: 3 件送って 1 件が既知の event_id なら accepted = 2。
+	//
+	// これは情報用でしかない。転送の成否は RPC が成功したかどうかで決まり、成功は
+	// 「バッチ全件が耐久化された (新規保存 + 重複無視のどちらか)」を意味する。ccxd は
+	// この数を見て spool を消すかどうかを決めたりしない — 成功なら全件消す。
+	//
+	// center が重複排除を実装するのは #91。それまでは accepted == バッチ件数。
 	Accepted      uint32 `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
