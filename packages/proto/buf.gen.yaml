@@ -12,10 +12,15 @@ managed:
 
 plugins:
   # ccxd (Go) 側の消費者。
-  - remote: buf.build/protocolbuffers/go
+  #
+  # remote plugin は必ず版を固定する。固定しないと BSR 側の plugin 更新で生成物が
+  # 黙って変わり、無関係な PR で drift 検出が落ちる — この PR が売りにしている
+  # 「CI が regenerate して diff で drift を捕まえる」保証そのものを壊す。
+  # protocolbuffers/go は go.mod の google.golang.org/protobuf と同じ v1.36.11。
+  - remote: buf.build/protocolbuffers/go:v1.36.11
     out: gen/go
     opt: paths=source_relative
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.18.1
     out: gen/go
     opt: paths=source_relative
 

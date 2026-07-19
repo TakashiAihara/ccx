@@ -122,8 +122,13 @@ type Event struct {
 	// 単調増加する seq ではなくこれを同一性の軸に置くのは、spool を作り直すと seq が
 	// ゼロに戻るため。seq は順序を語れるが、同一性は語れない。
 	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	// ccxd の spool の rowid。(machine, user) の中で単調増加し、ccxd の再起動を跨いで
+	// ccxd の spool の rowid。1 つの spool の中で単調増加し、ccxd の再起動を跨いで
 	// 維持される。「center 復旧後に順序どおり届く」ことはこの値で検証する。
+	//
+	// spool は ccxd ごとに 1 つ、ccxd はユーザ権限で機械ごとに 1 プロセス (#90) なので、
+	// 「1 つの spool の中で」は実質「その機械のそのユーザの中で」になる。これは新しい
+	// キー体系の宣言ではなく、rowid が spool-local だという事実の言い換えにすぎない
+	// (機械跨ぎのキーは machine + path、architecture.md)。
 	//
 	// spool を作り直すと 0 に戻る。順序の根拠であって、同一性の根拠ではない。
 	Seq uint64 `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`
