@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
 )
 
 // This test drives the REAL compiled ccxd binary — `ccxd serve` and `ccxd hook`
@@ -80,7 +82,8 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	}
 
 	bin := buildCcxd(t)
-	c, url := startCenter(t)
+	c, url := testcenter.Start()
+	t.Cleanup(c.Close)
 
 	work, err := os.MkdirTemp("", "ccxd-work")
 	if err != nil {
@@ -101,12 +104,12 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(within)
 		for time.Now().Before(deadline) {
-			if len(c.payloads()) >= want {
+			if len(c.Payloads()) >= want {
 				return
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		t.Fatalf("center reached %d events, wanted %d", len(c.payloads()), want)
+		t.Fatalf("center reached %d events, wanted %d", len(c.Payloads()), want)
 	}
 	waitSocket := func() {
 		deadline := time.Now().Add(3 * time.Second)
@@ -126,12 +129,12 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	fireHook(t, bin, env, `{"hook_event_name":"SessionStart","session_id":"s1"}`)
 	fireHook(t, bin, env, `{"hook_event_name":"Stop","session_id":"s1"}`)
 	waitCenter(2, 3*time.Second)
-	if got := c.payloads(); got[0] != `{"hook_event_name":"SessionStart","session_id":"s1"}` {
+	if got := c.Payloads(); got[0] != `{"hook_event_name":"SessionStart","session_id":"s1"}` {
 		t.Fatalf("scenario1 order wrong: %v", got)
 	}
 
 	// --- scenario 2: center down → spool, then ordered recovery.
-	c.setUnavailable(true)
+	c.SetUnavailable(true)
 	for _, p := range []string{`{"n":1}`, `{"n":2}`, `{"n":3}`} {
 		fireHook(t, bin, env, p)
 	}
@@ -140,10 +143,10 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	if n := countPB(t, spool); n < 3 {
 		t.Fatalf("expected >=3 spooled while center down, got %d", n)
 	}
-	baseline := len(c.payloads())
-	c.setUnavailable(false)
+	baseline := len(c.Payloads())
+	c.SetUnavailable(false)
 	waitCenter(baseline+3, 5*time.Second)
-	tail := c.payloads()[baseline : baseline+3]
+	tail := c.Payloads()[baseline : baseline+3]
 	for i, want := range []string{`{"n":1}`, `{"n":2}`, `{"n":3}`} {
 		if tail[i] != want {
 			t.Errorf("scenario2 recovery order[%d]: want %q got %q", i, want, tail[i])
@@ -157,13 +160,13 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	if len(raw) != 1 {
 		t.Fatalf("expected 1 fallback event in incoming/, got %d", len(raw))
 	}
-	baseline = len(c.payloads())
+	baseline = len(c.Payloads())
 	serve = startServe(t, bin, env)
 	waitSocket()
 	waitCenter(baseline+1, 4*time.Second)
 
 	// --- scenario 4: SIGKILL with pending spool → at-least-once, no loss.
-	c.setUnavailable(true)
+	c.SetUnavailable(true)
 	for _, p := range []string{`{"k":1}`, `{"k":2}`, `{"k":3}`, `{"k":4}`} {
 		fireHook(t, bin, env, p)
 	}
@@ -179,12 +182,12 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 
 	// Track which of the 4 survive.
 	want := map[string]bool{`{"k":1}`: false, `{"k":2}`: false, `{"k":3}`: false, `{"k":4}`: false}
-	c.setUnavailable(false)
+	c.SetUnavailable(false)
 	serve = startServe(t, bin, env)
 	waitSocket()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, p := range c.payloads() {
+		for _, p := range c.Payloads() {
 			if _, ok := want[p]; ok {
 				want[p] = true
 			}

@@ -1,4 +1,4 @@
-package main
+package collect
 
 import (
 	"context"
@@ -10,31 +10,55 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/TakashiAihara/ccx/packages/core/config"
+	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
-// Server is the resident ccxd: it owns the socket hooks write to, the spool
-// events wait in, and the loop that drains them to the center.
-type Server struct {
+// Collect is ccxd's collect concern (ADR 0002): hooks → center. It owns the
+// socket hooks write to, the spool events wait in, and the loop that drains them
+// to the center. It is one module behind the Concern interface — the seam both
+// for the config on/off toggle and for a future extraction to its own process.
+//
+// It satisfies the concern.Concern interface structurally (Name + Run); it does
+// not import that package, to keep the dependency pointing one way (main wires
+// concerns; concerns do not know about the runner).
+type Collect struct {
 	socketPath string
 	spool      *Spool
 	loop       *forwardLoop
 	log        func(string, ...any)
 }
 
-// NewServer wires a server from a resolved spool and forwarder. A nil forwarder
-// means "no center configured" — the server still accepts and spools; it just
-// does not run the drain loop.
-func NewServer(socketPath string, spool *Spool, forwarder Forwarder, log func(string, ...any)) *Server {
-	s := &Server{socketPath: socketPath, spool: spool, log: log}
-	if forwarder != nil {
-		s.loop = newForwardLoop(spool, forwarder, log)
+// New builds the collect concern from resolved config. The center may be unset
+// (HubURL == ""), in which case Collect still accepts and spools hook events; it
+// just has nowhere to forward them yet. The local side never depends on the
+// center (scope.md).
+func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
+	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
+	spool, err := OpenSpool(cfg.SpoolDir, origin)
+	if err != nil {
+		return nil, err
 	}
-	return s
+	return newCollect(cfg.SocketPath, spool, NewForwarder(cfg.HubURL), log), nil
 }
+
+// newCollect is the lower-level constructor with the spool and forwarder
+// injected, so tests can drive collect against a stub center and a temp spool.
+func newCollect(socketPath string, spool *Spool, forwarder Forwarder, log func(string, ...any)) *Collect {
+	c := &Collect{socketPath: socketPath, spool: spool, log: log}
+	if forwarder != nil {
+		c.loop = newForwardLoop(spool, forwarder, log)
+	}
+	return c
+}
+
+// Name identifies the concern in logs and config (ADR 0002).
+func (s *Collect) Name() string { return "collect" }
 
 // Run drains anything hooks left in incoming/ (from while ccxd was down), then
 // serves the socket and runs the forward loop until ctx is cancelled. It blocks.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Collect) Run(ctx context.Context) error {
 	// Startup drain: events hooks wrote to the fallback while ccxd was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
@@ -81,7 +105,7 @@ const maxUnixPath = 104
 
 // listen binds the unix socket, refusing to start if another ccxd already owns
 // it and clearing a stale socket left by a crashed one.
-func (s *Server) listen() (net.Listener, error) {
+func (s *Collect) listen() (net.Listener, error) {
 	// Fail early with a message that says what to do, instead of letting the
 	// kernel return "bind: invalid argument" for a path that is merely too long
 	// (a deep $HOME or $XDG_RUNTIME_DIR reaches this).
@@ -120,7 +144,7 @@ func (s *Server) listen() (net.Listener, error) {
 	return ln, nil
 }
 
-func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
+func (s *Collect) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -138,7 +162,7 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 // handle receives one framed payload, spools it, and acks. It does not inspect
 // the payload — it envelopes and stores the bytes. The producer is set from the
 // fact that this arrived on the hook socket, not from anything inside the bytes.
-func (s *Server) handle(conn net.Conn) {
+func (s *Collect) handle(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(hookDialTimeout))
 

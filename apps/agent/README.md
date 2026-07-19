@@ -10,6 +10,23 @@ Observing repodirs, starting sessions, delivering channels, threshold
 warnings — all of that sits on top of this and is out of scope here (#7, #20,
 #23, #83).
 
+## One process, three concerns (ADR 0002)
+
+ccxd is a modular monolith: one binary, but its jobs are separate internal
+modules behind an interface, each independently toggled in config.
+
+| Concern | Does | Default | Status |
+|---|---|---|---|
+| **collect** | hooks → center | on (inert without a center) | built (#90) |
+| **carry** | broker → session | off (inert without a broker) | later (#23) |
+| **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
+
+Persistence is off by default because it is the only *active* verb — it spawns
+and restarts sessions (START), so it is never on by surprise. Only `collect` is
+implemented here; the other two slot into the same `concern.Run` the same way
+when built. `internal/concern` is the interface, `internal/collect` the module.
+A ccxd with every concern off is a valid state.
+
 ## The two commands
 
 ```text
@@ -65,6 +82,11 @@ it simply has no center to forward to.
 | machine name | `CCX_MACHINE` | `ccx.machine` | `machine` | hostname |
 | socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccxd.sock` |
 | spool | `CCX_SPOOL` | — | — | `~/.ccx/spool` |
+| collect on/off | `CCX_COLLECT` | `ccx.collect` | `[collect] enabled` | on |
+| carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |
+| persistence on/off | `CCX_PERSISTENCE` | `ccx.persistence` | `[persistence] enabled` | off |
+
+Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 
 The machine name defaults to the hostname but is overridable, because hostnames
 collide (cloned VMs, same-named containers) and the center keys records on it

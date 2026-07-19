@@ -49,6 +49,31 @@ type Config struct {
 
 	// SpoolDir holds the forward queue and the hook-written fallback.
 	SpoolDir string
+
+	// Concerns turns ccxd's bundled jobs on and off independently (ADR 0002).
+	// ccxd is one process, but each concern is a module that a person can enable
+	// or disable through the usual ladder. A ccxd with every concern off is
+	// valid — someone who wants the CLI but none of the daemon's behaviours.
+	Concerns Concerns
+}
+
+// Concerns is the on/off state of each of ccxd's three jobs (ADR 0002). Only
+// Collect is implemented in #90; Carry and Persistence have their toggle here so
+// they slot in the same shape when built, and so a reader sees the full set.
+type Concerns struct {
+	// Collect — hooks → center. Defaults ON: it is inert without a center
+	// configured (it forwards nowhere), so on-by-default is harmless.
+	Collect bool
+
+	// Carry — broker → session. Defaults OFF: inert until a broker and a
+	// channel-enabled session exist (#23, not built yet).
+	Carry bool
+
+	// Persistence — keep a `desired: running` session alive. Defaults OFF,
+	// opt-in: it is the only *active* verb (it spawns/restarts, START), so it is
+	// never on by surprise — the same stance as the worker gate and
+	// `desired: running` itself (#20, not built yet).
+	Persistence bool
 }
 
 // fileShape is the subset of ~/.config/ccx/config.toml this port reads.
@@ -57,6 +82,10 @@ type fileShape struct {
 	Hub     struct {
 		URL string `toml:"url"`
 	} `toml:"hub"`
+	// *bool so "unset in file" is distinguishable from "set to false".
+	Collect     struct{ Enabled *bool } `toml:"collect"`
+	Carry       struct{ Enabled *bool } `toml:"carry"`
+	Persistence struct{ Enabled *bool } `toml:"persistence"`
 }
 
 // Load resolves the config from the real environment.
@@ -103,7 +132,43 @@ func load(
 		User:       uname,
 		SocketPath: socketPath(getenv),
 		SpoolDir:   spoolDir(getenv),
+		Concerns: Concerns{
+			// Defaults per ADR 0002: passive concerns may default on, the one
+			// active concern (persistence) is opt-in.
+			Collect:     toggle(getenv, gitcfg, "CCX_COLLECT", "ccx.collect", file.Collect.Enabled, true),
+			Carry:       toggle(getenv, gitcfg, "CCX_CARRY", "ccx.carry", file.Carry.Enabled, false),
+			Persistence: toggle(getenv, gitcfg, "CCX_PERSISTENCE", "ccx.persistence", file.Persistence.Enabled, false),
+		},
 	}, nil
+}
+
+// toggle resolves one concern's enabled flag through the usual ladder
+// (env → git config → file → default). It is the single shape all three
+// concerns share, so adding Carry/Persistence wiring later is one line each.
+func toggle(getenv func(string) string, gitcfg func(string) string, envKey, gitKey string, fileVal *bool, def bool) bool {
+	if v := getenv(envKey); v != "" {
+		return parseBool(v, def)
+	}
+	if v := gitcfg(gitKey); v != "" {
+		return parseBool(v, def)
+	}
+	if fileVal != nil {
+		return *fileVal
+	}
+	return def
+}
+
+// parseBool reads the common truthy/falsey spellings, falling back to def for
+// anything it does not recognise (a typo should not silently flip a concern).
+func parseBool(v string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on", "yes":
+		return true
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return def
+	}
 }
 
 // pick returns the first non-empty value, in precedence order.

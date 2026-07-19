@@ -1,4 +1,4 @@
-package main
+package collect
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func (s *stubForwarder) payloads() []string {
 }
 
 // startServer runs a Server on a temp socket/spool and returns it plus a cancel.
-func startServer(t *testing.T, fwd Forwarder) (*Server, string, string, context.CancelFunc) {
+func startServer(t *testing.T, fwd Forwarder) (*Collect, string, string, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
 	sock := dir + "/ccxd.sock"
@@ -60,7 +60,7 @@ func startServer(t *testing.T, fwd Forwarder) (*Server, string, string, context.
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(sock, spool, fwd, quietLog)
+	srv := newCollect(sock, spool, fwd, quietLog)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = srv.Run(ctx) }()
@@ -99,7 +99,7 @@ func TestHookToForward_EndToEnd(t *testing.T) {
 	defer cancel()
 
 	for _, p := range []string{`{"hook":"SessionStart"}`, `{"hook":"UserPromptSubmit"}`, `{"hook":"Stop"}`} {
-		if code := runHook(sock, t.TempDir(), strings.NewReader(p)); code != 0 {
+		if code := Hook(sock, t.TempDir(), strings.NewReader(p)); code != 0 {
 			t.Fatalf("hook should always exit 0, got %d", code)
 		}
 	}
@@ -124,7 +124,7 @@ func TestCenterDown_SpoolsThenDrainsInOrder(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 5; i++ {
-		if code := runHook(sock, t.TempDir(), strings.NewReader(fmt.Sprintf(`{"n":%d}`, i))); code != 0 {
+		if code := Hook(sock, t.TempDir(), strings.NewReader(fmt.Sprintf(`{"n":%d}`, i))); code != 0 {
 			t.Fatalf("hook exit %d", code)
 		}
 	}
@@ -162,7 +162,7 @@ func TestCcxdDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 	spoolDir := dir + "/spool"
 
 	// ccxd is NOT running. Hook fires: dial fails fast, falls back to incoming.
-	if code := runHook(sock, incomingPath(spoolDir), strings.NewReader(`{"while":"down"}`)); code != 0 {
+	if code := Hook(sock, spoolDir, strings.NewReader(`{"while":"down"}`)); code != 0 {
 		t.Fatalf("hook exit %d", code)
 	}
 
@@ -172,7 +172,7 @@ func TestCcxdDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(sock, spool, fwd, quietLog)
+	srv := newCollect(sock, spool, fwd, quietLog)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = srv.Run(ctx) }()
@@ -192,7 +192,7 @@ func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(long, spool, nil, quietLog)
+	srv := newCollect(long, spool, nil, quietLog)
 	_, err = srv.listen()
 	if err == nil {
 		t.Fatal("expected an error for an over-long socket path")

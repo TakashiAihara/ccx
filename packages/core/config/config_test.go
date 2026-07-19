@@ -115,3 +115,51 @@ func TestMalformedConfig_IsSurfaced(t *testing.T) {
 		t.Error("malformed config should return an error, not be swallowed")
 	}
 }
+
+func TestConcernToggles_Defaults(t *testing.T) {
+	// ADR 0002 defaults: collect on, carry off, persistence off (opt-in).
+	c, err := load(env(nil), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Concerns.Collect {
+		t.Error("collect should default ON")
+	}
+	if c.Concerns.Carry {
+		t.Error("carry should default OFF")
+	}
+	if c.Concerns.Persistence {
+		t.Error("persistence should default OFF (opt-in — the only active verb)")
+	}
+}
+
+func TestConcernToggles_EnvOverrides(t *testing.T) {
+	c, err := load(env(map[string]string{
+		"CCX_COLLECT":     "off",
+		"CCX_PERSISTENCE": "on",
+	}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Concerns.Collect {
+		t.Error("CCX_COLLECT=off should disable collect")
+	}
+	if !c.Concerns.Persistence {
+		t.Error("CCX_PERSISTENCE=on should enable persistence")
+	}
+}
+
+func TestConcernToggles_FileFalseBeatsDefaultOn(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/c.toml"
+	if err := os.WriteFile(p, []byte("[collect]\nenabled = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(env(map[string]string{"CCX_CONFIG": p}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Concerns.Collect {
+		t.Error("[collect] enabled=false in file should turn collect off despite the on default")
+	}
+}

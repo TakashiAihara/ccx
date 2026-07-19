@@ -1,17 +1,14 @@
 // Command ccxd is the resident agent, one process per machine, run as the
-// invoking user (never root, #90).
-//
-// In #90 it does exactly one thing: collect hook data and carry it to the
-// center. It has two subcommands —
+// invoking user (never root, #90). It is a modular monolith (ADR 0002): one
+// binary, role subcommands, its jobs (collect / carry / persistence) as separate
+// internal modules that each toggle on and off in config.
 //
 //	ccxd hook     thin: read a hook payload from stdin, hand it to the running
 //	              ccxd over the local socket, exit. Wired into Claude Code hooks.
-//	ccxd serve    resident: own the socket, spool what arrives, forward it to
-//	              the center, retry on outage, lose nothing across restarts.
+//	ccxd serve    resident: run every enabled concern until stopped.
 //
-// Everything else ccxd will eventually do — observe repodirs, start sessions,
-// deliver channels, threshold warnings — sits on top of this and is out of
-// scope here (#7, #20, #23, #83).
+// In #90 only the collect concern is built (hooks → center). Carry (#23) and
+// persistence (#20) slot into the same runner when built.
 package main
 
 import (
@@ -22,8 +19,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
 	"github.com/TakashiAihara/ccx/packages/core/config"
-	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
 func main() {
@@ -51,18 +49,17 @@ func run(args []string) int {
 	}
 }
 
-// cmdHook is the thin path. It resolves only the two paths it needs (socket to
-// write to, incoming dir to fall back to) and returns fast. It never fails the
-// session: runHook always returns 0.
+// cmdHook is the thin path. It resolves only the paths it needs and returns
+// fast. It never fails the session: collect.Hook always returns 0.
 func cmdHook() int {
 	cfg, err := config.Load()
 	if err != nil {
 		// Even a broken config must not fail a session's hook. Fall back to the
-		// default incoming location so the event is still captured.
+		// default spool location so the event is still captured.
 		home, _ := os.UserHomeDir()
-		return runHook("", incomingPath(home+"/.ccx/spool"), os.Stdin)
+		return collect.Hook("", home+"/.ccx/spool", os.Stdin)
 	}
-	return runHook(cfg.SocketPath, incomingPath(cfg.SpoolDir), os.Stdin)
+	return collect.Hook(cfg.SocketPath, cfg.SpoolDir, os.Stdin)
 }
 
 func cmdServe() int {
@@ -74,22 +71,24 @@ func cmdServe() int {
 
 	logger := func(format string, a ...any) { log.Printf(format, a...) }
 
-	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
-	spool, err := OpenSpool(cfg.SpoolDir, origin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ccxd: spool: %v\n", err)
-		return 1
+	// Assemble the enabled concerns (ADR 0002). Only collect is built in #90;
+	// carry and persistence append here the same way when they exist.
+	var concerns []concern.Concern
+	if cfg.Concerns.Collect {
+		c, err := collect.New(cfg, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ccxd: collect: %v\n", err)
+			return 1
+		}
+		concerns = append(concerns, c)
 	}
-
-	forwarder := NewForwarder(cfg.HubURL)
-	srv := NewServer(cfg.SocketPath, spool, forwarder, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger("ccxd serving on %s (machine=%s user=%s hub=%q)",
-		cfg.SocketPath, cfg.Machine, cfg.User, cfg.HubURL)
-	if err := srv.Run(ctx); err != nil {
+	logger("ccxd serving (machine=%s user=%s hub=%q collect=%v)",
+		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect)
+	if err := concern.Run(ctx, logger, concerns...); err != nil {
 		fmt.Fprintf(os.Stderr, "ccxd: %v\n", err)
 		return 1
 	}
@@ -100,7 +99,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `ccxd — ccx resident agent
 
 usage:
-  ccxd serve    run the resident agent (socket + spool + forward)
+  ccxd serve    run the resident agent (the enabled concerns)
   ccxd hook     forward one hook payload from stdin to the running agent
 
 ccxd runs as your user, never root. See docs for the systemd user unit.
