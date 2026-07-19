@@ -4,3 +4,8 @@ dist/
 # compiled binary (bun build --compile)
 /ccx
 /ccx-*
+
+# go build outputs (e.g. `go build ./apps/agent` drops `agent` at the root)
+/agent
+/ccxd
+/apps/*/agent

@@ -1,0 +1,43 @@
+# ccxd — ccx resident agent, as a *user* service.
+#
+# Install (never as root):
+#   mkdir -p ~/.config/systemd/user
+#   cp ccxd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ccxd
+#
+# For ccxd to stay up 24h — across logout, before login — the user needs
+# lingering, or the user manager stops when the last session ends:
+#   loginctl enable-linger "$USER"
+#
+# ccxd runs as the invoking user by construction: `systemctl --user` starts it
+# under that user's UID. Everything it creates (~/.ccx, the socket, the spool)
+# is therefore user-owned, with nothing to reconcile. It never needs root and
+# must never be installed as a system service.
+
+[Unit]
+Description=ccx resident agent (collects hook data, forwards to ccx-center)
+Documentation=https://github.com/TakashiAihara/ccx
+# The center being down is normal and handled by ccxd's spool, so do not couple
+# startup to any network target.
+
+[Service]
+Type=simple
+# %h is the user's home; ccxd is expected on PATH (installed to ~/.local/bin, #55).
+ExecStart=%h/.local/bin/ccxd serve
+Restart=on-failure
+RestartSec=2
+
+# It forwards data and needs no privilege, so refuse to gain any.
+NoNewPrivileges=true
+# Creates and owns /run/user/<uid>/ccx, where the socket lives by default
+# ($XDG_RUNTIME_DIR/ccx/ccxd.sock).
+RuntimeDirectory=ccx
+
+# Deliberately NOT hardened further here (ProtectHome / ReadWritePaths). Those
+# require ~/.ccx to already exist as a bind-mount source and would fail ccxd's
+# own first-run creation of the spool. Sandbox hardening is a follow-up, kept
+# out of the basic daemon so the happy path is not fragile.
+
+[Install]
+WantedBy=default.target
