@@ -183,3 +183,16 @@ func TestConcernToggles_UnparsableEnvFallsThroughToGit(t *testing.T) {
 		t.Error("unparsable CCX_COLLECT must fall through to ccx.collect=false, not the default")
 	}
 }
+
+// A config path that exists but cannot be read as a file (here: it is a
+// directory; a permission-denied file is the same branch) must surface an error,
+// not be silently ignored — a setting the user believes is applied is otherwise
+// silently dropped. Fix for the CodeRabbit review's config finding.
+func TestConfigFile_UnreadableIsSurfaced(t *testing.T) {
+	dir := t.TempDir()
+	// Point CCX_CONFIG at a directory: os.ReadFile returns a non-nil error that
+	// is NOT os.ErrNotExist, so it must be surfaced, not swallowed.
+	if _, err := load(env(map[string]string{"CCX_CONFIG": dir}), noGit, fixedHost("h")); err == nil {
+		t.Error("an existing-but-unreadable config path should surface an error, not be swallowed")
+	}
+}

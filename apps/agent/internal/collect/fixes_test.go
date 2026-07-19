@@ -3,6 +3,8 @@ package collect
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
+	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
 )
 
 // An unexpected Accept error must be RETURNED (fatal to the concern), not
@@ -178,5 +181,35 @@ func TestForwardLoop_AckFailure_BacksOffNotBusyLoop(t *testing.T) {
 	// the busy loop.
 	if n := fwd.count(); n > 25 {
 		t.Errorf("forward called %d times in 300ms on persistent Ack failure — that is a busy loop, backoff is missing", n)
+	}
+}
+
+// A center that accepts the connection but never responds must make Forward
+// time out and RETURN an error (so the loop can back off and retry), not block
+// for the life of ccxd. Fix for the CodeRabbit review's forward finding.
+func TestConnectForwarder_TimesOutOnHungCenter(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-block // hang: never respond until the test unblocks it
+	}))
+	// Order matters: unblock the handler BEFORE Close waits on it (defers are
+	// LIFO), or Close deadlocks on the still-hung request.
+	defer srv.Close()
+	defer close(block)
+
+	f := &connectForwarder{
+		client:  ccxv1connect.NewIngestServiceClient(http.DefaultClient, srv.URL),
+		timeout: 200 * time.Millisecond,
+	}
+
+	start := time.Now()
+	err := f.Forward(context.Background(), &ccxv1.Event{EventId: "x", Payload: []byte("y")})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Error("Forward against a hung center must return an error, not block/succeed")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Forward blocked %s on a hung center — the per-call timeout is missing", elapsed)
 	}
 }

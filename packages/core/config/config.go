@@ -16,6 +16,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"os/user"
@@ -101,12 +102,21 @@ func load(
 ) (Config, error) {
 	var file fileShape
 	if p := configPath(getenv); p != "" {
-		if b, err := os.ReadFile(p); err == nil {
+		b, err := os.ReadFile(p)
+		switch {
+		case err == nil:
 			// A malformed config file is worth surfacing, not swallowing —
 			// it means a setting the user thinks is applied is not.
 			if _, err := toml.Decode(string(b), &file); err != nil {
 				return Config{}, err
 			}
+		case errors.Is(err, os.ErrNotExist):
+			// No config file at all is fine — everything is optional.
+		default:
+			// The file exists but could not be read (permissions, I/O). Same
+			// reasoning as a parse error: a setting the user believes is applied
+			// is silently not. Surface it rather than swallow it.
+			return Config{}, err
 		}
 	}
 

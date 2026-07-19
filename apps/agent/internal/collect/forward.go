@@ -23,8 +23,16 @@ type Forwarder interface {
 // events is a later optimisation (#83-ish); one-at-a-time keeps ordering and
 // ack semantics trivially correct for the basic daemon.
 type connectForwarder struct {
-	client ccxv1connect.IngestServiceClient
+	client  ccxv1connect.IngestServiceClient
+	timeout time.Duration
 }
+
+// defaultForwardTimeout bounds a single Ingest call. Without it, a center that
+// accepts the TCP connection but never responds would leave Forward blocked for
+// the whole life of ccxd — the forward loop's backoff never fires, because it
+// only fires when Forward RETURNS, and a hung call never returns. A bounded call
+// turns "center hung" into "Forward errored", which the loop already retries.
+const defaultForwardTimeout = 30 * time.Second
 
 // NewForwarder builds a forwarder for the given center URL, or returns nil if
 // no center is configured. A nil forwarder is not an error: ccxd still runs and
@@ -35,11 +43,16 @@ func NewForwarder(hubURL string) Forwarder {
 		return nil
 	}
 	return &connectForwarder{
-		client: ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL),
+		client:  ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL),
+		timeout: defaultForwardTimeout,
 	}
 }
 
 func (f *connectForwarder) Forward(ctx context.Context, ev *ccxv1.Event) error {
+	// Per-call deadline. Still honours a cancelled parent ctx (shutdown); adds
+	// the timeout a hung center needs to become a retryable error.
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
 	_, err := f.client.Ingest(ctx, connect.NewRequest(&ccxv1.IngestRequest{
 		Events: []*ccxv1.Event{ev},
 	}))
