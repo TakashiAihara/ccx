@@ -58,6 +58,18 @@ func (s *Collect) Name() string { return "collect" }
 // Run drains anything hooks left in incoming/ (from while ccxd was down), then
 // serves the socket and runs the forward loop until ctx is cancelled. It blocks.
 func (s *Collect) Run(ctx context.Context) error {
+	// The single-instance lock is acquired FIRST, before any spool access. It
+	// must precede DrainIncoming: two ccxd starting at once would otherwise both
+	// drain incoming/ from the same on-disk state, assign the same seq numbers
+	// from independent in-memory counters, and one atomicWrite would silently
+	// overwrite the other — a lost event. The socket check in listen() cannot
+	// prevent this; only a lock held before the spool is touched can.
+	lock, err := acquireLock(s.spool.Dir())
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
 	// Startup drain: events hooks wrote to the fallback while ccxd was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
@@ -66,13 +78,6 @@ func (s *Collect) Run(ctx context.Context) error {
 	} else if n > 0 {
 		s.log("drained %d event(s) from the fallback spool on startup", n)
 	}
-
-	// One ccxd per spool. Held for the whole run; the kernel frees it on exit.
-	lock, err := acquireLock(s.spool.Dir())
-	if err != nil {
-		return err
-	}
-	defer lock.release()
 
 	ln, err := s.listen()
 	if err != nil {

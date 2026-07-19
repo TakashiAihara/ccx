@@ -213,3 +213,42 @@ func TestConnectForwarder_TimesOutOnHungCenter(t *testing.T) {
 		t.Errorf("Forward blocked %s on a hung center — the per-call timeout is missing", elapsed)
 	}
 }
+
+// The single-instance lock must be acquired BEFORE the spool is touched, so two
+// ccxd starting at once cannot both drain incoming/ and race the seq counter
+// (CodeRabbit Critical). If another instance holds the lock, Run must fail
+// without draining — proven here by the incoming file being left untouched.
+func TestRun_LockPrecedesDrain(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A hook dropped a fallback event while ccxd was down.
+	if err := writeIncoming(spool.IncomingDir(), []byte(`{"pending":1}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another ccxd already holds the spool lock.
+	held, err := acquireLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+
+	// This instance's Run must fail on the lock — before DrainIncoming runs.
+	c := newCollect(dir+"/s.sock", spool, nil, quietLog)
+	if err := c.Run(context.Background()); err == nil {
+		t.Fatal("Run should fail while another ccxd holds the lock")
+	}
+
+	// The incoming event must be untouched: the drain never ran.
+	raw, _ := filepath.Glob(filepath.Join(spool.IncomingDir(), "*.raw"))
+	if len(raw) != 1 {
+		t.Errorf("incoming/ should be untouched when Run fails on the lock, found %d files", len(raw))
+	}
+	pending, _ := spool.Pending()
+	if pending != 0 {
+		t.Errorf("nothing should have been drained into the main spool, found %d", pending)
+	}
+}
