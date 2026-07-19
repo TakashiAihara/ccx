@@ -1,0 +1,29 @@
+version: v2
+
+# TS 側 (center = apps/hub と React UI) の codegen ターゲット。
+#
+# この PR では宣言だけで、出力は生成しない。import する相手 (apps/hub) がまだ無く、
+# 誰も consume しない TS 生成物を commit しても、間違っていても何も壊れない =
+# 検証されない生成物になるため。#91 で apps/hub を作るとき、この template で
+#   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o apps/hub/src/gen
+# を回して生成し、そこで初めて型が consume されて検証される。
+#
+# ここに置いておくのは、契約が 2 言語のためにあるという事実を config に残すため
+# (ADR 0001)。Go 側 (buf.gen.yaml) と揃えて drift させない。
+#
+# 版の固定は #91 で行う。Go 側 (buf.gen.yaml) は remote plugin を版で固定してある
+# が、それは生成物が commit・diff されるため。TS 側の生成物はまだ commit されず
+# diff もされない (import する相手が居ない) ので、ここで版を書いても検証する術が
+# 無い。#91 で apps/hub に出力を commit すると同時に、その出力と一致する版へ固定
+# する (Go 側と同じ理由・同じやり方)。
+plugins:
+  # メッセージ型 + サービス記述子。connect-es v2 はこの記述子を直接 consume する
+  # ので、別途 connect 用 plugin は要らない。
+  - remote: buf.build/bufbuild/es
+    out: gen/ts
+    opt: target=ts
+
+  # React UI 用の TanStack Query バインディング (ADR 0001: connect-query for the UI)。
+  - remote: buf.build/bufbuild/connect-query
+    out: gen/ts
+    opt: target=ts

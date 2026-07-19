@@ -1,0 +1,28 @@
+version: v2
+
+# 生成物は commit する。理由は、受け取った人が buf を持っていなくても `go build` が
+# 通ること。drift は CI が `buf generate` 後の `git diff --exit-code` で検出する。
+# 生成物への後付け修正はしない (次の生成で消えるため)。
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/TakashiAihara/ccx/packages/proto/gen/go
+
+plugins:
+  # ccxd (Go) 側の消費者。
+  #
+  # remote plugin は必ず版を固定する。固定しないと BSR 側の plugin 更新で生成物が
+  # 黙って変わり、無関係な PR で drift 検出が落ちる — この PR が売りにしている
+  # 「CI が regenerate して diff で drift を捕まえる」保証そのものを壊す。
+  # protocolbuffers/go は go.mod の google.golang.org/protobuf と同じ v1.36.11。
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/connectrpc/go:v1.18.1
+    out: gen/go
+    opt: paths=source_relative
+
+  # center と UI (TS) 側の消費者は #91 で追加する。ここで生成しても import する
+  # 相手がまだ居らず、間違っていても何も壊れない = 検証されない生成物になるため。
