@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -68,12 +67,28 @@ func (s *Collect) Run(ctx context.Context) error {
 		s.log("drained %d event(s) from the fallback spool on startup", n)
 	}
 
+	// One ccxd per spool. Held for the whole run; the kernel frees it on exit.
+	lock, err := acquireLock(s.spool.Dir())
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
 	ln, err := s.listen()
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
 	defer os.Remove(s.socketPath)
+
+	// A fatal accept error must wind the whole concern down, not silently stop
+	// accepting while the forward loop keeps the process alive — that would leave
+	// a dead listener behind whose socket file still exists, so every hook would
+	// connect, get no ack, and stall for the full deadline, forever, with nothing
+	// surfaced. Cancelling on the error lets Run return it; concern.Run then
+	// stops the process and systemd restarts it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	var wg sync.WaitGroup
 
@@ -93,9 +108,10 @@ func (s *Collect) Run(ctx context.Context) error {
 		ln.Close()
 	}()
 
-	s.acceptLoop(ctx, ln)
+	acceptErr := s.acceptLoop(ctx, ln)
+	cancel() // stop the forward loop too — one process, one lifecycle
 	wg.Wait()
-	return nil
+	return acceptErr
 }
 
 // maxUnixPath is the practical limit on a unix socket path. The kernel's
@@ -119,14 +135,9 @@ func (s *Collect) listen() (net.Listener, error) {
 		return nil, err
 	}
 
-	// If something is already listening, do not clobber it — that would be a
-	// second ccxd, and two daemons racing on one spool is not a state to enter
-	// silently.
-	if conn, err := net.DialTimeout("unix", s.socketPath, 200*time.Millisecond); err == nil {
-		conn.Close()
-		return nil, errors.New("another ccxd is already listening on " + s.socketPath)
-	}
-	// Nothing answered — a leftover socket file from a crash is safe to remove.
+	// We hold the single-instance lock by the time we get here, so any socket
+	// file present is a stale leftover from a crashed ccxd — no live daemon can
+	// own it. Safe to remove unconditionally; there is no live socket to clobber.
 	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -144,16 +155,18 @@ func (s *Collect) listen() (net.Listener, error) {
 	return ln, nil
 }
 
-func (s *Collect) acceptLoop(ctx context.Context, ln net.Listener) {
+func (s *Collect) acceptLoop(ctx context.Context, ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			// ctx cancelled → the listener was closed on purpose.
+			// ctx cancelled → the listener was closed on purpose; a clean stop.
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
-			s.log("accept error: %v", err)
-			return
+			// An unexpected accept error is fatal to the concern — return it so
+			// Run tears down and the process restarts, rather than looping into a
+			// dead-listener state.
+			return fmt.Errorf("accept: %w", err)
 		}
 		go s.handle(conn)
 	}
@@ -164,7 +177,7 @@ func (s *Collect) acceptLoop(ctx context.Context, ln net.Listener) {
 // fact that this arrived on the hook socket, not from anything inside the bytes.
 func (s *Collect) handle(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(hookDialTimeout))
+	_ = conn.SetDeadline(time.Now().Add(hookExchangeTimeout))
 
 	payload, err := readFrame(conn)
 	if err != nil {

@@ -126,7 +126,18 @@ func (l *forwardLoop) run(ctx context.Context) {
 
 		// Center confirmed. Only now remove it from the spool.
 		if err := l.spool.Ack(e); err != nil {
-			l.log("ack/delete failed (seq %d): %v", e.Event.GetSeq(), err)
+			// The center already has it, but the local delete failed (a full or
+			// read-only fs, say). If we looped straight back, Oldest would return
+			// this same still-present event and we would re-forward it as fast as
+			// the CPU allows — a busy loop hammering the center with a duplicate.
+			// Back off instead; the center dedups the re-send by event_id when it
+			// does go through.
+			l.log("ack/delete failed (seq %d), backing off: %v", e.Event.GetSeq(), err)
+			if !l.sleep(ctx, backoff) {
+				return
+			}
+			backoff = l.nextBackoff(backoff)
+			continue
 		}
 		backoff = l.minBackoff
 	}

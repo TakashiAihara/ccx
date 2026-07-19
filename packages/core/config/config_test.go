@@ -163,3 +163,23 @@ func TestConcernToggles_FileFalseBeatsDefaultOn(t *testing.T) {
 		t.Error("[collect] enabled=false in file should turn collect off despite the on default")
 	}
 }
+
+// An unparsable value at one level must NOT resolve to the default — it must
+// fall through to the next real source (the fix for the review's Medium#4).
+func TestConcernToggles_UnparsableEnvFallsThroughToGit(t *testing.T) {
+	git := func(key string) string {
+		if key == "ccx.collect" {
+			return "false" // deliberately off in git
+		}
+		return ""
+	}
+	// A typo in the env var must not silently flip collect back to its "on"
+	// default and discard the deliberate git-config false.
+	c, err := load(env(map[string]string{"CCX_COLLECT": "treu"}), git, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Concerns.Collect {
+		t.Error("unparsable CCX_COLLECT must fall through to ccx.collect=false, not the default")
+	}
+}

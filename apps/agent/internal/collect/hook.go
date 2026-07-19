@@ -6,11 +6,23 @@ import (
 	"time"
 )
 
-// hookDialTimeout bounds how long the hook will wait on the socket before
-// giving up and falling back. The socket is local, so success is sub-millisecond;
-// this only guards against a wedged ccxd. A hook must never block the session on
-// I/O (#18), so the bound is short.
-const hookDialTimeout = 2 * time.Second
+// The hook's timeouts, kept short and separate. The socket is local, so success
+// is sub-millisecond; these only bound the pathological cases.
+const (
+	// hookDialTimeout — connecting to a local socket is instant; this only
+	// bounds a kernel/backlog stall.
+	hookDialTimeout = 1 * time.Second
+	// hookExchangeTimeout — the write+ack after a successful dial; bounds a ccxd
+	// that accepted the connection but then stalled.
+	hookExchangeTimeout = 1 * time.Second
+	// hookOverallBudget — the hard backstop on the ENTIRE hook, socket path and
+	// fallback write together. A hook must never block the session (#18,
+	// scope.md); if even the fallback disk write stalls, the hook abandons it and
+	// returns. It is a process about to exit, so an abandoned write goroutine
+	// dies with it. Must exceed dial+exchange so the normal fallback is never cut
+	// off.
+	hookOverallBudget = 3 * time.Second
+)
 
 // Hook is `ccxd hook`, the client side of collect. It reads the hook payload
 // from stdin, hands it to the running ccxd over the local socket, and returns.
@@ -36,14 +48,28 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 		return 0
 	}
 
-	if deliverToSocket(socketPath, payload) {
-		return 0
-	}
+	// Do the delivery under a hard overall budget. Both the socket exchange and
+	// the fallback disk write are bounded individually, but this is the backstop
+	// that guarantees the hook returns even if some syscall wedges in a way the
+	// per-step deadlines miss (a hung fs on the fallback write, say). We are about
+	// to exit, so abandoning the goroutine is free.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if deliverToSocket(socketPath, payload) {
+			return
+		}
+		// Socket path failed for any reason — fall back so the event is not lost.
+		_ = writeIncoming(incomingPath(spoolDir), payload)
+	}()
 
-	// Socket path failed for any reason — fall back so the event is not lost.
-	// If even this fails there is genuinely nowhere to put it, but we still do
-	// not fail the session.
-	_ = writeIncoming(incomingPath(spoolDir), payload)
+	select {
+	case <-done:
+	case <-time.After(hookOverallBudget):
+		// Everything downstream stalled. Protect the session and return; the
+		// event may be lost in this rare case, but a blocked session is the worse
+		// failure (scope.md: local must never be held hostage to anything).
+	}
 	return 0
 }
 
@@ -56,9 +82,11 @@ func deliverToSocket(socketPath string, payload []byte) bool {
 	}
 	defer conn.Close()
 
-	// One deadline covers the whole exchange, so a ccxd that accepts the
-	// connection but then stalls cannot wedge the hook.
-	_ = conn.SetDeadline(time.Now().Add(hookDialTimeout))
+	// A separate, short deadline on the post-dial exchange, so a ccxd that
+	// accepted the connection but then stalls cannot wedge the hook. Kept
+	// distinct from the dial timeout so the worst case is dial+exchange, not
+	// twice the dial timeout.
+	_ = conn.SetDeadline(time.Now().Add(hookExchangeTimeout))
 
 	if err := writeFrame(conn, payload); err != nil {
 		return false

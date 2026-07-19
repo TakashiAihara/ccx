@@ -146,11 +146,16 @@ func load(
 // (env → git config → file → default). It is the single shape all three
 // concerns share, so adding Carry/Persistence wiring later is one line each.
 func toggle(getenv func(string) string, gitcfg func(string) string, envKey, gitKey string, fileVal *bool, def bool) bool {
-	if v := getenv(envKey); v != "" {
-		return parseBool(v, def)
+	// An unparsable value at one level is treated as "not set here" and falls
+	// through to the next source — a typo in CCX_COLLECT must not silently
+	// override a deliberate `ccx.collect=false` in git config. That is the whole
+	// point of "a typo should not flip a concern": it should be ignored, not
+	// resolved to the built-in default while a real lower source is discarded.
+	if b, ok := parseBool(getenv(envKey)); ok {
+		return b
 	}
-	if v := gitcfg(gitKey); v != "" {
-		return parseBool(v, def)
+	if b, ok := parseBool(gitcfg(gitKey)); ok {
+		return b
 	}
 	if fileVal != nil {
 		return *fileVal
@@ -158,16 +163,17 @@ func toggle(getenv func(string) string, gitcfg func(string) string, envKey, gitK
 	return def
 }
 
-// parseBool reads the common truthy/falsey spellings, falling back to def for
-// anything it does not recognise (a typo should not silently flip a concern).
-func parseBool(v string, def bool) bool {
+// parseBool reads the common truthy/falsey spellings. ok is false for an empty
+// or unrecognised value, so the caller can fall through to the next source
+// rather than treating a typo as a deliberate setting.
+func parseBool(v string) (value, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "on", "yes":
-		return true
+		return true, true
 	case "0", "false", "off", "no":
-		return false
+		return false, true
 	default:
-		return def
+		return false, false
 	}
 }
 

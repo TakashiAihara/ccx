@@ -74,6 +74,12 @@ func OpenSpool(dir string, origin *ccxv1.Origin) (*Spool, error) {
 		now:      time.Now,
 	}
 
+	// Sweep stray temp files left by a crash mid-atomicWrite. They are never
+	// read (only .pb / .raw names are), but without a reaper they accumulate
+	// across crash cycles. Best-effort — a failure here is not fatal.
+	reapTemps(dir)
+	reapTemps(incoming)
+
 	max, err := s.maxSeqOnDisk()
 	if err != nil {
 		return nil, err
@@ -83,8 +89,28 @@ func OpenSpool(dir string, origin *ccxv1.Origin) (*Spool, error) {
 	return s, nil
 }
 
+// reapTemps removes leftover ".tmp-*" files (atomicWrite's staging files) from a
+// directory. A complete event is always renamed to its real name; anything still
+// carrying the temp prefix is a partial write from a crash and is safe to drop.
+func reapTemps(dir string) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), ".tmp-") {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
 // IncomingDir is where the hook drops events when the socket is unreachable.
 func (s *Spool) IncomingDir() string { return s.incoming }
+
+// Dir is the spool's root directory. Exposed so the single-instance lock can
+// live beside the resource it protects (two ccxd writing one spool would race
+// the seq counter).
+func (s *Spool) Dir() string { return s.dir }
 
 // Append envelopes a raw hook payload and writes it to the spool, returning the
 // stored event. This is the only place seq is advanced and event_id is minted.

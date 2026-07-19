@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
@@ -56,8 +57,13 @@ func cmdHook() int {
 	if err != nil {
 		// Even a broken config must not fail a session's hook. Fall back to the
 		// default spool location so the event is still captured.
-		home, _ := os.UserHomeDir()
-		return collect.Hook("", home+"/.ccx/spool", os.Stdin)
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			// No home either — nowhere sensible to spool. Do not fail the session
+			// over it; the socket may still be reachable at its default path.
+			return collect.Hook("", os.TempDir()+"/ccx-spool", os.Stdin)
+		}
+		return collect.Hook("", filepath.Join(home, ".ccx", "spool"), os.Stdin)
 	}
 	return collect.Hook(cfg.SocketPath, cfg.SpoolDir, os.Stdin)
 }
