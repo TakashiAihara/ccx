@@ -47,6 +47,9 @@ repodir
   .option("--agent <name>", "agent to run later (claude / opencode / ...)")
   .option("--model <name>", "model to run later")
   .option("--refresh", "force-update the mirror regardless of its age")
+  // --refresh と --no-refresh を両方定義すると、commander は同じキーを三値で渡す
+  // (未指定 = undefined / --refresh = true / --no-refresh = false)。
+  .option("--no-refresh", "use the mirror as-is, without checking its age")
   .option("--protocol <name>", "clone protocol: https or ssh (default: config `protocol`)")
   .option("--no-recursive", "skip submodule initialisation")
   .option("--json", "print the result as JSON")
@@ -96,7 +99,7 @@ repodir
       `repo    ${specToSlug(spec)}`,
       `branch  ${r.meta.baseBranch} @ ${r.meta.baseCommit.slice(0, 8)}`,
       r.meta.initialTask ? `task    ${r.meta.initialTask}` : null,
-      `mirror  ${r.mirror.created ? "created" : r.mirror.updated ? "updated" : "cached"}`,
+      `mirror  ${mirrorNote(r.mirror)}`,
       `took    ${elapsed} ms`,
     ].filter(Boolean);
     console.error(notes.join("\n"));
@@ -269,6 +272,29 @@ repodir
     console.error(`${picked.spec.owner}/${picked.spec.repo}  ${picked.meta?.initialTask ?? "-"}`);
     console.log(picked.path);
   });
+
+/**
+ * mirror に何が起きたか。
+ *
+ * 「確認して新鮮だった (cached)」と「そもそも確認していない (unchecked)」を同じ表示にすると、
+ * --no-refresh で 1 週間前の mirror を使っていても新鮮に見えてしまう。年齢を添えて区別する。
+ * stale は「更新を試みたが失敗し、古いまま使った」で、警告そのものは core が stderr に出す。
+ */
+function mirrorNote(m: {
+  created: boolean;
+  updated: boolean;
+  stale: boolean;
+  checked: boolean;
+  ageMs: number | null;
+}): string {
+  if (m.created) return "created";
+  if (m.updated) return "updated";
+
+  const age = m.ageMs === null ? "unknown age" : `last fetched ${humanAge(new Date(Date.now() - m.ageMs))} ago`;
+  if (m.stale) return `stale — update failed, ${age}`;
+  if (!m.checked) return `unchecked — ${age}`;
+  return `cached — ${age}`;
+}
 
 function humanAge(d: Date): string {
   const s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));

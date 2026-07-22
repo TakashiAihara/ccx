@@ -24,7 +24,14 @@ import {
   type RepodirMeta,
 } from "./meta.ts";
 import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
-import { ensureMirror } from "./mirror.ts";
+import { ensureMirror, mirrorIsBroken } from "./mirror.ts";
+
+/** git のエラーメッセージから、コマンド行ではなく本当の理由 (fatal/error 行) を取り出す。 */
+function firstGitError(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const lines = e.message.split("\n");
+  return lines.find((l) => /^(fatal|error):/.test(l.trim())) ?? lines[0] ?? e.message;
+}
 
 export type NewRepodirOptions = {
   initialTask?: string;
@@ -34,10 +41,15 @@ export type NewRepodirOptions = {
   pr?: PrIntent;
   agent?: string;
   model?: string;
-  /** mirror の鮮度を問わず必ず remote update する */
+  /**
+   * mirror の鮮度チェックの上書き。
+   *   未指定 = cfg.mirrorMaxAgeMs で判定 / true = 必ず更新 / false = チェックごと飛ばす
+   */
   refresh?: boolean;
   /** clone / origin に使う protocol。省略時は cfg.protocol */
   protocol?: Protocol;
+  /** mirror についての警告の出力先。既定は stderr */
+  warn?: (message: string) => void;
   /** submodule を初期化する (既定 true) */
   recurseSubmodules?: boolean;
 };
@@ -46,7 +58,13 @@ export type NewRepodirResult = {
   path: string;
   dirId: string;
   meta: RepodirMeta;
-  mirror: { created: boolean; updated: boolean };
+  mirror: {
+    created: boolean;
+    updated: boolean;
+    stale: boolean;
+    checked: boolean;
+    ageMs: number | null;
+  };
 };
 
 export async function createRepodir(
@@ -56,7 +74,8 @@ export async function createRepodir(
   version: string,
 ): Promise<NewRepodirResult> {
   const protocol = opts.protocol ?? cfg.protocol;
-  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol });
+  const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
+  const mirror = await ensureMirror(cfg, spec, { refresh: opts.refresh, protocol });
 
   const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
   await mkdir(parent, { recursive: true });
@@ -72,7 +91,38 @@ export async function createRepodir(
   }
 
   // hardlink clone。--no-checkout せず branch を直接指定する
-  await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+  //
+  // 更新に失敗した mirror を使っている場合、ここで初めて「その mirror が本当に使えるか」が
+  // 分かる。壊れた object を踏めば落ちる。ensureMirror が警告を持ち帰るだけにしてあるのは、
+  // この結果を見てから口を開くため。
+  try {
+    await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+  } catch (e) {
+    // clone は破損以外の理由でも落ちる (存在しないブランチ、ディスク不足、権限)。それらを
+    // 破損と決めつけて「rm -rf しろ」と言うと、健全な mirror を消させる。実際に壊れていると
+    // fsck が言ったときだけ、そう言う。それ以外は git の本当のエラーをそのまま投げる。
+    //
+    // stale か否かは見ない。更新窓の内側で壊れた mirror (更新を挟まないので stale=false) でも、
+    // 壊れているなら壊れていると言うべき。破損の裁定は fsck ひとつに委ねる。
+    if (await mirrorIsBroken(mirror.path)) {
+      throw new Error(
+        [
+          `could not create a repodir: the mirror at ${mirror.path} is corrupt`,
+          `  ${firstGitError(e)}`,
+          `remove it and ccx will clone it again: rm -rf ${mirror.path}`,
+        ].join("\n"),
+        { cause: e },
+      );
+    }
+    throw e;
+  }
+
+  // 警告は clone が通った「今」出す。末尾まで溜めると、この後の set-url / submodule /
+  // meta 書き込みのどれかが落ちたときに握り潰される。警告の意味は「clone した mirror が
+  // 古いかもしれない」であって、後続ステップの成否とは独立なので、ここで出すのが正しい。
+  // 失敗をデバッグするユーザーが一番欲しいのは、まさにこの「mirror が stale/offline だった」
+  // という文脈で、それを失敗のたびに剥ぎ取ってはいけない。
+  for (const w of mirror.warnings) warn(w);
 
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
@@ -105,5 +155,16 @@ export async function createRepodir(
   await writeMeta(path, meta);
   await writeState(path, { desired: "stopped", done: null });
 
-  return { path, dirId, meta, mirror: { created: mirror.created, updated: mirror.updated } };
+  return {
+    path,
+    dirId,
+    meta,
+    mirror: {
+      created: mirror.created,
+      updated: mirror.updated,
+      stale: mirror.stale,
+      checked: mirror.checked,
+      ageMs: mirror.ageMs,
+    },
+  };
 }

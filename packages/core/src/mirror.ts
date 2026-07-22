@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.ts";
 import { git, GitError } from "./git.ts";
-import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
+import { cloneUrl, specToSlug, type Protocol, type RepoSpec } from "./repospec.ts";
 
 export function mirrorPath(cfg: Config, spec: RepoSpec): string {
   return join(cfg.mirrorRoot, spec.host, spec.owner, `${spec.repo}.git`);
@@ -24,6 +24,27 @@ async function exists(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * mirror の object store が壊れているか。git fsck が object の SHA-1 まで検証するので、
+ * 空の object store も pack の bit 腐敗も捉える (前者は missing、後者は hash mismatch)。
+ *
+ * これは「mirror からの clone が落ちた」ときにだけ、その原因を切り分けるために呼ぶ。clone は
+ * 破損以外の理由でも落ちる (存在しないブランチ指定、ディスク不足、権限)。それらを破損と決めつけて
+ * 「rm -rf しろ」と言うと、健全な mirror を消させる。破損だと言い切れるのは、fsck が実際に
+ * 壊れていると言ったときだけ。fsck は大きな repo で高くつくが、ここは既に失敗して中断しようと
+ * している経路なので、一度だけなら許容できる。
+ */
+export async function mirrorIsBroken(path: string): Promise<boolean> {
+  try {
+    // --connectivity-only は付けない。それだと欠けている object は見つかるが、object の中身が
+    // 腐っている (SHA-1 が合わない) ケースを見逃す。full fsck は content まで検証する。
+    await git(["fsck", "--no-progress"], path);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -73,51 +94,137 @@ async function syncOrigin(path: string, url: string): Promise<void> {
   await git(["remote", "set-url", "origin", url], path);
 }
 
+/** mirror の最終 fetch からの経過 (ミリ秒)。時刻が取れなければ null。 */
+async function age(path: string): Promise<number | null> {
+  const fetched = await lastFetchedAt(path);
+  return fetched ? Date.now() - fetched.getTime() : null;
+}
+
 export type EnsureMirrorResult = {
   path: string;
   created: boolean;
   updated: boolean;
+  /** 更新すべきだったが失敗し、古い mirror をそのまま使っている */
+  stale: boolean;
+  /**
+   * 鮮度を確認したか。--no-refresh のときだけ false になる。
+   *
+   * 「確認して新鮮だった」と「そもそも確認していない」を混ぜると、1 週間前の mirror が
+   * 新鮮なものと同じ顔で出てくる。呼び手が両者を区別できるよう、別の値として持つ。
+   */
+  checked: boolean;
+  /** 最終 fetch からの経過 (ミリ秒)。更新した直後は 0、時刻が取れなければ null。 */
+  ageMs: number | null;
+  /**
+   * ユーザーに伝えるべきこと。呼び手が repodir を作り終えてから出す。
+   *
+   * ここで即座に出さないのは、「古いまま続行します」と言った直後に、その mirror からの clone が
+   * 壊れた object を踏んで落ちることがあるため。約束は、果たせると分かってから口にする。
+   */
+  warnings: string[];
 };
+
+export type EnsureMirrorOptions = {
+  /**
+   * 鮮度チェックの上書き。
+   *
+   *   undefined … cfg.mirrorMaxAgeMs で判定する (既定)
+   *   true      … 鮮度を問わず必ず remote update する (--refresh)
+   *   false     … 鮮度チェックごと飛ばす (--no-refresh)
+   */
+  refresh?: boolean;
+  protocol?: Protocol;
+};
+
+/**
+ * 警告に出す失敗理由。GitError.message はコマンド行から始まるので、そのまま出すと
+ * 「なぜ失敗したか」が読めない。git が stderr に書いた fatal / error の行を拾う。
+ */
+function failureReason(e: unknown): string {
+  if (e instanceof GitError) {
+    const lines = e.stderr.split("\n").map((l) => l.trim()).filter(Boolean);
+    return lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines.at(-1) ?? e.message;
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** ミリ秒を人が読める粗い粒度にする (警告文用)。 */
+function humanAge(ms: number): string {
+  const units: [number, string][] = [[86_400_000, "d"], [3_600_000, "h"], [60_000, "m"]];
+  for (const [size, suffix] of units) {
+    if (ms >= size) return `${Math.floor(ms / size)}${suffix}`;
+  }
+  return `${Math.floor(ms / 1000)}s`;
+}
 
 /**
  * mirror を用意する。無ければ作り、古ければ更新する。
  *
- * 新鮮さの閾値は cfg.mirrorMaxAgeMs。常駐 agent (ccxd) が定期的に更新する運用でも、
- * ここで閾値チェックを行うことで単独動作時に古い clone を生やさない。
+ * 新鮮さの閾値は cfg.mirrorMaxAgeMs。常駐 agent (ccxd) が背後で mirror を更新する構想は
+ * あるが、それは ccxd 側の責務であり、ここは「単独で動かしたときに何が起きるか」だけを
+ * 決める。ccxd が居ても居なくても、この関数の判断だけで正しい repodir が生える。
+ *
+ * 更新に失敗しても落とさない。オフラインでも repodir が作れることは設計上の売りなので、
+ * 鮮度のために可用性を捨てない。古い mirror から repodir を作り、stderr で警告する。
+ * 「少し古い作業コピー」は仕事の続行を妨げないが、「repodir が作れない」は妨げる。
+ *
+ * mirror がまだ無い場合だけは remote に届かないと何も作れないので、そこでの失敗は投げる。
  */
 export async function ensureMirror(
   cfg: Config,
   spec: RepoSpec,
-  opts: { force?: boolean; protocol?: Protocol; warn?: (message: string) => void } = {},
+  opts: EnsureMirrorOptions = {},
 ): Promise<EnsureMirrorResult> {
   const path = mirrorPath(cfg, spec);
   const url = cloneUrl(spec, opts.protocol ?? cfg.protocol);
-  const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
 
   if (!(await exists(path))) {
     const created = await cloneMirror(url, path);
-    return { path, created, updated: false };
+    const ageMs = created ? 0 : await age(path);
+    return { path, created, updated: false, stale: false, checked: true, ageMs, warnings: [] };
   }
 
-  // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
-  // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
-  //
-  // ただし origin の付け替えは fetch の下準備でしかない。並行実行で .git/config のロックを
-  // 取り損ねたときに、それだけで repodir の生成そのものを諦めるのは割に合わない。失敗しても
-  // 警告に留めて進み、fetch は (古い protocol の origin で) 続行する。
+  const ageMs = await age(path);
+
+  // --no-refresh は「mirror に一切触らない」ことが売りなので、ここで打ち切る。origin の
+  // 追従 (syncOrigin) も remote に出るときにしか要らないので、この後ろに置いてある。
+  // 鮮度は見ていないので checked: false。呼び手はこれを「新鮮」と混同してはいけない。
+  if (opts.refresh === false) {
+    return { path, created: false, updated: false, stale: false, checked: false, ageMs, warnings: [] };
+  }
+
+  const needsUpdate = opts.refresh === true || ageMs === null || ageMs > cfg.mirrorMaxAgeMs;
+  if (!needsUpdate) {
+    return { path, created: false, updated: false, stale: false, checked: true, ageMs, warnings: [] };
+  }
+
   try {
+    // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
+    // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
+    //
+    // set-url も fetch と同じく失敗しうる (並行実行時の .git/config のロック競合など) ので、
+    // 更新一式をまとめて try で囲む。ここから先の失敗は全て「古いまま使う」に落とす。
     await syncOrigin(path, url);
+    await git(["remote", "update", "--prune"], path);
+    return { path, created: false, updated: true, stale: false, checked: true, ageMs: 0, warnings: [] };
   } catch (e) {
-    const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
-    warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
+    // ここで warn せず、警告を持ち帰るだけにする。この mirror から clone できるかはまだ
+    // 分からない (壊れた object を踏めば呼び手の clone が落ちる)。「古いまま続行します」と
+    // 言った直後に死ぬのが、いちばん質が悪い。約束は、果たせると分かってから口にする。
+    const when = ageMs === null ? "unknown age" : `last fetched ${humanAge(ageMs)} ago`;
+    return {
+      path,
+      created: false,
+      updated: false,
+      stale: true,
+      checked: true,
+      ageMs,
+      warnings: [
+        `ccx: warning: could not update the mirror (${when}): ${failureReason(e)}`,
+        `ccx: using the existing mirror as-is; the repodir may be behind ${specToSlug(spec)}`,
+      ],
+    };
   }
-
-  const fetched = await lastFetchedAt(path);
-  const stale = opts.force || !fetched || Date.now() - fetched.getTime() > cfg.mirrorMaxAgeMs;
-  if (!stale) return { path, created: false, updated: false };
-
-  await git(["remote", "update", "--prune"], path);
-  return { path, created: false, updated: true };
 }
 
 /**

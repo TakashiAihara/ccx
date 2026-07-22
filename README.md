@@ -82,6 +82,38 @@ Repodirs live under a path that carries the meaning, so the directory id itself 
 The id is the first 14 characters of a Crockford-base32 UUIDv7, so directory names sort by
 creation time and no counter needs to be allocated.
 
+### Mirror freshness
+
+A repodir is only as current as the mirror it came from, so `ccx rd new` updates the mirror when it
+is older than `mirrorMaxAge` (default: 10 minutes). Two flags override that per invocation:
+
+```bash
+ccx rd new owner/repo --refresh      # update it whatever its age
+ccx rd new owner/repo --no-refresh   # use it as-is, don't even check
+```
+
+Each run says what it did with the mirror, and does not pretend an unchecked mirror is a fresh one:
+
+```text
+mirror  created
+mirror  updated
+mirror  cached — last fetched 2m ago          it was checked, and it was fresh
+mirror  unchecked — last fetched 7d ago       --no-refresh: the age was never verified
+mirror  stale — update failed, last fetched 3h ago
+```
+
+If the update fails — you are on a plane, the forge is down, the VPN is off — ccx does not stop. It
+creates the repodir from the mirror it already has and warns on stderr that the copy may be behind.
+Being able to create a repodir offline is one of the reasons the mirror exists; a slightly stale
+working copy does not stop you from working, but a repodir you cannot create does. Only the very
+first clone of a repo needs the forge to answer, because there is nothing to fall back to.
+
+Creating several repodirs of the same repo at once is the normal case here, so nothing in that path
+may lose a race. The first clone of a repo goes to a temporary directory and is moved into place with
+a rename, which is atomic on one filesystem: concurrent creators cannot collide, the loser simply
+uses the winner's mirror. Everything that talks to the forge afterwards is fail-soft, so a lost lock
+on `.git/config` degrades to "use the mirror as-is" rather than to an error.
+
 ### Metadata
 
 Two files, both under `.git/` so they never show up in `git status` and can never be committed by
