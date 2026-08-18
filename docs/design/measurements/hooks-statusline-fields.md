@@ -20,7 +20,7 @@
 | 経路 | 取得契機 | 主に取れるもの | 主に取れないもの |
 | :--- | :--- | :--- | :--- |
 | hook stdin JSON | イベント発生時 (31 種) | イベント種別・時系列・tool 入出力・permission mode・effort・subagent 識別子 | model (SessionStart 以外)・トークン・コスト・context window・rate limit・version |
-| statusline stdin JSON | セッション開始時 + assistant メッセージ着信 + `/compact` 完了 + permission mode 変更 + vim mode 切替 + `refreshInterval` タイマ | model・トークン・context window・使用率・rate limit・コスト・fast mode・output style・version・PR・worktree | イベント種別・tool 入出力・permission mode・git branch |
+| statusline stdin JSON | interactive セッションのみ。セッション開始時 + assistant メッセージ着信 + `/compact` 完了 + permission mode 変更 + vim mode 切替 + `refreshInterval` タイマ。`claude -p` では 1 度も動かない | model・トークン・context window・使用率・rate limit・コスト・fast mode・output style・version・PR・worktree | イベント種別・tool 入出力・permission mode・git branch |
 | transcript JSONL | 常時追記 (非同期) | メッセージ単位の model・usage 全内訳 (thinking 込み)・effort・permissionMode・version・gitBranch・tool 結果・compact 境界・subagent 別 transcript | cost・context window サイズ・使用率・rate limit・fast mode・output style・PR・worktree |
 
 ## 論点別の対応表
@@ -76,6 +76,154 @@
 - permission mode を statusline から
 - context window サイズを hook / transcript から。モデル id から引き当てるしかない
 - 「いま何回目のリクエストか」のようなシーケンス番号。`bridge-session.lastSequenceNum` は remote control 用で、API 呼び出し回数ではない
+
+## 経路の選び方
+
+3 経路は代替関係ではなく補完関係にある。何を集めたいかで必要な経路が決まる。
+
+### statusline は interactive セッションでしか動かない
+
+同一の project 設定 (`statusLine` + SessionStart hook) を置いて、起動形態だけを変えて実測した。
+
+| 起動形態 | SessionStart hook | statusline |
+| :--- | ---: | ---: |
+| `claude -p '...'` (headless) | 1 回 | 0 回 |
+| interactive (tmux 経由で起動、プロンプトは送らない) | 1 回 | 46〜49 回 (50 秒間、`refreshInterval: 1`。4 回実行して 46 / 46 / 47 / 49) |
+
+- 同じ設定・同じスクリプトで hook 側は両方とも発火しているので、「設定が読まれていない」ではなく「statusline が headless では呼ばれない」と切り分けられる (ネガティブコントロール)
+- interactive 側は statusline スクリプトに `echo SL-OK` を仕込み、画面下部に `SL-OK` が描画されることも確認した
+- 起動直後は数十秒かかることがある。10 秒台で判定すると interactive でも 0 回に見えるので、待ち時間を伸ばして確かめること
+
+再現手順。3 点を守らないと結果を誤読する。
+
+- 既存の project 設定を退避してから走らせる。`cleanup` は 2 度呼ばれても壊れないようにする (シグナルで走った後に EXIT でもう一度走る)
+- `claude` と `tmux` の起動が成功したこと、hook 側が発火したことを先に確かめる。statusline が 0 回でも、起動に失敗しただけかもしれない
+- statusline の呼び出し回数は、スクリプトの先頭で専用のカウンタに 1 行足して数える。stdin を書いたファイルの行数で数えると、実行中にキャンセルされた呼び出し (300ms デバウンスの仕様) を取りこぼす
+
+```bash
+set -e
+export REPODIR=$(git rev-parse --show-toplevel)
+D=$(mktemp -d); install -d -m 700 "$D" "$D/backup" "$D/raw"
+SESSION="slchk-$$"
+
+[ -e "$REPODIR/.claude/settings.json" ] && install -D -m 600 "$REPODIR/.claude/settings.json" "$D/backup/settings.json"
+cleanup() {
+  if [ -e "$D/backup/settings.json" ]; then
+    install -D -m 600 "$D/backup/settings.json" "$REPODIR/.claude/settings.json"
+  else
+    rm -f "$REPODIR/.claude/settings.json"
+    rmdir "$REPODIR/.claude" 2>/dev/null || true
+  fi
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  rm -rf "$D"
+}
+# 復元は EXIT で 1 度だけ。シグナル側は終了させるだけにして二重実行を作らない
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+cat > "$D/sl.sh" <<'SH'
+#!/bin/sh
+R=$(dirname "$0")
+echo call >> "$R/sl-calls.txt"      # 呼び出し開始で必ず 1 行
+T=$(mktemp "$R/raw/sl-XXXXXX.json")
+cat > "$T"
+echo "SL-OK"
+SH
+cat > "$D/hook.sh" <<'SH'
+#!/bin/sh
+R=$(dirname "$0")
+echo call >> "$R/hook-calls.txt"
+cat > /dev/null
+exit 0
+SH
+chmod 700 "$D/sl.sh" "$D/hook.sh"
+install -d -m 700 "$REPODIR/.claude"
+REPODIR="$REPODIR" python3 -c "
+import json, os, sys
+d = sys.argv[1]
+json.dump({'statusLine': {'type': 'command', 'command': d + '/sl.sh', 'refreshInterval': 1},
+           'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': d + '/hook.sh', 'timeout': 10}]}]}},
+          open(os.path.join(os.environ['REPODIR'], '.claude', 'settings.json'), 'w'), indent=2)
+" "$D"
+
+# grep -c は空ファイルで "0" を出しつつ exit 1 になるので || と組み合わせると 2 行出る。wc で数える
+count() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+
+if ! timeout 300 claude -p 'Reply with the single word DONE.' --model sonnet > "$D/headless.out" 2>&1; then
+  echo "headless run failed — 計測無効"; tail -3 "$D/headless.out"; exit 1
+fi
+h_hook=$(count "$D/hook-calls.txt"); h_sl=$(count "$D/sl-calls.txt")
+[ "$h_hook" -ge 1 ] || { echo "hook が発火していない = 設定が読まれていない。計測無効"; exit 1; }
+echo "headless: hook=$h_hook statusline=$h_sl"
+
+tmux new-session -d -s "$SESSION" -x 180 -y 40 -c "$REPODIR" "claude --model sonnet"
+sleep 50
+tmux has-session -t "$SESSION" 2>/dev/null || { echo "セッションが落ちた。計測無効"; exit 1; }
+i_hook=$(count "$D/hook-calls.txt"); i_sl=$(count "$D/sl-calls.txt")
+[ "$i_hook" -gt "$h_hook" ] || { echo "interactive で hook が発火していない = 起動途中。待ち時間を延ばして再実行"; exit 1; }
+tmux capture-pane -p -t "$SESSION" | grep -q SL-OK || echo "warning: 画面に SL-OK が見えない"
+echo "interactive: hook=$((i_hook - h_hook)) statusline=$((i_sl - h_sl))"
+
+if [ "$h_sl" -eq 0 ] && [ "$((i_sl - h_sl))" -gt 0 ]; then
+  echo "結論: statusline は interactive でのみ動く"
+else
+  echo "結論と異なる結果。headless=$h_sl interactive=$((i_sl - h_sl))"
+fi
+```
+
+同じ repodir で別の Claude Code セッションが動いていると、そのセッションの statusline も計測用のものに差し替わる (statusLine と `refreshInterval` は動作中セッションに即時反映される)。呼び出し回数もそちらのぶん混ざるので、他のセッションを止めてから走らせるか、専用の repodir を切って実行する。
+
+
+
+この手順は掲載した状態のまま抜き出して確認した。既存の `.claude/settings.json` を置いた状態で走らせても実行後に中身が元のまま残り (sentinel で確認)、存在しない状態で走らせれば計測で作ったものだけが消える。
+
+statusline の stdin は 1 行の JSON で、1 回ぶんが 1234 バイトだった。行数で数えても回数と一致するが、上のカウンタ方式の方が安全。
+
+つまり headless セッションも観測対象にするなら、statusline に依存した設計はそこで穴が開く。
+
+### hook payload だけでは足りない。ただし hook 起点なら足りる
+
+- hook の payload にコスト・context・rate limit は入らない。トークンも、`Agent` tool の PostToolUse が持つ subagent 分 (`tool_response.usage`) を除いて入らない
+- ただし全イベントに `transcript_path` が載る。hook プロセスがそのファイルを読めば、`message.model` と `message.usage` (thinking tokens 込み)、`effort`、`gitBranch` まで取れる
+- `effort` は transcript を読まなくても hook から取れる。tool コンテキスト系イベントと Stop / SubagentStop の `effort.level`、および hook プロセスの環境変数 `$CLAUDE_EFFORT`
+- 「そのプロンプトを処理したモデル」は hook では確定できない。`model` が載るのは SessionStart だけで、しかも interactive 起動時のみ。セッション途中の `/model` 切替も追えない。transcript の `message.model` が唯一の経路
+
+### transcript を読んでも埋まらないもの
+
+| フィールド | 代替 |
+| :--- | :--- |
+| `cost.total_cost_usd` | model + usage + 価格表から自前計算できる。ただし Claude Code の算出値と突き合わせてはいない |
+| `context_window.context_window_size` | モデル ID から引き当てる (実測では `claude-sonnet-5` / `claude-opus-5[1m]` とも 1000000) |
+| `used_percentage` | usage から算出できる。`input_tokens + cache_creation_input_tokens + cache_read_input_tokens` を窓サイズで割る。出力トークンは含めない (ドキュメント記載の式と同じ) |
+| `rate_limits.five_hour` / `seven_day` | 代替経路なし。statusline を持つ以外に取得手段がない |
+| `fast_mode` / `output_style.name` | 代替経路なし |
+
+### 2 つの構成
+
+| | hook 起点のみ | hook 起点 + statusline |
+| :--- | :--- | :--- |
+| 対象セッション | headless と interactive の両方 | statusline 由来の値は interactive のみ |
+| model / usage / effort / gitBranch | 取れる (transcript 経由) | 同左 |
+| コスト | 自前計算 | 公式値 (`cost.total_cost_usd`) |
+| context 使用率 | 自前計算 | 公式値 |
+| rate limit (5h / 7d) | 取れない | 取れる |
+| 副作用 | なし | ユーザーの既存 statusline を奪うので委譲が必須。1 セッションあたり数秒に 1 回、1KB 強の JSON が流れる |
+
+### hook 起点で transcript を読むときの注意
+
+- transcript の書き込みは非同期。hook が発火した時点では直近のメッセージがまだ載っていないことがある (ドキュメントにも明記あり)。Stop hook で「いまの応答の usage」を取るなら、リトライか遅延が要る
+- 末尾行が書きかけで JSON decode に失敗することがある。失敗を握り潰さず数え、末尾以外で失敗したら結果を捨てる
+- 直前の応答のテキストだけが欲しいなら transcript を読む必要はない。Stop / SubagentStop の `last_assistant_message` を使う方が確実 (ドキュメントもそう指示している)
+
+### 逆に hook にしかないもの
+
+- `permission_suggestions` (PermissionRequest)、`notification_type` (Notification)
+- ConfigChange / FileChanged / CwdChanged / DirectoryAdded の各イベントそのもの
+- `Setup.trigger`、`PreCompact.custom_instructions`
+- tool の `duration_ms`、`PostToolUseFailure.error` と `is_interrupt`
+- `Agent` tool の PostToolUse が持つ集約値 `totalTokens` / `totalDurationMs` / `totalToolUseCount`。subagent のトークンとモデル自体は subagent transcript (`message.usage` / `message.model`) にもあるので hook 固有ではない。hook 側の利点は、subagent transcript を開かずに 1 イベントで受け取れること
 
 ## hook: 観測できたイベントとキー集合
 
@@ -136,7 +284,8 @@
 
 ## statusline
 
-- 実測した呼び出し回数: 259 回 (5 セッション分)。以下の出現率もこの 259 回を母数にした同一スナップショット (2026-08-18 04:06 JST 時点)
+- interactive セッションでしか動かない。`claude -p` では 1 度も呼ばれない
+- 実測した呼び出し回数: 259 回 (5 セッション分。すべて interactive)。以下の出現率もこの 259 回を母数にした同一スナップショット (2026-08-18 04:06 JST 時点)
 - 実測したキーの出現率
 
 | キー | 出現 |
@@ -243,13 +392,14 @@ CLAUDE_PROJECT_DIR
 
 ## 実測とドキュメントの食い違い
 
-区分は 3 つ。食い違い 4 件、記述を細かくできたもの 1 件、一致を確認したもの 2 件。
+区分は 3 つ。食い違い 5 件、記述を細かくできたもの 1 件、一致を確認したもの 2 件。
 
 | 区分 | 箇所 | ドキュメント | 実測 |
 | :--- | :--- | :--- | :--- |
 | 食い違い | statusline の項目一覧 | top-level `agent_type` の記載が無い (`agent.name` のみ) | `agent_type` が top-level に存在する。`--agent general-purpose` のセッションで 26/259 回。値は `agent.name` と同じ |
 | 食い違い | SessionStart の入力 | `session_title` の記載が無い | `--name` 付きセッションの SessionStart に `session_title` が入る。UserPromptSubmit にも入ることがある (14 件中 2 件) |
 | 食い違い | Notification の入力 | サンプルに `title` がある (「optional な title」と記述) | 実測 3 件すべてで `title` キー自体が存在しない (`idle_prompt` / `permission_prompt` とも) |
+| 食い違い | statusline の起動条件 | headless で動かないという記載が無い (「セッション開始時に 1 度走る」とだけある) | `claude -p` では 1 度も呼ばれない。同一設定で SessionStart hook は発火しているので、設定が読まれていないのではなく statusline が呼ばれない |
 | 食い違い | 設定の反映タイミング (statusline 側の記述) | 「設定は自動でリロードされる。次のやり取りまで表示は変わらない」 | statusLine (`refreshInterval` 含む) は動作中セッションに即時反映された。一方 hooks 定義は反映されない。FileChanged の watcher を動作中セッションに追加しても発火せず、新規セッションで初めて発火した |
 | 記述の詳細化 | SessionStart の `model` | 「SessionStart hook だけが受け取れる。存在は保証されない」 | 保証されないの中身が判明した。interactive 起動 (`source: startup` / `compact`) では毎回入り、`claude -p` では 1 件も入らない。`source: clear` の SessionStart にも入らなかった |
 | 一致 | PermissionDenied | 「auto モードが tool 呼び出しを拒否したとき」 | 記述と矛盾しない。manual モードでのユーザー拒否では発火しないことを実測で確認した。auto モードでの拒否は再現できず、このイベントは未観測のまま |
