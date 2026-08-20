@@ -314,8 +314,13 @@ export function summarizeProblems(problems: MetaProblem[]): string | null {
 /**
  * createdBy を決める。Claude Code の session 内から呼ばれていればその session を、
  * そうでなければ "user" を返す。系譜は後から復元できないのでここで確定させる。
+ *
+ * 読む変数名は CLAUDE_CODE_SESSION_ID。実測 (docs/design/measurements/hooks-statusline-fields.md)
+ * で Claude Code が export しているのはこの名前だけで、CLAUDE_SESSION_ID は存在しない。
+ * 名前を 1 文字間違えても「session の外から呼ばれた」と区別がつかないまま "user" を返すので、
+ * ここは test で両方向を pin してある (meta.test.ts)。
  */
 export function detectCreatedBy(env: Record<string, string | undefined> = process.env): string {
-  const id = env.CLAUDE_SESSION_ID;
+  const id = env.CLAUDE_CODE_SESSION_ID;
   return id ? `session:${id}` : "user";
 }

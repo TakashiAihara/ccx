@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  detectCreatedBy,
   loadMeta,
   loadState,
   META_SCHEMA,
@@ -251,5 +252,43 @@ describe("summarizeProblems", () => {
     expect(summarizeProblems(problems)).toBe(
       `${problems[0]!.message} (+${problems.length - 1} more)`,
     );
+  });
+});
+
+describe("detectCreatedBy", () => {
+  /**
+   * 両方向を書く。「env が無ければ user」だけなら、読む変数名が何であっても通ってしまう。
+   * 実際 #111 まで存在しない名前 (CLAUDE_SESSION_ID) を読んでおり、85 repodir すべてが
+   * user になっていた。session を検出できる側こそがこの関数の仕事。
+   */
+  test("session の env があれば session:<id>", () => {
+    expect(detectCreatedBy({ CLAUDE_CODE_SESSION_ID: "abc-123" })).toBe("session:abc-123");
+  });
+
+  test("session の env が無ければ user", () => {
+    expect(detectCreatedBy({})).toBe("user");
+  });
+
+  test("空文字は id が無いのと同じ扱い (session:<空> を作らない)", () => {
+    expect(detectCreatedBy({ CLAUDE_CODE_SESSION_ID: "" })).toBe("user");
+  });
+
+  /**
+   * 取り違えの再発を pin する。CLAUDE_SESSION_ID は Claude Code が export しない名前で、
+   * これを読むコードに戻ると、session 内から作った repodir がまた黙って user になる。
+   */
+  test("CLAUDE_SESSION_ID は読まない (存在しない変数名)", () => {
+    expect(detectCreatedBy({ CLAUDE_SESSION_ID: "abc-123" })).toBe("user");
+  });
+
+  test("引数を省いたら process.env を見る", () => {
+    const saved = process.env.CLAUDE_CODE_SESSION_ID;
+    process.env.CLAUDE_CODE_SESSION_ID = "from-process-env";
+    try {
+      expect(detectCreatedBy()).toBe("session:from-process-env");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = saved;
+    }
   });
 });
