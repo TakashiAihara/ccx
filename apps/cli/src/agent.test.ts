@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,9 +13,15 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "ccx-agent-"));
 });
 
-afterEach(() => {
-  for (const s of servers) s.close();
+/** listen 中の server を全部閉じ、実際に閉じ切るまで待つ。 */
+async function closeAll(): Promise<void> {
+  const closing = servers.map((s) => new Promise<void>((res) => s.close(() => res())));
   servers = [];
+  await Promise.all(closing);
+}
+
+afterEach(async () => {
+  await closeAll();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -60,13 +66,20 @@ describe("agentStatus", () => {
 
   test("死んだあとに残った socket ファイルを running と読まない", async () => {
     // ccxd が落ちても unix socket のファイルは残る。存在で判定すると、落ちた
-    // agent を生きていると報告することになる
-    const sock = join(dir, "stale.sock");
-    await listen(sock);
-    for (const s of servers) s.close();
-    servers = [];
+    // agent を生きていると報告することになる。
+    //
+    // その状態を、listen してから close するやり方では作れない。node は unix
+    // socket を close 時に unlink するので、消えるのが先か観測が先かで結果が
+    // 変わる (最初にそう書いて、ローカルでは通り CI で落ちた)。listen 中に
+    // hard link を張っておくと、close が元の名前を消してもリンク先は socket の
+    // まま残り、しかも誰も listen していない。
+    const live = join(dir, "live.sock");
+    const stale = join(dir, "stale.sock");
+    await listen(live);
+    linkSync(live, stale);
+    await closeAll();
 
-    const st = await agentStatus(undefined, { CCX_SOCKET: sock, CCX_SPOOL: join(dir, "spool") });
+    const st = await agentStatus(undefined, { CCX_SOCKET: stale, CCX_SPOOL: join(dir, "spool") });
     expect(st.socketPresent).toBe(true);
     expect(st.socketConnectable).toBe(false);
   });
