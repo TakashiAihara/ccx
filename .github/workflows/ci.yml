@@ -52,9 +52,14 @@ jobs:
         run: buf lint packages/proto
 
       # 生成物は commit されている。手で直したもの、あるいは proto を変えて生成し
-      # 忘れたものは、ここで落とす。生成物と proto がずれた状態で緑になるのが
-      # いちばん困る (誰も気づかないまま「型が通っている」ことになる)。
-      - name: Generated code is in sync with the schema
+      # 忘れたものは、ここで落とす。Go と TS の両方を見るのは、片方だけ再生成して
+      # もう片方が古いまま緑になる形が、いちばん見つけにくいため。
+      - name: Generated code is in sync with the schema (Go)
         run: |
           buf generate packages/proto --template packages/proto/buf.gen.yaml -o packages/proto
           git diff --exit-code -- packages/proto/gen
+
+      - name: Generated code is in sync with the schema (TS)
+        run: |
+          buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o apps/hub/src/gen
+          git diff --exit-code -- apps/hub/src/gen

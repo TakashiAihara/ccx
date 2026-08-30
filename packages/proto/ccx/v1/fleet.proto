@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// 集めたものを読み返す口。ingest.proto が「運ぶ形」を定めるのに対し、こちらは
+// 「解釈した形」を定める。
+//
+// 分けてあるのは、パースの境界が設計判断そのものだから (ingest.proto の
+// IngestService コメント)。ccxd は payload を不透明なバイト列として運ぶ。session
+// も hook 種別も、この契約に出てくる派生値はすべて center が payload から導出する。
+// 生バイトは常に残るので、導出の誤りは後から読み直して直せる。
+//
+// 事実だけを返し、助言は返さない (docs/design/scope.md)。「session X の context が
+// 85% である」は答えるが、「だから畳むべきだ」は答えない。active かどうかも、
+// 「SessionEnd を観測していない」という機械的な事実としてのみ表現する。判断は
+// 読んだ側がする。
+service FleetService {
+  // 「今フリートに何が居るか」。
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // 「session X は何をしたか」「machine Y で T 以降に何が起きたか」。
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+}
+
+// 鍵は (user, machine, session_id) の 3 つ。
+//
+// machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccxd
+// を自分の権限で動かすため (#92)。2 ユーザは 2 本の別々の流れであって、混ぜると
+// 後から分けられない。
+//
+// session_id は Claude Code のもので、ccx が採番したものではない。機械を跨いで
+// 衝突しない保証は無いので、単独では鍵にしない。
+message SessionKey {
+  string machine = 1;
+  string user = 2;
+  string session_id = 3;
+}
+
+// event から導出した session の姿。どの値も「観測したもの」であって、集計や推定は
+// 入っていない。
+message Session {
+  SessionKey key = 1;
+
+  // 最初と最後に観測した event の受信時刻 (ccxd の時計)。
+  google.protobuf.Timestamp first_seen = 2;
+  google.protobuf.Timestamp last_seen = 3;
+
+  // SessionEnd を観測した時刻。未観測なら未設定。
+  //
+  // 「未設定 = まだ動いている」ではない。ccxd が落ちていた・hook が配線されて
+  // いない・セッションが強制終了した、のいずれでも未設定になる。生きているかを
+  // 知りたい読み手は last_seen からの経過も併せて見る。ここで閾値を持たないのは、
+  // 何分で死んだとみなすかが読み手の判断だから。
+  google.protobuf.Timestamp ended_at = 4;
+
+  // 最後に観測した値。session の途中で変わりうる (cd する、compact される) ので、
+  // 「その session の cwd」ではなく「最後に見えた cwd」。
+  string cwd = 5;
+  string transcript_path = 6;
+
+  // 観測した event の件数と、最後の hook 種別。
+  uint64 event_count = 7;
+  string last_hook = 8;
+}
+
+// 1 件の event。origin と seq は ccxd が付けた値、それ以外の派生値は center が
+// payload から導出した値。
+//
+// ingest.proto の Event と別の型なのは、別のものだから。あちらは ccxd が送る「運ぶ
+// 形」、こちらは center が保存して導出まで済ませた「読む形」。同じ名前にすると、
+// パースがどちら側の責務かという設計判断が型から消える。
+message EventRecord {
+  string event_id = 1;
+
+  string machine = 2;
+  string user = 3;
+
+  // ccxd の spool の rowid。1 つの spool の中でだけ単調増加する (ingest.proto)。
+  uint64 seq = 4;
+  google.protobuf.Timestamp received_at = 5;
+
+  // --- ここから下は center が payload から導出した値 ---
+
+  // payload が読めなかったときは false。読めなかった event も落とさずに返す。
+  // 落とすと「パーサが壊れている」と「その event が無い」の区別がつかなくなる。
+  bool parsed = 6;
+
+  string session_id = 7;
+  string hook_event_name = 8;
+  string cwd = 9;
+
+  // hook の stdin をそのまま。既定では返さない (ListEventsRequest.include_payload)。
+  // PostToolUse の payload は数十 KB になるので、既定で載せると一覧が読めなくなる。
+  bytes payload = 10;
+}
+
+message ListSessionsRequest {
+  // 空なら絞らない。
+  string machine = 1;
+  string user = 2;
+
+  // SessionEnd を観測していないものだけ。時間による判定はしない (Session.ended_at)。
+  bool active_only = 3;
+
+  // 既定 100、上限 1000。
+  uint32 limit = 4;
+}
+
+message ListSessionsResponse {
+  // last_seen の新しい順。
+  repeated Session sessions = 1;
+}
+
+message ListEventsRequest {
+  // 空なら絞らない。すべて AND で効く。
+  string machine = 1;
+  string user = 2;
+  string session_id = 3;
+  string hook_event_name = 4;
+
+  // received_at の範囲。since は含み、until は含まない。
+  google.protobuf.Timestamp since = 5;
+  google.protobuf.Timestamp until = 6;
+
+  // 既定 100、上限 1000。
+  uint32 limit = 7;
+
+  // 生 payload を載せるか。既定は載せない。
+  bool include_payload = 8;
+}
+
+message ListEventsResponse {
+  // received_at の新しい順。同時刻なら seq の大きい順。
+  repeated EventRecord events = 1;
+}
