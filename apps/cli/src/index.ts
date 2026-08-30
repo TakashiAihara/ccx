@@ -18,6 +18,9 @@ import {
   type PrIntent,
 } from "@ccx/core";
 
+import { agentStatus } from "./agent.ts";
+import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
+import { humanSince, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
 
 export const VERSION = "0.1.0";
@@ -270,6 +273,157 @@ repodir
     console.log(picked.path);
   });
 
+// ---------------------------------------------------------------------------
+// ccx session / ccx agent — center が集めた事実を読む (#32)
+//
+// どちらも center が居なければ「見えない」だけで、repodir の操作には一切影響しない
+// (docs/design/scope.md: 中心は不在でありうる)。
+// ---------------------------------------------------------------------------
+
+const session = program
+  .command("session")
+  .description("Inspect sessions the center has collected");
+
+session
+  .command("ls")
+  .description("List sessions across every machine the center knows about")
+  .option("-m, --machine <name>", "only this machine")
+  .option("-u, --user <name>", "only this user")
+  .option("-a, --active", "only sessions with no SessionEnd observed")
+  .option("-n, --limit <count>", "how many to list (default 100)", Number)
+  .option("--json", "print as JSON")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const client = fleetClient(cfg.hub?.url);
+
+    const res = await client
+      .listSessions({
+        machine: o.machine ?? "",
+        user: o.user ?? "",
+        activeOnly: Boolean(o.active),
+        limit: o.limit ?? 0,
+      })
+      .catch((e: unknown) => {
+        throw unreachable(cfg.hub!.url, e);
+      });
+
+    if (o.json) {
+      console.log(JSON.stringify(res.sessions, null, 2));
+      return;
+    }
+
+    if (res.sessions.length === 0) {
+      console.error("no sessions");
+      return;
+    }
+
+    const rows = res.sessions.map((s) => {
+      const last = s.lastSeen ? Number(s.lastSeen.seconds) * 1000 : 0;
+      return [
+        shortId(s.key?.sessionId ?? "?"),
+        s.key?.machine ?? "?",
+        s.key?.user ?? "?",
+        // SessionEnd を観測したかどうかだけ。動いているかの判定はしない
+        s.endedAt ? "ended" : "",
+        String(s.eventCount),
+        humanSince(last),
+        s.lastHook,
+        s.cwd,
+      ];
+    });
+    for (const line of table(rows)) console.log(line);
+
+    // 「ended でない」は「動いている」ではない。ccxd が落ちていても hook が
+    // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
+    console.error(
+      "\nended = a SessionEnd was observed. Its absence is not proof a session is alive;\nread the age column too.",
+    );
+  });
+
+session
+  .command("show")
+  .description("Show what one session did, newest first")
+  .argument("<session-id>", "session id (full, as printed by --json)")
+  .option("-m, --machine <name>", "disambiguate when the id exists on several machines")
+  .option("-u, --user <name>", "disambiguate when the id exists for several users")
+  .option("-e, --hook <name>", "only this hook event")
+  .option("-n, --limit <count>", "how many events (default 100)", Number)
+  .option("-p, --payload", "include the raw hook payload")
+  .option("--json", "print as JSON")
+  .action(async (sessionId: string, o) => {
+    const cfg = await loadConfig();
+    const client = fleetClient(cfg.hub?.url);
+
+    const res = await client
+      .listEvents({
+        sessionId,
+        machine: o.machine ?? "",
+        user: o.user ?? "",
+        hookEventName: o.hook ?? "",
+        limit: o.limit ?? 0,
+        includePayload: Boolean(o.payload),
+      })
+      .catch((e: unknown) => {
+        throw unreachable(cfg.hub!.url, e);
+      });
+
+    if (o.json) {
+      console.log(
+        JSON.stringify(
+          res.events.map((e) => ({
+            ...e,
+            payload: o.payload ? new TextDecoder().decode(e.payload) : undefined,
+          })),
+          (_k, v) => (typeof v === "bigint" ? String(v) : v),
+          2,
+        ),
+      );
+      return;
+    }
+
+    if (res.events.length === 0) {
+      console.error(`no events for session ${sessionId}`);
+      return;
+    }
+
+    for (const e of res.events) {
+      const at = e.receivedAt ? new Date(Number(e.receivedAt.seconds) * 1000).toISOString() : "?";
+      // パースできなかった event も出す。出さないと「壊れている」と「無い」の
+      // 区別がつかなくなる
+      const mark = e.parsed ? "" : "  (unparsed)";
+      console.log(`${at}  ${e.hookEventName || "?"}${mark}`);
+      if (o.payload) console.log(`    ${new TextDecoder().decode(e.payload)}`);
+    }
+  });
+
+const agent = program.command("agent").description("Inspect the local resident agent (ccxd)");
+
+agent
+  .command("status")
+  .description("Is ccxd up, how much is waiting, and can it reach the center")
+  .option("--json", "print as JSON")
+  .action(async (o) => {
+    const cfg = await loadConfig();
+    const st = await agentStatus(cfg.hub?.url);
+
+    if (o.json) {
+      console.log(JSON.stringify(st, null, 2));
+      return;
+    }
+
+    const rows: string[][] = [
+      // socket ファイルの存在では見ない。掴んでいたプロセスが死んでも残るため
+      ["ccxd", st.socketConnectable ? "running" : st.socketPresent ? "socket present, not answering" : "not running"],
+      ["socket", st.socketPath],
+      ["spool", `${st.spooled} waiting to forward`],
+      ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
+      ["center", st.hubUrl ?? "not configured (ccxd spools only)"],
+    ];
+    if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);
+
+    for (const line of table(rows)) console.log(line);
+  });
+
 function humanAge(d: Date): string {
   const s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
   if (s < 60) return `${s}s`;
@@ -280,5 +434,7 @@ function humanAge(d: Date): string {
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  // center が未設定なのは壊れているのではなく、設定していないだけ。他の失敗と
+  // 同じ 1 では区別できないので分ける
+  process.exit(err instanceof NoCenterConfigured ? 3 : 1);
 });

@@ -59,6 +59,28 @@ ccd() {
 }
 ```
 
+### Seeing across machines
+
+Once a resident agent (`ccxd`) is collecting and a `ccx-center` is up, the same CLI reads what they
+gathered. Both are optional: without them, everything above still works, you just have no view
+across machines.
+
+```bash
+ccx agent status              # is the local ccxd up, how much is waiting, can it reach the center
+ccx session ls                # every session the center knows about, newest activity first
+ccx session ls --active       # only those with no SessionEnd observed
+ccx session show <id>         # what one session did, newest first
+ccx session show <id> --hook PostToolUse --payload
+```
+
+`--active` means exactly one thing: no `SessionEnd` has been observed. It is **not** a liveness
+check — a session whose machine lost its ccxd, or that was killed, never sends one either. Read the
+age column alongside it.
+
+Point the CLI at a center the same way `ccxd` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /
+`hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
+empty.
+
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own
 fzf keybindings and layout apply — and a numbered prompt when it is not. Both draw on the terminal,
