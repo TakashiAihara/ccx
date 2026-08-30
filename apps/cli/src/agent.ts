@@ -18,6 +18,8 @@ export type AgentStatus = {
   spooled: number;
   /** ccxd に渡せず hook が直接落とした event 数。次の ccxd 起動で取り込まれる */
   incoming: number;
+  /** hubUrl が URL として読めなかった。「届かない」とは別の状態 */
+  hubUrlInvalid?: boolean;
   hubUrl?: string;
   /** hub が未設定なら undefined。設定されていて届かなければ false */
   hubReachable?: boolean;
@@ -52,10 +54,18 @@ async function connectable(path: string, timeoutMs = 500): Promise<boolean> {
   });
 }
 
-async function countFiles(dir: string, suffix?: string): Promise<number> {
+/**
+ * ccxd が使う拡張子。転送待ちは `.pb`、hook が socket に届かず直接落としたものは
+ * `.raw` (apps/agent/internal/collect)。どちらのディレクトリにもロックや書きかけの
+ * 一時ファイルが同居するので、拡張子で絞らないと「詰まっている件数」が水増しされる。
+ */
+const SPOOL_EXT = ".pb";
+const INCOMING_EXT = ".raw";
+
+async function countFiles(dir: string, suffix: string): Promise<number> {
   try {
     const names = await readdir(dir);
-    return names.filter((n) => (suffix ? n.endsWith(suffix) : true)).length;
+    return names.filter((n) => n.endsWith(suffix)).length;
   } catch {
     // ディレクトリが無いのは「まだ 1 件も来ていない」。エラーではない
     return 0;
@@ -76,18 +86,41 @@ export async function agentStatus(
 
   const [socketConnectable, spooled, incoming] = await Promise.all([
     socketPresent ? connectable(socketPath) : Promise.resolve(false),
-    countFiles(spoolDir, ".pb"),
-    countFiles(join(spoolDir, "incoming")),
+    countFiles(spoolDir, SPOOL_EXT),
+    countFiles(join(spoolDir, "incoming"), INCOMING_EXT),
   ]);
 
-  let hubReachable: boolean | undefined;
+  // URL の組み立ては fetch の前に同期で走るので、catch の外で throw する。
+  // scheme を書き忘れた ("127.0.0.1:8791") だけで status 全体が落ちるのは、
+  // 「ccxd の状態を見る」という用途に対して過剰。読めなかったことを状態として返す。
+  let healthz: URL | undefined;
+  let hubUrlInvalid = false;
   if (hubUrl) {
-    hubReachable = await fetch(new URL("/healthz", hubUrl), {
-      signal: AbortSignal.timeout(2000),
-    })
-      .then((r) => r.ok)
-      .catch(() => false);
+    try {
+      healthz = new URL("/healthz", hubUrl);
+    } catch {
+      hubUrlInvalid = true;
+    }
   }
 
-  return { socketPath, socketPresent, socketConnectable, spoolDir, spooled, incoming, hubUrl, hubReachable };
+  let hubReachable: boolean | undefined;
+  if (healthz) {
+    hubReachable = await fetch(healthz, { signal: AbortSignal.timeout(2000) })
+      .then((r) => r.ok)
+      .catch(() => false);
+  } else if (hubUrlInvalid) {
+    hubReachable = false;
+  }
+
+  return {
+    socketPath,
+    socketPresent,
+    socketConnectable,
+    spoolDir,
+    spooled,
+    incoming,
+    hubUrl,
+    hubReachable,
+    ...(hubUrlInvalid ? { hubUrlInvalid: true } : {}),
+  };
 }

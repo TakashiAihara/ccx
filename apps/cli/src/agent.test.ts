@@ -71,14 +71,21 @@ describe("agentStatus", () => {
     expect(st.socketConnectable).toBe(false);
   });
 
-  test("spool と incoming を別々に数える", async () => {
+  test("spool と incoming を別々に数え、雑音を数えない", async () => {
+    // 拡張子は ccxd 側の実装が正。転送待ちは .pb、hook が直接落としたものは .raw。
+    // どちらのディレクトリにも lock や書きかけの一時ファイルが同居する
     const spool = join(dir, "spool");
     mkdirSync(join(spool, "incoming"), { recursive: true });
     writeFileSync(join(spool, "00000000000000000001.pb"), "x");
     writeFileSync(join(spool, "00000000000000000002.pb"), "x");
-    // .pb でないものは転送待ちではない (lock ファイル等)
     writeFileSync(join(spool, "ccxd.lock"), "");
-    writeFileSync(join(spool, "incoming", "a.pb"), "x");
+    writeFileSync(join(spool, "00000000000000000003.tmp"), "x");
+
+    writeFileSync(join(spool, "incoming", "01a050e6-8722-7c8a-9041-f38193f5a46f.raw"), "x");
+    writeFileSync(join(spool, "incoming", "ccxd.lock"), "");
+    writeFileSync(join(spool, "incoming", "half-written.tmp"), "x");
+    // incoming に .pb は置かれない。ここを .pb で数えていると 0 件になる
+    writeFileSync(join(spool, "incoming", "wrong-ext.pb"), "x");
 
     const st = await agentStatus(undefined, { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool });
     expect(st.spooled).toBe(2);
@@ -90,6 +97,27 @@ describe("agentStatus", () => {
       CCX_SOCKET: join(dir, "n.sock"),
       CCX_SPOOL: join(dir, "spool"),
     });
+    expect(st.hubReachable).toBe(false);
+  });
+
+  test("URL として読めない hub は、届かないのとは別の状態として返す", async () => {
+    // scheme を書き忘れただけで status 全体が落ちるのは、用途に対して過剰
+    const st = await agentStatus("127.0.0.1:8791", {
+      CCX_SOCKET: join(dir, "n.sock"),
+      CCX_SPOOL: join(dir, "spool"),
+    });
+    expect(st.hubUrlInvalid).toBe(true);
+    expect(st.hubReachable).toBe(false);
+    // ccxd 側の情報は URL が壊れていても取れる
+    expect(st.socketConnectable).toBe(false);
+  });
+
+  test("正しい URL では hubUrlInvalid が立たない", async () => {
+    const st = await agentStatus("http://127.0.0.1:1", {
+      CCX_SOCKET: join(dir, "n.sock"),
+      CCX_SPOOL: join(dir, "spool"),
+    });
+    expect(st.hubUrlInvalid).toBeUndefined();
     expect(st.hubReachable).toBe(false);
   });
 

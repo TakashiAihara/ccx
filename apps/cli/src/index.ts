@@ -20,7 +20,7 @@ import {
 
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
-import { humanSince, shortId, table } from "./format.ts";
+import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
 
 export const VERSION = "0.1.0";
@@ -290,7 +290,7 @@ session
   .option("-m, --machine <name>", "only this machine")
   .option("-u, --user <name>", "only this user")
   .option("-a, --active", "only sessions with no SessionEnd observed")
-  .option("-n, --limit <count>", "how many to list (default 100)", Number)
+  .option("-n, --limit <count>", "how many to list (default 100)", parseLimit)
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
@@ -347,7 +347,7 @@ session
   .option("-m, --machine <name>", "disambiguate when the id exists on several machines")
   .option("-u, --user <name>", "disambiguate when the id exists for several users")
   .option("-e, --hook <name>", "only this hook event")
-  .option("-n, --limit <count>", "how many events (default 100)", Number)
+  .option("-n, --limit <count>", "how many events (default 100)", parseLimit)
   .option("-p, --payload", "include the raw hook payload")
   .option("--json", "print as JSON")
   .action(async (sessionId: string, o) => {

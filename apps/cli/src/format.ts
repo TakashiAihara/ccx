@@ -37,3 +37,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function shortId(id: string): string {
   return UUID.test(id) ? id.slice(0, 8) : id;
 }
+
+/**
+ * `--limit` を読む。
+ *
+ * 契約 (fleet.proto) では 0 が「指定なし」で、center は既定の 100 を返す。だから
+ * `--limit 0` と書いた人は 0 件ではなく 100 件を受け取ることになる。呼び出し側が
+ * その食い違いに気づく手段が無いので、CLI で先に落とす。
+ */
+export function parseLimit(v: unknown): number {
+  if (v === undefined) return 0; // 未指定 = center の既定に任せる
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`--limit must be a positive integer, got ${String(v)}`);
+  }
+  return n;
+}
