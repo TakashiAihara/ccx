@@ -1,29 +1,25 @@
 version: v2
 
-# TS 側 (center = apps/hub と React UI) の codegen ターゲット。
+# TS 側の codegen ターゲット。生成先は Go 側と対称に packages/proto/gen:
 #
-# この PR では宣言だけで、出力は生成しない。import する相手 (apps/hub) がまだ無く、
-# 誰も consume しない TS 生成物を commit しても、間違っていても何も壊れない =
-# 検証されない生成物になるため。#91 で apps/hub を作るとき、この template で
-#   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o apps/hub/src/gen
-# を回して生成し、そこで初めて型が consume されて検証される。
+#   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o packages/proto
 #
-# ここに置いておくのは、契約が 2 言語のためにあるという事実を config に残すため
-# (ADR 0001)。Go 側 (buf.gen.yaml) と揃えて drift させない。
+# 生成物を apps/ の下ではなく packages/proto に置くのは、消費者が 1 つではないから。
+# center (apps/hub) と CLI (apps/cli) の両方が同じ契約を読む。片方の app の下に
+# 置くと、もう片方が app を跨いで import することになり、依存の向きが嘘になる。
 #
-# 版の固定は #91 で行う。Go 側 (buf.gen.yaml) は remote plugin を版で固定してある
-# が、それは生成物が commit・diff されるため。TS 側の生成物はまだ commit されず
-# diff もされない (import する相手が居ない) ので、ここで版を書いても検証する術が
-# 無い。#91 で apps/hub に出力を commit すると同時に、その出力と一致する版へ固定
-# する (Go 側と同じ理由・同じやり方)。
+# Go 側 (buf.gen.yaml) と同じく生成物は commit し、drift は CI が regenerate 後の
+# `git diff --exit-code` で捕まえる。版を固定するのも同じ理由 — 固定しないと BSR 側の
+# plugin 更新で生成物が黙って変わり、無関係な PR で drift 検出が落ちる。
+#
+# React UI 用の connect-query binding はここに置かない。UI (#46) がまだ無く、誰も
+# consume しない生成物は間違っていても何も壊れない = 検証されない生成物になるため。
+# (#91 以前にこのファイルへ書いてあったのは buf.build/bufbuild/connect-query で、
+# 実際に生成すると protobuf-es v2 と噛み合わない v0.4.1 の出力が出た。UI を作る
+# ときに、そのとき正しい plugin を、生成物を consume する PR で入れる。)
 plugins:
   # メッセージ型 + サービス記述子。connect-es v2 はこの記述子を直接 consume する
   # ので、別途 connect 用 plugin は要らない。
-  - remote: buf.build/bufbuild/es
-    out: gen/ts
-    opt: target=ts
-
-  # React UI 用の TanStack Query バインディング (ADR 0001: connect-query for the UI)。
-  - remote: buf.build/bufbuild/connect-query
+  - remote: buf.build/bufbuild/es:v2.14.0
     out: gen/ts
     opt: target=ts

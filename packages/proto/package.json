@@ -1,0 +1,12 @@
+{
+  "name": "@ccx/proto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ccx/v1/*": "./gen/ts/ccx/v1/*"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.14.0"
+  }
+}
