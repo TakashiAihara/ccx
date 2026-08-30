@@ -3,8 +3,8 @@ import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { Hono } from "hono";
 
 import type { Db } from "./db/open.ts";
-import { FleetService } from "./gen/ts/ccx/v1/fleet_pb.ts";
-import { IngestService } from "./gen/ts/ccx/v1/ingest_pb.ts";
+import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
+import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
 
 /**

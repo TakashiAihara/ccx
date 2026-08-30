@@ -22,6 +22,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@bufbuild/protobuf": "^2.14.0",
+        "@ccx/proto": "workspace:*",
         "@connectrpc/connect": "^2.1.0",
         "@connectrpc/connect-node": "^2.1.0",
         "drizzle-orm": "^0.44.0",
@@ -32,6 +33,13 @@
       "name": "@ccx/core",
       "version": "0.1.0",
     },
+    "packages/proto": {
+      "name": "@ccx/proto",
+      "version": "0.1.0",
+      "dependencies": {
+        "@bufbuild/protobuf": "^2.14.0",
+      },
+    },
   },
   "packages": {
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.14.0", "", {}, "sha512-C3UGsiCwSprE2NKIIFA3hCDlpXTMCAXRZuEVp88L1GY36Y41+rYL5fryE+nOFhp4p4JPQvdV8PQ4DWgHgeTE+w=="],
@@ -41,6 +49,8 @@
     "@ccx/core": ["@ccx/core@workspace:packages/core"],
 
     "@ccx/hub": ["@ccx/hub@workspace:apps/hub"],
+
+    "@ccx/proto": ["@ccx/proto@workspace:packages/proto"],
 
     "@connectrpc/connect": ["@connectrpc/connect@2.1.2", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA=="],
 

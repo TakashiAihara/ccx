@@ -5,8 +5,8 @@ import { createConnectTransport } from "@connectrpc/connect-node";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { openDb, type Db } from "./db/open.ts";
-import { FleetService } from "./gen/ts/ccx/v1/fleet_pb.ts";
-import { IngestRequestSchema, IngestService } from "./gen/ts/ccx/v1/ingest_pb.ts";
+import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
+import { IngestRequestSchema, IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { createApp } from "./server.ts";
 
 // 実際に HTTP で往復させる。handler を直接呼ぶと、Connect の枠組み (経路・

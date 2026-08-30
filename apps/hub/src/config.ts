@@ -17,8 +17,11 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
   // 「誰でも書き込める事実の器」になる。複数機械から使うときは明示的に開ける。
   const host = env.CCX_CENTER_HOST ?? "127.0.0.1";
 
-  const raw = env.CCX_CENTER_PORT;
-  const port = raw === undefined ? 8791 : Number(raw);
+  // Number("") は 0 を返し、下の範囲チェックも 0 を通す。env に空文字で export
+  // されていると、8791 ではなく任意の空きポートに bind されて誰も気づかない。
+  // 空文字は「未設定」として扱う。
+  const raw = env.CCX_CENTER_PORT?.trim();
+  const port = raw === undefined || raw === "" ? 8791 : Number(raw);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`CCX_CENTER_PORT is not a valid port: ${raw}`);
   }

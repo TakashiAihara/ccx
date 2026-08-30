@@ -2,8 +2,8 @@ import { timestampDate, timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 
 import type { Db } from "./db/open.ts";
-import { IngestService } from "./gen/ts/ccx/v1/ingest_pb.ts";
-import { FleetService } from "./gen/ts/ccx/v1/fleet_pb.ts";
+import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { ingest, listEvents, listSessions, type IncomingEvent } from "./store.ts";
 
 /** fleet.proto の既定と上限。0 は「指定なし」なので既定に落ちる。 */

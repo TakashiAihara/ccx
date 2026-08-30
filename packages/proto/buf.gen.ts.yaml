@@ -1,8 +1,12 @@
 version: v2
 
-# TS 側 (center = apps/hub) の codegen ターゲット。生成先は apps/hub/src/gen:
+# TS 側の codegen ターゲット。生成先は Go 側と対称に packages/proto/gen:
 #
-#   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o apps/hub/src/gen
+#   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o packages/proto
+#
+# 生成物を apps/ の下ではなく packages/proto に置くのは、消費者が 1 つではないから。
+# center (apps/hub) と CLI (apps/cli) の両方が同じ契約を読む。片方の app の下に
+# 置くと、もう片方が app を跨いで import することになり、依存の向きが嘘になる。
 #
 # Go 側 (buf.gen.yaml) と同じく生成物は commit し、drift は CI が regenerate 後の
 # `git diff --exit-code` で捕まえる。版を固定するのも同じ理由 — 固定しないと BSR 側の
@@ -17,5 +21,5 @@ plugins:
   # メッセージ型 + サービス記述子。connect-es v2 はこの記述子を直接 consume する
   # ので、別途 connect 用 plugin は要らない。
   - remote: buf.build/bufbuild/es:v2.14.0
-    out: ts
+    out: gen/ts
     opt: target=ts

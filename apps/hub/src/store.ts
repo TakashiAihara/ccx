@@ -179,7 +179,13 @@ export type ListEventsFilter = {
   limit: number;
 };
 
-export function listEvents(db: Db, f: ListEventsFilter): StoredEvent[] {
+/**
+ * SELECT を組み立てるところだけを切り出してある。payload を要求されていないときに
+ * 列そのものを SELECT していないことは、返り値からは確かめられない (どちらでも
+ * payload は null になる)。組み立てた SQL を見るしかないので、そこに触れる口を
+ * 開けておく。
+ */
+export function listEventsQuery(db: Db, f: ListEventsFilter) {
   const where: SQL[] = [];
   if (f.machine) where.push(eq(events.machine, f.machine));
   if (f.user) where.push(eq(events.user, f.user));
@@ -190,15 +196,33 @@ export function listEvents(db: Db, f: ListEventsFilter): StoredEvent[] {
   if (f.sinceMs !== undefined) where.push(gte(events.receivedAtMs, f.sinceMs));
   if (f.untilMs !== undefined) where.push(lt(events.receivedAtMs, f.untilMs));
 
-  const rows = db
-    .select()
+  // payload を要求されていないなら、列そのものを SELECT しない。select() を引数
+  // 無しで呼ぶと SELECT * になり、SQLite は捨てるだけの BLOB を全行ぶん読む。
+  // limit 1000 x 数十 KB で、返さない値のために数十 MB を読むことになる。
+  const columns = {
+    eventId: events.eventId,
+    machine: events.machine,
+    user: events.user,
+    seq: events.seq,
+    receivedAtMs: events.receivedAtMs,
+    producer: events.producer,
+    parsed: events.parsed,
+    sessionId: events.sessionId,
+    hookEventName: events.hookEventName,
+    cwd: events.cwd,
+    transcriptPath: events.transcriptPath,
+  };
+
+  return db
+    .select(f.includePayload ? { ...columns, payload: events.payload } : columns)
     .from(events)
     .where(where.length ? and(...where) : undefined)
     .orderBy(desc(events.receivedAtMs), desc(events.seq))
-    .limit(f.limit)
-    .all();
+    .limit(f.limit);
+}
 
-  return rows.map((r) => ({
+export function listEvents(db: Db, f: ListEventsFilter): StoredEvent[] {
+  return listEventsQuery(db, f).all().map((r) => ({
     eventId: r.eventId,
     machine: r.machine,
     user: r.user,
@@ -212,6 +236,6 @@ export function listEvents(db: Db, f: ListEventsFilter): StoredEvent[] {
     transcriptPath: r.transcriptPath,
     // 既定で載せないのは PostToolUse の payload が数十 KB になるため
     // (fleet.proto)。一覧が読めなくなる。
-    payload: f.includePayload ? new Uint8Array(r.payload as Buffer) : null,
+    payload: "payload" in r && r.payload ? new Uint8Array(r.payload as Buffer) : null,
   }));
 }

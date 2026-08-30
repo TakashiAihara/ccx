@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { openDb, type Db } from "./db/open.ts";
-import { ingest, listEvents, listSessions, type IncomingEvent } from "./store.ts";
+import { ingest, listEvents, listEventsQuery, listSessions, type IncomingEvent } from "./store.ts";
 
 const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
 
@@ -239,5 +239,19 @@ describe("ingest は全か無か", () => {
   test("同じ並びでも、壊れた 1 件が無ければ全件入る", () => {
     // 上のテストが「600 件は元々入らない」を見ているだけでないことの対照。
     expect(ingest(db, Array.from({ length: 600 }, () => ev()))).toBe(600);
+  });
+});
+
+describe("payload は要求されたときだけ SELECT する", () => {
+  test("includePayload が false なら payload 列を読まない", () => {
+    ingest(db, [ev({ payload: { session_id: "s1", hook_event_name: "Stop" } })]);
+
+    // 返り値の payload が null であることは「捨てた」も「読まなかった」も満たす。
+    // 読んでいないことを見るには、SELECT の結果に列が居ないことを確かめる。
+    const sql = listEventsQuery(db, { includePayload: false, limit: 1 }).toSQL().sql;
+    expect(sql).not.toContain("payload");
+
+    const withPayload = listEventsQuery(db, { includePayload: true, limit: 1 }).toSQL().sql;
+    expect(withPayload).toContain("payload");
   });
 });

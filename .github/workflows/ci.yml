@@ -54,12 +54,18 @@ jobs:
       # 生成物は commit されている。手で直したもの、あるいは proto を変えて生成し
       # 忘れたものは、ここで落とす。Go と TS の両方を見るのは、片方だけ再生成して
       # もう片方が古いまま緑になる形が、いちばん見つけにくいため。
+      #
+      # intent-to-add を挟むのは、git diff が追跡下のファイルしか見ないから。proto を
+      # 足して生成物が新規ファイルになった場合、それを commit し忘れても未追跡のまま
+      # diff に出ず、gate が緑で通る (この PR で実際にその状態になっていた)。
       - name: Generated code is in sync with the schema (Go)
         run: |
           buf generate packages/proto --template packages/proto/buf.gen.yaml -o packages/proto
+          git add --intent-to-add packages/proto/gen
           git diff --exit-code -- packages/proto/gen
 
       - name: Generated code is in sync with the schema (TS)
         run: |
-          buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o apps/hub/src/gen
-          git diff --exit-code -- apps/hub/src/gen
+          buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o packages/proto
+          git add --intent-to-add packages/proto/gen
+          git diff --exit-code -- packages/proto/gen

@@ -48,7 +48,11 @@ afterAll(async () => {
 
 describe("設定の解決", () => {
   test("何も無ければ既定値。~/.repodirs に落ちる", async () => {
-    const cfg = await loadConfig({ env: {}, git: noGit });
+    // env を空にするだけでは足りない。CCX_CONFIG が無いと configPath は
+    // ~/.config/ccx/config.toml に落ちるので、実行した人の設定ファイルを読んでしまう。
+    // CI には無いので緑のままだが、手元に置いた瞬間に落ちる (実際に落ちた)。
+    // 「何も無ければ」を主張するなら、無いことをこちらで作る。
+    const cfg = await loadConfig({ env: { CCX_CONFIG: join(tmp, "no-such-file.toml") }, git: noGit });
 
     expect(cfg.root).toBe(join(homedir(), ".repodirs"));
     expect(cfg.mirrorRoot).toBe(join(homedir(), ".repodirs", ".mirror"));
