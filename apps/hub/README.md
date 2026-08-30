@@ -105,9 +105,27 @@ event が二度届くのは異常ではなく正常系。
 | bind address | `CCX_CENTER_HOST` | `127.0.0.1` |
 | bind port | `CCX_CENTER_PORT` | `8791` |
 | sqlite file | `CCX_CENTER_DB` | `$CCX_ROOT/center.db` (既定 `~/.ccx/center.db`) |
+| 非 loopback bind を許す | `CCX_CENTER_ALLOW_INSECURE_BIND` | 未設定 = 許さない |
 
-既定が loopback なのは、この時点で center に認証が無いため。複数機械から使うときは
-明示的に開ける。
+### 非 loopback bind は既定で拒む
+
+この時点の center には**認証が無く、平文 HTTP で話す**。届く相手は誰でも event を
+書けるし、集まった payload を全部読める。
+
+なので loopback 以外への bind は起動時に拒否する (exit 2)。README に書いておくだけ
+では、環境変数を 1 つ足した人には届かない。
+
+```console
+$ CCX_CENTER_HOST=0.0.0.0 ccx-center serve
+ccx-center: refusing to bind 0.0.0.0: ccx-center has no authentication and speaks plain HTTP.
+...
+```
+
+複数機械から使うときは、loopback のまま **TLS 終端と認証を持つ proxy を前に置く**。
+その network を信頼していて承知のうえなら `CCX_CENTER_ALLOW_INSECURE_BIND=1` で越えられる。
+
+loopback の判定は `127.0.0.0/8` 全体と `::1` / `localhost`。`127.0.0.1` だけを見ると
+`127.0.0.2` を取りこぼす。
 
 ## 動かす
 
@@ -120,7 +138,7 @@ ccxd 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub
 
 ## まだ無いもの
 
-- 認証。誰でも書き込める。loopback 既定はそのため
+- 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
 - 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)
 - Web UI (#46)。ここは事実を返すだけで、描かない
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの

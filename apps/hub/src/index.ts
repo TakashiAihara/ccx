@@ -21,7 +21,15 @@ env:
 }
 
 function serve(): void {
-  const cfg = loadCenterConfig();
+  let cfg;
+  try {
+    cfg = loadCenterConfig();
+  } catch (e) {
+    // 設定の誤りは「壊れた」ではなく「そう書いてある」。スタックを出しても
+    // 直し方は伝わらないので、本文だけ出す
+    process.stderr.write(`ccx-center: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(2);
+  }
   mkdirSync(dirname(cfg.dbPath), { recursive: true });
 
   const db = openDb(cfg.dbPath);

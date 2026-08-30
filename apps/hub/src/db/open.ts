@@ -17,11 +17,16 @@ export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
  * busy_timeout を置くのは同じ理由。既定は 0 なので、他プロセスがロックを持って
  * いると即 SQLITE_BUSY で落ちる。ingest が「全か無か」である以上、待てば通る
  * ものを落とすとバッチ 1 つが丸ごと再送に回る。
+ *
+ * **busy_timeout は journal_mode より先に置く。** journal_mode の切り替え自体が
+ * ロックを取るので、待機時間が 0 のままだと、他プロセスが書いている最中の起動が
+ * SQLITE_BUSY で落ちる。落ちるのは center の起動そのもの (openDb は起動経路)。
+ * 順序を逆にした版は open.test.ts が別プロセスでロックを掴んで pin している。
  */
 export function openDb(path: string): Db {
   const sqlite = new Database(path, { create: true });
-  if (path !== ":memory:") sqlite.exec("PRAGMA journal_mode = WAL");
   sqlite.exec("PRAGMA busy_timeout = 5000");
+  if (path !== ":memory:") sqlite.exec("PRAGMA journal_mode = WAL");
   // 外部キーは今のところ無いが、後で足したときに黙って効かない状態を避ける。
   sqlite.exec("PRAGMA foreign_keys = ON");
 
