@@ -132,7 +132,10 @@ describe("ccx-center over the wire", () => {
     expect(active.sessions.map((s) => s.key!.sessionId)).toEqual(["live"]);
   });
 
-  test("event_id が無いバッチは弾かれ、1 件も保存されない (全か無か)", async () => {
+  // ここが見ているのは「入口で弾く」ところまで。検証は insert より手前で走るので、
+  // トランザクションが外れてもこのテストは通る。DB の巻き戻しは store.test.ts の
+  // 「ingest は全か無か」が、チャンクを跨いで途中で落ちるバッチで pin している
+  test("event_id が無いバッチは入口で弾かれ、1 件も保存されない", async () => {
     const err = await send(
       event({ session_id: "ok", hook_event_name: "Stop" }),
       event({ session_id: "bad", hook_event_name: "Stop" }, { eventId: "" }),

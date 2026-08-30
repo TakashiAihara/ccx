@@ -14,6 +14,8 @@ import { loadConfig, parseDuration } from "./config.ts";
 
 let tmp: string;
 let cfgFile: string;
+/** 設定が 1 つも無い状態を作るための、空の XDG_CONFIG_HOME */
+let emptyConfigHome: string;
 
 /** git config を差し替える */
 const gitStub = (values: Record<string, string>) => async (key: string) => values[key] ?? null;
@@ -22,6 +24,7 @@ const noGit = async () => null;
 beforeAll(async () => {
   tmp = await mkdtemp(join(tmpdir(), "ccx-cfg-"));
   cfgFile = join(tmp, "config.toml");
+  emptyConfigHome = await mkdtemp(join(tmpdir(), "ccx-xdg-"));
 
   await Bun.write(
     cfgFile,
@@ -44,15 +47,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(tmp, { recursive: true, force: true });
+  await rm(emptyConfigHome, { recursive: true, force: true });
 });
 
 describe("設定の解決", () => {
   test("何も無ければ既定値。~/.repodirs に落ちる", async () => {
     // env を空にするだけでは足りない。CCX_CONFIG が無いと configPath は
-    // ~/.config/ccx/config.toml に落ちるので、実行した人の設定ファイルを読んでしまう。
-    // CI には無いので緑のままだが、手元に置いた瞬間に落ちる (実際に落ちた)。
-    // 「何も無ければ」を主張するなら、無いことをこちらで作る。
-    const cfg = await loadConfig({ env: { CCX_CONFIG: join(tmp, "no-such-file.toml") }, git: noGit });
+    // $XDG_CONFIG_HOME/ccx/config.toml (既定 ~/.config) に落ちるので、実行した人の
+    // 設定ファイルを読んでしまう。CI には無いので緑のままだが、手元に置いた瞬間に
+    // 落ちる (実際に落ちた)。
+    //
+    // CCX_CONFIG で存在しないパスを指すのでは「明示した設定ファイルが無い場合」を
+    // 見ることになり、主張したい「何も設定していない場合」とは別の経路。既定の
+    // 探索先ごと空ディレクトリに向ける。
+    const cfg = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome }, git: noGit });
 
     expect(cfg.root).toBe(join(homedir(), ".repodirs"));
     expect(cfg.mirrorRoot).toBe(join(homedir(), ".repodirs", ".mirror"));
