@@ -193,16 +193,24 @@ describe("createRepodir", () => {
     expect(status).toBe("");
   });
 
+  /**
+   * env は明示的に落としてから組み立てる。テスト自体が Claude session 内で走ることがあり、
+   * その場合 CLAUDE_CODE_SESSION_ID は既に入っている。消さずに書くと「session 外なら user」
+   * 側が環境次第で落ちる。
+   */
   test("createdBy: session 内なら session id、そうでなければ user", async () => {
-    const r1 = await createRepodir(cfg, spec(), {}, "0.1.0");
-    expect(r1.meta.createdBy).toBe("user");
-
-    process.env.CLAUDE_SESSION_ID = "abc-123";
+    const saved = process.env.CLAUDE_CODE_SESSION_ID;
     try {
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+      const r1 = await createRepodir(cfg, spec(), {}, "0.1.0");
+      expect(r1.meta.createdBy).toBe("user");
+
+      process.env.CLAUDE_CODE_SESSION_ID = "abc-123";
       const r2 = await createRepodir(cfg, spec(), {}, "0.1.0");
       expect(r2.meta.createdBy).toBe("session:abc-123");
     } finally {
-      delete process.env.CLAUDE_SESSION_ID;
+      if (saved === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = saved;
     }
   });
 
