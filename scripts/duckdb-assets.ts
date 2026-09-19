@@ -26,12 +26,21 @@ const OUT = join(ROOT, ".build", "duckdb");
 const CLI = join(ROOT, "apps", "cli");
 
 type Target = { pkg: string; platform: string; lib: string };
+/** ビルドできる target。key は bun の --target */
 export const TARGETS: Record<string, Target> = {
   "bun-linux-x64": { pkg: "node-bindings-linux-x64", platform: "linux_amd64", lib: "libduckdb.so" },
   "bun-linux-arm64": { pkg: "node-bindings-linux-arm64", platform: "linux_arm64", lib: "libduckdb.so" },
   "bun-darwin-x64": { pkg: "node-bindings-darwin-x64", platform: "osx_amd64", lib: "libduckdb.dylib" },
   "bun-darwin-arm64": { pkg: "node-bindings-darwin-arm64", platform: "osx_arm64", lib: "libduckdb.dylib" },
 };
+/** `@duckdb/node-bindings` が require しうる platform 全部。ビルドしない分は external にする */
+export const ALL_BINDINGS = [
+  ...Object.values(TARGETS).map((t) => `@duckdb/${t.pkg}`),
+  "@duckdb/node-bindings-linux-x64-musl",
+  "@duckdb/node-bindings-linux-arm64-musl",
+  "@duckdb/node-bindings-win32-x64",
+  "@duckdb/node-bindings-win32-arm64",
+];
 
 /** この host の target。Windows は対応 platform に無いので、Linux の asset を黙って用意せず止まる */
 export function hostTarget(): string {
@@ -42,12 +51,23 @@ export function hostTarget(): string {
   return `bun-${process.platform}-${arch}`;
 }
 
-async function fetchTo(url: string, path: string, transform?: (b: Uint8Array) => Uint8Array): Promise<void> {
+async function fetchBytes(url: string): Promise<Uint8Array> {
   console.error(`fetching ${url}`);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  const body = new Uint8Array(await res.arrayBuffer());
-  await Bun.write(path, transform ? transform(body) : body);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** npm の tarball は registry が出す dist.integrity (sha512) と突き合わせてから展開する。release がこの経路を通る */
+async function fetchNpmTarball(pkg: string, version: string, dest: string): Promise<void> {
+  const metaUrl = `https://registry.npmjs.org/${pkg}/${version}`;
+  const dist = (JSON.parse(new TextDecoder().decode(await fetchBytes(metaUrl))) as { dist: { tarball: string; integrity: string } }).dist;
+  const body = await fetchBytes(dist.tarball);
+  const [algo, expected] = dist.integrity.split("-", 2);
+  if (algo !== "sha512" || !expected) throw new Error(`${pkg}: unexpected integrity ${dist.integrity}`);
+  const actual = new Bun.CryptoHasher("sha512").update(body).digest("base64");
+  if (actual !== expected) throw new Error(`${pkg}@${version}: tarball sha512 ${actual} != registry ${expected}`);
+  await Bun.write(dest, body);
 }
 
 export async function prepare(target: string): Promise<void> {
@@ -67,24 +87,31 @@ export async function prepare(target: string): Promise<void> {
   let dir = join(bindingsHome, t.pkg);
   if (!(await Bun.file(join(dir, t.lib)).exists())) {
     const tgz = join(OUT, `${t.pkg}.tgz`);
-    await fetchTo(`https://registry.npmjs.org/@duckdb/${t.pkg}/-/${t.pkg}-${fullVersion}.tgz`, tgz);
+    await fetchNpmTarball(`@duckdb/${t.pkg}`, fullVersion, tgz);
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
     const untar = Bun.spawn(["tar", "-xzf", tgz, "-C", dir, "--strip-components=1"], { stdout: "inherit", stderr: "inherit" });
     if ((await untar.exited) !== 0) throw new Error("tar failed");
     await rm(tgz, { force: true });
   }
-  await Bun.write(join(OUT, "libduckdb"), Bun.file(join(dir, t.lib)));
-
   const meta = { version: duckdbVersion, platform: t.platform, target, lib: t.lib };
-  const extPath = join(OUT, "httpfs.duckdb_extension");
   const prev = (await Bun.file(join(OUT, "meta.json")).json().catch(() => null)) as typeof meta | null;
+  const same = prev?.version === meta.version && prev?.platform === meta.platform;
+
+  // 67 MB のコピーは、同じ版・同じ platform で既にあれば飛ばす (postinstall のたびに書かない)
+  const libSrc = Bun.file(join(dir, t.lib));
+  const libSize = await stat(join(OUT, "libduckdb")).then((s) => s.size).catch(() => -1);
+  if (!same || libSize !== libSrc.size) await Bun.write(join(OUT, "libduckdb"), libSrc);
+
+  const extPath = join(OUT, "httpfs.duckdb_extension");
   const have = await stat(extPath).then((s) => s.size > 0).catch(() => false);
-  if (!have || !prev || prev.version !== meta.version || prev.platform !== meta.platform) {
+  if (!have || !same) {
     const url = `https://extensions.duckdb.org/v${duckdbVersion}/${t.platform}/httpfs.duckdb_extension.gz`;
-    await fetchTo(url, extPath, (b) => Bun.gunzipSync(b)).catch((e) => {
+    // 拡張の検証は LOAD 時の署名検査が担う (DuckDB の core 拡張は署名付き)
+    const gz = await fetchBytes(url).catch((e) => {
       throw new Error(`${e instanceof Error ? e.message : e} (is DuckDB ${duckdbVersion} published for ${t.platform}?)`);
     });
+    await Bun.write(extPath, Bun.gunzipSync(gz));
   }
   await Bun.write(join(OUT, "meta.json"), JSON.stringify(meta, null, 2));
   console.error(`duckdb ${duckdbVersion} ${t.platform} ready in ${OUT} (bindings: ${dir})`);

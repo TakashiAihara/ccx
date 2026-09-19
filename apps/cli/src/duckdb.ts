@@ -20,7 +20,14 @@ import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
  * 行かない。cache は DuckDB の版と platform / arch で分ける (同じ版の x64 と arm64 の
  * バイナリが 1 人のホームを共有しても衝突しない)
  */
-export async function openDuckDB(store: TranscriptStore) {
+export type OpenOptions = {
+  /** この session (id か先頭一致) だけを glob で絞る。保存先全体を読まない */
+  session?: string;
+  /** `history` view も作る (`--sql` 用。作ると history/ を全部読む) */
+  withHistory?: boolean;
+};
+
+export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {}) {
   const cache = join(
     process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
     "ccx",
@@ -38,31 +45,55 @@ export async function openDuckDB(store: TranscriptStore) {
   await c.run(`LOAD '${ext.replaceAll("'", "''")}'`);
 
   const u = new URL(store.endpoint);
+  // S3 の endpoint は host[:port] で、path は持てない (DuckDB は捨て、Bun.S3Client は bucket を path に置く)
+  if (u.pathname !== "/" && u.pathname !== "") {
+    throw new Error(`transcript endpoint ${store.endpoint} has a path; an S3 endpoint is scheme://host[:port] only`);
+  }
   const endpoint = u.port ? `${u.hostname}:${u.port}` : u.hostname;
   const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
+  const env = process.env;
+  const token = env.AWS_SESSION_TOKEN ?? env.S3_SESSION_TOKEN;
   await c.run(
-    `CREATE SECRET store (TYPE s3, KEY_ID ${q(process.env.AWS_ACCESS_KEY_ID ?? process.env.S3_ACCESS_KEY_ID ?? "ccx")}, ` +
-      `SECRET ${q(process.env.AWS_SECRET_ACCESS_KEY ?? process.env.S3_SECRET_ACCESS_KEY ?? "ccx")}, ` +
+    `CREATE SECRET store (TYPE s3, KEY_ID ${q(env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? "ccx")}, ` +
+      `SECRET ${q(env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx")}, ` +
+      (token ? `SESSION_TOKEN ${q(token)}, ` : "") +
       `ENDPOINT ${q(endpoint)}, URL_STYLE 'path', USE_SSL ${u.protocol === "https:"}, REGION ${q(store.region ?? "us-east-1")})`,
   );
   const base = `s3://${store.bucket}/${normalizePrefix(store.prefix)}transcripts`;
-  // union_by_name: レコード種別ごとにキーが違う。maximum_object_size: tool の出力を抱えた行が 16 MB の既定を超える。
+  // session を渡されたら glob で絞る。read_json は glob に当たったファイルしか取りに行かない
+  const sessionGlob = opts.session ? `session_id=${opts.session.replaceAll("*", "")}*` : "*";
+  const files = `${base}/machine=*/user=*/${sessionGlob}/transcript.jsonl`;
+  // maximum_object_size: tool の出力を抱えた行が 16 MB の既定を超える (手元の 26 本で最大 3.8 MB。上限は 256 MB)。
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
+    // `lines`: 1 行 = 1 レコードの生 JSON。文字列検索はこちらで行う。`transcripts` (構造化) は
+    // union_by_name で全レコード種別のキーを持つ struct になり、to_json すると無いキーが
+    // `"x":null` として全行に現れて、"null" や "model" がすべての行に当たる
     await c.run(
-      `CREATE VIEW transcripts AS SELECT * FROM read_json(${q(`${base}/**/transcript.jsonl`)}, format='newline_delimited', union_by_name=true, hive_partitioning=true, maximum_object_size=268435456)`,
+      `CREATE VIEW lines AS SELECT session_id, machine, "user", json FROM read_json_objects(${q(files)}, format='newline_delimited', hive_partitioning=true, maximum_object_size=268435456)`,
+    );
+    await c.run(
+      `CREATE VIEW transcripts AS SELECT * FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, hive_partitioning=true, maximum_object_size=268435456)`,
     );
   } catch (e) {
-    if (/No files found/i.test(String(e))) throw new EmptyStore(base);
+    if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;
   }
-  try {
-    await c.run(
-      `CREATE VIEW history AS SELECT * FROM read_json(${q(`${base}/**/history/*.json`)}, format='newline_delimited', union_by_name=true, hive_partitioning=true)`,
-    );
-  } catch (e) {
-    if (!/No files found/i.test(String(e))) throw e;
-    await c.run(`CREATE VIEW history AS SELECT NULL::VARCHAR AS op, NULL::VARCHAR AS machine, NULL::VARCHAR AS "user", NULL::VARCHAR AS at WHERE false`);
+  if (opts.withHistory) {
+    // hive の machine / user (push した側) がファイルの machine / user (操作した側) を隠すので、
+    // 生 JSON から取り直す。history は「誰が pull したか」を答えるもので、押した側ではない
+    const hist = `${base}/machine=*/user=*/${sessionGlob}/history/*.json`;
+    try {
+      await c.run(
+        // `at` は DuckDB の予約語 (AT 句) なので列名は occurred_at
+        `CREATE VIEW history AS SELECT session_id, json->>'op' AS op, json->>'machine' AS machine, json->>'user' AS "user", json->>'at' AS occurred_at, machine AS pushed_by_machine, "user" AS pushed_by_user FROM read_json_objects(${q(hist)}, format='newline_delimited', hive_partitioning=true)`,
+      );
+    } catch (e) {
+      if (!/No files found/i.test(String(e))) throw e;
+      await c.run(
+        `CREATE VIEW history AS SELECT NULL::VARCHAR AS session_id, NULL::VARCHAR AS op, NULL::VARCHAR AS machine, NULL::VARCHAR AS "user", NULL::VARCHAR AS occurred_at, NULL::VARCHAR AS pushed_by_machine, NULL::VARCHAR AS pushed_by_user WHERE false`,
+      );
+    }
   }
   return c;
 }
