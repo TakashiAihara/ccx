@@ -24,12 +24,16 @@ let db: ReturnType<typeof openDb>;
 let root: string;
 let home: string;
 let store: TranscriptStore;
+/** 本物の ~/.cache に 90 MB を書かない */
+let cacheHome: string;
 
 const line = (o: Record<string, unknown>) => `${JSON.stringify(o)}\n`;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "ccx-search-"));
   home = await mkdtemp(join(tmpdir(), "ccx-search-home-"));
+  cacheHome = await mkdtemp(join(tmpdir(), "ccx-search-cache-"));
+  process.env.XDG_CACHE_HOME = cacheHome;
   db = openDb(":memory:");
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db, new ObjectStore(root)).fetch });
   store = { endpoint: `http://127.0.0.1:${server.port}`, bucket: "ccx", prefix: "pre/" };
@@ -54,7 +58,7 @@ beforeEach(async () => {
 /** 本物のコマンドを、この store を向けて走らせる */
 async function ccx(...args: string[]): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", ...args], {
-    env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root },
+    env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -65,12 +69,12 @@ async function ccx(...args: string[]): Promise<{ code: number; out: string; err:
 afterEach(async () => {
   void server.stop(true);
   db.$client.close();
-  await Promise.all([root, home].map((d) => rm(d, { recursive: true, force: true })));
+  await Promise.all([root, home, cacheHome].map((d) => rm(d, { recursive: true, force: true })));
 });
 
 describe("search: embedded DuckDB over the store", () => {
   test("transcripts view carries the hive columns and message fields; a present word hits, an absent one does not", async () => {
-    const c = await openDuckDB(store);
+    const c = await openDuckDB(store, { withHistory: true });
 
     const rows = await c.runAndReadAll(`SELECT session_id, machine, "user", type FROM transcripts ORDER BY timestamp`);
     expect(rows.getRowObjectsJson()).toEqual([
@@ -82,16 +86,35 @@ describe("search: embedded DuckDB over the store", () => {
     const model = await c.runAndReadAll(`SELECT message.model AS m, message.usage.output_tokens AS n FROM transcripts WHERE type = 'assistant'`);
     expect(model.getRowObjectsJson()).toEqual([{ m: "claude-opus-5", n: "7" }]);
 
-    const hit = await c.runAndReadAll(`SELECT session_id FROM transcripts WHERE lower(to_json(message)::VARCHAR) LIKE '%needle-alpha%'`);
+    const hit = await c.runAndReadAll(`SELECT session_id FROM lines WHERE contains(lower(json::VARCHAR), 'needle-alpha')`);
     expect(hit.getRowObjectsJson()).toEqual([{ session_id: SID }]);
-    const miss = await c.runAndReadAll(`SELECT count(*) AS n FROM transcripts WHERE lower(to_json(message)::VARCHAR) LIKE '%needle-omega%'`);
+    const miss = await c.runAndReadAll(`SELECT count(*) AS n FROM lines WHERE contains(lower(json::VARCHAR), 'needle-omega')`);
     expect(miss.getRowObjectsJson()).toEqual([{ n: "0" }]);
+    // 生の行を探しているか: "usage" は assistant の 1 行にしか無い。構造化した struct を
+    // to_json すると "usage":null が全行に出て 3 行当たる
+    const keyOnly = await c.runAndReadAll(`SELECT count(*) AS n FROM lines WHERE contains(json::VARCHAR, 'usage')`);
+    expect(keyOnly.getRowObjectsJson()).toEqual([{ n: "1" }]);
 
-    const history = await c.runAndReadAll(`SELECT session_id, op, machine FROM history ORDER BY session_id`);
+    // B が pull した記録は machine=host-b と出る (hive の machine=host-a に隠されない)
+    const B = new TranscriptClient(store, { machine: "host-b", user: "bob" });
+    // 別の home へ (同じ home だと already-here で履歴が書かれない)
+    const homeB = await mkdtemp(join(tmpdir(), "ccx-search-homeB-"));
+    try {
+      expect((await B.pull(SID, homeB)).status).toBe("pulled");
+    } finally {
+      await rm(homeB, { recursive: true, force: true });
+    }
+    const c2 = await openDuckDB(store, { withHistory: true });
+    const history = await c2.runAndReadAll(`SELECT session_id, op, machine, "user", pushed_by_machine FROM history ORDER BY session_id, occurred_at`);
     expect(history.getRowObjectsJson()).toEqual([
-      { session_id: SID, op: "push", machine: "host-a" },
-      { session_id: SID2, op: "push", machine: "host-a" },
+      { session_id: SID, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a" },
+      { session_id: SID, op: "pull", machine: "host-b", user: "bob", pushed_by_machine: "host-a" },
+      { session_id: SID2, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a" },
     ]);
+
+    // session で絞ると、その session のファイルしか読まない
+    const one = await openDuckDB(store, { session: SID2.slice(0, 8) });
+    expect((await one.runAndReadAll(`SELECT DISTINCT session_id FROM lines`)).getRowObjectsJson()).toEqual([{ session_id: SID2 }]);
   });
 
   test("the command: case-insensitive, wildcards are literal, snippet lands on the match, --sql and --json", async () => {
@@ -117,6 +140,16 @@ describe("search: embedded DuckDB over the store", () => {
 
     const table = await ccx("needle", "-s", SID2.slice(0, 8));
     expect(table.err).toContain("no match");
+
+    // 混ぜられない組み合わせは黙って捨てず止まる
+    expect((await ccx("x", "--sql", "SELECT 1")).code).toBe(1);
+    expect((await ccx("--sql", "SELECT 1", "-n", "2")).code).toBe(1);
+    // --sql の history は操作した側の machine を出す
+    const hist = await ccx("--sql", "SELECT op, machine FROM history ORDER BY occurred_at", "--json");
+    expect(JSON.parse(hist.out)).toEqual([
+      { op: "push", machine: "host-a" },
+      { op: "push", machine: "host-a" },
+    ]);
   });
 
   test("an empty store says so instead of a DuckDB IO error", async () => {

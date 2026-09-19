@@ -174,23 +174,26 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .option("--json", "print rows as JSON")
     .action(async (text: string | undefined, o) => {
       if (!text && !o.sql) throw new Error("give text to search for, or --sql");
+      if (text && o.sql) throw new Error("give either text or --sql, not both");
+      if (o.sql && (o.limit !== undefined || o.session)) throw new Error("-n / -s do not apply to --sql; put them in the query");
       const cfg = await loadConfig();
       if (!cfg.transcript) throw new NoTranscriptStore();
       const { openDuckDB } = await import("./duckdb.ts");
-      const c = await openDuckDB(cfg.transcript);
+      const c = await openDuckDB(cfg.transcript, { session: o.session, withHistory: Boolean(o.sql) });
       const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
-      const limit = o.limit ?? 50;
+      // 生の行 (`lines`) を探す。構造化した `transcripts` を to_json すると無いキーが null で
+      // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む
       const sql =
         o.sql ??
-        `SELECT session_id, machine, "user", type, timestamp,
-                substr(to_json(message)::VARCHAR, greatest(1, position(lower(${q(text!)}) IN lower(to_json(message)::VARCHAR)) - 60), 200) AS snippet
-         FROM transcripts
-         WHERE message IS NOT NULL AND contains(lower(to_json(message)::VARCHAR), lower(${q(text!)}))
-           ${o.session ? `AND session_id LIKE ${q(`${o.session}%`)}` : ""}
+        `SELECT session_id, machine, "user", json->>'type' AS type, json->>'timestamp' AS timestamp,
+                substr(json::VARCHAR, greatest(1, position(lower(${q(text!)}) IN lower(json::VARCHAR)) - 60), 200) AS snippet
+         FROM lines
+         WHERE contains(lower(json::VARCHAR), lower(${q(text!)}))
          ORDER BY timestamp DESC
-         LIMIT ${limit}`;
+         LIMIT ${o.limit ?? 50}`;
       const r = await c.runAndReadAll(sql);
       const cols = r.columnNames();
+      // DuckDB の JSON 変換は BIGINT を文字列で出す ("7")。そのまま渡す
       const rows = r.getRowObjectsJson();
       if (o.json) {
         console.log(JSON.stringify(rows, null, 2));
@@ -204,7 +207,10 @@ export function registerTranscript(program: Command, VERSION: string): void {
         cols.map((k) => {
           const v = row[k];
           const s = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
-          return k === "session_id" ? shortId(String(s)) : s.replaceAll("\n", " ").slice(0, 200);
+          // 短縮は既定の検索結果だけ。--sql の列はそのまま
+          if (!o.sql && k === "session_id") return shortId(String(s));
+          const one = s.replaceAll("\n", " ");
+          return one.length > 200 ? `${one.slice(0, 199)}…` : one;
         }),
       );
       for (const line of table([cols, ...out])) console.log(line);

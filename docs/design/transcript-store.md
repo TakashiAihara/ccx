@@ -83,8 +83,14 @@ WHERE type = 'assistant';
 
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
-does exactly this and exposes the result as the `transcripts` view (plus `history` over
-`**/history/*.json`), so `--sql` queries start from `FROM transcripts`.
+does exactly this and exposes three views for `--sql`: `transcripts` (structured, `union_by_name`
+across record types), `lines` (`json` = the raw record — what the text search reads, because the
+structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
+and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
+/ `pushed_by_user` from the path — the two differ for a pull). `-s <id|prefix>` narrows the glob so
+only that session's files are fetched; without it every transcript is read on each invocation
+(measured by the reviewer: 401 objects / 50.9 MB → 0.69 s, 209 MB RSS; one 20 MB line → 4.3 s,
+432 MB), and `history/` is only read for `--sql`.
 
 ### How DuckDB rides inside the binary
 
@@ -96,7 +102,9 @@ embeds them as file assets, and `openDuckDB` writes them to `~/.cache/ccx/duckdb
 use and `dlopen`s the library through `bun:ffi` before the shim loads — the shim then resolves the
 already-loaded copy. `httpfs` is `LOAD`ed from the cache by path, so the first search does not go to
 extensions.duckdb.org. Measured on linux-x64: binary 175 MB, first search 0.26 s (writes 92 MB to the
-cache), then 0.18 s. macOS is built the same way but has not been run, and the shim there resolves
+cache), then 0.18 s, over one 3 MB transcript; the cache holds 92 MB per DuckDB version and
+platform and is never pruned (`rm -r ~/.cache/ccx/duckdb` is the whole cleanup). macOS is built the
+same way but has not been run, and the shim there resolves
 `@rpath/libduckdb.dylib` through dyld's rpath search rather than the preloaded copy, so `search` on
 macOS is expected to fail until #125 is done; the other verbs are unaffected. Windows is not a target:
 the assets script refuses `win32` rather than preparing Linux files.
