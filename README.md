@@ -27,7 +27,7 @@ From source, which needs [Bun](https://bun.sh) but nothing else:
 
 ```bash
 git clone https://github.com/TakashiAihara/ccx && cd ccx
-bun install
+bun install                    # also fetches the DuckDB library + httpfs extension into .build/duckdb
 bun run install:local          # builds, then installs to ~/.local/bin/ccx
 ```
 
@@ -94,6 +94,8 @@ ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
 ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
+ccx tr search "rate limit"    # every transcript in the store, searched with the DuckDB inside ccx
+ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
 ```
 
 The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to
@@ -105,7 +107,10 @@ every other verb is unaffected.
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
 file, plus `tool-results/`, `session.json` and an append-only `history/` of every push and pull).
-See `docs/design/transcript-store.md`.
+`search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
+`~/.cache/ccx/duckdb/<version>/` on first use (the binary is ~175 MB for that reason). `--sql` gets
+two views, `transcripts` and `history`, with `machine` / `user` / `session_id` as columns. See
+`docs/design/transcript-store.md`.
 
 `ccx` decides only whether a session is *running* (`--ended` is everything that is not). Whether it is
 *done* is your call — feed it ids from whatever marks completion in your workflow. `prune` refuses a

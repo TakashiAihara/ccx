@@ -32,11 +32,10 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # DuckDB (libduckdb + httpfs) を target の platform ぶん埋める。scripts/build.ts が
+      # bindings と拡張を取ってから bun build --compile する
       - name: Build binary
-        run: >
-          bun build apps/cli/src/index.ts --compile
-          --target ${{ matrix.target }}
-          --outfile ${{ matrix.artifact }}
+        run: bun run scripts/build.ts --target ${{ matrix.target }} --outfile ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:

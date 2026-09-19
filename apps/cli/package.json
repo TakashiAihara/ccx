@@ -9,6 +9,7 @@
     "@ccx/proto": "workspace:*",
     "@connectrpc/connect": "^2.1.0",
     "@connectrpc/connect-web": "^2.1.0",
+    "@duckdb/node-api": "^1.5.5-r.5",
     "commander": "^13.1.0"
   },
   "devDependencies": {
