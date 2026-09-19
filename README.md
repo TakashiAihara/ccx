@@ -96,9 +96,11 @@ ccx tr pull <id>              # fetch it here, then: claude --resume <id>
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
 ```
 
-The store is the center's own object API by default (`CCX_HUB_URL` is enough), or any S3-compatible
-endpoint via `CCX_TRANSCRIPT_ENDPOINT` / `CCX_TRANSCRIPT_BUCKET` / `[transcript]` in the config file.
-Nothing is set → `ccx transcript` exits `2` and says so; every other verb is unaffected.
+The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to
+reach it from another machine the center must be bound beyond loopback, see `apps/hub/README.md`), or
+any S3-compatible endpoint via `CCX_TRANSCRIPT_ENDPOINT` / `CCX_TRANSCRIPT_BUCKET` / `[transcript]`
+in the config file. Nothing is set → `ccx transcript` exits `3` like `ccx session` does, and says so;
+every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
@@ -106,7 +108,9 @@ file, plus `tool-results/`, `session.json` and an append-only `history/` of ever
 See `docs/design/transcript-store.md`.
 
 `ccx` decides only whether a session is *running* (`--ended` is everything that is not). Whether it is
-*done* is your call — feed it ids from whatever marks completion in your workflow.
+*done* is your call — feed it ids from whatever marks completion in your workflow. `prune` refuses a
+running session, a session the store does not have, and any session whose copy in the store does not
+read back byte-identical (transcript and tool-results both) — and it exits `1` if it refused any.
 
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own

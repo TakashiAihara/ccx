@@ -440,6 +440,6 @@ program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   // center が未設定なのは壊れているのではなく、設定していないだけ。他の失敗と
   // 同じ 1 では区別できないので分ける
-  // transcript の保存先が未設定なのも同じ扱い (2 は設定の誤り。ccx-center と揃える)
-  process.exit(err instanceof NoCenterConfigured ? 3 : err instanceof NoTranscriptStore ? 2 : 1);
+  // transcript の保存先が未設定なのも同じ「設定していないだけ」なので同じ 3
+  process.exit(err instanceof NoCenterConfigured || err instanceof NoTranscriptStore ? 3 : 1);
 });

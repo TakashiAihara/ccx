@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import {
   claudeHome,
   loadConfig,
+  localOrigin,
   localTranscripts,
   NoTranscriptStore,
   runningSessionIds,
@@ -23,8 +24,11 @@ import { humanSince, shortId, table } from "./format.ts";
 async function client() {
   const cfg = await loadConfig();
   if (!cfg.transcript) throw new NoTranscriptStore();
-  return new TranscriptClient(cfg.transcript);
+  // machine は ccxd と同じ規則で決める。center の event と同じ名前で並ぶように
+  return new TranscriptClient(cfg.transcript, localOrigin(cfg.machine));
 }
+
+const human = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)}K` : `${(bytes / 1024 / 1024).toFixed(1)}M`);
 
 /** 引数の id か、--ended なら動いていない全部。どちらも無ければ何を指すか分からないので止まる */
 async function select(ids: string[], ended: boolean): Promise<{ picked: LocalTranscript[]; running: Set<string> }> {
@@ -33,9 +37,12 @@ async function select(ids: string[], ended: boolean): Promise<{ picked: LocalTra
     const byId = new Map(all.map((t) => [t.sessionId, t]));
     const picked: LocalTranscript[] = [];
     for (const id of ids) {
-      const t = byId.get(id) ?? all.find((x) => x.sessionId.startsWith(id));
-      if (!t) throw new Error(`no local transcript for session ${id}`);
-      picked.push(t);
+      const exact = byId.get(id);
+      const hits = exact ? [exact] : all.filter((x) => x.sessionId.startsWith(id));
+      if (hits.length === 0) throw new Error(`no local transcript for session ${id}`);
+      // 曖昧な prefix で prune すると意図しない session を消す。rd rm と同じく止まる
+      if (hits.length > 1) throw new Error(`${id} matches ${hits.length} sessions: ${hits.map((h) => h.sessionId).join(", ")}`);
+      picked.push(hits[0]!);
     }
     return { picked, running };
   }
@@ -62,7 +69,7 @@ export function registerTranscript(program: Command): void {
       for (const t of picked) {
         const r = await c.push(t);
         results.push({ sessionId: t.sessionId, ...r });
-        if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${r.meta.cwd}`);
+        if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${human(r.meta.size)}  ${r.meta.cwd}`);
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));
       if (!o.json && picked.length === 0) console.error("nothing to push");
@@ -71,17 +78,20 @@ export function registerTranscript(program: Command): void {
   transcript
     .command("pull")
     .description("Fetch a transcript from the store so that `claude --resume <id>` works here")
-    .argument("<session-id>")
-    .option("--force", "overwrite a local transcript with the same id but different content")
+    .argument("<session-id>", "full id, or the unique prefix that `ls` prints")
+    .option("--force", "replace a local transcript with the same id but different content (the local file is kept as .replaced-<time>)")
     .option("--json", "print as JSON")
-    .action(async (id: string, o) => {
+    .action(async (idOrPrefix: string, o) => {
       const c = await client();
+      const id = await c.resolve(idOrPrefix);
+      if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
       if (o.json) {
         console.log(JSON.stringify(r, null, 2));
         return;
       }
       console.log(`${r.status}  ${r.path}`);
+      if (r.replaced) console.log(`the previous local file was kept as ${r.replaced}`);
       console.log(`resume with:  claude --resume ${id}`);
       console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}`);
     });
@@ -93,30 +103,31 @@ export function registerTranscript(program: Command): void {
     .option("--json", "print as JSON")
     .action(async (o) => {
       const c = await client();
-      let metas = await c.list();
-      if (o.machine) metas = metas.filter((m) => m.machine === o.machine);
+      const metas = await c.list(o.machine);
+      // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
+      const withPull = await Promise.all(
+        metas.map(async (m) => {
+          const h = await c.history(m);
+          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null };
+        }),
+      );
       if (o.json) {
-        console.log(JSON.stringify(metas, null, 2));
+        console.log(JSON.stringify(withPull, null, 2));
         return;
       }
-      if (metas.length === 0) {
-        console.error("the store is empty");
+      if (withPull.length === 0) {
+        console.error(o.machine ? `nothing in the store from ${o.machine}` : "the store is empty");
         return;
       }
-      const rows: string[][] = [];
-      for (const m of metas) {
-        const h = await c.history(m);
-        const lastPull = [...h].reverse().find((e) => e.op === "pull");
-        rows.push([
-          shortId(m.sessionId),
-          m.machine,
-          m.user,
-          `${(m.size / 1024 / 1024).toFixed(1)}M`,
-          humanSince(Date.parse(m.pushedAt)),
-          lastPull ? `pulled ${lastPull.machine} ${humanSince(Date.parse(lastPull.at))} ago` : "",
-          m.cwd,
-        ]);
-      }
+      const rows = withPull.map((m) => [
+        shortId(m.sessionId),
+        m.machine,
+        m.user,
+        human(m.size),
+        `${humanSince(Date.parse(m.pushedAt))} ago`,
+        m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
+        m.cwd,
+      ]);
       for (const line of table(rows)) console.log(line);
     });
 
@@ -135,7 +146,7 @@ export function registerTranscript(program: Command): void {
         const r = await c.prune(t, running);
         results.push({ sessionId: t.sessionId, ...r });
         if (r.status === "refused") refused += 1;
-        if (!o.json) console.log(`${r.status.padEnd(8)} ${t.sessionId}  ${r.reason ?? t.path}`);
+        if (!o.json) console.log(`${r.status.padEnd(7)} ${t.sessionId}  ${r.reason ?? t.path}`);
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));
       // 1 件でも断ったら非 0。「全部消えた」と読まれないように
