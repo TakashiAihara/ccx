@@ -4,7 +4,12 @@ import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-node";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { openDb, type Db } from "./db/open.ts";
+import { ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { IngestRequestSchema, IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { createApp } from "./server.ts";
@@ -18,9 +23,12 @@ let fleetClient: ReturnType<typeof createClient<typeof FleetService>>;
 
 const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
 
-beforeEach(() => {
+let objectsDir: string;
+
+beforeEach(async () => {
   db = openDb(":memory:");
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db).fetch });
+  objectsDir = await mkdtemp(join(tmpdir(), "ccx-server-objects-"));
+  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db, new ObjectStore(objectsDir)).fetch });
   const transport = createConnectTransport({
     baseUrl: `http://127.0.0.1:${server.port}`,
     httpVersion: "1.1",
@@ -29,9 +37,10 @@ beforeEach(() => {
   fleetClient = createClient(FleetService, transport);
 });
 
-afterEach(() => {
+afterEach(async () => {
   void server.stop(true);
   db.$client.close();
+  await rm(objectsDir, { recursive: true, force: true });
 });
 
 let n = 0;
