@@ -96,13 +96,35 @@ export class ObjectStore {
     // stream のまま書く。transcript は数 MB から数十 MB で、本文を丸ごと持つと
     // 同時に来た数本ぶんがそのままメモリになる
     const src = body instanceof Uint8Array ? [body] : body;
-    for await (const chunk of src) {
-      h.update(chunk);
-      if (!w.write(chunk)) await new Promise((r) => w.once("drain", r));
+    try {
+      for await (const chunk of src) {
+        h.update(chunk);
+        if (!w.write(chunk)) await new Promise((r) => w.once("drain", r));
+      }
+      await new Promise<void>((resolve, reject) => w.end((e?: Error | null) => (e ? reject(e) : resolve())));
+      await rename(tmp, path);
+    } catch (e) {
+      // 途中で落ちた staging を残さない
+      await rm(tmp, { force: true });
+      throw e;
     }
-    await new Promise<void>((resolve, reject) => w.end((e?: Error | null) => (e ? reject(e) : resolve())));
-    await rename(tmp, path);
     return `"${h.digest("hex")}"`;
+  }
+
+  /** bucket を用意する。既にあっても成功 (S3 の CreateBucket と同じ) */
+  async createBucket(bucket: string): Promise<void> {
+    await mkdir(join(this.root, bucket), { recursive: true });
+  }
+
+  async listBuckets(): Promise<string[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.root);
+    } catch (e) {
+      if (isEnoent(e)) return [];
+      throw e;
+    }
+    return names.filter((n) => BUCKET.test(n)).sort();
   }
 
   /** 無ければ null。無い以外の失敗 (権限 / I/O) は投げる — 404 に化けると消えたように見える */
@@ -229,8 +251,12 @@ export class ObjectStore {
     return { bucket, key, etag };
   }
 
-  async abortUpload(uploadId: string): Promise<void> {
-    await rm(this.uploadDir(uploadId), { recursive: true, force: true });
+  /** 無い uploadId は false (S3 は NoSuchUpload) */
+  async abortUpload(uploadId: string): Promise<boolean> {
+    const dir = this.uploadDir(uploadId);
+    if (!(await Bun.file(join(dir, "meta.json")).exists())) return false;
+    await rm(dir, { recursive: true, force: true });
+    return true;
   }
 }
 
@@ -249,7 +275,11 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
     const prefix = q.prefix ?? "";
     if (!validPrefix(prefix)) return xmlError(400, "InvalidArgument", `invalid prefix: ${prefix}`);
     const delimiter = q.delimiter ?? "";
-    const maxKeys = Math.min(Number(q["max-keys"] ?? MAX_KEYS_DEFAULT) || MAX_KEYS_DEFAULT, MAX_KEYS_DEFAULT);
+    // max-keys=0 は「0 件返す」で、未指定や読めない値だけが既定に落ちる
+    const maxKeysRaw = q["max-keys"] === undefined ? Number.NaN : Number(q["max-keys"]);
+    const maxKeys = Number.isInteger(maxKeysRaw) && maxKeysRaw >= 0 ? Math.min(maxKeysRaw, MAX_KEYS_DEFAULT) : MAX_KEYS_DEFAULT;
+    // encoding-type=url を頼まれたら key と prefix を URL エンコードして返す (aws cli と DuckDB が頼む)
+    const enc = q["encoding-type"] === "url" ? (s: string) => encodeURIComponent(s).replace(/%2F/g, "/") : (s: string) => s;
     // continuation-token は「前のページの最後の要素 (key か common prefix)」を
     // そのまま使う。不透明であればよい
     const after = q["continuation-token"] ?? q["start-after"] ?? "";
@@ -283,24 +313,40 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
     const xml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">',
-      `<Name>${xmlEscape(bucket)}</Name><Prefix>${xmlEscape(prefix)}</Prefix>`,
+      `<Name>${xmlEscape(bucket)}</Name><Prefix>${xmlEscape(enc(prefix))}</Prefix>`,
+      delimiter ? `<Delimiter>${xmlEscape(enc(delimiter))}</Delimiter>` : "",
+      q["encoding-type"] === "url" ? "<EncodingType>url</EncodingType>" : "",
+      after ? `<ContinuationToken>${xmlEscape(enc(after))}</ContinuationToken>` : "",
       `<KeyCount>${page.length}</KeyCount><MaxKeys>${maxKeys}</MaxKeys>`,
       `<IsTruncated>${truncated}</IsTruncated>`,
-      truncated ? `<NextContinuationToken>${xmlEscape(last)}</NextContinuationToken>` : "",
+      truncated ? `<NextContinuationToken>${xmlEscape(enc(last))}</NextContinuationToken>` : "",
       ...page.map((e) =>
         "commonPrefix" in e
-          ? `<CommonPrefixes><Prefix>${xmlEscape(e.commonPrefix)}</Prefix></CommonPrefixes>`
-          : `<Contents><Key>${xmlEscape(e.key)}</Key><Size>${e.size}</Size><LastModified>${e.mtime.toISOString()}</LastModified><StorageClass>STANDARD</StorageClass></Contents>`,
+          ? `<CommonPrefixes><Prefix>${xmlEscape(enc(e.commonPrefix))}</Prefix></CommonPrefixes>`
+          : `<Contents><Key>${xmlEscape(enc(e.key))}</Key><Size>${e.size}</Size><LastModified>${e.mtime.toISOString()}</LastModified><StorageClass>STANDARD</StorageClass></Contents>`,
       ),
       "</ListBucketResult>",
     ].join("");
     return c.body(xml, 200, { "content-type": "application/xml" });
   };
 
-  app.get("/:bucket", (c) => {
+  // ListBuckets。rclone / aws cli が最初に叩く
+  app.get("/", async (c) => {
+    const names = await store.listBuckets();
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><ListAllMyBucketsResult><Buckets>${names
+      .map((n) => `<Bucket><Name>${xmlEscape(n)}</Name><CreationDate>1970-01-01T00:00:00.000Z</CreationDate></Bucket>`)
+      .join("")}</Buckets></ListAllMyBucketsResult>`;
+    return c.body(xml, 200, { "content-type": "application/xml" });
+  });
+
+  // bucket 単位。GET は一覧、PUT は CreateBucket (既にあっても成功)、HEAD は存在確認。
+  // bucket は暗黙に存在するので、どれも「作った / ある」としか答えない
+  app.on(["GET", "PUT", "HEAD"], "/:bucket", async (c) => {
     const bucket = c.req.param("bucket");
     if (!BUCKET.test(bucket)) return xmlError(400, "InvalidBucketName", bucket);
-    return list(c, bucket);
+    if (c.req.method === "GET") return list(c, bucket);
+    if (c.req.method === "PUT") await store.createBucket(bucket);
+    return c.body(null, 200);
   });
 
   app.on(["GET", "HEAD", "PUT", "POST", "DELETE"], "/:bucket/*", async (c) => {
@@ -308,12 +354,22 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
     if (!BUCKET.test(bucket)) return xmlError(400, "InvalidBucketName", bucket);
     let key: string;
     try {
-      key = decodeURIComponent(new URL(c.req.url).pathname.slice(bucket.length + 2));
+      // `new URL().pathname` は `%2e%2e` を `..` と読んで畳む (WHATWG)。畳まれた後の
+      // パスからは何が来たか分からないので、生のパスから切る
+      key = decodeURIComponent(c.req.path.slice(bucket.length + 2));
     } catch {
       return xmlError(400, "InvalidArgument", "key is not valid percent-encoding");
     }
-    // `GET /<bucket>/?list-type=2` — 末尾 `/` 付きで一覧を頼むクライアント (Bun.S3Client) がいる
-    if (key === "" && c.req.method === "GET") return list(c, bucket);
+    // `GET /<bucket>/?list-type=2` (Bun.S3Client) と `PUT /<bucket>/` (rclone の CreateBucket) は
+    // 末尾 `/` 付きで来る
+    if (key === "") {
+      if (c.req.method === "GET") return list(c, bucket);
+      if (c.req.method === "PUT") {
+        await store.createBucket(bucket);
+        return c.body(null, 200);
+      }
+      if (c.req.method === "HEAD") return c.body(null, 200);
+    }
     if (!validKey(key)) return xmlError(400, "InvalidArgument", `invalid key: ${key}`);
     const q = c.req.query();
     const method = c.req.method;
@@ -340,20 +396,32 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       const done = await store.completeUpload(q.uploadId, partNumbersOf(await c.req.text()));
       if (done === "no-such-upload") return xmlError(404, "NoSuchUpload", q.uploadId);
       if (done === "invalid-part") return xmlError(400, "InvalidPart", "a listed part was not uploaded");
+      // 置いた先は開始時に記録した bucket / key。URL のものではなく実際の置き場所を返す
       return c.body(
-        `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult><Bucket>${xmlEscape(bucket)}</Bucket><Key>${xmlEscape(key)}</Key><ETag>${xmlEscape(done.etag)}</ETag></CompleteMultipartUploadResult>`,
+        `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult><Bucket>${xmlEscape(done.bucket)}</Bucket><Key>${xmlEscape(done.key)}</Key><ETag>${xmlEscape(done.etag)}</ETag></CompleteMultipartUploadResult>`,
         200,
         { "content-type": "application/xml" },
       );
     }
     if (method === "DELETE" && q.uploadId) {
-      await store.abortUpload(q.uploadId);
+      if (!(await store.abortUpload(q.uploadId))) return xmlError(404, "NoSuchUpload", q.uploadId);
       return c.body(null, 204);
     }
 
     if (method === "PUT") {
-      const etag = await store.put(bucket, key, c.req.raw.body ?? new Uint8Array());
-      return c.body(null, 200, { etag });
+      try {
+        const etag = await store.put(bucket, key, c.req.raw.body ?? new Uint8Array());
+        return c.body(null, 200, { etag });
+      } catch (e) {
+        // ファイルシステムの上では `a` と `a/b` は両立しない (S3 では両方置ける)。
+        // 500 ではなく、何と衝突したかが分かる形で断る
+        const code = (e as NodeJS.ErrnoException)?.code;
+        if (code === "ENOTDIR" || code === "EISDIR" || code === "EEXIST") {
+          return xmlError(409, "KeyConflict", `${key} conflicts with an existing object that is a prefix of it, or that it is a prefix of`);
+        }
+        if (code === "ENAMETOOLONG") return xmlError(400, "KeyTooLongError", key);
+        throw e;
+      }
     }
     // POST は multipart の開始と完了にしか意味が無い。素の POST を GET に読み替えない
     if (method === "POST") return xmlError(405, "MethodNotAllowed", "POST needs ?uploads or ?uploadId");

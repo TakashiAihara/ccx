@@ -15,7 +15,7 @@ import { fleetImpl, ingestImpl } from "./services.ts";
  * createFetchHandler が UniversalHandler を Request → Response に変換してくれる
  * ので、それを Hono の route に載せる。
  */
-export function createApp(db: Db, objects?: ObjectStore): Hono {
+export function createApp(db: Db, objects: ObjectStore): Hono {
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db));
   router.service(FleetService, fleetImpl(db));
@@ -34,7 +34,7 @@ export function createApp(db: Db, objects?: ObjectStore): Hono {
   // S3 互換の object API (#121)。`/:bucket` と `/:bucket/*` を取るので、上の route
   // (`/healthz` と Connect) より後に載せる。Hono は登録順に照合する。`healthz` は
   // bucket 名として有効なので、順序を入れ替えると `/healthz` が空の一覧になる
-  if (objects) mountObjects(app, objects);
+  mountObjects(app, objects);
 
   return app;
 }

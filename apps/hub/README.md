@@ -66,7 +66,8 @@ Connect (`ConnectRPC + Buf + Hono`)。契約は `packages/proto/ccx/v1/`。
 | `IngestService/Ingest` | (ccxd が書く側) |
 | `FleetService/ListSessions` | 今フリートに何が居るか |
 | `FleetService/ListEvents` | session X は何をしたか / machine Y で T 以降に何が起きたか |
-| `/<bucket>/<key>` (S3 互換) | transcript の保存先 (下の「object API」) |
+
+Connect とは別に、S3 互換の object API を同じポートで出す (下の「object API」)。
 
 Connect は JSON でも話せるので、curl でそのまま叩ける。
 
@@ -106,20 +107,25 @@ event が二度届くのは異常ではなく正常系。
 クライアントのまま center を向ける。外部の S3 互換サービスを向けても同じ。
 
 ```text
-PUT    /<bucket>/<key>                       置く (書きかけは隣に書いてから rename)
+GET    /                                     ListBuckets
+PUT    /<bucket>                             CreateBucket (既にあっても 200)
+HEAD   /<bucket>                             200
+GET    /<bucket>?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=&encoding-type=url
+PUT    /<bucket>/<key>                       置く (staging に書いてから rename。stream で、本文をメモリに持たない)
 GET    /<bucket>/<key>                       読む。Range は Bun.serve が切る (206)
-HEAD   /<bucket>/<key>                       size / ETag / Last-Modified
+HEAD   /<bucket>/<key>                       size / ETag (md5) / Last-Modified
 DELETE /<bucket>/<key>                       消す (無くても 204)
-GET    /<bucket>?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=
 POST   /<bucket>/<key>?uploads               multipart 開始
 PUT    /<bucket>/<key>?partNumber=&uploadId= part
-POST   /<bucket>/<key>?uploadId=             multipart 完了 (part を番号順に連結)
+POST   /<bucket>/<key>?uploadId=             multipart 完了 (本文に並んだ part をその順に連結)
 DELETE /<bucket>/<key>?uploadId=             multipart 中止
 ```
 
 - 置き場所は `<objects dir>/<bucket>/<key>`。center を止めて `ls` するだけで中身が分かる
-- bucket は暗黙に存在する。CreateBucket は無く、未知の bucket の一覧は空
+- bucket は暗黙に存在する。CreateBucket は mkdir で、未知の bucket の一覧は空
 - 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
+- ファイルシステムの上に置くことから来る制約: `a` と `a/b` は両立しない (S3 では両方置ける。後から来た方を 409 `KeyConflict` で断る) / `/` で終わる key (ディレクトリ marker) は置けない (400) / 1 セグメント 255 バイト超は 400 `KeyTooLongError` / Content-Type と `x-amz-meta-*` は保存しない / 一覧の `Contents` に ETag は載らない (載せるには全 object を読むことになる)
+- 動かして確かめたクライアント: Bun.S3Client (テスト) / DuckDB httpfs (`ccx transcript search`) / aws cli (`s3 ls` / `cp`)
 - `/healthz` と `/ccx.v1.*` の route が先に照合されるので、`healthz` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
 - 1 回の PUT で置ける大きさは 1 GB (`maxRequestBodySize`)。それより大きいものは multipart で
 
@@ -170,7 +176,8 @@ ccxd 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub
 ## まだ無いもの
 
 - 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
-- 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る
+- 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る。完了も中止もされなかった multipart (`<objects dir>/.multipart/<uploadId>/`) も同じで、誰も掃かない
+- object API の一覧は index を持たず、ページごとに prefix 配下を歩き直す。実測で 2 万 key のとき 1 ページ 0.55 s、全部で 15 s (レビュー時の計測)。transcript の数がそこに届いたら index を足す
 - Web UI (#46)。ここは事実を返すだけで、描かない
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの
   上のクエリ

@@ -9,9 +9,30 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { connect } from "node:net";
+
 import { openDb, type Db } from "./db/open.ts";
 import { ObjectStore, partNumbersOf, validKey, validPrefix } from "./objects.ts";
 import { createApp } from "./server.ts";
+
+/**
+ * 生の request line を送る。fetch (client 側) は `%2e%2e` を送る前に `..` として畳む
+ * ので、traversal の入力は fetch では server に届かない。
+ */
+function raw(port: number, method: string, target: string, body = ""): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = connect(port, "127.0.0.1", () => {
+      sock.write(`${method} ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`);
+    });
+    let buf = "";
+    sock.on("data", (d) => (buf += d.toString()));
+    sock.on("error", reject);
+    sock.on("close", () => {
+      const status = Number(/^HTTP\/1\.1 (\d+)/.exec(buf)?.[1] ?? 0);
+      resolve({ status, body: buf.slice(buf.indexOf("\r\n\r\n") + 4) });
+    });
+  });
+}
 
 let server: ReturnType<typeof Bun.serve>;
 let db: Db;
@@ -84,9 +105,56 @@ describe("objects: S3 client round trip", () => {
     const back = new Uint8Array(await s3.file("big.bin").arrayBuffer());
     expect(back.length).toBe(big.length);
     expect(Buffer.compare(back, big)).toBe(0);
-    // 途中の part はディスクに残らない
-    const leftovers = await Array.fromAsync(new Bun.Glob("**").scan({ cwd: join(root, ".multipart"), onlyFiles: true })).catch(() => []);
+    // 途中の part はディスクに残らない (`.multipart/` 自体は残る。無ければ空と同じ)
+    const leftovers = (await Bun.file(join(root, ".multipart")).exists())
+      ? await Array.fromAsync(new Bun.Glob("**").scan({ cwd: join(root, ".multipart"), onlyFiles: true }))
+      : [];
     expect(leftovers).toEqual([]);
+  });
+
+  test("bucket verbs: CreateBucket / HeadBucket / ListBuckets, as rclone and aws cli expect", async () => {
+    expect((await fetch(`${base}/newb`, { method: "PUT" })).status).toBe(200);
+    expect((await fetch(`${base}/newb/`, { method: "PUT" })).status).toBe(200);
+    expect((await fetch(`${base}/newb`, { method: "HEAD" })).status).toBe(200);
+    await s3.write("k", "x");
+    const res = await fetch(`${base}/`);
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain("<Name>ccx</Name>");
+    expect(xml).toContain("<Name>newb</Name>");
+    expect(xml).not.toContain(".staging");
+  });
+
+  test("max-keys=0 returns no keys; encoding-type=url encodes keys", async () => {
+    await s3.write("sp ace/k=v.txt", "x");
+    const zero = await fetch(`${base}/ccx?list-type=2&max-keys=0`);
+    const z = await zero.text();
+    expect(z).toContain("<KeyCount>0</KeyCount>");
+    expect(z).toContain("<IsTruncated>true</IsTruncated>");
+
+    const enc = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url`)).text();
+    expect(enc).toContain("<Key>sp%20ace/k%3Dv.txt</Key>");
+    expect(enc).toContain("<EncodingType>url</EncodingType>");
+    const plain = await (await fetch(`${base}/ccx?list-type=2`)).text();
+    expect(plain).toContain("<Key>sp ace/k=v.txt</Key>");
+  });
+
+  test("a key that collides with an existing object as its directory is 409, not 500", async () => {
+    await s3.write("a", "x");
+    const under = await fetch(`${base}/ccx/a/b`, { method: "PUT", body: "y" });
+    expect(under.status).toBe(409);
+    expect(await under.text()).toContain("KeyConflict");
+    await s3.write("c/d", "x");
+    expect((await fetch(`${base}/ccx/c`, { method: "PUT", body: "y" })).status).toBe(409);
+    // 失敗した staging は残らない
+    expect(await Array.fromAsync(new Bun.Glob("*").scan({ cwd: join(root, ".staging"), onlyFiles: true }))).toEqual([]);
+    // 無関係な key は今までどおり
+    expect((await fetch(`${base}/ccx/e`, { method: "PUT", body: "y" })).status).toBe(200);
+  });
+
+  test("aborting an unknown upload is NoSuchUpload", async () => {
+    const res = await fetch(`${base}/ccx/k?uploadId=00000000-0000-4000-8000-000000000000`, { method: "DELETE" });
+    expect(res.status).toBe(404);
   });
 
   test("Range reads return 206 with the requested slice (what DuckDB httpfs does; Bun.serve slices the stream)", async () => {
@@ -152,13 +220,17 @@ describe("objects: S3 client round trip", () => {
     expect(res.status).toBe(404);
     expect(await res.text()).toContain("NoSuchKey");
 
-    // fetch は `..` を送る前に畳むので、server に届く形で書く。2 段上がると root の
-    // 外なので、そこに無いことを見る
-    const bad = await fetch(`${base}/ccx/%2e%2e/%2e%2e/escaped`, { method: "PUT", body: "x" });
-    expect(bad.status).toBe(400);
+    // 2 段上がると root の外。fetch は畳んでしまうので生で送る。Bun.serve も `..` と
+    // `%2e%2e` を畳んで `/escaped` (= bucket "escaped" の CreateBucket) にするので、
+    // ここで見るのは status ではなく「root の外に何も出来ていない」こと。validKey は
+    // その後ろの 2 枚目で、単体で pin している
+    for (const target of ["/ccx/%2e%2e/%2e%2e/escaped", "/ccx/../../escaped", "/ccx/a/%2e%2e/%2e%2e/%2e%2e/escaped"]) {
+      await raw(server.port!, "PUT", target, "x");
+    }
     expect(await Bun.file(join(root, "..", "escaped")).exists()).toBe(false);
+    expect((await Bun.file(join(root, "escaped")).stat().then((s) => s.isFile()).catch(() => false))).toBe(false);
 
-    const malformed = await fetch(`${base}/ccx/%99`);
+    const malformed = await raw(server.port!, "GET", "/ccx/%99");
     expect(malformed.status).toBe(400);
 
     const barePost = await fetch(`${base}/ccx/k`, { method: "POST", body: "x" });
