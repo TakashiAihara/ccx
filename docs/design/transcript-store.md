@@ -20,8 +20,13 @@ The client speaks S3 and nothing else. By default that is `ccx-center`'s object 
 it is MinIO, R2, Garage or AWS instead. DuckDB's `httpfs` reads the same layout from either.
 
 This is the usual invariant (`scope.md`): the centre adds reach, it is never a dependency for acting
-locally. With no store configured, `ccx transcript` says so and exits `2`; `ccx repodir` does not
-notice.
+locally. With no store configured, `ccx transcript` says so and exits `3` (the same code `ccx session`
+uses for a missing center); `ccx repodir` does not notice. A center reachable from other machines has
+to be bound beyond loopback, which the center refuses unless told the network is trusted
+(`apps/hub/README.md`).
+
+`machine` in the layout follows ccxd's rule (`CCX_MACHINE` / `ccx.machine` / `machine` / hostname),
+so the center's events and the store name a machine the same way and a DuckDB join between them holds.
 
 ## Layout
 
@@ -44,11 +49,16 @@ notice.
 
 | verb | does | refuses when |
 |---|---|---|
-| `push [id...] \| --ended` | put transcript, tool-results, session.json; record `push` | — (unchanged content is skipped, not an error) |
-| `pull <id>` | fetch into `~/.claude/projects/<encoded original cwd>/`; record `pull` | a local file with the same id has different content (`--force` overrides); the download does not match `session.json` |
-| `ls` | every `session.json`, newest push first, with the last pull | — |
-| `prune [id...] \| --ended` | delete the local transcript and tool-results; record `prune` | the session is running; it is not in the store; the store's copy, **read back and hashed**, differs from the local file |
+| `push [id...] \| --ended` | snapshot the file, put transcript, tool-results (hashed, only the ones not already there), session.json; record `push` | — (unchanged content is skipped, not an error) |
+| `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; record `pull` | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
+| `ls [-m machine]` | every `session.json`, newest push first, with who last pulled it | — |
+| `prune [id...] \| --ended` | delete the local transcript and tool-results (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript and tool-results; the matching copy, **read back and hashed**, differs from the local files |
 | `search` | DuckDB over `transcripts/**/transcript.jsonl` | — (separate PR) |
+
+Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
+takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
+argument may be the 8-character prefix `ls` prints, resolved against the store (`pull`) or the local
+files (`push` / `prune`); an ambiguous prefix stops the command rather than picking one.
 
 `--ended` is every local session with no live Claude Code process (`~/.claude/sessions/<pid>.json`
 names the pid; a dead pid does not count). That is the only judgement `ccx` makes. *Done* is the
@@ -62,7 +72,7 @@ the path is an address, not a requirement.
 
 ```sql
 SELECT session_id, machine, message.model, message.usage.output_tokens
-FROM read_json('s3://ccx/transcripts/**/transcript.jsonl',
+FROM read_json('s3://<bucket>/<prefix>transcripts/**/transcript.jsonl',
                format='newline_delimited', union_by_name=true, hive_partitioning=true)
 WHERE type = 'assistant';
 ```
@@ -73,12 +83,16 @@ USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature.
 ## Measured (2026-09-19, one host, real center on loopback)
 
 `push` → `prune` (local file gone) → `pull` → `claude --resume <id> -p "what was the token?"`
-answered with the token given in the first turn. The two-host round trip is the same sequence with
-`CCX_HUB_URL` pointing at a center both hosts reach; it is exercised in
-`packages/core/src/transcript.test.ts` with two config dirs standing in for two machines.
+answered with the token given in the first turn. The two-host round trip (#121's acceptance) is the
+same sequence with `CCX_HUB_URL` pointing at a center both hosts reach; it has **not** been run on two
+real machines yet — `apps/cli/src/transcript.test.ts` stands two config dirs in for two machines.
 
 ## Not here
 
 - ccxd pushing and pruning on its own when a session ends and a user-side marker says so
 - retention in the store
 - transcript deltas for accounting (#120) — a different route with a different consumer
+- a `pull --cwd` to land the file under a different project directory: Claude Code finds the session by
+  id wherever it is (#110), so the original cwd's directory is used and the option was dropped
+- an index over the store: `ls` is three levels of listing plus one GET per session; fine for hundreds,
+  not for tens of thousands

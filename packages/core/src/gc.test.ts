@@ -50,6 +50,7 @@ beforeAll(async () => {
     root: join(tmp, "repodirs"),
     mirrorRoot: join(tmp, "repodirs", ".mirror"),
     defaultHost: "github.com",
+    machine: "test-machine",
     protocol: "https",
     mirrorMaxAgeMs: 600_000,
     defaults: { agent: "claude" },
