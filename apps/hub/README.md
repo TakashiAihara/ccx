@@ -125,7 +125,7 @@ DELETE /<bucket>/<key>?uploadId=             multipart 中止
 - bucket は暗黙に存在する。CreateBucket は mkdir で、未知の bucket の一覧は空
 - 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
 - ファイルシステムの上に置くことから来る制約: `a` と `a/b` は両立しない (S3 では両方置ける。後から来た方を 409 `KeyConflict` で断る) / `/` で終わる key (ディレクトリ marker) は置けない (400) / 1 セグメント 255 バイト超は 400 `KeyTooLongError` / Content-Type と `x-amz-meta-*` は保存しない / 一覧の `Contents` に ETag は載らない (載せるには全 object を読むことになる)
-- 動かして確かめたクライアント: Bun.S3Client (テスト) / DuckDB httpfs (`ccx transcript search`) / aws cli (`s3 ls` / `cp`)
+- 動かして確かめたクライアント: Bun.S3Client (`objects.test.ts`) / DuckDB httpfs (`ccx transcript search`、`apps/cli/src/search.test.ts`) / aws cli (`s3 ls` / `cp`、レビュー時)
 - `/healthz` と `/ccx.v1.*` の route が先に照合されるので、`healthz` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
 - 1 回の PUT で置ける大きさは 1 GB (`maxRequestBodySize`)。それより大きいものは multipart で
 

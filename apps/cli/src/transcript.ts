@@ -11,7 +11,7 @@ import {
   type LocalTranscript,
 } from "@ccx/core";
 
-import { humanSince, shortId, table } from "./format.ts";
+import { humanSince, parseLimit, shortId, table } from "./format.ts";
 
 /**
  * `ccx transcript` — session の transcript を保存先に置き、別マシンで取り出す (#121)。
@@ -129,6 +129,52 @@ export function registerTranscript(program: Command): void {
         m.cwd,
       ]);
       for (const line of table(rows)) console.log(line);
+    });
+
+  transcript
+    .command("search")
+    .description("Search every transcript in the store with DuckDB (embedded)")
+    .argument("[text]", "case-insensitive substring of any message")
+    .option("--sql <query>", "run this SQL instead; the views are `transcripts` and `history`")
+    .option("-s, --session <id>", "only this session (full id or prefix)")
+    .option("-n, --limit <count>", "at most this many rows (default 50)", parseLimit)
+    .option("--json", "print rows as JSON")
+    .action(async (text: string | undefined, o) => {
+      if (!text && !o.sql) throw new Error("give text to search for, or --sql");
+      const cfg = await loadConfig();
+      if (!cfg.transcript) throw new NoTranscriptStore();
+      const { openDuckDB } = await import("./duckdb.ts");
+      const c = await openDuckDB(cfg.transcript);
+      const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
+      const limit = o.limit ?? 50;
+      const sql =
+        o.sql ??
+        `SELECT session_id, machine, "user", type, timestamp,
+                substr(to_json(message)::VARCHAR, greatest(1, position(lower(${q(text!)}) IN lower(to_json(message)::VARCHAR)) - 60), 200) AS snippet
+         FROM transcripts
+         WHERE message IS NOT NULL AND lower(to_json(message)::VARCHAR) LIKE ${q(`%${text!.toLowerCase()}%`)}
+           ${o.session ? `AND session_id LIKE ${q(`${o.session}%`)}` : ""}
+         ORDER BY timestamp DESC
+         LIMIT ${limit}`;
+      const r = await c.runAndReadAll(sql);
+      const cols = r.columnNames();
+      const rows = r.getRowObjectsJson();
+      if (o.json) {
+        console.log(JSON.stringify(rows, null, 2));
+        return;
+      }
+      if (rows.length === 0) {
+        console.error("no match");
+        return;
+      }
+      const out = rows.map((row) =>
+        cols.map((k) => {
+          const v = row[k];
+          const s = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+          return k === "session_id" ? shortId(String(s)) : s.replaceAll("\n", " ").slice(0, 200);
+        }),
+      );
+      for (const line of table([cols, ...out])) console.log(line);
     });
 
   transcript

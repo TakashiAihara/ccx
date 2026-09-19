@@ -53,7 +53,7 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; record `pull` | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
 | `ls [-m machine]` | every `session.json`, newest push first, with who last pulled it | — |
 | `prune [id...] \| --ended` | delete the local transcript and tool-results (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript and tool-results; the matching copy, **read back and hashed**, differs from the local files |
-| `search` | DuckDB over `transcripts/**/transcript.jsonl` | — (separate PR) |
+| `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl`; `transcripts` and `history` views | — |
 
 Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
 takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
@@ -78,7 +78,25 @@ WHERE type = 'assistant';
 ```
 
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
-USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature.
+USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
+does exactly this and exposes the result as the `transcripts` view (plus `history` over
+`**/history/*.json`), so `--sql` queries start from `FROM transcripts`.
+
+### How DuckDB rides inside the binary
+
+`@duckdb/node-api` is a thin N-API shim (`duckdb.node`) that `dlopen`s `libduckdb` from next to
+itself by SONAME. Inside a `bun build --compile` binary there is no "next to itself", so
+`scripts/duckdb-assets.ts` (run by `postinstall` and by `scripts/build.ts`) fetches the platform's
+`libduckdb` and the matching `httpfs` extension into `.build/duckdb/`, `apps/cli/src/duckdb-assets.ts`
+embeds them as file assets, and `openDuckDB` writes them to `~/.cache/ccx/duckdb/<version>/` on first
+use and `dlopen`s the library through `bun:ffi` before the shim loads — the shim then resolves the
+already-loaded copy. `httpfs` is `LOAD`ed from the cache by path, so the first search does not go to
+extensions.duckdb.org. Measured on linux-x64: binary 175 MB, first search 0.26 s (writes 92 MB to the
+cache), then 0.18 s. macOS uses the same mechanism (`libduckdb.dylib`) but has not been run yet.
+
+Cross-builds: the bundler resolves every `require('@duckdb/node-bindings-<platform>/duckdb.node')`
+branch, so `scripts/build.ts` marks every platform but the target as external and the assets script
+drops the target's bindings package into `apps/cli/node_modules` when it is not the host's.
 
 ## Measured (2026-09-19, one host, real center on loopback)
 

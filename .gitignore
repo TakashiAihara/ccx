@@ -1,6 +1,9 @@
 node_modules/
 dist/
 
+# DuckDB assets fetched by scripts/duckdb-assets.ts (postinstall)
+/.build/
+
 # compiled binary (bun build --compile)
 /ccx
 /ccx-*
