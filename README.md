@@ -108,9 +108,10 @@ The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
 file, plus `tool-results/`, `session.json` and an append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
-`~/.cache/ccx/duckdb/<version>/` on first use (the binary is ~175 MB for that reason). `--sql` gets
-two views, `transcripts` and `history`, with `machine` / `user` / `session_id` as columns. See
-`docs/design/transcript-store.md`.
+`~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that
+reason). `--sql` gets two views, `transcripts` and `history`, with `machine` / `user` / `session_id`
+as columns. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
+target. See `docs/design/transcript-store.md`.
 
 `ccx` decides only whether a session is *running* (`--ended` is everything that is not). Whether it is
 *done* is your call — feed it ids from whatever marks completion in your workflow. `prune` refuses a

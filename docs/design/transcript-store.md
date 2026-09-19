@@ -92,11 +92,16 @@ embeds them as file assets, and `openDuckDB` writes them to `~/.cache/ccx/duckdb
 use and `dlopen`s the library through `bun:ffi` before the shim loads — the shim then resolves the
 already-loaded copy. `httpfs` is `LOAD`ed from the cache by path, so the first search does not go to
 extensions.duckdb.org. Measured on linux-x64: binary 175 MB, first search 0.26 s (writes 92 MB to the
-cache), then 0.18 s. macOS uses the same mechanism (`libduckdb.dylib`) but has not been run yet.
+cache), then 0.18 s. macOS is built the same way but has not been run, and the shim there resolves
+`@rpath/libduckdb.dylib` through dyld's rpath search rather than the preloaded copy, so `search` on
+macOS is expected to fail until #125 is done; the other verbs are unaffected. Windows is not a target:
+the assets script refuses `win32` rather than preparing Linux files.
 
 Cross-builds: the bundler resolves every `require('@duckdb/node-bindings-<platform>/duckdb.node')`
 branch, so `scripts/build.ts` marks every platform but the target as external and the assets script
-drops the target's bindings package into `apps/cli/node_modules` when it is not the host's.
+drops the target's bindings package next to `@duckdb/node-bindings` (where that `require` resolves
+from — under `node_modules/.bun/` in an isolated install) when it is not the host's. Measured: a
+`bun-linux-arm64` build from linux-x64 bundles and links (not run — no arm64 host).
 
 ## Measured (2026-09-19, one host, real center on loopback)
 

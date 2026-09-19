@@ -13,21 +13,17 @@
 
 import { join } from "node:path";
 
+import { hostTarget, prepare } from "./duckdb-assets.ts";
+
 const ROOT = join(import.meta.dir, "..");
 const arg = (name: string) => {
   const i = process.argv.indexOf(name);
   return i === -1 ? undefined : process.argv[i + 1];
 };
-const os = process.platform === "darwin" ? "darwin" : "linux";
-const arch = process.arch === "arm64" ? "arm64" : "x64";
-const target = arg("--target") ?? `bun-${os}-${arch}`;
+const target = arg("--target") ?? hostTarget();
 const outfile = arg("--outfile") ?? "ccx";
 
-const prep = Bun.spawn(["bun", "run", join(ROOT, "scripts", "duckdb-assets.ts"), "--target", target], {
-  stdout: "inherit",
-  stderr: "inherit",
-});
-if ((await prep.exited) !== 0) process.exit(1);
+await prepare(target);
 
 const ALL = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-arm64-musl", "linux-x64", "linux-x64-musl", "win32-arm64", "win32-x64"];
 const keep = target.replace(/^bun-/, "");
