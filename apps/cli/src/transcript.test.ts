@@ -1,0 +1,299 @@
+/**
+ * push / pull / prune を、本物の保存先 (ccx-center の object API) に対して HTTP 越しに回す。
+ * 2 つの偽 CLAUDE_CONFIG_DIR を「マシン A」「マシン B」に見立てる。
+ *
+ * core ではなく cli に置くのは、core (library) が hub (app) に依存する向きを作らないため。
+ * 両方を繋ぐのは cli の役目
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { openDb } from "@ccx/hub/src/db/open.ts";
+import { ObjectStore } from "@ccx/hub/src/objects.ts";
+import { createApp } from "@ccx/hub/src/server.ts";
+
+import {
+  AmbiguousSessionId,
+  encodeCwd,
+  localTranscripts,
+  runningSessionIds,
+  sha256,
+  transcriptFacts,
+  TranscriptClient,
+  type LocalTranscript,
+} from "@ccx/core";
+
+const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const CWD_A = "/home/a/.ccx/github.com/o/r/01AAAAAAAAAAAA";
+
+let server: ReturnType<typeof Bun.serve>;
+let db: ReturnType<typeof openDb>;
+let root: string;
+let homeA: string;
+let homeB: string;
+let A: TranscriptClient;
+let B: TranscriptClient;
+
+const line = (o: Record<string, unknown>) => `${JSON.stringify(o)}\n`;
+const transcriptBody = [
+  line({ type: "user", cwd: CWD_A, gitBranch: "feat/x", version: "2.1.300", message: "PORTABILITY-TEST-1" }),
+  // 2 行目は別の値。先頭のレコードを採ることを pin するため (同じ値だと最後を採る実装でも通る)
+  line({ type: "assistant", cwd: "/elsewhere", gitBranch: "other", version: "9.9.9", message: { model: "claude-opus-5" } }),
+].join("");
+
+async function seedA(): Promise<LocalTranscript> {
+  const projectDir = join(homeA, "projects", encodeCwd(CWD_A));
+  await mkdir(join(projectDir, SID, "tool-results"), { recursive: true });
+  await Bun.write(join(projectDir, `${SID}.jsonl`), transcriptBody);
+  await Bun.write(join(projectDir, SID, "tool-results", "abc.txt"), "big tool output");
+  // uuid でない名前は transcript ではない
+  await Bun.write(join(projectDir, "notes.jsonl"), "x\n");
+  const [t] = await localTranscripts(homeA);
+  return t!;
+}
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "ccx-tstore-"));
+  homeA = await mkdtemp(join(tmpdir(), "ccx-homeA-"));
+  homeB = await mkdtemp(join(tmpdir(), "ccx-homeB-"));
+  db = openDb(":memory:");
+  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db, new ObjectStore(root)).fetch });
+  const store = { endpoint: `http://127.0.0.1:${server.port}`, bucket: "ccx", prefix: "p/" };
+  A = new TranscriptClient(store, { machine: "host-a", user: "alice" });
+  B = new TranscriptClient(store, { machine: "host-b", user: "bob" });
+});
+
+afterEach(async () => {
+  void server.stop(true);
+  db.$client.close();
+  await Promise.all([root, homeA, homeB].map((d) => rm(d, { recursive: true, force: true })));
+});
+
+describe("transcript: local side", () => {
+  test("localTranscripts finds <uuid>.jsonl under any project dir, with its tool-results", async () => {
+    const t = await seedA();
+    expect((await localTranscripts(homeA)).map((x) => x.sessionId)).toEqual([SID]);
+    expect(t.toolResultsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "tool-results"));
+    expect(await localTranscripts(join(homeA, "nope"))).toEqual([]);
+  });
+
+  test("transcriptFacts takes cwd / gitBranch / version from the first records that carry them, and stops at the line cap", async () => {
+    const t = await seedA();
+    expect(await transcriptFacts(t.path)).toEqual({ cwd: CWD_A, gitBranch: "feat/x", version: "2.1.300" });
+
+    // git の外の session: gitBranch はどこにも無い。全行読まずに上限で止まる
+    const noGit = join(homeA, "nogit.jsonl");
+    await Bun.write(noGit, `${line({ cwd: "/x", version: "1" })}${line({ cwd: "/x" }).repeat(50)}${line({ gitBranch: "late" })}`);
+    expect(await transcriptFacts(noGit, 10)).toEqual({ cwd: "/x", gitBranch: "", version: "1" });
+    expect(await transcriptFacts(noGit)).toEqual({ cwd: "/x", gitBranch: "late", version: "1" });
+  });
+
+  test("runningSessionIds counts only pids that are alive and still the same process", async () => {
+    const dir = join(homeA, "sessions");
+    await mkdir(dir, { recursive: true });
+    const dead = Bun.spawn(["true"]);
+    await dead.exited;
+    const procStart = await Bun.file(`/proc/${process.pid}/stat`)
+      .text()
+      .then((s) => s.slice(s.lastIndexOf(")") + 2).split(" ")[19])
+      .catch(() => undefined);
+    await Bun.write(join(dir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: "live", procStart }));
+    await Bun.write(join(dir, `${dead.pid}.json`), JSON.stringify({ pid: dead.pid, sessionId: "dead" }));
+    // pid は生きているが起動時刻が違う = 番号が巡回して別のプロセス
+    if (procStart) {
+      await Bun.write(join(dir, `${process.pid + 0}.json.reused`), ""); // 名前が合わないので無視される (対照)
+      await Bun.write(join(dir, `1.json`), JSON.stringify({ pid: process.pid, sessionId: "reused", procStart: "1" }));
+    }
+    await Bun.write(join(dir, "garbage.json"), "{");
+    expect([...(await runningSessionIds(homeA))]).toEqual(["live"]);
+  });
+});
+
+describe("transcript: push / pull / prune through the store", () => {
+  const prefixA = `p/transcripts/machine=host-a/user=alice/session_id=${SID}/`;
+  const storedA = () => join(root, "ccx", `${prefixA}transcript.jsonl`);
+
+  test("push puts the file byte for byte, tool-results with hashes, session.json and a history entry; a second push is unchanged", async () => {
+    const t = await seedA();
+    const r1 = await A.push(t);
+    expect(r1.status).toBe("pushed");
+    expect(r1.meta).toMatchObject({ sessionId: SID, machine: "host-a", user: "alice", cwd: CWD_A, gitBranch: "feat/x" });
+    expect(r1.meta.toolResults).toEqual([{ name: "abc.txt", sha256: await sha256(join(t.toolResultsDir!, "abc.txt")) }]);
+
+    expect(await A.s3.file(`${prefixA}transcript.jsonl`).text()).toBe(transcriptBody);
+    expect(await A.s3.file(`${prefixA}tool-results/abc.txt`).text()).toBe("big tool output");
+    expect(await Bun.file(join(root, "ccx", `${prefixA}session.json`)).exists()).toBe(true);
+    expect((await A.history(r1.meta)).map((e) => [e.op, e.machine])).toEqual([["push", "host-a"]]);
+    // スナップショットは残らない
+    expect(await Bun.file(`${t.path}.push-tmp`).exists()).toBe(false);
+
+    expect((await A.push(t)).status).toBe("unchanged");
+    expect((await A.history(r1.meta)).length).toBe(1);
+
+    // transcript が同じでも tool-results が増えれば置き直す
+    await Bun.write(join(t.toolResultsDir!, "def.txt"), "another");
+    expect((await A.push(t)).status).toBe("pushed");
+    expect((await A.find(SID))!.toolResults.map((r) => r.name)).toEqual(["abc.txt", "def.txt"]);
+
+    // 内容が変わればもう一度置く
+    await Bun.write(t.path, `${transcriptBody}${line({ type: "user", message: "more" })}`);
+    expect((await A.push(t)).status).toBe("pushed");
+    expect((await A.history(r1.meta)).length).toBe(3);
+  });
+
+  test("pull on another machine lands where claude --resume finds it, records who pulled, and refuses to clobber", async () => {
+    const t = await seedA();
+    await A.push(t);
+
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(r.path).toBe(join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`));
+    expect(await sha256(r.path)).toBe(await sha256(t.path));
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "tool-results", "abc.txt")).text()).toBe("big tool output");
+
+    const h = await B.history(r.meta);
+    expect(h.map((e) => [e.op, e.machine, e.user])).toEqual([
+      ["push", "host-a", "alice"],
+      ["pull", "host-b", "bob"],
+    ]);
+
+    expect((await B.pull(SID, homeB)).status).toBe("already-here");
+
+    // tool-results が欠けていれば already-here にはならず、埋め直す
+    await rm(join(homeB, "projects", encodeCwd(CWD_A), SID), { recursive: true, force: true });
+    expect((await B.pull(SID, homeB)).status).toBe("pulled");
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "tool-results", "abc.txt")).exists()).toBe(true);
+
+    await Bun.write(r.path, "something else\n");
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
+    expect(await Bun.file(r.path).text()).toBe("something else\n");
+    const forced = await B.pull(SID, homeB, true);
+    expect(forced.status).toBe("pulled");
+    expect(await Bun.file(r.path).text()).toBe(transcriptBody);
+    // 押し退けた方は消えない
+    expect(forced.replaced).toMatch(/\.replaced-\d+$/);
+    expect(await Bun.file(forced.replaced!).text()).toBe("something else\n");
+
+    await expect(B.pull("00000000-0000-4000-8000-000000000000", homeB)).rejects.toThrow(/not in the store/);
+  });
+
+  test("pull refuses to install a download that does not match session.json, and leaves no tmp", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await Bun.write(storedA(), (await Bun.file(storedA()).text()).replace("PORTABILITY-TEST-1", "PORTABILITY-TEST-X"));
+
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/does not match/);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    expect(await Bun.file(path).exists()).toBe(false);
+    expect(await Bun.file(`${path}.pull-tmp`).exists()).toBe(false);
+
+    // tool-results の破損も同じ
+    await Bun.write(storedA(), transcriptBody);
+    await Bun.write(join(root, "ccx", `${prefixA}tool-results/abc.txt`), "corrupt");
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/tool-results\/abc.txt/);
+    expect(await Bun.file(path).exists()).toBe(false);
+  });
+
+  test("resolve turns the short id that ls prints into the full id, and refuses an ambiguous one", async () => {
+    const t = await seedA();
+    await A.push(t);
+    expect(await A.resolve(SID.slice(0, 8))).toBe(SID);
+    expect(await A.resolve(SID)).toBe(SID);
+    expect(await A.resolve("ffffffff")).toBeNull();
+
+    const other = `${SID.slice(0, 8)}-ffff-4fff-8fff-ffffffffffff`;
+    await Bun.write(join(t.projectDir, `${other}.jsonl`), transcriptBody);
+    const [t2] = (await localTranscripts(homeA)).filter((x) => x.sessionId === other);
+    await A.push(t2!);
+    await expect(A.resolve(SID.slice(0, 8))).rejects.toThrow(AmbiguousSessionId);
+    expect(await A.resolve(SID.slice(0, 10))).toBe(SID);
+    expect((await A.list("host-a")).length).toBe(2);
+    expect((await A.list("host-z")).length).toBe(0);
+  });
+
+  test("find returns the newest copy when several machines pushed the same id; list sees them all", async () => {
+    const t = await seedA();
+    await A.push(t);
+    // B が続きを書いて push (後の push)
+    const grown = `${transcriptBody}${line({ type: "user", message: "continued on B" })}`;
+    await Bun.write(t.path, grown);
+    await new Promise((r) => setTimeout(r, 5));
+    await B.push(t);
+
+    expect((await A.list()).map((m) => m.machine).sort()).toEqual(["host-a", "host-b"]);
+    const newest = await A.find(SID);
+    expect(newest?.machine).toBe("host-b");
+    expect(newest?.size).toBe(grown.length);
+    expect((await A.findAll(SID)).map((m) => m.machine)).toEqual(["host-b", "host-a"]);
+    expect(await B.find("00000000-0000-4000-8000-000000000000")).toBeNull();
+
+    // pull は新しい方を取る
+    const r = await B.pull(SID, homeB);
+    expect(await Bun.file(r.path).text()).toBe(grown);
+  });
+
+  test("prune deletes only when a store copy reads back identical (any machine's), never a running session, and only its own files", async () => {
+    const t = await seedA();
+
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: "not in the store (push first)" });
+
+    await A.push(t);
+    expect(await A.prune(t, new Set([SID]))).toMatchObject({ status: "refused", reason: "session is running" });
+    expect(await Bun.file(t.path).exists()).toBe(true);
+
+    // 保存先の写しを (同じ長さのまま) 壊す → 読み戻しで違いが出て消さない
+    const good = await Bun.file(storedA()).text();
+    await Bun.write(storedA(), good.replace("PORTABILITY-TEST-1", "PORTABILITY-TEST-X"));
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("does not read back") });
+    expect(await Bun.file(t.path).exists()).toBe(true);
+    await Bun.write(storedA(), good);
+
+    // tool-results の実体が壊れていても消さない
+    await Bun.write(join(root, "ccx", `${prefixA}tool-results/abc.txt`), "corrupt");
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("does not read back") });
+    await Bun.write(join(root, "ccx", `${prefixA}tool-results/abc.txt`), "big tool output");
+
+    // ローカルが push 後に進んでいても消さない (transcript でも tool-results でも)
+    await Bun.write(t.path, `${transcriptBody}${line({ type: "user", message: "after push" })}`);
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("no copy in the store matches") });
+    await Bun.write(t.path, transcriptBody);
+    await Bun.write(join(t.toolResultsDir!, "new.txt"), "unpushed");
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("no copy in the store matches") });
+    await rm(join(t.toolResultsDir!, "new.txt"));
+
+    // <projectDir>/<id>/ の他のものは残す
+    await Bun.write(join(t.projectDir, SID, "subagents", "x.jsonl"), "keep");
+    const r = await A.prune(t, new Set());
+    expect(r.status).toBe("pruned");
+    expect(await Bun.file(t.path).exists()).toBe(false);
+    expect(await Bun.file(join(t.projectDir, SID, "tool-results", "abc.txt")).exists()).toBe(false);
+    expect(await Bun.file(join(t.projectDir, SID, "subagents", "x.jsonl")).text()).toBe("keep");
+    expect((await A.history(r.meta!)).map((e) => e.op)).toEqual(["push", "prune"]);
+
+    // 消した後も保存先から戻せる
+    expect((await A.pull(SID, homeA)).status).toBe("pulled");
+    expect(await Bun.file(t.path).text()).toBe(transcriptBody);
+  });
+
+  test("prune on the machine that pulled (not the one that pushed) works, and folds an empty session dir", async () => {
+    const t = await seedA();
+    await A.push(t);
+    const r = await B.pull(SID, homeB);
+    const [tb] = await localTranscripts(homeB);
+    expect(tb!.path).toBe(r.path);
+
+    const pr = await B.prune(tb!, new Set());
+    expect(pr.status).toBe("pruned");
+    expect(pr.meta?.machine).toBe("host-a");
+    expect(await Bun.file(r.path).exists()).toBe(false);
+    expect(await stat(join(homeB, "projects", encodeCwd(CWD_A), SID)).catch(() => null)).toBeNull();
+    expect((await B.history(pr.meta!)).map((e) => [e.op, e.machine])).toEqual([
+      ["push", "host-a"],
+      ["pull", "host-b"],
+      ["prune", "host-b"],
+    ]);
+  });
+});
