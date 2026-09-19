@@ -39,7 +39,16 @@ function serve(): void {
   mkdirSync(cfg.objectsDir, { recursive: true });
   const app = createApp(db, new ObjectStore(cfg.objectsDir));
 
-  const server = Bun.serve({ hostname: cfg.host, port: cfg.port, fetch: app.fetch });
+  const server = Bun.serve({
+    hostname: cfg.host,
+    port: cfg.port,
+    fetch: app.fetch,
+    // object API は本文を stream で書くのでメモリは本文の大きさに依らない。上限は
+    // 「1 回の PUT で置ける object の大きさ」で、Bun の既定 128 MB は transcript
+    // (実測で数 MB〜数十 MB) には足りるが、S3 クライアントが multipart に切り替える
+    // 前に単発 PUT で送る上限 (aws cli は 5 GB) より小さい。1 GB で揃えておく
+    maxRequestBodySize: 1024 * 1024 * 1024,
+  });
   console.error(
     `ccx-center listening on http://${cfg.host}:${server.port} (db=${cfg.dbPath}, objects=${cfg.objectsDir})`,
   );

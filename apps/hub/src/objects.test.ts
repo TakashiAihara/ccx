@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openDb, type Db } from "./db/open.ts";
-import { ObjectStore, validKey } from "./objects.ts";
+import { ObjectStore, partNumbersOf, validKey, validPrefix } from "./objects.ts";
 import { createApp } from "./server.ts";
 
 let server: ReturnType<typeof Bun.serve>;
@@ -94,9 +94,13 @@ describe("objects: S3 client round trip", () => {
     const res = await fetch(`${base}/ccx/r.txt`, { headers: { range: "bytes=2-5" } });
     expect(res.status).toBe(206);
     expect(res.headers.get("content-range")).toBe("bytes 2-5/10");
+    // headersOf は全体の size を渡すが、206 では Bun.serve が切った長さに書き換える
+    expect(res.headers.get("content-length")).toBe("4");
     expect(await res.text()).toBe("2345");
 
     const tail = await fetch(`${base}/ccx/r.txt`, { headers: { range: "bytes=-3" } });
+    expect(tail.status).toBe(206);
+    expect(tail.headers.get("content-range")).toBe("bytes 7-9/10");
     expect(await tail.text()).toBe("789");
 
     const head = await fetch(`${base}/ccx/r.txt`, { method: "HEAD" });
@@ -128,6 +132,15 @@ describe("objects: S3 client round trip", () => {
     expect(p2.contents?.map((o) => o.key)).toEqual(["t/m=b/s2/transcript.jsonl"]);
     expect(p2.isTruncated).toBe(false);
 
+    // CommonPrefixes も max-keys に数える。数えないと delimiter 付きの一覧が
+    // 上限を超えても truncated にならず、2 ページ目が永遠に来ない
+    const d1 = await s3.list({ prefix: "t/", delimiter: "/", maxKeys: 1 });
+    expect(d1.commonPrefixes?.map((p) => p.prefix)).toEqual(["t/m=a/"]);
+    expect(d1.isTruncated).toBe(true);
+    const d2 = await s3.list({ prefix: "t/", delimiter: "/", maxKeys: 1, continuationToken: d1.nextContinuationToken });
+    expect(d2.commonPrefixes?.map((p) => p.prefix)).toEqual(["t/m=b/"]);
+    expect(d2.isTruncated).toBe(false);
+
     // 未知の bucket は空の一覧 (bucket は暗黙に存在する)
     const other = new Bun.S3Client({ endpoint: base, bucket: "nothing-here", accessKeyId: "t", secretAccessKey: "t" });
     expect((await other.list()).contents ?? []).toEqual([]);
@@ -139,29 +152,111 @@ describe("objects: S3 client round trip", () => {
     expect(res.status).toBe(404);
     expect(await res.text()).toContain("NoSuchKey");
 
-    // fetch は `..` を送る前に畳むので、server に届く形で書く
-    const bad = await fetch(`${base}/ccx/a/%2e%2e/%2e%2e/escaped`, { method: "PUT", body: "x" });
+    // fetch は `..` を送る前に畳むので、server に届く形で書く。2 段上がると root の
+    // 外なので、そこに無いことを見る
+    const bad = await fetch(`${base}/ccx/%2e%2e/%2e%2e/escaped`, { method: "PUT", body: "x" });
     expect(bad.status).toBe(400);
-    expect(await Bun.file(join(root, "escaped")).exists()).toBe(false);
+    expect(await Bun.file(join(root, "..", "escaped")).exists()).toBe(false);
+
+    const malformed = await fetch(`${base}/ccx/%99`);
+    expect(malformed.status).toBe(400);
+
+    const barePost = await fetch(`${base}/ccx/k`, { method: "POST", body: "x" });
+    expect(barePost.status).toBe(405);
 
     const badBucket = await fetch(`${base}/Not_Valid/k`, { method: "PUT", body: "x" });
     expect(badBucket.status).toBe(400);
   });
 
-  test("Connect routes still win over the bucket route", async () => {
+  test("uploadId and prefix cannot point outside the root", async () => {
+    // abort に `../../<dir>` を渡しても root の外は消えない
+    const outside = join(root, "..", `ccx-outside-${Date.now()}`);
+    await Bun.write(join(outside, "keep"), "x");
+    try {
+      const abort = await fetch(`${base}/ccx/k?uploadId=${encodeURIComponent(`../../${outside.split("/").pop()}`)}`, {
+        method: "DELETE",
+      });
+      expect(abort.status).toBe(404);
+      expect(await Bun.file(join(outside, "keep")).exists()).toBe(true);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+
+    // 一覧の prefix で bucket の外を歩かせない
+    const res = await fetch(`${base}/ccx?list-type=2&prefix=${encodeURIComponent("../")}`);
+    expect(res.status).toBe(400);
+    const part = await fetch(`${base}/ccx/k?partNumber=1&uploadId=not-a-uuid`, { method: "PUT", body: "x" });
+    expect(part.status).toBe(404);
+  });
+
+  test("complete uses the parts the client lists, in that order, and refuses a missing one", async () => {
+    const init = await fetch(`${base}/ccx/m.txt?uploads`, { method: "POST" });
+    const uploadId = /<UploadId>([^<]+)<\/UploadId>/.exec(await init.text())![1]!;
+    for (const [n, body] of [
+      [1, "AAA"],
+      [2, "BBB"],
+      [3, "CCC"],
+    ] as const) {
+      expect((await fetch(`${base}/ccx/m.txt?partNumber=${n}&uploadId=${uploadId}`, { method: "PUT", body })).status).toBe(200);
+    }
+    const listing = (parts: number[]) =>
+      `<CompleteMultipartUpload>${parts.map((n) => `<Part><PartNumber>${n}</PartNumber><ETag>"x"</ETag></Part>`).join("")}</CompleteMultipartUpload>`;
+
+    // 存在しない part を挙げると断られ、upload は残る
+    const bad = await fetch(`${base}/ccx/m.txt?uploadId=${uploadId}`, { method: "POST", body: listing([1, 9]) });
+    expect(bad.status).toBe(400);
+    expect(await bad.text()).toContain("InvalidPart");
+
+    // 挙げた part だけを、挙げた順に
+    const ok = await fetch(`${base}/ccx/m.txt?uploadId=${uploadId}`, { method: "POST", body: listing([3, 1]) });
+    expect(ok.status).toBe(200);
+    expect(await s3.file("m.txt").text()).toBe("CCCAAA");
+  });
+
+  test("a filesystem failure other than ENOENT is an error, not a 404", async () => {
+    // key の途中にファイルがあると、その下の stat は ENOTDIR で落ちる
+    await s3.write("file", "x");
+    const res = await fetch(`${base}/ccx/file/child`);
+    expect(res.status).toBe(500);
+  });
+
+  test("routes registered before the bucket route still win", async () => {
+    // `healthz` は bucket 名として有効なので、順序が逆だと空の一覧 (XML) が返る
+    const hz = await fetch(`${base}/healthz`);
+    expect(await hz.text()).toBe("ok\n");
+
     const res = await fetch(`${base}/ccx.v1.FleetService/ListSessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
     });
     expect(res.status).toBe(200);
-    // proto3 の JSON は空の repeated を省く。bucket として扱われていれば XML が返る
+    // proto3 の JSON は空の repeated を省く
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(await res.json()).toEqual({});
+  });
+
+  test("a key ending in .tmp is listed like any other", async () => {
+    await s3.write("exports/dump.tmp", "x");
+    expect((await s3.list({ prefix: "exports/" })).contents?.map((o) => o.key)).toEqual(["exports/dump.tmp"]);
   });
 });
 
 describe("objects: helpers", () => {
+  test("validPrefix", () => {
+    expect(validPrefix("")).toBe(true);
+    expect(validPrefix("t/")).toBe(true);
+    expect(validPrefix("t/m=a/sess")).toBe(true);
+    expect(validPrefix("../")).toBe(false);
+    expect(validPrefix("a/../b")).toBe(false);
+    expect(validPrefix("a//b")).toBe(false);
+  });
+
+  test("partNumbersOf", () => {
+    expect(partNumbersOf("<CompleteMultipartUpload><Part><PartNumber>2</PartNumber></Part><Part><PartNumber> 1 </PartNumber></Part></CompleteMultipartUpload>")).toEqual([2, 1]);
+    expect(partNumbersOf("")).toEqual([]);
+  });
+
   test("validKey", () => {
     expect(validKey("a/b.c")).toBe(true);
     expect(validKey("")).toBe(false);

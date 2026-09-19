@@ -31,9 +31,9 @@ export function createApp(db: Db, objects?: ObjectStore): Hono {
   // 人と、この先の `ccx agent` 用。
   app.get("/healthz", (c) => c.text("ok\n"));
 
-  // S3 互換の object API (#121)。`/:bucket/*` を取るので Connect の route より後に
-  // 載せる。Hono は登録順に照合するため、`/ccx.v1.FleetService/ListSessions` が
-  // bucket "ccx.v1.FleetService" として読まれることはない
+  // S3 互換の object API (#121)。`/:bucket` と `/:bucket/*` を取るので、上の route
+  // (`/healthz` と Connect) より後に載せる。Hono は登録順に照合する。`healthz` は
+  // bucket 名として有効なので、順序を入れ替えると `/healthz` が空の一覧になる
   if (objects) mountObjects(app, objects);
 
   return app;

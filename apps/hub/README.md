@@ -120,7 +120,8 @@ DELETE /<bucket>/<key>?uploadId=             multipart 中止
 - 置き場所は `<objects dir>/<bucket>/<key>`。center を止めて `ls` するだけで中身が分かる
 - bucket は暗黙に存在する。CreateBucket は無く、未知の bucket の一覧は空
 - 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
-- `/ccx.v1.*` の Connect route が先に照合されるので、`ccx.v1.FleetService` という名前の bucket は作れない
+- `/healthz` と `/ccx.v1.*` の route が先に照合されるので、`healthz` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
+- 1 回の PUT で置ける大きさは 1 GB (`maxRequestBodySize`)。それより大きいものは multipart で
 
 ```bash
 # 既製のクライアントで叩ける
