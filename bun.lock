@@ -36,6 +36,9 @@
     "packages/core": {
       "name": "@ccx/core",
       "version": "0.1.0",
+      "devDependencies": {
+        "@ccx/hub": "workspace:*",
+      },
     },
     "packages/proto": {
       "name": "@ccx/proto",

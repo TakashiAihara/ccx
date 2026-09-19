@@ -16,12 +16,14 @@ import {
   summarizeProblems,
   type Goal,
   type PrIntent,
+  NoTranscriptStore,
 } from "@ccx/core";
 
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
+import { registerTranscript } from "./transcript.ts";
 
 export const VERSION = "0.1.0";
 
@@ -396,6 +398,8 @@ session
     }
   });
 
+registerTranscript(program);
+
 const agent = program.command("agent").description("Inspect the local resident agent (ccxd)");
 
 agent
@@ -436,5 +440,6 @@ program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   // center が未設定なのは壊れているのではなく、設定していないだけ。他の失敗と
   // 同じ 1 では区別できないので分ける
-  process.exit(err instanceof NoCenterConfigured ? 3 : 1);
+  // transcript の保存先が未設定なのも同じ扱い (2 は設定の誤り。ccx-center と揃える)
+  process.exit(err instanceof NoCenterConfigured ? 3 : err instanceof NoTranscriptStore ? 2 : 1);
 });
