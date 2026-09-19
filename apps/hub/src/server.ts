@@ -3,6 +3,7 @@ import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { Hono } from "hono";
 
 import type { Db } from "./db/open.ts";
+import { mountObjects, type ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
@@ -14,7 +15,7 @@ import { fleetImpl, ingestImpl } from "./services.ts";
  * createFetchHandler が UniversalHandler を Request → Response に変換してくれる
  * ので、それを Hono の route に載せる。
  */
-export function createApp(db: Db): Hono {
+export function createApp(db: Db, objects?: ObjectStore): Hono {
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db));
   router.service(FleetService, fleetImpl(db));
@@ -29,6 +30,11 @@ export function createApp(db: Db): Hono {
   // 生きているかだけを返す。ccxd はここを見ない (見なくても spool するので)。
   // 人と、この先の `ccx agent` 用。
   app.get("/healthz", (c) => c.text("ok\n"));
+
+  // S3 互換の object API (#121)。`/:bucket/*` を取るので Connect の route より後に
+  // 載せる。Hono は登録順に照合するため、`/ccx.v1.FleetService/ListSessions` が
+  // bucket "ccx.v1.FleetService" として読まれることはない
+  if (objects) mountObjects(app, objects);
 
   return app;
 }

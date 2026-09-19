@@ -66,6 +66,7 @@ Connect (`ConnectRPC + Buf + Hono`)。契約は `packages/proto/ccx/v1/`。
 | `IngestService/Ingest` | (ccxd が書く側) |
 | `FleetService/ListSessions` | 今フリートに何が居るか |
 | `FleetService/ListEvents` | session X は何をしたか / machine Y で T 以降に何が起きたか |
+| `/<bucket>/<key>` (S3 互換) | transcript の保存先 (下の「object API」) |
 
 Connect は JSON でも話せるので、curl でそのまま叩ける。
 
@@ -98,6 +99,34 @@ event が二度届くのは異常ではなく正常系。
 `Ingest` は全か無か。バッチの途中で落ちればトランザクションごと巻き戻り、1 件も
 保存されない。ccxd はこの保証に乗って spool を消す。
 
+## object API (S3 互換)
+
+`ccx transcript` (#121) が session の transcript を置く先。center が「どこにでもある S3」
+の 1 つになる形にしてあるので、`ccx transcript` も DuckDB の httpfs も既製の S3
+クライアントのまま center を向ける。外部の S3 互換サービスを向けても同じ。
+
+```text
+PUT    /<bucket>/<key>                       置く (書きかけは隣に書いてから rename)
+GET    /<bucket>/<key>                       読む。Range は Bun.serve が切る (206)
+HEAD   /<bucket>/<key>                       size / ETag / Last-Modified
+DELETE /<bucket>/<key>                       消す (無くても 204)
+GET    /<bucket>?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=
+POST   /<bucket>/<key>?uploads               multipart 開始
+PUT    /<bucket>/<key>?partNumber=&uploadId= part
+POST   /<bucket>/<key>?uploadId=             multipart 完了 (part を番号順に連結)
+DELETE /<bucket>/<key>?uploadId=             multipart 中止
+```
+
+- 置き場所は `<objects dir>/<bucket>/<key>`。center を止めて `ls` するだけで中身が分かる
+- bucket は暗黙に存在する。CreateBucket は無く、未知の bucket の一覧は空
+- 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
+- `/ccx.v1.*` の Connect route が先に照合されるので、`ccx.v1.FleetService` という名前の bucket は作れない
+
+```bash
+# 既製のクライアントで叩ける
+AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url http://127.0.0.1:8791 s3 ls s3://ccx/transcripts/
+```
+
 ## 設定
 
 | what | env | default |
@@ -105,6 +134,7 @@ event が二度届くのは異常ではなく正常系。
 | bind address | `CCX_CENTER_HOST` | `127.0.0.1` |
 | bind port | `CCX_CENTER_PORT` | `8791` |
 | sqlite file | `CCX_CENTER_DB` | `$CCX_ROOT/center.db` (既定 `~/.ccx/center.db`) |
+| object API の置き場所 | `CCX_CENTER_OBJECTS` | `$CCX_ROOT/center-objects` (既定 `~/.ccx/center-objects`) |
 | 非 loopback bind を許す | `CCX_CENTER_ALLOW_INSECURE_BIND` | 未設定 = 許さない |
 
 ### 非 loopback bind は既定で拒む
@@ -139,7 +169,7 @@ ccxd 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub
 ## まだ無いもの
 
 - 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
-- 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)
+- 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る
 - Web UI (#46)。ここは事実を返すだけで、描かない
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの
   上のクエリ
