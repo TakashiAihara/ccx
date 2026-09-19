@@ -185,7 +185,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
         `SELECT session_id, machine, "user", type, timestamp,
                 substr(to_json(message)::VARCHAR, greatest(1, position(lower(${q(text!)}) IN lower(to_json(message)::VARCHAR)) - 60), 200) AS snippet
          FROM transcripts
-         WHERE message IS NOT NULL AND lower(to_json(message)::VARCHAR) LIKE ${q(`%${text!.toLowerCase()}%`)}
+         WHERE message IS NOT NULL AND contains(lower(to_json(message)::VARCHAR), lower(${q(text!)}))
            ${o.session ? `AND session_id LIKE ${q(`${o.session}%`)}` : ""}
          ORDER BY timestamp DESC
          LIMIT ${limit}`;

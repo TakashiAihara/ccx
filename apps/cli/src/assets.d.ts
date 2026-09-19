@@ -7,3 +7,7 @@ declare module "*.duckdb_extension" {
   const path: string;
   export default path;
 }
+declare module "*/.build/duckdb/meta.json" {
+  const meta: { version: string; platform: string; target: string; lib: string };
+  export default meta;
+}
