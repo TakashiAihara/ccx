@@ -10,6 +10,8 @@ export type CenterConfig = {
   host: string;
   port: number;
   dbPath: string;
+  /** S3 互換 object API の置き場所。transcript の保存先 (#121) */
+  objectsDir: string;
 };
 
 /**
@@ -60,7 +62,9 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
     throw new Error(`CCX_CENTER_PORT is not a valid port: ${raw}`);
   }
 
-  const dbPath = env.CCX_CENTER_DB ?? join(env.CCX_ROOT ?? join(homedir(), ".ccx"), "center.db");
+  const ccxRoot = env.CCX_ROOT ?? join(homedir(), ".ccx");
+  const dbPath = env.CCX_CENTER_DB ?? join(ccxRoot, "center.db");
+  const objectsDir = env.CCX_CENTER_OBJECTS ?? join(ccxRoot, "center-objects");
 
-  return { host, port, dbPath };
+  return { host, port, dbPath, objectsDir };
 }

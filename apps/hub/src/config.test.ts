@@ -35,6 +35,8 @@ describe("loadCenterConfig", () => {
   test("DB は CCX_ROOT の下。CCX_CENTER_DB があればそちらが勝つ", () => {
     expect(loadCenterConfig({ CCX_ROOT: "/r" }).dbPath).toBe("/r/center.db");
     expect(loadCenterConfig({ CCX_ROOT: "/r", CCX_CENTER_DB: "/x/y.db" }).dbPath).toBe("/x/y.db");
+    expect(loadCenterConfig({ CCX_ROOT: "/r" }).objectsDir).toBe("/r/center-objects");
+    expect(loadCenterConfig({ CCX_ROOT: "/r", CCX_CENTER_OBJECTS: "/o" }).objectsDir).toBe("/o");
   });
 });
 
