@@ -45,8 +45,9 @@ Two kinds of state, kept apart:
 ccx defines these states and carries them with the transcript. What a person *does* with them —
 which sessions get reclaimed, whether a `done` session is closed by hand or by a daemon — stays on
 the methodology side, and `ccx-agent` only ever acts on a declared flag it did not originate (see
-below). Until #127 lands, the declared flags live as files under `~/.claude/sessions/<id>/`, written
-by the user's own scripts; that is a stand-in for ccx holding them, not a design.
+below). The declared flags live as files under `~/.claude/sessions/<id>/` — the same files the
+user's own scripts had been writing, now ccx's format, written by `ccx session mark` / `label` /
+`task` and carried as `state.json` by `ccx transcript` (`session-state.md`, #127).
 
 ## ccx-agent's verbs
 

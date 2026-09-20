@@ -3,11 +3,13 @@ import type { Command } from "commander";
 import {
   claudeHome,
   createRepodir,
+  flagsOf,
   loadConfig,
   localOrigin,
   localTranscripts,
   NoTranscriptStore,
   parseRepoSpec,
+  readDeclared,
   runningSessionIds,
   TranscriptClient,
   type LocalTranscript,
@@ -18,9 +20,9 @@ import { humanSince, parseLimit, shortId, table } from "./format.ts";
 /**
  * `ccx transcript` — session の transcript を保存先に置き、別マシンで取り出す (#121)。
  *
- * どの session が「終わった」かは ccx は決めない。分かるのは「動いていない」だけで、
- * 終わったと印を付けるのは利用者の運用 (docs/design/scope.md: mechanism / methodology)。
- * だから対象は session id で受け、`--ended` は「動いていない全部」を指す。
+ * 対象は session id か選択子で受ける。`--ended` は観測 (動いていない全部)、`--done` は
+ * 宣言 (`ccx session mark done` が立っている全部)。両方付ければ AND (#127)。
+ * 宣言された状態 (state.json) は push が運び、pull が手元の印に写す。
  */
 
 async function client() {
@@ -45,9 +47,20 @@ async function client() {
 
 const human = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)}K` : `${(bytes / 1024 / 1024).toFixed(1)}M`);
 
-/** 引数の id か、--ended なら動いていない全部。どちらも無ければ何を指すか分からないので止まる */
-async function select(ids: string[], ended: boolean): Promise<{ picked: LocalTranscript[]; running: Set<string> }> {
-  const [all, running] = await Promise.all([localTranscripts(), runningSessionIds()]);
+export type Selector = { ended?: boolean; done?: boolean };
+
+/**
+ * 引数の id か、選択子に当たる全部。どちらも無ければ何を指すか分からないので止まる。
+ * prune は選択子で選んだ running を先に外す (「done だが動いている」を refused で
+ * 数えると、退役していない session が毎回 exit 1 を作る)
+ */
+export async function select(
+  ids: string[],
+  sel: Selector,
+  opts: { home?: string; excludeRunning?: boolean } = {},
+): Promise<{ picked: LocalTranscript[]; running: Set<string> }> {
+  const home = opts.home ?? claudeHome();
+  const [all, running] = await Promise.all([localTranscripts(home), runningSessionIds(home)]);
   if (ids.length) {
     const byId = new Map(all.map((t) => [t.sessionId, t]));
     const picked: LocalTranscript[] = [];
@@ -61,8 +74,14 @@ async function select(ids: string[], ended: boolean): Promise<{ picked: LocalTra
     }
     return { picked, running };
   }
-  if (ended) return { picked: all.filter((t) => !running.has(t.sessionId)), running };
-  throw new Error("give session ids, or --ended for every session that is not running");
+  if (!sel.ended && !sel.done) throw new Error("give session ids, or a selector: --ended (not running) / --done (marked done)");
+  const picked: LocalTranscript[] = [];
+  for (const t of all) {
+    if ((sel.ended || opts.excludeRunning) && running.has(t.sessionId)) continue;
+    if (sel.done && !(await readDeclared(t.sessionId, home)).done) continue;
+    picked.push(t);
+  }
+  return { picked, running };
 }
 
 export function registerTranscript(program: Command, VERSION: string): void {
@@ -76,15 +95,17 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .description("Copy local transcripts to the store (unchanged ones are skipped)")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
+    .option("--done", "every local session marked done (ccx session mark done)")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
-      const { picked } = await select(ids, Boolean(o.ended));
+      const { picked } = await select(ids, { ended: Boolean(o.ended), done: Boolean(o.done) });
       const results = [];
       for (const t of picked) {
         const r = await c.push(t);
         results.push({ sessionId: t.sessionId, ...r });
-        if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${human(r.meta.size)}  ${r.meta.cwd}`);
+        const flags = flagsOf(r.state).join(",");
+        if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${human(r.meta.size)}  ${flags ? `[${flags}]  ` : ""}${r.meta.cwd}`);
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));
       if (!o.json && picked.length === 0) console.error("nothing to push");
@@ -127,6 +148,10 @@ export function registerTranscript(program: Command, VERSION: string): void {
         console.log(`resume with:  claude --resume ${id}${r.meta.repo ? "" : "   (no repo recorded for this session; run it where you like)"}`);
       }
       console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
+      if (r.state) {
+        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`].filter(Boolean);
+        if (parts.length) console.log(`state         ${parts.join("  ")}${r.status === "pulled" ? "" : "  (not applied: the transcript was already here)"}`);
+      }
     });
 
   transcript
@@ -140,8 +165,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
-          const h = await c.history(m);
-          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null };
+          const [h, state] = await Promise.all([c.history(m), c.readRemoteDeclared(m.sessionId, m)]);
+          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state };
         }),
       );
       if (o.json) {
@@ -156,10 +181,12 @@ export function registerTranscript(program: Command, VERSION: string): void {
         shortId(m.sessionId),
         m.machine,
         m.user,
+        m.state ? flagsOf(m.state).join(",") : "",
         human(m.size),
         `${humanSince(Date.parse(m.pushedAt))} ago`,
         m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
         m.cwd,
+        m.state?.label ?? "",
       ]);
       for (const line of table(rows)) console.log(line);
     });
@@ -221,10 +248,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .description("Delete local transcripts whose copy in the store matches byte for byte")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
+    .option("--done", "every local session marked done and not running")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
-      const { picked, running } = await select(ids, Boolean(o.ended));
+      const { picked, running } = await select(ids, { ended: Boolean(o.ended), done: Boolean(o.done) }, { excludeRunning: true });
       const results = [];
       let refused = 0;
       for (const t of picked) {

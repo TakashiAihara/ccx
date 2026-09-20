@@ -7,4 +7,5 @@ export * from "./mirror.ts";
 export * from "./repodir.ts";
 export * from "./repospec.ts";
 export * from "./scan.ts";
+export * from "./session-state.ts";
 export * from "./transcript.ts";
