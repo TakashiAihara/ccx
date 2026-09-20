@@ -26,6 +26,19 @@ import { humanSince, shortId, table } from "./format.ts";
 async function client() {
   const cfg = await loadConfig();
   if (!cfg.transcript) throw new NoTranscriptStore();
+  // 保存先が S3 を話すかを 1 往復で見る。object API を持たない古い center (#122 より前) は
+  // `HEAD /<bucket>` に 404 を返し、そのまま進むと S3 クライアントの "key does not exist" に化ける
+  const probe = await fetch(`${cfg.transcript.endpoint.replace(/\/$/, "")}/${cfg.transcript.bucket}`, { method: "HEAD" }).catch(
+    (e: unknown) => {
+      throw new Error(`transcript store ${cfg.transcript!.endpoint} did not answer: ${e instanceof Error ? e.message : String(e)}`);
+    },
+  );
+  if (probe.status === 404) {
+    throw new Error(
+      `${cfg.transcript.endpoint} answers but has no S3 object API (bucket ${cfg.transcript.bucket} → 404). ` +
+        "A ccx-center older than #122? Update it, or point CCX_TRANSCRIPT_ENDPOINT at an S3-compatible service.",
+    );
+  }
   // machine は ccxd と同じ規則で決める。center の event と同じ名前で並ぶように
   return new TranscriptClient(cfg.transcript, localOrigin(cfg.machine));
 }
