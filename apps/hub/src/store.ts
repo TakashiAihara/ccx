@@ -185,7 +185,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
   }));
 }
 
-/** 一覧の session ごとに、最後に届いた宣言状態の payload を読む。読めない payload は無いものとして扱う */
+/**
+ * 一覧の session ごとに、最後に届いた宣言状態の payload を読む。読めない payload は無いものとして扱う。
+ * 「最後」は center への到着順 (rowid)。送り手 (ccx の CLI) は seq を持たず、時計は
+ * マシンごとに違うので、received_at で並べると同じ ms や戻った時計で古い方が勝つ
+ */
 function latestStates(db: Db, keys: { machine: string; os_user: string; session_id: string }[]): Map<string, SessionState> {
   const out = new Map<string, SessionState>();
   if (keys.length === 0) return out;
@@ -194,7 +198,7 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
     SELECT machine, os_user, session_id, payload
     FROM (
       SELECT machine, os_user, session_id, payload,
-             ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC) AS rn
+             ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY rowid DESC) AS rn
       FROM events
       WHERE producer = ${PRODUCER_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
     )

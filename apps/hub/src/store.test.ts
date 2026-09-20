@@ -272,9 +272,9 @@ describe("session state events (producer 2, #127)", () => {
     expect(s1.lastHook).toBe("PostToolUse");
     // 1 件も届いていない session は null (「印が無い」ではなく「知らない」)
     expect(s2.state).toBeNull();
-    // 最新は received_at で決まる。後から届いた古い時刻の event は勝たない
-    ingest(db, [state("s1", { archived: false, label: "stale", task: "" }, { receivedAtMs: 500 })]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("second");
+    // 最新は center への到着順。送り手の時計が戻っていても (received_at が古くても) 後から届いた方が勝つ
+    ingest(db, [state("s1", { archived: false, label: "later-but-older-clock", task: "" }, { receivedAtMs: 500, seq: 0 })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
   });
 
   test("a session with only state events is not listed; an unreadable state payload counts as none", () => {

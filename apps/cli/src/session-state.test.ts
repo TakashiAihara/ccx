@@ -346,6 +346,21 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1" });
   });
 
+  test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
+    await seed(homeA, SID);
+    const silent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Promise<Response>(() => {}) });
+    try {
+      const started = Date.now();
+      const r = await run(["mark", "archived", SID], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
+      expect(r.code).toBe(0);
+      expect(r.err).toMatch(/did not take the state/);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect((await readDeclared(SID, homeA)).archived).toBe(true);
+    } finally {
+      void silent.stop(true);
+    }
+  }, 15_000);
+
   test("session ls: another machine's row shows the center's copy; this machine's row shows the local files", async () => {
     const user = localOrigin().user;
     await seed(homeA, SID);

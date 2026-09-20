@@ -75,23 +75,30 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
  * center が無ければ何もしない、届かなければ stderr に 1 行出して終わる — 真実源は
  * 手元のファイルで、center は index。次の mark が送り直す。exit code は変えない
  */
+const REPORT_TIMEOUT_MS = 3000;
+
 export async function reportState(hubUrl: string | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<"sent" | "no-center" | "failed"> {
   if (!hubUrl) return "no-center";
   const origin = localOrigin(machine);
   const client = createClient(IngestService, createConnectTransport({ baseUrl: hubUrl }));
   try {
-    await client.ingest({
-      events: [
-        {
-          origin: { machine: origin.machine, user: origin.user },
-          eventId: randomUUID(),
-          seq: 0n,
-          receivedAt: timestampFromMs(Date.now()),
-          producer: Producer.CCX_SESSION_STATE,
-          payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state })),
-        },
-      ],
-    });
+    await client.ingest(
+      {
+        events: [
+          {
+            origin: { machine: origin.machine, user: origin.user },
+            eventId: randomUUID(),
+            // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は center の到着順
+            seq: 0n,
+            receivedAt: timestampFromMs(Date.now()),
+            producer: Producer.CCX_SESSION_STATE,
+            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state })),
+          },
+        ],
+      },
+      // 繋がった後に黙る center で mark を止めない。best effort なので期限切れは届かなかったのと同じ
+      { timeoutMs: REPORT_TIMEOUT_MS },
+    );
     return "sent";
   } catch (e) {
     console.error(`(center ${hubUrl} did not take the state: ${e instanceof Error ? e.message : String(e)}; it is recorded locally and will be sent with the next mark)`);

@@ -57,8 +57,10 @@ Two copies leave the machine, for two readers:
 - an event at the center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
   shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` right after the local
   write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
-  and the next mark sends the whole state again. The center keeps the latest event per session
-  (`Session.state` in `fleet.proto`); it does not count these as hooks. (User decision, 2026-09-21:
+  and the next mark sends the whole state again; a center that accepts and never answers is cut off
+  after a short deadline. The center keeps the last event per session in *arrival* order
+  (`Session.state` in `fleet.proto`) — not by the sender's clock, which differs per machine — and
+  does not count these as hooks. (User decision, 2026-09-21:
   the center has a database, the list should come from it rather than from one GET per row.)
 
 The local files stay the source of truth; both copies are projections of them, and a copy that is
