@@ -11,7 +11,7 @@ managed:
       value: github.com/TakashiAihara/ccx/packages/proto/gen/go
 
 plugins:
-  # ccxd (Go) 側の消費者。
+  # ccx-agent (Go) 側の消費者。
   #
   # remote plugin は必ず版を固定する。固定しないと BSR 側の plugin 更新で生成物が
   # 黙って変わり、無関係な PR で drift 検出が落ちる — この PR が売りにしている

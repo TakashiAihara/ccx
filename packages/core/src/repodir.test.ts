@@ -182,7 +182,7 @@ describe("createRepodir", () => {
     expect(meta).not.toHaveProperty("pr");
   });
 
-  test("ccx.state は desired: stopped で初期化する (ccxd が勝手に session を立てない)", async () => {
+  test("ccx.state は desired: stopped で初期化する (ccx-agent が勝手に session を立てない)", async () => {
     const r = await createRepodir(cfg, spec(), {}, "0.1.0");
     expect(await readState(r.path)).toEqual({ desired: "stopped", done: null });
   });

@@ -34,7 +34,7 @@ export type Config = {
     model?: string;
   };
   /**
-   * このマシンの名前。ccxd と同じ規則 (CCX_MACHINE / ccx.machine / machine / hostname)。
+   * このマシンの名前。ccx-agent と同じ規則 (CCX_MACHINE / ccx.machine / machine / hostname)。
    * center の event と transcript の保存先の両方でマシンを指す鍵なので、揃っていないと
    * `ccx session` と `ccx transcript ls` が同じマシンを別名で呼ぶ
    */

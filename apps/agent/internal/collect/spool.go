@@ -29,7 +29,7 @@ import (
 //   - Every file is created by write-temp-then-rename, so a file that exists is
 //     complete; a crash mid-write leaves a .tmp, never a half-event under a
 //     real name.
-//   - A file is deleted only AFTER the center has acked it. If ccxd is killed
+//   - A file is deleted only AFTER the center has acked it. If ccx-agent is killed
 //     between the ack and the delete, the event is re-sent on restart — a
 //     duplicate, which the center drops by event_id (#97). That is the correct
 //     failure: at-least-once. Losing an event is not acceptable; sending it
@@ -108,7 +108,7 @@ func reapTemps(dir string) {
 func (s *Spool) IncomingDir() string { return s.incoming }
 
 // Dir is the spool's root directory. Exposed so the single-instance lock can
-// live beside the resource it protects (two ccxd writing one spool would race
+// live beside the resource it protects (two ccx-agent writing one spool would race
 // the seq counter).
 func (s *Spool) Dir() string { return s.dir }
 
@@ -184,7 +184,7 @@ func (s *Spool) Pending() (int, error) {
 	return len(names), err
 }
 
-// DrainIncoming moves everything the hook dropped into incoming/ (because ccxd
+// DrainIncoming moves everything the hook dropped into incoming/ (because ccx-agent
 // was down when the hook fired) into the main queue, in name order, enveloping
 // each as it goes. Returns how many were drained.
 func (s *Spool) DrainIncoming() (int, error) {

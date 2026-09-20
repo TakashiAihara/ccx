@@ -71,7 +71,7 @@ describe("ccx-center over the wire", () => {
     expect(res.status).toBe(200);
   });
 
-  test("ccxd が送ったものが session として読み返せる", async () => {
+  test("ccx-agent が送ったものが session として読み返せる", async () => {
     const res = await send(
       event({ session_id: "s1", hook_event_name: "SessionStart", cwd: "/repo" }),
       event({ session_id: "s1", hook_event_name: "Stop", cwd: "/repo" }),

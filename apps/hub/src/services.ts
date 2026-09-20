@@ -35,7 +35,7 @@ export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
           machine: e.origin.machine,
           user: e.origin.user,
           seq: Number(e.seq),
-          // ccxd が received_at を付けそこねた場合だけ center の時計に落ちる。
+          // ccx-agent が received_at を付けそこねた場合だけ center の時計に落ちる。
           // 時刻を持たない行を作るより、どちらの時計かが分かる形で埋めるほうがよい。
           receivedAtMs: e.receivedAt ? timestampDate(e.receivedAt).getTime() : Date.now(),
           producer: e.producer,

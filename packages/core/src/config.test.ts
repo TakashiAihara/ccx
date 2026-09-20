@@ -167,7 +167,7 @@ describe("設定の解決", () => {
     expect(cfg.hub?.url).toBe("nats://env:4222");
   });
 
-  test("machine follows ccxd's rule: CCX_MACHINE > ccx.machine > file > hostname", async () => {
+  test("machine follows ccx-agent's rule: CCX_MACHINE > ccx.machine > file > hostname", async () => {
     const { hostname } = await import("node:os");
     expect((await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome }, git: noGit })).machine).toBe(hostname());
     expect((await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_MACHINE: "box-1" }, git: noGit })).machine).toBe("box-1");

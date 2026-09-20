@@ -1,6 +1,6 @@
 # ccx-center — the data sink
 
-ccxd が集めた事実を受け取り、貯め、読み返せる形で返す。それだけをする (#91)。
+ccx-agent が集めた事実を受け取り、貯め、読み返せる形で返す。それだけをする (#91)。
 
 judge しない。advise しない。「session X の context が 85% である」は答えるが、
 「だから畳むべきだ」は答えない (`docs/design/scope.md`)。解釈は読んだ側の仕事。
@@ -8,10 +8,10 @@ judge しない。advise しない。「session X の context が 85% である�
 ## 名前が 2 つある
 
 同じものを、ディレクトリでは `hub`、サービス名では `ccx-center` と呼んでいる。
-`docs/design/architecture.md` は hub、`#91` と ccxd 側は center。config のキーも
+`docs/design/architecture.md` は hub、`#91` と ccx-agent 側は center。config のキーも
 `CCX_HUB_URL` (送る側) と `CCX_CENTER_*` (待つ側) で割れている。
 
-今は割れたままにしてある。片方に寄せるのは docs / proto / config / ccxd に跨る
+今は割れたままにしてある。片方に寄せるのは docs / proto / config / ccx-agent に跨る
 変更で、この PR の範囲を超えるため。どちらの名前も同じものを指す。
 
 ## 通り道
@@ -19,7 +19,7 @@ judge しない。advise しない。「session X の context が 85% である�
 ```mermaid
 sequenceDiagram
     participant H as Claude Code hook
-    participant D as ccxd
+    participant D as ccx-agent
     participant C as ccx-center
     participant Q as ccx / UI
 
@@ -33,17 +33,17 @@ sequenceDiagram
     C-->>Q: 事実
 ```
 
-center が落ちている間、機械側は何も失わない。ccxd が spool に貯め、復旧後に順序
+center が落ちている間、機械側は何も失わない。ccx-agent が spool に貯め、復旧後に順序
 どおり流し込む。逆に center が上がっていても、機械側の動作は一切それに依存しない。
 
 ## パースはここでする
 
-ccxd は payload を読まない。読むのはここ。理由は `packages/proto/ccx/v1/ingest.proto`
+ccx-agent は payload を読まない。読むのはここ。理由は `packages/proto/ccx/v1/ingest.proto`
 に書いてあるが、要点は 2 つ。
 
-- ccxd の forward path に中身依存の分岐が無いことを、grep で検証できる状態に保てる
+- ccx-agent の forward path に中身依存の分岐が無いことを、grep で検証できる状態に保てる
   (`scope.md`: COLLECT と CARRY のみ、CONSULT はしない)
-- ccxd は他人の機械で動く単一バイナリでこちらから直せない。center のパーサは直せて、
+- ccx-agent は他人の機械で動く単一バイナリでこちらから直せない。center のパーサは直せて、
   生バイトは常に残っているので、読み違えは後から読み直して直せる
 
 その帰結として、**読めなかった payload も捨てない**。`parsed=false` を立てて行として
@@ -51,7 +51,7 @@ ccxd は payload を読まない。読むのはここ。理由は `packages/prot
 
 ## 鍵は (machine, user, session_id)
 
-machine だけでは足りない。1 台に複数ユーザが居るとき、それぞれが自分の ccxd を自分の
+machine だけでは足りない。1 台に複数ユーザが居るとき、それぞれが自分の ccx-agent を自分の
 権限で動かす (#90, #92)。2 ユーザは 2 本の別々の流れで、混ぜると後から分けられない。
 
 `session_id` は Claude Code のもので ccx が採番したものではないので、単独では鍵に
@@ -63,7 +63,7 @@ Connect (`ConnectRPC + Buf + Hono`)。契約は `packages/proto/ccx/v1/`。
 
 | method | 答える問い |
 |---|---|
-| `IngestService/Ingest` | (ccxd が書く側) |
+| `IngestService/Ingest` | (ccx-agent が書く側) |
 | `FleetService/ListSessions` | 今フリートに何が居るか |
 | `FleetService/ListEvents` | session X は何をしたか / machine Y で T 以降に何が起きたか |
 
@@ -81,7 +81,7 @@ curl -s -X POST http://127.0.0.1:8791/ccx.v1.FleetService/ListSessions \
 `ListSessions` の `activeOnly` は「SessionEnd を観測していない」という機械的な事実
 だけを意味する。時間による判定はしない。
 
-「未設定 = まだ動いている」ではない。ccxd が落ちていた・hook が配線されていない・
+「未設定 = まだ動いている」ではない。ccx-agent が落ちていた・hook が配線されていない・
 セッションが強制終了した、のいずれでも SessionEnd は来ない。生きているかを知りたい
 読み手は `last_seen` からの経過も併せて見る。何分で死んだとみなすかは読み手の判断
 なので、ここに閾値は置かない。
@@ -94,11 +94,11 @@ session は行として持たず、event から `GROUP BY` で導く。session �
 2 つ目の真実源になり、raw と食い違ったときにどちらが正か言えなくなる。パーサを直せば
 一覧もその場で直る、という性質もこの形から来ている。
 
-重複排除は `event_id` (ccxd が採番する UUIDv7)。転送は at-least-once なので、同じ
+重複排除は `event_id` (ccx-agent が採番する UUIDv7)。転送は at-least-once なので、同じ
 event が二度届くのは異常ではなく正常系。
 
 `Ingest` は全か無か。バッチの途中で落ちればトランザクションごと巻き戻り、1 件も
-保存されない。ccxd はこの保証に乗って spool を消す。
+保存されない。ccx-agent はこの保証に乗って spool を消す。
 
 ## object API (S3 互換)
 
@@ -170,18 +170,18 @@ loopback の判定は `127.0.0.0/8` 全体と `::1` / `localhost`。`127.0.0.1` 
 bun run apps/hub/src/index.ts serve
 ```
 
-常駐させるなら `systemd/ccx-center.service` (user service。`ccxd.service` と同じ流儀)。
-別マシンから使う (ccxd の転送先 / `ccx transcript` の保存先) には loopback の外に bind する
+常駐させるなら `systemd/ccx-center.service` (user service。`ccx-agent.service` と同じ流儀)。
+別マシンから使う (ccx-agent の転送先 / `ccx transcript` の保存先) には loopback の外に bind する
 必要があり、その条件は下の「非 loopback bind は既定で拒む」。center はまだ単一バイナリでは
 なく、repo の checkout から `bun run` で動く。
 
-ccxd 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub] url`)。
-未設定なら ccxd は spool するだけで、それも正常な状態。
+ccx-agent 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub] url`)。
+未設定なら ccx-agent は spool するだけで、それも正常な状態。
 
 ## まだ無いもの
 
 - 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
-- 保持期間。`events` は無限に増える。ccxd 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る。完了も中止もされなかった multipart (`<objects dir>/.multipart/<uploadId>/`) も同じで、誰も掃かない
+- 保持期間。`events` は無限に増える。ccx-agent 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る。完了も中止もされなかった multipart (`<objects dir>/.multipart/<uploadId>/`) も同じで、誰も掃かない
 - object API の一覧は index を持たず、ページごとに prefix 配下を歩き直す。実測で 2 万 key のとき 1 ページ 0.55 s、全部で 15 s (レビュー時の計測)。transcript の数がそこに届いたら index を足す
 - Web UI (#46)。ここは事実を返すだけで、描かない
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの

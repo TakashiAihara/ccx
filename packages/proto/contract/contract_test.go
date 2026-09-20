@@ -9,7 +9,7 @@ import (
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
-// payload は ccxd にとって意味を持たない列であり、往復して 1 バイトも変わってはならない。
+// payload は ccx-agent にとって意味を持たない列であり、往復して 1 バイトも変わってはならない。
 //
 // この性質が要るのは、center が後から生バイトを読み直せることに設計が乗っているから
 // (パーサの誤りを後から直せる、という前提)。運ぶ途中で正規化されたら前提が崩れる。
@@ -17,7 +17,7 @@ func TestPayloadSurvivesVerbatim(t *testing.T) {
 	cases := map[string][]byte{
 		"claude code hook json": []byte(`{"session_id":"01K9","hook_event_name":"Stop","cwd":"/tmp/x"}`),
 
-		// bytes であって string ではないことの根拠。ccxd は UTF-8 として妥当かどうかの
+		// bytes であって string ではないことの根拠。ccx-agent は UTF-8 として妥当かどうかの
 		// 判断すらしない。string にすると proto の実装がここで弾く。
 		"invalid utf-8": {0xff, 0xfe, 0x00, 0x80},
 

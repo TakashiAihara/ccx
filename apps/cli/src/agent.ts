@@ -4,19 +4,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
- * ローカルの ccxd の状態。ccx は ccxd に依存しないので、ここで分かることは
- * すべて「外から見た事実」であって、ccxd に問い合わせた答えではない。
+ * ローカルの ccx-agent の状態。ccx は ccx-agent に依存しないので、ここで分かることは
+ * すべて「外から見た事実」であって、ccx-agent に問い合わせた答えではない。
  */
 export type AgentStatus = {
   socketPath: string;
   /** socket ファイルが在るか。在っても掴んでいるプロセスが死んでいることはある */
   socketPresent: boolean;
-  /** 実際に connect できたか。ここが true なら ccxd は生きている */
+  /** 実際に connect できたか。ここが true なら ccx-agent は生きている */
   socketConnectable: boolean;
   spoolDir: string;
   /** center へ未転送の event 数 */
   spooled: number;
-  /** ccxd に渡せず hook が直接落とした event 数。次の ccxd 起動で取り込まれる */
+  /** ccx-agent に渡せず hook が直接落とした event 数。次の ccx-agent 起動で取り込まれる */
   incoming: number;
   /** hubUrl が URL として読めなかった。「届かない」とは別の状態 */
   hubUrlInvalid?: boolean;
@@ -28,7 +28,7 @@ export type AgentStatus = {
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.CCX_SOCKET) return env.CCX_SOCKET;
   const runtime = env.XDG_RUNTIME_DIR ?? join("/run/user", String(process.getuid?.() ?? 0));
-  return join(runtime, "ccx", "ccxd.sock");
+  return join(runtime, "ccx", "ccx-agent.sock");
 }
 
 export function defaultSpoolDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -39,7 +39,7 @@ export function defaultSpoolDir(env: NodeJS.ProcessEnv = process.env): string {
  * socket に繋げるかどうかで生死を見る。ファイルの存在では見ない。
  *
  * unix socket のファイルは、掴んでいたプロセスが死んでも残る。存在だけで「動いて
- * いる」と読むと、落ちた ccxd を生きていると報告することになる。
+ * いる」と読むと、落ちた ccx-agent を生きていると報告することになる。
  */
 async function connectable(path: string, timeoutMs = 500): Promise<boolean> {
   return new Promise((resolve) => {
@@ -55,7 +55,7 @@ async function connectable(path: string, timeoutMs = 500): Promise<boolean> {
 }
 
 /**
- * ccxd が使う拡張子。転送待ちは `.pb`、hook が socket に届かず直接落としたものは
+ * ccx-agent が使う拡張子。転送待ちは `.pb`、hook が socket に届かず直接落としたものは
  * `.raw` (apps/agent/internal/collect)。どちらのディレクトリにもロックや書きかけの
  * 一時ファイルが同居するので、拡張子で絞らないと「詰まっている件数」が水増しされる。
  */
@@ -92,7 +92,7 @@ export async function agentStatus(
 
   // URL の組み立ては fetch の前に同期で走るので、catch の外で throw する。
   // scheme を書き忘れた ("127.0.0.1:8791") だけで status 全体が落ちるのは、
-  // 「ccxd の状態を見る」という用途に対して過剰。読めなかったことを状態として返す。
+  // 「ccx-agent の状態を見る」という用途に対して過剰。読めなかったことを状態として返す。
   let healthz: URL | undefined;
   let hubUrlInvalid = false;
   if (hubUrl) {

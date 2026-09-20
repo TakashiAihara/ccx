@@ -97,7 +97,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
   env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 
-/** machine は config の `machine` (ccxd と同じ規則) を渡す。省けば hostname */
+/** machine は config の `machine` (ccx-agent と同じ規則) を渡す。省けば hostname */
 export const localOrigin = (machine = hostname()): Origin => ({ machine, user: userInfo().username });
 
 /** ~/.claude/projects 配下の <uuid>.jsonl を全部。cwd の別を問わない (session id が鍵) */

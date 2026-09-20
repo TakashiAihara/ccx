@@ -12,7 +12,7 @@ const (
 	// hookDialTimeout — connecting to a local socket is instant; this only
 	// bounds a kernel/backlog stall.
 	hookDialTimeout = 1 * time.Second
-	// hookExchangeTimeout — the write+ack after a successful dial; bounds a ccxd
+	// hookExchangeTimeout — the write+ack after a successful dial; bounds a ccx-agent
 	// that accepted the connection but then stalled.
 	hookExchangeTimeout = 1 * time.Second
 	// hookOverallBudget — the hard backstop on the ENTIRE hook, socket path and
@@ -24,19 +24,19 @@ const (
 	hookOverallBudget = 3 * time.Second
 )
 
-// Hook is `ccxd hook`, the client side of collect. It reads the hook payload
-// from stdin, hands it to the running ccxd over the local socket, and returns.
+// Hook is `ccx-agent hook`, the client side of collect. It reads the hook payload
+// from stdin, hands it to the running ccx-agent over the local socket, and returns.
 // It does nothing else — no retry, no forwarding, no parsing of the payload
-// (#18: the hook stays thin; forwarding and retry are ccxd's job).
+// (#18: the hook stays thin; forwarding and retry are ccx-agent's job).
 //
 // It ALWAYS exits 0. A hook that fails a session's turn because a daemon was
 // down would break the one thing the whole design protects: the local side
 // works regardless of anything downstream (scope.md).
 //
 // Two outcomes, both durable, both exit 0:
-//   - socket reachable → ccxd spools it and acks → done.
+//   - socket reachable → ccx-agent spools it and acks → done.
 //   - socket unreachable or unresponsive → write the payload to the fallback
-//     spool (incoming/) and exit. ccxd drains it when it next starts.
+//     spool (incoming/) and exit. ccx-agent drains it when it next starts.
 //
 // It takes the spool dir (not the incoming dir) and derives the fallback
 // location itself, so the spool layout stays owned by collect.
@@ -73,7 +73,7 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 	return 0
 }
 
-// deliverToSocket returns true only if ccxd acknowledged durable receipt. Any
+// deliverToSocket returns true only if ccx-agent acknowledged durable receipt. Any
 // error, timeout, or unexpected ack is a false — the caller then falls back.
 func deliverToSocket(socketPath string, payload []byte) bool {
 	conn, err := net.DialTimeout("unix", socketPath, hookDialTimeout)
@@ -82,7 +82,7 @@ func deliverToSocket(socketPath string, payload []byte) bool {
 	}
 	defer conn.Close()
 
-	// A separate, short deadline on the post-dial exchange, so a ccxd that
+	// A separate, short deadline on the post-dial exchange, so a ccx-agent that
 	// accepted the connection but then stalls cannot wedge the hook. Kept
 	// distinct from the dial timeout so the worst case is dial+exchange, not
 	// twice the dial timeout.

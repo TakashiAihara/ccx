@@ -73,7 +73,7 @@ func TestRun_StartsAllConcerns(t *testing.T) {
 	<-done
 }
 
-// One concern failing winds the whole process down — ccxd lives and dies as one
+// One concern failing winds the whole process down — ccx-agent lives and dies as one
 // process (ADR 0002). The healthy concern's ctx is cancelled, and the error is
 // returned.
 func TestRun_OneFailureCancelsTheRest(t *testing.T) {

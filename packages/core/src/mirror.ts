@@ -82,7 +82,7 @@ export type EnsureMirrorResult = {
 /**
  * mirror を用意する。無ければ作り、古ければ更新する。
  *
- * 新鮮さの閾値は cfg.mirrorMaxAgeMs。常駐 agent (ccxd) が定期的に更新する運用でも、
+ * 新鮮さの閾値は cfg.mirrorMaxAgeMs。常駐 agent (ccx-agent) が定期的に更新する運用でも、
  * ここで閾値チェックを行うことで単独動作時に古い clone を生やさない。
  */
 export async function ensureMirror(

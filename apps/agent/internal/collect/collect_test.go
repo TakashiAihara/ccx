@@ -53,7 +53,7 @@ func (s *stubForwarder) payloads() []string {
 func startServer(t *testing.T, fwd Forwarder) (*Collect, string, string, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
-	sock := dir + "/ccxd.sock"
+	sock := dir + "/ccx-agent.sock"
 	spoolDir := dir + "/spool"
 
 	spool, err := OpenSpool(spoolDir, &ccxv1.Origin{Machine: "m", User: "u"})
@@ -154,19 +154,19 @@ func TestCenterDown_SpoolsThenDrainsInOrder(t *testing.T) {
 	}
 }
 
-// A hook that fires while ccxd is down writes to the fallback; when ccxd starts,
+// A hook that fires while ccx-agent is down writes to the fallback; when ccx-agent starts,
 // it drains that fallback into the queue before serving.
-func TestCcxdDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
+func TestAgentDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/ccxd.sock"
+	sock := dir + "/ccx-agent.sock"
 	spoolDir := dir + "/spool"
 
-	// ccxd is NOT running. Hook fires: dial fails fast, falls back to incoming.
+	// ccx-agent is NOT running. Hook fires: dial fails fast, falls back to incoming.
 	if code := Hook(sock, spoolDir, strings.NewReader(`{"while":"down"}`)); code != 0 {
 		t.Fatalf("hook exit %d", code)
 	}
 
-	// Now ccxd starts. It should drain the fallback and forward it.
+	// Now ccx-agent starts. It should drain the fallback and forward it.
 	fwd := &stubForwarder{}
 	spool, err := OpenSpool(spoolDir, &ccxv1.Origin{Machine: "m", User: "u"})
 	if err != nil {
@@ -187,7 +187,7 @@ func TestCcxdDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 // than the kernel's cryptic "bind: invalid argument". Surfaced by running the
 // real binary under a deep scratchpad path.
 func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
-	long := "/tmp/" + strings.Repeat("x", 120) + "/ccxd.sock"
+	long := "/tmp/" + strings.Repeat("x", 120) + "/ccx-agent.sock"
 	spool, err := OpenSpool(t.TempDir(), &ccxv1.Origin{Machine: "m", User: "u"})
 	if err != nil {
 		t.Fatal(err)

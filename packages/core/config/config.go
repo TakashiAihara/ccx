@@ -1,8 +1,8 @@
-// Package config resolves ccxd's settings without baking in any personal
+// Package config resolves ccx-agent's settings without baking in any personal
 // environment. It is the Go port of the TS core's config, cut down to exactly
-// what #90 (ccxd basic) needs: where to forward, what machine we are, and where
+// what #90 (ccx-agent basic) needs: where to forward, what machine we are, and where
 // the socket and spool live. The repodir-side keys (root, mirror, protocol)
-// are not ported yet — ccxd basic does not touch repodirs.
+// are not ported yet — ccx-agent basic does not touch repodirs.
 //
 // Resolution order mirrors the TS core (which follows ghq):
 //
@@ -26,9 +26,9 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config is the resolved ccxd configuration. Only the fields ccxd basic needs.
+// Config is the resolved ccx-agent configuration. Only the fields ccx-agent basic needs.
 type Config struct {
-	// HubURL is where ccxd forwards. Empty means "no center configured" — ccxd
+	// HubURL is where ccx-agent forwards. Empty means "no center configured" — ccx-agent
 	// still runs and spools; it just has nowhere to drain to yet. The local
 	// side never depends on the center existing (scope.md).
 	HubURL string
@@ -40,7 +40,7 @@ type Config struct {
 	// leave the override open.
 	Machine string
 
-	// User names the owning user in the same key. ccxd runs as the invoking
+	// User names the owning user in the same key. ccx-agent runs as the invoking
 	// user (never root, #90), so this is just who that is.
 	User string
 
@@ -51,14 +51,14 @@ type Config struct {
 	// SpoolDir holds the forward queue and the hook-written fallback.
 	SpoolDir string
 
-	// Concerns turns ccxd's bundled jobs on and off independently (ADR 0002).
-	// ccxd is one process, but each concern is a module that a person can enable
-	// or disable through the usual ladder. A ccxd with every concern off is
+	// Concerns turns ccx-agent's bundled jobs on and off independently (ADR 0002).
+	// ccx-agent is one process, but each concern is a module that a person can enable
+	// or disable through the usual ladder. A ccx-agent with every concern off is
 	// valid — someone who wants the CLI but none of the daemon's behaviours.
 	Concerns Concerns
 }
 
-// Concerns is the on/off state of each of ccxd's three jobs (ADR 0002). Only
+// Concerns is the on/off state of each of ccx-agent's three jobs (ADR 0002). Only
 // Collect is implemented in #90; Carry and Persistence have their toggle here so
 // they slot in the same shape when built, and so a reader sees the full set.
 type Concerns struct {
@@ -214,22 +214,22 @@ func configPath(getenv func(string) string) string {
 	return filepath.Join(xdg, "ccx", "config.toml")
 }
 
-// socketPath is CCX_SOCKET, else $XDG_RUNTIME_DIR/ccx/ccxd.sock, else
-// ~/.ccx/run/ccxd.sock. Under a user-owned dir so the socket is user-owned and
-// the hook→ccxd path is trivially permitted (#90).
+// socketPath is CCX_SOCKET, else $XDG_RUNTIME_DIR/ccx/ccx-agent.sock, else
+// ~/.ccx/run/ccx-agent.sock. Under a user-owned dir so the socket is user-owned and
+// the hook→ccx-agent path is trivially permitted (#90).
 func socketPath(getenv func(string) string) string {
 	if p := getenv("CCX_SOCKET"); p != "" {
 		return p
 	}
 	if run := getenv("XDG_RUNTIME_DIR"); run != "" {
-		return filepath.Join(run, "ccx", "ccxd.sock")
+		return filepath.Join(run, "ccx", "ccx-agent.sock")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ccx", "run", "ccxd.sock")
+	return filepath.Join(home, ".ccx", "run", "ccx-agent.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike
-// the socket), because the point of the spool is to survive ccxd restarts.
+// the socket), because the point of the spool is to survive ccx-agent restarts.
 func spoolDir(getenv func(string) string) string {
 	if p := getenv("CCX_SPOOL"); p != "" {
 		return p

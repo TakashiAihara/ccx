@@ -25,7 +25,7 @@ uses for a missing center); `ccx repodir` does not notice. A center reachable fr
 to be bound beyond loopback, which the center refuses unless told the network is trusted
 (`apps/hub/README.md`).
 
-`machine` in the layout follows ccxd's rule (`CCX_MACHINE` / `ccx.machine` / `machine` / hostname),
+`machine` in the layout follows ccx-agent's rule (`CCX_MACHINE` / `ccx.machine` / `machine` / hostname),
 so the center's events and the store name a machine the same way and a DuckDB join between them holds.
 
 ## Layout
@@ -124,7 +124,7 @@ real machines yet — `apps/cli/src/transcript.test.ts` stands two config dirs i
 
 ## Not here
 
-- ccxd pushing and pruning on its own when a session ends and a user-side marker says so
+- ccx-agent pushing and pruning on its own when a session ends and a user-side marker says so
 - retention in the store
 - transcript deltas for accounting (#120) — a different route with a different consumer
 - a `pull --cwd` to land the file under a different project directory: Claude Code finds the session by

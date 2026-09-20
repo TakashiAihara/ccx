@@ -14,7 +14,7 @@ import (
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
-// Collect is ccxd's collect concern (ADR 0002): hooks → center. It owns the
+// Collect is ccx-agent's collect concern (ADR 0002): hooks → center. It owns the
 // socket hooks write to, the spool events wait in, and the loop that drains them
 // to the center. It is one module behind the Concern interface — the seam both
 // for the config on/off toggle and for a future extraction to its own process.
@@ -55,11 +55,11 @@ func newCollect(socketPath string, spool *Spool, forwarder Forwarder, log func(s
 // Name identifies the concern in logs and config (ADR 0002).
 func (s *Collect) Name() string { return "collect" }
 
-// Run drains anything hooks left in incoming/ (from while ccxd was down), then
+// Run drains anything hooks left in incoming/ (from while ccx-agent was down), then
 // serves the socket and runs the forward loop until ctx is cancelled. It blocks.
 func (s *Collect) Run(ctx context.Context) error {
 	// The single-instance lock is acquired FIRST, before any spool access. It
-	// must precede DrainIncoming: two ccxd starting at once would otherwise both
+	// must precede DrainIncoming: two ccx-agent starting at once would otherwise both
 	// drain incoming/ from the same on-disk state, assign the same seq numbers
 	// from independent in-memory counters, and one atomicWrite would silently
 	// overwrite the other — a lost event. The socket check in listen() cannot
@@ -70,7 +70,7 @@ func (s *Collect) Run(ctx context.Context) error {
 	}
 	defer lock.release()
 
-	// Startup drain: events hooks wrote to the fallback while ccxd was down get
+	// Startup drain: events hooks wrote to the fallback while ccx-agent was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
 	if n, err := s.spool.DrainIncoming(); err != nil {
@@ -124,7 +124,7 @@ func (s *Collect) Run(ctx context.Context) error {
 // null terminator; over that, bind fails with a cryptic "invalid argument".
 const maxUnixPath = 104
 
-// listen binds the unix socket, refusing to start if another ccxd already owns
+// listen binds the unix socket, refusing to start if another ccx-agent already owns
 // it and clearing a stale socket left by a crashed one.
 func (s *Collect) listen() (net.Listener, error) {
 	// Fail early with a message that says what to do, instead of letting the
@@ -141,7 +141,7 @@ func (s *Collect) listen() (net.Listener, error) {
 	}
 
 	// We hold the single-instance lock by the time we get here, so any socket
-	// file present is a stale leftover from a crashed ccxd — no live daemon can
+	// file present is a stale leftover from a crashed ccx-agent — no live daemon can
 	// own it. Safe to remove unconditionally; there is no live socket to clobber.
 	if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
 		return nil, err

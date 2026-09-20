@@ -81,7 +81,7 @@ func TestEnvelope_IsAssignedHere(t *testing.T) {
 }
 
 // The core durability claim: seq keeps climbing across a reopen, and un-acked
-// events survive. This is "restarting ccxd loses no spooled events".
+// events survive. This is "restarting ccx-agent loses no spooled events".
 func TestReopen_ResumesSeq_AndKeepsUnacked(t *testing.T) {
 	dir := t.TempDir()
 
@@ -92,13 +92,13 @@ func TestReopen_ResumesSeq_AndKeepsUnacked(t *testing.T) {
 	if _, err := s1.Append([]byte("second")); err != nil {
 		t.Fatal(err)
 	}
-	// Ack only the first — "second" is still pending when ccxd dies.
+	// Ack only the first — "second" is still pending when ccx-agent dies.
 	e, _ := s1.Oldest()
 	if err := s1.Ack(e); err != nil {
 		t.Fatal(err)
 	}
 
-	// Reopen (= ccxd restart). "second" must still be there.
+	// Reopen (= ccx-agent restart). "second" must still be there.
 	s2 := openTestSpool(t, dir)
 	pending, err := s2.Pending()
 	if err != nil {
@@ -145,7 +145,7 @@ func TestDrainIncoming_MovesRawIntoQueueInOrder(t *testing.T) {
 	dir := t.TempDir()
 	s := openTestSpool(t, dir)
 
-	// Simulate hooks having dropped raw payloads while ccxd was down.
+	// Simulate hooks having dropped raw payloads while ccx-agent was down.
 	for _, p := range []string{"one", "two", "three"} {
 		if err := writeIncoming(s.IncomingDir(), []byte(p)); err != nil {
 			t.Fatal(err)

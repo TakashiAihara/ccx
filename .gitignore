@@ -10,5 +10,5 @@ dist/
 
 # go build outputs (e.g. `go build ./apps/agent` drops `agent` at the root)
 /agent
-/ccxd
+/ccx-agent
 /apps/*/agent

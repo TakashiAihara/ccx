@@ -6,13 +6,13 @@ import (
 	"io"
 )
 
-// The hook↔ccxd wire is deliberately minimal: one framed payload in, one ack
+// The hook↔ccx-agent wire is deliberately minimal: one framed payload in, one ack
 // byte back.
 //
-//	hook → ccxd:  [4-byte big-endian length][payload bytes]
-//	ccxd → hook:  [1 byte] ackOK once the payload is durably spooled
+//	hook → ccx-agent:  [4-byte big-endian length][payload bytes]
+//	ccx-agent → hook:  [1 byte] ackOK once the payload is durably spooled
 //
-// The ack is the receipt. The hook treats "I got ackOK" as "ccxd has this on
+// The ack is the receipt. The hook treats "I got ackOK" as "ccx-agent has this on
 // disk" and only then considers the socket path a success. Anything else —
 // no ack, wrong byte, timeout, a dead socket — sends the hook to its fallback
 // (write to incoming/, exit 0), so an event is never lost, only ever
@@ -21,7 +21,7 @@ const (
 	ackOK byte = 1
 
 	// A hook payload is JSON of at most tens of KB in practice. Cap the frame
-	// well above that but far below anything that could OOM ccxd on a bad
+	// well above that but far below anything that could OOM ccx-agent on a bad
 	// length prefix.
 	maxFrame = 64 << 20 // 64 MiB
 )

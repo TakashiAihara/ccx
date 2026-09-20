@@ -19,7 +19,7 @@ export const file_ccx_v1_ingest: GenFile = /*@__PURE__*/
  */
 export type IngestRequest = Message<"ccx.v1.IngestRequest"> & {
   /**
-   * ccxd の spool の FIFO 順。
+   * ccx-agent の spool の FIFO 順。
    *
    * @generated from field: repeated ccx.v1.Event events = 1;
    */
@@ -43,7 +43,7 @@ export type Event = Message<"ccx.v1.Event"> & {
   origin?: Origin | undefined;
 
   /**
-   * ccxd が受信時に採番する UUIDv7。center 側の重複排除キー。
+   * ccx-agent が受信時に採番する UUIDv7。center 側の重複排除キー。
    *
    * 単調増加する seq ではなくこれを同一性の軸に置くのは、spool を作り直すと seq が
    * ゼロに戻るため。seq は順序を語れるが、同一性は語れない。
@@ -53,10 +53,10 @@ export type Event = Message<"ccx.v1.Event"> & {
   eventId: string;
 
   /**
-   * ccxd の spool の rowid。1 つの spool の中で単調増加し、ccxd の再起動を跨いで
+   * ccx-agent の spool の rowid。1 つの spool の中で単調増加し、ccx-agent の再起動を跨いで
    * 維持される。「center 復旧後に順序どおり届く」ことはこの値で検証する。
    *
-   * spool は ccxd ごとに 1 つ、ccxd はユーザ権限で機械ごとに 1 プロセス (#90) なので、
+   * spool は ccx-agent ごとに 1 つ、ccx-agent はユーザ権限で機械ごとに 1 プロセス (#90) なので、
    * 「1 つの spool の中で」は実質「その機械のそのユーザの中で」になる。これは新しい
    * キー体系の宣言ではなく、rowid が spool-local だという事実の言い換えにすぎない
    * (機械跨ぎのキーは machine + path、architecture.md)。
@@ -68,7 +68,7 @@ export type Event = Message<"ccx.v1.Event"> & {
   seq: bigint;
 
   /**
-   * ccxd の時計。payload の中にある時刻ではない (それを読むにはパースが要る)。
+   * ccx-agent の時計。payload の中にある時刻ではない (それを読むにはパースが要る)。
    *
    * @generated from field: google.protobuf.Timestamp received_at = 4;
    */
@@ -82,10 +82,10 @@ export type Event = Message<"ccx.v1.Event"> & {
   producer: Producer;
 
   /**
-   * hook の stdin をそのまま。ccxd はこれをパースしない。
+   * hook の stdin をそのまま。ccx-agent はこれをパースしない。
    *
-   * bytes であって string ではないのは、これが「ccxd にとって意味を持たない列」で
-   * あることを型で言うため。UTF-8 として妥当かどうかの判断すら ccxd はしない。
+   * bytes であって string ではないのは、これが「ccx-agent にとって意味を持たない列」で
+   * あることを型で言うため。UTF-8 として妥当かどうかの判断すら ccx-agent はしない。
    *
    * @generated from field: bytes payload = 6;
    */
@@ -100,7 +100,7 @@ export const EventSchema: GenMessage<Event> = /*@__PURE__*/
   messageDesc(file_ccx_v1_ingest, 1);
 
 /**
- * すべて ccxd 自身の環境から埋まる。payload から読み出した値は 1 つも無い。
+ * すべて ccx-agent 自身の環境から埋まる。payload から読み出した値は 1 つも無い。
  *
  * @generated from message ccx.v1.Origin
  */
@@ -116,8 +116,8 @@ export type Origin = Message<"ccx.v1.Origin"> & {
   machine: string;
 
   /**
-   * ccxd の実行 UID の名前。ccxd はユーザ権限で動く (root では動かさない) ので、
-   * これは「誰の ccxd か」と同義。
+   * ccx-agent の実行 UID の名前。ccx-agent はユーザ権限で動く (root では動かさない) ので、
+   * これは「誰の ccx-agent か」と同義。
    *
    * @generated from field: string user = 2;
    */
@@ -142,7 +142,7 @@ export type IngestResponse = Message<"ccx.v1.IngestResponse"> & {
    * 例: 3 件送って 1 件が既知の event_id なら accepted = 2。
    *
    * これは情報用でしかない。転送の成否は RPC が成功したかどうかで決まり、成功は
-   * 「バッチ全件が耐久化された (新規保存 + 重複無視のどちらか)」を意味する。ccxd は
+   * 「バッチ全件が耐久化された (新規保存 + 重複無視のどちらか)」を意味する。ccx-agent は
    * この数を見て spool を消すかどうかを決めたりしない — 成功なら全件消す。
    *
    * center が重複排除を実装するのは #91。それまでは accepted == バッチ件数。
@@ -169,7 +169,7 @@ export enum Producer {
   UNSPECIFIED = 0,
 
   /**
-   * `ccxd hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
+   * `ccx-agent hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
    *
    * @generated from enum value: PRODUCER_CLAUDE_CODE_HOOK = 1;
    */
@@ -189,11 +189,11 @@ export const ProducerSchema: GenEnum<Producer> = /*@__PURE__*/
  * 種別ごと) は center が payload から導出し、別ファイルで定義する (#91)。
  * 境界をここに書いておくのは、どちら側がパースするかが設計判断そのものだから。
  *
- * なぜ ccxd がパースしないか:
+ * なぜ ccx-agent がパースしないか:
  *
  *   1. forward path に中身依存の分岐が無いことが、grep で検証できる状態に保たれる
- *      (docs/design/scope.md — ccxd は COLLECT と CARRY のみ)。
- *   2. ccxd は他人のマシンで動く単一バイナリで、こちらから直せない。そこでパースを
+ *      (docs/design/scope.md — ccx-agent は COLLECT と CARRY のみ)。
+ *   2. ccx-agent は他人のマシンで動く単一バイナリで、こちらから直せない。そこでパースを
  *      間違えれば、そのマシンのデータは間違った形のまま入り、後から直せない。center
  *      でパースするなら生バイトが常に残るので、パーサの誤りは後から読み直して直せる。
  *
@@ -203,13 +203,13 @@ export const IngestService: GenService<{
   /**
    * 耐久化は全か無か。RPC が成功したら「バッチ全件が耐久化された」、失敗したら
    * 「1 件も耐久化されていない」。中間 (一部だけ保存されて成功が返る) は無い。
-   * ccxd はこの all-or-nothing に乗って、成功なら spool を全件消す。
+   * ccx-agent はこの all-or-nothing に乗って、成功なら spool を全件消す。
    *
    * これは「accepted == バッチ件数」を意味しない。耐久化には重複無視も含まれる
    * ので、既知の event が混じれば accepted はバッチ件数より小さくなる (IngestResponse
    * 参照)。「全件耐久化された」と「全件が新規保存された」は別のこと。
    *
-   * 転送は at-least-once (ccxd は成功を確認してから spool を消す)。同じ event が
+   * 転送は at-least-once (ccx-agent は成功を確認してから spool を消す)。同じ event が
    * 二度届くことは正常系であり、center は event_id で潰す。
    *
    * @generated from rpc ccx.v1.IngestService.Ingest

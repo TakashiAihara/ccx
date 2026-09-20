@@ -16,17 +16,17 @@ import { blob, check, index, integer, sqliteTable, text } from "drizzle-orm/sqli
 export const events = sqliteTable(
   "events",
   {
-    // ccxd が採番した UUIDv7。center 側の重複排除キー (ingest.proto)。
+    // ccx-agent が採番した UUIDv7。center 側の重複排除キー (ingest.proto)。
     eventId: text("event_id").primaryKey(),
 
-    // ここから 3 つは ccxd 自身の環境から来た値で、payload からは読んでいない。
+    // ここから 3 つは ccx-agent 自身の環境から来た値で、payload からは読んでいない。
     machine: text("machine").notNull(),
     // "user" は SQLite の予約語ではないが、他の SQL 方言では予約されている。
     // 将来 Postgres に移すときに黙って壊れないよう、列名を分けておく。
     user: text("os_user").notNull(),
     seq: integer("seq").notNull(),
 
-    // ccxd の時計。epoch ミリ秒。payload の中の時刻ではない。
+    // ccx-agent の時計。epoch ミリ秒。payload の中の時刻ではない。
     receivedAtMs: integer("received_at_ms").notNull(),
 
     // ccx.v1.Producer の数値。

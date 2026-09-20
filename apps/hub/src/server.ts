@@ -27,7 +27,7 @@ export function createApp(db: Db, objects: ObjectStore): Hono {
     app.all(uHandler.requestPath, (c) => handler(c.req.raw));
   }
 
-  // 生きているかだけを返す。ccxd はここを見ない (見なくても spool するので)。
+  // 生きているかだけを返す。ccx-agent はここを見ない (見なくても spool するので)。
   // 人と、この先の `ccx agent` 用。
   app.get("/healthz", (c) => c.text("ok\n"));
 

@@ -12,7 +12,7 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
 )
 
-// This test drives the REAL compiled ccxd binary — `ccxd serve` and `ccxd hook`
+// This test drives the REAL compiled ccx-agent binary — `ccx-agent serve` and `ccx-agent hook`
 // as separate processes, exactly as Claude Code's hooks and a systemd unit run
 // them — against the REAL Connect center. It is the one place main.go's wiring,
 // signal handling, and the process boundary are exercised. The in-package tests
@@ -20,29 +20,29 @@ import (
 //
 // It builds the binary, so it is skipped under -short.
 
-func buildCcxd(t *testing.T) string {
+func buildAgent(t *testing.T) string {
 	t.Helper()
 	// A short output dir: unix socket paths (built below) must fit sun_path
 	// (~108 bytes), and t.TempDir() under a deep CI path can be long.
-	dir, err := os.MkdirTemp("", "ccxd-it")
+	dir, err := os.MkdirTemp("", "ccx-agent-it")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	bin := filepath.Join(dir, "ccxd")
+	bin := filepath.Join(dir, "ccx-agent")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build ccxd: %v\n%s", err, out)
+		t.Fatalf("build ccx-agent: %v\n%s", err, out)
 	}
 	return bin
 }
 
-type ccxdProc struct {
+type agentProc struct {
 	cmd *exec.Cmd
 }
 
-func startServe(t *testing.T, bin string, env []string) *ccxdProc {
+func startServe(t *testing.T, bin string, env []string) *agentProc {
 	t.Helper()
 	cmd := exec.Command(bin, "serve")
 	cmd.Env = env
@@ -50,10 +50,10 @@ func startServe(t *testing.T, bin string, env []string) *ccxdProc {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start serve: %v", err)
 	}
-	return &ccxdProc{cmd: cmd}
+	return &agentProc{cmd: cmd}
 }
 
-func (p *ccxdProc) kill() { _ = p.cmd.Process.Kill(); _, _ = p.cmd.Process.Wait() }
+func (p *agentProc) kill() { _ = p.cmd.Process.Kill(); _, _ = p.cmd.Process.Wait() }
 
 func fireHook(t *testing.T, bin string, env []string, payload string) {
 	t.Helper()
@@ -78,14 +78,14 @@ func countPB(t *testing.T, spoolDir string) int {
 
 func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	if testing.Short() {
-		t.Skip("builds and runs the real ccxd binary")
+		t.Skip("builds and runs the real ccx-agent binary")
 	}
 
-	bin := buildCcxd(t)
+	bin := buildAgent(t)
 	c, url := testcenter.Start()
 	t.Cleanup(c.Close)
 
-	work, err := os.MkdirTemp("", "ccxd-work")
+	work, err := os.MkdirTemp("", "ccx-agent-work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,9 +153,9 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 		}
 	}
 
-	// --- scenario 3: ccxd down → hook falls back, drained on restart.
+	// --- scenario 3: ccx-agent down → hook falls back, drained on restart.
 	serve.kill()
-	fireHook(t, bin, env, `{"while":"ccxd-down"}`) // socket gone → incoming/
+	fireHook(t, bin, env, `{"while":"ccx-agent-down"}`) // socket gone → incoming/
 	raw, _ := filepath.Glob(filepath.Join(spool, "incoming", "*.raw"))
 	if len(raw) != 1 {
 		t.Fatalf("expected 1 fallback event in incoming/, got %d", len(raw))

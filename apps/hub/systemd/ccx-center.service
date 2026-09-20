@@ -7,7 +7,7 @@
 #   systemctl --user enable --now ccx-center
 #   loginctl enable-linger "$USER"     # stays up across logout
 #
-# To be reachable from other machines (ccxd forwarding, `ccx transcript` from
+# To be reachable from other machines (ccx-agent forwarding, `ccx transcript` from
 # elsewhere) it must bind beyond loopback. The center has no authentication and
 # speaks plain HTTP, so that is refused unless the network is declared trusted:
 #   systemctl --user edit ccx-center   # add under [Service]:
@@ -16,7 +16,7 @@
 # or keep loopback and put a TLS-terminating, authenticating proxy in front.
 
 [Unit]
-Description=ccx-center (collects what ccxd forwards; stores transcripts)
+Description=ccx-center (collects what ccx-agent forwards; stores transcripts)
 Documentation=https://github.com/TakashiAihara/ccx
 
 [Service]

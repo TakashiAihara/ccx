@@ -40,7 +40,7 @@ describe("パスの解決", () => {
   });
 
   test("既定は XDG_RUNTIME_DIR と CCX_ROOT の下", () => {
-    expect(defaultSocketPath({ XDG_RUNTIME_DIR: "/run/user/9" })).toBe("/run/user/9/ccx/ccxd.sock");
+    expect(defaultSocketPath({ XDG_RUNTIME_DIR: "/run/user/9" })).toBe("/run/user/9/ccx/ccx-agent.sock");
     expect(defaultSpoolDir({ CCX_ROOT: "/r" })).toBe("/r/spool");
   });
 });
@@ -57,7 +57,7 @@ describe("agentStatus", () => {
   });
 
   test("socket が在って繋がれば running", async () => {
-    const sock = join(dir, "ccxd.sock");
+    const sock = join(dir, "ccx-agent.sock");
     await listen(sock);
     const st = await agentStatus(undefined, { CCX_SOCKET: sock, CCX_SPOOL: join(dir, "spool") });
     expect(st.socketPresent).toBe(true);
@@ -65,7 +65,7 @@ describe("agentStatus", () => {
   });
 
   test("死んだあとに残った socket ファイルを running と読まない", async () => {
-    // ccxd が落ちても unix socket のファイルは残る。存在で判定すると、落ちた
+    // ccx-agent が落ちても unix socket のファイルは残る。存在で判定すると、落ちた
     // agent を生きていると報告することになる。
     //
     // その状態を、listen してから close するやり方では作れない。node は unix
@@ -85,17 +85,17 @@ describe("agentStatus", () => {
   });
 
   test("spool と incoming を別々に数え、雑音を数えない", async () => {
-    // 拡張子は ccxd 側の実装が正。転送待ちは .pb、hook が直接落としたものは .raw。
+    // 拡張子は ccx-agent 側の実装が正。転送待ちは .pb、hook が直接落としたものは .raw。
     // どちらのディレクトリにも lock や書きかけの一時ファイルが同居する
     const spool = join(dir, "spool");
     mkdirSync(join(spool, "incoming"), { recursive: true });
     writeFileSync(join(spool, "00000000000000000001.pb"), "x");
     writeFileSync(join(spool, "00000000000000000002.pb"), "x");
-    writeFileSync(join(spool, "ccxd.lock"), "");
+    writeFileSync(join(spool, "ccx-agent.lock"), "");
     writeFileSync(join(spool, "00000000000000000003.tmp"), "x");
 
     writeFileSync(join(spool, "incoming", "01a050e6-8722-7c8a-9041-f38193f5a46f.raw"), "x");
-    writeFileSync(join(spool, "incoming", "ccxd.lock"), "");
+    writeFileSync(join(spool, "incoming", "ccx-agent.lock"), "");
     writeFileSync(join(spool, "incoming", "half-written.tmp"), "x");
     // incoming に .pb は置かれない。ここを .pb で数えていると 0 件になる
     writeFileSync(join(spool, "incoming", "wrong-ext.pb"), "x");
@@ -121,7 +121,7 @@ describe("agentStatus", () => {
     });
     expect(st.hubUrlInvalid).toBe(true);
     expect(st.hubReachable).toBe(false);
-    // ccxd 側の情報は URL が壊れていても取れる
+    // ccx-agent 側の情報は URL が壊れていても取れる
     expect(st.socketConnectable).toBe(false);
   });
 

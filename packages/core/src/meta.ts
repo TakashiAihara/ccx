@@ -2,7 +2,7 @@
  * repodir のメタデータ。2 ファイルに分ける。
  *
  *   .git/ccx.json   生成時に確定する不変の事実。ccx repodir new のみが書く
- *   .git/ccx.state  可変のライフサイクル。ccx / ccxd が書く
+ *   .git/ccx.state  可変のライフサイクル。ccx / ccx-agent が書く
  *
  * .git/ 配下に置くのは (a) git status に出ない、(b) agent が誤ってコミットする
  * ことが原理的に不可能、(c) dir と生死を共にし孤児が残らない、の 3 点による。

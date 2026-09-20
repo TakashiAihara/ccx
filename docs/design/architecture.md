@@ -13,7 +13,7 @@ per machine
                ccx session ...   sessions
                ccx agent ...     control the resident agent
 
-  ccxd       resident agent, one process per machine
+  ccx-agent  resident agent, one process per machine
                observes repodirs                    — observes only, never writes them
                observes sessions and starts them    — actively
                reports to the hub
@@ -22,7 +22,7 @@ per machine
 
 central (optional)
   hub        holds session and repodir records for every machine
-  broker     transport between ccxd and the hub
+  broker     transport between ccx-agent and the hub
 ```
 
 ## What owns what
@@ -30,11 +30,11 @@ central (optional)
 | | repodirs | sessions |
 |---|---|---|
 | `ccx` (CLI) | creates and removes them | records intent (`open`, `done`) |
-| `ccxd` (resident) | **observes only** | **observes, and starts them** |
+| `ccx-agent` (resident) | **observes only** | **observes, and starts them** |
 | herdr | — | persistence and visibility |
 | hub | holds records for every machine | holds records for every machine |
 
-`ccx` does not know `ccxd` exists. **If `ccxd` is not running, or the hub is unreachable, `ccx`
+`ccx` does not know `ccx-agent` exists. **If `ccx-agent` is not running, or the hub is unreachable, `ccx`
 still works completely** — you lose the cross-machine view, nothing else.
 
 ## The hub holds state
@@ -56,7 +56,7 @@ records on **`machine + path`**.
 ## Sessions run on herdr
 
 Session startup, persistence, and visibility are delegated to
-[herdr](https://herdr.dev). `ccxd` drives herdr rather than a terminal multiplexer directly.
+[herdr](https://herdr.dev). `ccx-agent` drives herdr rather than a terminal multiplexer directly.
 
 herdr provides persistence and local visibility. The hub provides the cross-machine view. They are
 different jobs and both exist.

@@ -26,7 +26,7 @@ A message you cannot find is a message you did not receive.
 
 ```mermaid
 sequenceDiagram
-    participant D as ccxd
+    participant D as ccx-agent
     participant T as terminal (shared prompt box)
     participant S as claude session
     participant H as human
@@ -47,16 +47,16 @@ sequenceDiagram
 
 A channel is an MCP server that pushes events into a running session. It was built for exactly this, and it does exactly this.
 
-The following was run, not read about. An external process wrote a line to a file; a channel server picked it up and pushed it; the session — with no keystroke sent to it at all — woke and answered:
+The following was run, not read about (the names in the output are updated to the current ones). An external process wrote a line to a file; a channel server picked it up and pushed it; the session — with no keystroke sent to it at all — woke and answered:
 
 ```text
-[user]      <channel source="ccxd-test" origin="ccxd">
+[user]      <channel source="ccx-agent-test" origin="ccx-agent">
               channel 経由のテストです。届いたら CHANNEL OK とだけ返してください。
             </channel>
 [assistant] CHANNEL OK
 ```
 
-`source` is not a prefix somebody remembered to type. It is an attribute of the message, set from the server's name. Keys passed in `meta` become further attributes — `origin="ccxd"` above.
+`source` is not a prefix somebody remembered to type. It is an attribute of the message, set from the server's name. Keys passed in `meta` become further attributes — `origin="ccx-agent"` above.
 
 ### It does not interrupt work in progress
 
@@ -79,13 +79,13 @@ That is precisely the "don't disturb me mid-task, but do read it when you stop" 
 ```mermaid
 sequenceDiagram
     participant B as broker
-    participant D as ccxd
+    participant D as ccx-agent
     participant C as channel (MCP server)
     participant S as claude session
 
     B->>D: message for session X
     D->>C: notifications/claude/channel
-    C->>S: <channel source="ccxd">…</channel>
+    C->>S: <channel source="ccx-agent">…</channel>
 
     alt session is idle
         S->>S: wakes, takes a turn immediately
@@ -110,7 +110,7 @@ capabilities: { experimental: { "claude/channel": {} } }
 {
   jsonrpc: "2.0",
   method: "notifications/claude/channel",
-  params: { content: "<body>", meta: { origin: "ccxd" } },
+  params: { content: "<body>", meta: { origin: "ccx-agent" } },
 }
 ```
 
@@ -143,9 +143,9 @@ channel push  → UserPromptSubmit → Stop
 human typing  → UserPromptSubmit → Stop
 ```
 
-So `ccxd` gets its acknowledgements for free, from mechanisms that already exist:
+So `ccx-agent` gets its acknowledgements for free, from mechanisms that already exist:
 
-| Hook | What ccxd learns |
+| Hook | What ccx-agent learns |
 |---|---|
 | `SessionStart` | the session came up |
 | `UserPromptSubmit` | **the message arrived** — receipt |
@@ -184,7 +184,7 @@ Every mechanism is a way into a session. Having several is worse than having one
 
 ```text
 human (own web UI) ─┐
-another session     ├─→ hub → broker → ccxd → channel (MCP push) → session
+another session     ├─→ hub → broker → ccx-agent → channel (MCP push) → session
 CI, external events ─┘
 ```
 
@@ -200,8 +200,8 @@ The one thing that stays is not a delivery path. Terminal-level interruption —
 
 ## What is left to build
 
-1. **The channel server, per session.** `ccxd` subscribes to the broker and pushes. The measured minimum above is most of it.
-2. **The hook feed.** Every session's hooks write to a local socket; `ccxd` forwards to the hub. Receipt, completion, tool activity, stalls — all of it, from hooks that already fire.
-3. **Group addressing** (#78). The sender names a group; `ccxd` fans out. Delivery is tracked per member, because "I told everyone" is the claim most often false and least often checked.
-4. **Priority.** The sender — the PM role — decides. `ccxd` routes. It does not judge.
+1. **The channel server, per session.** `ccx-agent` subscribes to the broker and pushes. The measured minimum above is most of it.
+2. **The hook feed.** Every session's hooks write to a local socket; `ccx-agent` forwards to the hub. Receipt, completion, tool activity, stalls — all of it, from hooks that already fire.
+3. **Group addressing** (#78). The sender names a group; `ccx-agent` fans out. Delivery is tracked per member, because "I told everyone" is the claim most often false and least often checked.
+4. **Priority.** The sender — the PM role — decides. `ccx-agent` routes. It does not judge.
 5. **A decision about stalled questions.** Detection is done. Whether an orchestrator answers on the session's behalf, or whether sessions are simply forbidden from asking, is not.

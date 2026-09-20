@@ -26,7 +26,7 @@ type Producer int32
 
 const (
 	Producer_PRODUCER_UNSPECIFIED Producer = 0
-	// `ccxd hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
+	// `ccx-agent hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
 	Producer_PRODUCER_CLAUDE_CODE_HOOK Producer = 1
 )
 
@@ -71,7 +71,7 @@ func (Producer) EnumDescriptor() ([]byte, []int) {
 
 type IngestRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// ccxd の spool の FIFO 順。
+	// ccx-agent の spool の FIFO 順。
 	Events        []*Event `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -117,29 +117,29 @@ func (x *IngestRequest) GetEvents() []*Event {
 type Event struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Origin *Origin                `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"`
-	// ccxd が受信時に採番する UUIDv7。center 側の重複排除キー。
+	// ccx-agent が受信時に採番する UUIDv7。center 側の重複排除キー。
 	//
 	// 単調増加する seq ではなくこれを同一性の軸に置くのは、spool を作り直すと seq が
 	// ゼロに戻るため。seq は順序を語れるが、同一性は語れない。
 	EventId string `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	// ccxd の spool の rowid。1 つの spool の中で単調増加し、ccxd の再起動を跨いで
+	// ccx-agent の spool の rowid。1 つの spool の中で単調増加し、ccx-agent の再起動を跨いで
 	// 維持される。「center 復旧後に順序どおり届く」ことはこの値で検証する。
 	//
-	// spool は ccxd ごとに 1 つ、ccxd はユーザ権限で機械ごとに 1 プロセス (#90) なので、
+	// spool は ccx-agent ごとに 1 つ、ccx-agent はユーザ権限で機械ごとに 1 プロセス (#90) なので、
 	// 「1 つの spool の中で」は実質「その機械のそのユーザの中で」になる。これは新しい
 	// キー体系の宣言ではなく、rowid が spool-local だという事実の言い換えにすぎない
 	// (機械跨ぎのキーは machine + path、architecture.md)。
 	//
 	// spool を作り直すと 0 に戻る。順序の根拠であって、同一性の根拠ではない。
 	Seq uint64 `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`
-	// ccxd の時計。payload の中にある時刻ではない (それを読むにはパースが要る)。
+	// ccx-agent の時計。payload の中にある時刻ではない (それを読むにはパースが要る)。
 	ReceivedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
 	// どう呼ばれたかで決まる。payload の中身を見て決めることはしない。
 	Producer Producer `protobuf:"varint,5,opt,name=producer,proto3,enum=ccx.v1.Producer" json:"producer,omitempty"`
-	// hook の stdin をそのまま。ccxd はこれをパースしない。
+	// hook の stdin をそのまま。ccx-agent はこれをパースしない。
 	//
-	// bytes であって string ではないのは、これが「ccxd にとって意味を持たない列」で
-	// あることを型で言うため。UTF-8 として妥当かどうかの判断すら ccxd はしない。
+	// bytes であって string ではないのは、これが「ccx-agent にとって意味を持たない列」で
+	// あることを型で言うため。UTF-8 として妥当かどうかの判断すら ccx-agent はしない。
 	Payload       []byte `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -217,7 +217,7 @@ func (x *Event) GetPayload() []byte {
 	return nil
 }
 
-// すべて ccxd 自身の環境から埋まる。payload から読み出した値は 1 つも無い。
+// すべて ccx-agent 自身の環境から埋まる。payload から読み出した値は 1 つも無い。
 type Origin struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// CCX_MACHINE、既定は hostname。
@@ -225,8 +225,8 @@ type Origin struct {
 	// ディレクトリ id は機械ごとにしか一意でないので、機械を跨ぐものは machine と
 	// 併せて鍵にする (docs/design/repodir.md)。
 	Machine string `protobuf:"bytes,1,opt,name=machine,proto3" json:"machine,omitempty"`
-	// ccxd の実行 UID の名前。ccxd はユーザ権限で動く (root では動かさない) ので、
-	// これは「誰の ccxd か」と同義。
+	// ccx-agent の実行 UID の名前。ccx-agent はユーザ権限で動く (root では動かさない) ので、
+	// これは「誰の ccx-agent か」と同義。
 	User          string `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -284,7 +284,7 @@ type IngestResponse struct {
 	// 例: 3 件送って 1 件が既知の event_id なら accepted = 2。
 	//
 	// これは情報用でしかない。転送の成否は RPC が成功したかどうかで決まり、成功は
-	// 「バッチ全件が耐久化された (新規保存 + 重複無視のどちらか)」を意味する。ccxd は
+	// 「バッチ全件が耐久化された (新規保存 + 重複無視のどちらか)」を意味する。ccx-agent は
 	// この数を見て spool を消すかどうかを決めたりしない — 成功なら全件消す。
 	//
 	// center が重複排除を実装するのは #91。それまでは accepted == バッチ件数。

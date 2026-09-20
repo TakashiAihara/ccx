@@ -39,7 +39,7 @@ async function client() {
         "A ccx-center older than #122? Update it, or point CCX_TRANSCRIPT_ENDPOINT at an S3-compatible service.",
     );
   }
-  // machine は ccxd と同じ規則で決める。center の event と同じ名前で並ぶように
+  // machine は ccx-agent と同じ規則で決める。center の event と同じ名前で並ぶように
   return new TranscriptClient(cfg.transcript, localOrigin(cfg.machine));
 }
 
