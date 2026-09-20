@@ -156,7 +156,7 @@ func TestCenterDown_SpoolsThenDrainsInOrder(t *testing.T) {
 
 // A hook that fires while ccx-agent is down writes to the fallback; when ccx-agent starts,
 // it drains that fallback into the queue before serving.
-func TestCcxdDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
+func TestAgentDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 	dir := t.TempDir()
 	sock := dir + "/ccx-agent.sock"
 	spoolDir := dir + "/spool"

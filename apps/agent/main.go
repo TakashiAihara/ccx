@@ -4,7 +4,7 @@
 // internal modules that each toggle on and off in config.
 //
 //	ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
-//	              ccx-agent over the local socket, exit. Wired into Claude Code hooks.
+//	                   ccx-agent over the local socket, exit. Wired into Claude Code hooks.
 //	ccx-agent serve    resident: run every enabled concern until stopped.
 //
 // In #90 only the collect concern is built (hooks → center). Carry (#23) and

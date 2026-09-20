@@ -20,7 +20,7 @@ import (
 //
 // It builds the binary, so it is skipped under -short.
 
-func buildCcxd(t *testing.T) string {
+func buildAgent(t *testing.T) string {
 	t.Helper()
 	// A short output dir: unix socket paths (built below) must fit sun_path
 	// (~108 bytes), and t.TempDir() under a deep CI path can be long.
@@ -81,7 +81,7 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 		t.Skip("builds and runs the real ccx-agent binary")
 	}
 
-	bin := buildCcxd(t)
+	bin := buildAgent(t)
 	c, url := testcenter.Start()
 	t.Cleanup(c.Close)
 

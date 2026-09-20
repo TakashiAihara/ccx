@@ -47,7 +47,7 @@ sequenceDiagram
 
 A channel is an MCP server that pushes events into a running session. It was built for exactly this, and it does exactly this.
 
-The following was run, not read about. An external process wrote a line to a file; a channel server picked it up and pushed it; the session — with no keystroke sent to it at all — woke and answered:
+The following was run, not read about (the names in the output are updated to the current ones). An external process wrote a line to a file; a channel server picked it up and pushed it; the session — with no keystroke sent to it at all — woke and answered:
 
 ```text
 [user]      <channel source="ccx-agent-test" origin="ccx-agent">

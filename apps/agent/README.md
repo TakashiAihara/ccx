@@ -31,12 +31,12 @@ A ccx-agent with every concern off is a valid state.
 
 ```text
 ccx-agent serve    the resident agent: owns the socket, spools what arrives,
-              forwards it to the center, retries on outage, loses nothing
-              across restarts.
+                   forwards it to the center, retries on outage, loses nothing
+                   across restarts.
 
 ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
-              ccx-agent over the local socket, exit. This is what Claude Code hooks
-              invoke. It never fails a session — it always exits 0.
+                   ccx-agent over the local socket, exit. This is what Claude Code hooks
+                   invoke. It never fails a session — it always exits 0.
 ```
 
 ## The path a hook event takes

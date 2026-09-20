@@ -13,7 +13,7 @@ per machine
                ccx session ...   sessions
                ccx agent ...     control the resident agent
 
-  ccx-agent       resident agent, one process per machine
+  ccx-agent  resident agent, one process per machine
                observes repodirs                    — observes only, never writes them
                observes sessions and starts them    — actively
                reports to the hub
