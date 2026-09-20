@@ -2,8 +2,10 @@
  * session の状態 (#127)。ccx が定義し、transcript と一緒に運ぶ (docs/design/scope.md
  * 「Session state is ccx's to hold」)。
  *
- * 2 種類ある。観測 (running / ended / archived) は事実から導き、手では書かない。
- * 宣言 (done / pinned / ephemeral / label / task) は人か session が書く。
+ * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
+ * 宣言 (archived / done / pinned / ephemeral / label / task) は人か session が書く。
+ * archived は Desktop App と同じ語で「一覧から畳む」宣言 (ユーザー判断 2026-09-21)。
+ * 「保存先にだけあり手元に無い」観測は remote と呼び、語を分ける。
  *
  * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` で、ファイル名は利用者側の
  * script が以前から使っていたものをそのまま採る (`done` / `pinned` / `delete` の空
@@ -23,11 +25,12 @@ import { join } from "node:path";
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
   env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 
-export const FLAGS = ["done", "pinned", "ephemeral"] as const;
+export const FLAGS = ["archived", "done", "pinned", "ephemeral"] as const;
 export type Flag = (typeof FLAGS)[number];
 
 /** 宣言された状態。無いものは false / 空文字 */
 export type DeclaredState = {
+  archived: boolean;
   done: boolean;
   pinned: boolean;
   ephemeral: boolean;
@@ -35,18 +38,18 @@ export type DeclaredState = {
   task: string;
 };
 
-export type Lifecycle = "running" | "ended" | "archived" | "unknown";
+export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 
-const FLAG_FILE: Record<Flag, string> = { done: "done", pinned: "pinned", ephemeral: "delete" };
+const FLAG_FILE: Record<Flag, string> = { archived: "archived", done: "done", pinned: "pinned", ephemeral: "delete" };
 const TEXT_FILE = { label: "label", task: "task" } as const;
 
-export const EMPTY_DECLARED: DeclaredState = { done: false, pinned: false, ephemeral: false, label: "", task: "" };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, done: false, pinned: false, ephemeral: false, label: "", task: "" };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
 export const isFlag = (s: string): s is Flag => (FLAGS as readonly string[]).includes(s);
 
-export const isEmptyDeclared = (s: DeclaredState) => !s.done && !s.pinned && !s.ephemeral && !s.label && !s.task;
+export const isEmptyDeclared = (s: DeclaredState) => flagsOf(s).length === 0 && !s.label && !s.task;
 
 /** 立っている flag の名前。`ls` の列と JSON の両方で使う */
 export const flagsOf = (s: DeclaredState): Flag[] => FLAGS.filter((f) => s[f]);
@@ -55,6 +58,7 @@ export const flagsOf = (s: DeclaredState): Flag[] => FLAGS.filter((f) => s[f]);
 export function normalizeDeclared(raw: unknown): DeclaredState {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   return {
+    archived: r.archived === true,
     done: r.done === true,
     pinned: r.pinned === true,
     ephemeral: r.ephemeral === true,
@@ -76,14 +80,15 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [done, pinned, ephemeral, label, task] = await Promise.all([
+  const [archived, done, pinned, ephemeral, label, task] = await Promise.all([
+    flag("archived"),
     flag("done"),
     flag("pinned"),
     flag("ephemeral"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
   ]);
-  return { done, pinned, ephemeral, label, task };
+  return { archived, done, pinned, ephemeral, label, task };
 }
 
 /**

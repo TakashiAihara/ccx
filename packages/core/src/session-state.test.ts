@@ -36,9 +36,10 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "done"), "");
     await Bun.write(join(dir, "delete"), "");
     await Bun.write(join(dir, "label"), "scope｜step\n");
+    await Bun.write(join(dir, "archived"), "");
     const s = await readDeclared(SID, home);
-    expect(s).toEqual({ done: true, pinned: false, ephemeral: true, label: "scope｜step", task: "" });
-    expect(flagsOf(s)).toEqual(["done", "ephemeral"]);
+    expect(s).toEqual({ archived: true, done: true, pinned: false, ephemeral: true, label: "scope｜step", task: "" });
+    expect(flagsOf(s)).toEqual(["archived", "done", "ephemeral"]);
     // 名前が `ephemeral` のファイルは印ではない (SessionEnd hook は `delete` を読む)
     await rm(join(dir, "delete"));
     await Bun.write(join(dir, "ephemeral"), "");
@@ -52,6 +53,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
 
     // pinned / task を書いても done / label は残る
     expect(await writeDeclared(SID, { pinned: true, task: "kaneo ccx#1" }, home)).toEqual({
+      archived: false,
       done: true,
       pinned: true,
       ephemeral: false,
@@ -70,11 +72,11 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
   test("normalizeDeclared fills missing keys and drops wrong types; sameDeclared compares every field", () => {
     expect(normalizeDeclared(null)).toEqual(EMPTY_DECLARED);
     expect(normalizeDeclared({ done: "yes", label: 3, task: "t", pinned: true })).toEqual({ ...EMPTY_DECLARED, pinned: true, task: "t" });
-    // 3 つの flag それぞれが `=== true` で見ていること (truthy な文字列は false)
-    expect(normalizeDeclared({ done: "yes", pinned: "yes", ephemeral: "yes" })).toEqual(EMPTY_DECLARED);
-    expect(normalizeDeclared({ done: true, pinned: true, ephemeral: true })).toEqual({ ...EMPTY_DECLARED, done: true, pinned: true, ephemeral: true });
+    // 4 つの flag それぞれが `=== true` で見ていること (truthy な文字列は false)
+    expect(normalizeDeclared({ archived: "yes", done: "yes", pinned: "yes", ephemeral: "yes" })).toEqual(EMPTY_DECLARED);
+    expect(normalizeDeclared({ archived: true, done: true, pinned: true, ephemeral: true })).toEqual({ ...EMPTY_DECLARED, archived: true, done: true, pinned: true, ephemeral: true });
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED })).toBe(true);
-    for (const k of ["done", "pinned", "ephemeral"] as const) expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, [k]: true })).toBe(false);
+    for (const k of ["archived", "done", "pinned", "ephemeral"] as const) expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, [k]: true })).toBe(false);
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, label: "a" })).toBe(false);
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, task: "a" })).toBe(false);
   });

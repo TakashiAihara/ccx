@@ -342,7 +342,7 @@ export class TranscriptClient {
     }
   }
 
-  /** 保存先のその origin の下に session.json があるか。1 GET で済むので `session ls` の archived 判定に使う (`find` は全 machine を list する) */
+  /** 保存先のその origin の下に session.json があるか。1 GET で済むので `session ls` の remote 判定に使う (`find` は全 machine を list する) */
   async inStore(sessionId: string, origin: Origin = this.origin): Promise<boolean> {
     return (await this.readMeta(`${this.keyPrefix(sessionId, origin)}session.json`)) !== null;
   }

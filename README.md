@@ -84,17 +84,19 @@ part lives as files under `~/.claude/sessions/<id>/`, the observed part is read 
 transcripts and the store.
 
 ```bash
-ccx session mark done         # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
-ccx session mark pinned <id>  # never reclaim; --off clears any flag
+ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
+ccx session mark done <id>    # scope finished; --off clears any flag
+ccx session mark pinned <id>  # never reclaim
 ccx session mark ephemeral    # delete the transcript when the session ends
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
-ccx session status [id]       # lifecycle (running / ended / archived) + flags, label, task
+ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task
 ```
 
-Observed: `running` (a live pid), `ended` (a transcript here, no pid), `archived` (no transcript
-here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared: `done`,
-`pinned`, `ephemeral`, plus a free-text `label` and
+Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
+here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared:
+`archived` (folded away — the word the Claude Desktop app uses), `done`, `pinned`, `ephemeral`,
+plus a free-text `label` and
 one external `task` reference. `ccx session ls` and `ccx tr ls` show the flags and label; `ccx tr
 push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a machine
 that holds none yet (marks already set there are never overwritten). What you *do* with a flag —
@@ -114,12 +116,12 @@ be resumed elsewhere.
 
 ```bash
 ccx tr push --ended           # every local session that is not running (unchanged ones are skipped)
-ccx tr push --done            # every local session marked done (ccx session mark done); with --ended too: only those that are both
+ccx tr push --marked archived # every local session with that flag (archived | done | pinned | ephemeral); with --ended too: only those that are both
 ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
 ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
-ccx tr prune --done           # the same, for sessions marked done and not running
+ccx tr prune --marked archived  # the same, for sessions with the flag and not running
 ccx tr search "rate limit"    # every transcript in the store, searched with the DuckDB inside ccx
 ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
 ```
@@ -140,8 +142,8 @@ reason). `--sql` gets two views, `transcripts` and `history`, with `machine` / `
 as columns. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
 target. See `docs/design/transcript-store.md`.
 
-`--ended` is what ccx observes (not running); `--done` is what someone declared (`ccx session mark
-done`). Deciding when to mark a session done is your call; `prune` refuses a
+`--ended` is what ccx observes (not running); `--marked <flag>` is what someone declared (`ccx
+session mark <flag>`). Deciding when to mark a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript and tool-results both) — and it exits `1` if it refused any.
 

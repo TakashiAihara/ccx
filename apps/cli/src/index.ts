@@ -324,7 +324,7 @@ session
       return;
     }
 
-    // 状態の列。このマシンの行は pid と手元の transcript / 印から (手元に無い archived な
+    // 状態の列。このマシンの行は pid と手元の transcript / 印から (手元に無い remote な
     // ものだけ保存先の state.json)、他のマシンの行は保存先の state.json から (保存先が
     // 無ければ空)。保存先へは行ごとに GET 1〜2 回で、一覧は引かない。center の event DB
     // には写さない (#127)
@@ -382,7 +382,7 @@ session
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
     console.error(
-      `\n${me}: running / ended read here (pid, transcript)${store ? ", archived from the store" : "; no store configured, so a pruned session shows unknown"}. Other machines: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
+      `\n${me}: running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
     );
   });
 

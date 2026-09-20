@@ -13,19 +13,23 @@ believed.
   the working copy, the `done` flag on a session is about the conversation; a session can be done
   while its repodir is not.
 - **ended** vs **done** — *ended* is observed (no live process); *done* is declared (someone marked
-  the scope finished). `--ended` and `--done` on `ccx tr` are those two, and nothing else.
+  the scope finished). `--ended` and `--marked done` on `ccx tr` are those two, and nothing else.
+- **archived** vs **remote** — *archived* is declared: someone folded the session away (the word
+  the Claude Desktop app uses; user decision 2026-09-21). *remote* is observed: the transcript is in
+  the store and not on this machine. A session can be either without the other.
 
 ## Sessions
 
 - **session** — one Claude Code conversation, identified by its UUID; its transcript is
   `~/.claude/projects/<encoded cwd>/<id>.jsonl`.
-- **lifecycle** — the observed state of a session: `running` / `ended` / `archived` / `unknown`
+- **lifecycle** — the observed state of a session: `running` / `ended` / `remote` / `unknown`
   (`Lifecycle` in `packages/core/src/session-state.ts`). Derived, never written.
-- **declared state** — what a person or the session recorded about it: the flags `done` / `pinned`
-  / `ephemeral`, a `label`, a `task` (`DeclaredState`). Local files under `~/.claude/sessions/<id>/`;
-  `state.json` in the store.
-- **flag** — one of the three booleans in the declared state.
-- **archived** — a session whose transcript is in the store and not on this machine. A lifecycle
+- **declared state** — what a person or the session recorded about it: the flags `archived` /
+  `done` / `pinned` / `ephemeral`, a `label`, a `task` (`DeclaredState`). Local files under
+  `~/.claude/sessions/<id>/`; `state.json` in the store.
+- **flag** — one of the four booleans in the declared state.
+- **archived** — the flag meaning "folded away; not in the working set". Declared, never derived.
+- **remote** — a session whose transcript is in the store and not on this machine. A lifecycle
   value, not a flag.
 - **ephemeral** — the flag meaning "delete the transcript when the session ends". Its local file is
   named `delete` (the name the SessionEnd hook reads).

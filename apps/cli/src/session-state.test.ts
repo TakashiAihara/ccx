@@ -131,7 +131,7 @@ describe("session state travels with the transcript", () => {
     expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, pinned: true });
   });
 
-  test("lifecycle: running by pid, ended by a local transcript, archived by the store (any machine's copy, or one origin's), unknown otherwise", async () => {
+  test("lifecycle: running by pid, ended by a local transcript, remote by the store (any machine's copy, or one origin's), unknown otherwise", async () => {
     const t = await seed(homeA, SID);
     expect(await lifecycleOf(SID, new Set([SID]), true, A)).toBe("running");
     expect(await lifecycleOf(SID, new Set(), true, A)).toBe("ended");
@@ -139,11 +139,11 @@ describe("session state travels with the transcript", () => {
     expect(await lifecycleOf(SID, new Set(), false, A)).toBe("unknown");
     expect(await lifecycleOf(SID, new Set(), false, null)).toBe("unknown");
     await A.push(t, homeA);
-    expect(await lifecycleOf(SID, new Set(), false, A)).toBe("archived");
-    // 別マシンが push した写しでも archived (origin 無し = 全 machine を探す)
-    expect(await lifecycleOf(SID, new Set(), false, B)).toBe("archived");
+    expect(await lifecycleOf(SID, new Set(), false, A)).toBe("remote");
+    // 別マシンが push した写しでも remote (origin 無し = 全 machine を探す)
+    expect(await lifecycleOf(SID, new Set(), false, B)).toBe("remote");
     // origin を渡せばその下だけ: host-a の写しは host-b の下には無い
-    expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-a", user: "alice" })).toBe("archived");
+    expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-a", user: "alice" })).toBe("remote");
     expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-b", user: "bob" })).toBe("unknown");
   });
 
@@ -154,17 +154,17 @@ describe("session state travels with the transcript", () => {
     // 手元に印がある → 手元 (保存先とは違えても)
     await writeDeclared(SID, { label: "newer" }, homeA);
     expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
-    // archived で手元に印が無い → 保存先
-    expect(await declaredFor(SID, homeB, "archived", B)).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
-    expect(await declaredFor(SID, homeB, "archived", B, { machine: "host-a", user: "alice" })).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
-    // archived でなければ保存先は見ない。保存先が無ければ手元 (空)
+    // remote で手元に印が無い → 保存先
+    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
+    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
+    // remote でなければ保存先は見ない。保存先が無ければ手元 (空)
     expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
-    expect(await declaredFor(SID, homeB, "archived", null)).toEqual(EMPTY_DECLARED);
+    expect(await declaredFor(SID, homeB, "remote", null)).toEqual(EMPTY_DECLARED);
   });
 });
 
-describe("select: --ended / --done", () => {
-  test("--done picks sessions marked done (running included for push, excluded for prune); --ended --done is the intersection", async () => {
+describe("select: --ended / --marked", () => {
+  test("--marked <flag> picks sessions with that flag (running included for push, excluded for prune); --ended --marked is the intersection", async () => {
     await seed(homeA, SID, "one");
     await seed(homeA, SID2, "two");
     // SID3: ended だが done ではない。--ended と --ended --done を区別するための対照
@@ -176,18 +176,22 @@ describe("select: --ended / --done", () => {
     await writeDeclared(SID2, { done: true }, homeA);
 
     const ids = (r: { picked: LocalTranscript[] }) => r.picked.map((t) => t.sessionId).sort();
-    expect(ids(await select([], { done: true }, { home: homeA }))).toEqual([SID, SID2]);
-    expect(ids(await select([], { done: true }, { home: homeA, excludeRunning: true }))).toEqual([SID]);
+    expect(ids(await select([], { marked: "done" }, { home: homeA }))).toEqual([SID, SID2]);
+    expect(ids(await select([], { marked: "done" }, { home: homeA, excludeRunning: true }))).toEqual([SID]);
     expect(ids(await select([], { ended: true }, { home: homeA }))).toEqual([SID, SID3]);
-    expect(ids(await select([], { ended: true, done: true }, { home: homeA }))).toEqual([SID]);
+    expect(ids(await select([], { ended: true, marked: "done" }, { home: homeA }))).toEqual([SID]);
+    // flag は 1 つずつ別: archived は誰にも無い
+    expect(ids(await select([], { marked: "archived" }, { home: homeA }))).toEqual([]);
+    await writeDeclared(SID3, { archived: true }, homeA);
+    expect(ids(await select([], { marked: "archived" }, { home: homeA }))).toEqual([SID3]);
 
     await writeDeclared(SID, { done: false }, homeA);
-    expect(ids(await select([], { done: true }, { home: homeA }))).toEqual([SID2]);
-    expect(ids(await select([], { ended: true, done: true }, { home: homeA }))).toEqual([]);
+    expect(ids(await select([], { marked: "done" }, { home: homeA }))).toEqual([SID2]);
+    expect(ids(await select([], { ended: true, marked: "done" }, { home: homeA }))).toEqual([]);
 
     // 明示の id は選択子を要らない。何も無ければ止まる
     expect(ids(await select([SID.slice(0, 8)], {}, { home: homeA }))).toEqual([SID]);
-    await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --done/);
+    await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --marked/);
   });
 });
 
@@ -220,9 +224,13 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["label", "", SID])).code).toBe(0);
     expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
 
-    const bad = await run(["mark", "archived", SID]);
+    // remote は観測であって宣言ではない: mark できない
+    const bad = await run(["mark", "remote", SID]);
     expect(bad.code).toBe(1);
-    expect(bad.err).toMatch(/unknown flag archived/);
+    expect(bad.err).toMatch(/unknown flag remote/);
+    expect((await run(["mark", "archived", SID])).code).toBe(0);
+    expect((await readDeclared(SID, homeA)).archived).toBe(true);
+    expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
     expect((await run(["mark", "done", "ffffffff"])).err).toMatch(/no local session matches ffffffff/);
 
     // status: 保存先が無いので lifecycle は手元から (transcript あり = ended)。--json の形は mark と同じ鍵 + lifecycle
@@ -230,7 +238,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect(st.code).toBe(0);
     expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
     const mark = await run(["mark", "ephemeral", SID, "--json"]);
-    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "done", "pinned", "ephemeral", "label", "task"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "done", "pinned", "ephemeral", "label", "task"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+pinned,ephemeral/);
   });
 });

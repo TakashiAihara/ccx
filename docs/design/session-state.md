@@ -8,12 +8,18 @@ it lives, and how it travels. (#127)
 
 | Kind | Values | Who writes it | Where it comes from |
 |---|---|---|---|
-| Observed | `running` / `ended` / `archived` / `unknown` | nobody — derived | a live pid (`~/.claude/sessions/<pid>.json`), a local transcript, a copy in the store |
-| Declared | `done` / `pinned` / `ephemeral` (flags), `label` (free text), `task` (one external reference) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
+| Observed | `running` / `ended` / `remote` / `unknown` | nobody — derived | a live pid (`~/.claude/sessions/<pid>.json`), a local transcript, a copy in the store |
+| Declared | `archived` / `done` / `pinned` / `ephemeral` (flags), `label` (free text), `task` (one external reference) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
 
-`archived` means "no transcript on this machine, a copy in the store": it is what `push` + `prune`
+`remote` means "no transcript on this machine, a copy in the store": it is what `push` + `prune`
 leave behind, and it is never typed by hand. `unknown` is what ccx says when it cannot tell — no
-local transcript and no store to ask — rather than guessing `ended` or `archived`.
+local transcript and no store to ask — rather than guessing `ended` or `remote`.
+
+`archived` is the one declared flag every workflow is expected to have: "folded away, not in the
+working set", the word the Claude Desktop app uses (user decision, 2026-09-21). It says nothing
+about where the transcript is — an archived session may still be on this machine, and a `remote`
+one need not be archived. The other three flags come from the user's current workflow; whether
+they stay fixed, become free-form, or go is open (#127 follow-up).
 
 What a flag *means for action* is not here. `pinned` says "never reclaim"; which reaper honours it is
 the user's methodology. `ephemeral` says "delete the transcript when the session ends"; the hook that
@@ -61,12 +67,12 @@ kind — local files for this machine, `state.json` for what was pushed.
 | `ccx session mark <flag> [id] [--off]` | set or clear `done` / `pinned` / `ephemeral` |
 | `ccx session label <text> [id]` | set the label; an empty string clears it |
 | `ccx session task <ref> [id]` | set the task reference; an empty string clears it |
-| `ccx session status [id]` | lifecycle + declared state. Local marks win; the store's `state.json` is read only for an `archived` session with no local marks. A prefix that nothing local knows is tried against the store |
+| `ccx session status [id]` | lifecycle + declared state. Local marks win; the store's `state.json` is read only for a `remote` session with no local marks. A prefix that nothing local knows is tried against the store |
 | `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript, one GET to the store under this machine's own prefix — never a listing) and flags from `state.json` for other machines' rows when a store is configured |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
 | `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds none for that session; marks set here are never overwritten (`already-here`, or a mark that preceded the transcript) |
 | `ccx tr ls` | flags and label per stored session |
-| `--done` on `push` / `prune` | selector: every local session with `done`; `prune` also skips running ones |
+| `--marked <flag>` on `push` / `prune` | selector: every local session with that flag; `prune` also skips running ones |
 
 `[id]` defaults to `CLAUDE_CODE_SESSION_ID`, so a session can mark itself from a hook or a skill. A
 prefix is accepted when it is unique among local transcripts and marked sessions; a full id is
@@ -77,11 +83,13 @@ the last flag leaves the directory (Claude Code keeps its own files there) but n
 
 ## Not here
 
-- `archived` as a declared flag: it would drift from the fact it names. Prune instead.
+- deriving `archived` from the store: the earlier draft had `archived` as the observed "only in the
+  store" value; the user wanted it as a declaration, so that fact is now `remote` and `archived` is
+  a flag
 - a label history: `label` is the current name; the auto-label hook keeps its own history for its own
   purposes
 - removing `~/.claude/sessions/<id>/` when a transcript is pruned or deleted: the marks outlive the
-  transcript on purpose (a `done` on an archived session is still a fact about it), and the directory
+  transcript on purpose (a `done` on a remote session is still a fact about it), and the directory
   also holds the hook's own files
 - the claude-config scripts (`ta-session-done` / `ta-session-pin` / `ta-session-delete-on-end` /
   `claude-idle-reaper`) becoming wrappers over `ccx session` — that is their repo's change; the order

@@ -27,7 +27,7 @@ import { table } from "./format.ts";
  * `ccx session mark / label / task / status` — 宣言された状態をローカルに書き、読む (#127)。
  *
  * 書く側 (mark / label / task) は center も保存先も要らない (docs/design/scope.md の
- * invariant)。読む側 (status) は手元を先に見て、手元に無い session (archived) だけ
+ * invariant)。読む側 (status) は手元を先に見て、手元に無い session (remote) だけ
  * 保存先の state.json を読む。保存先が無ければ unknown と言う。id を省くと自分の
  * session (`CLAUDE_CODE_SESSION_ID`。Claude Code が hook / Bash に渡す)。
  */
@@ -37,7 +37,7 @@ async function knownIds(home: string): Promise<string[]> {
   return [...ts.map((t) => t.sessionId), ...marked];
 }
 
-/** 手元 (transcript と印) で解けなければ、保存先の一覧 (archived な session) でも試す */
+/** 手元 (transcript と印) で解けなければ、保存先の一覧 (remote な session) でも試す */
 async function target(idOrPrefix: string | undefined, home: string, store: TranscriptClient | null = null): Promise<string> {
   if (idOrPrefix) {
     try {
@@ -61,7 +61,7 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
 }
 
 /**
- * 観測される状態。running は pid、ended は手元に transcript がある、archived は手元に
+ * 観測される状態。running は pid、ended は手元に transcript がある、remote は手元に
  * 無く保存先にある。保存先が無いか答えなければ unknown (「無い」とは言わない)。
  * origin を渡せばその下だけを 1 GET で見る (`session ls` の行ごと用)。渡さなければ
  * 全 machine を探す (`find`。1 件を見る `status` 用)
@@ -78,7 +78,7 @@ export async function lifecycleOf(
   if (!store) return "unknown";
   try {
     const there = origin ? await store.inStore(sessionId, origin) : (await store.find(sessionId)) !== null;
-    return there ? "archived" : "unknown";
+    return there ? "remote" : "unknown";
   } catch (e) {
     // 「保存先に無い」と「保存先が答えない」を同じ unknown にしない: 後者は stderr に出す
     warnStore(store, e);
@@ -94,7 +94,7 @@ function warnStore(store: TranscriptClient, e: unknown): void {
 }
 
 /**
- * 表示する宣言状態。手元の印があればそれ、無ければ (archived なら) 保存先の state.json。
+ * 表示する宣言状態。手元の印があればそれ、無ければ (remote なら) 保存先の state.json。
  * 手元の印は push で保存先に写るので、両方あるときは手元が新しい
  */
 export async function declaredFor(
@@ -105,7 +105,7 @@ export async function declaredFor(
   origin?: Origin,
 ): Promise<DeclaredState> {
   const local = await readDeclared(sessionId, home);
-  if (!isEmptyDeclared(local) || lifecycle !== "archived" || !store) return local;
+  if (!isEmptyDeclared(local) || lifecycle !== "remote" || !store) return local;
   const remote = await (origin
     ? store.readRemoteDeclared(sessionId, origin)
     : store.find(sessionId).then((m) => (m ? store.readRemoteDeclared(sessionId, m) : null))

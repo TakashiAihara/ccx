@@ -30,7 +30,7 @@ Thinking through a specific way of working is still useful — but its output is
 
 "Role-agnostic mechanism" is about *roles* — who reviews whom, what a PM is. It does not mean ccx holds
 no state about sessions. ccx is the integrated management of parallel sessions, and a session's
-state is the substance of that: whether it is running or ended, whether its transcript is archived
+state is the substance of that: whether it is running or ended, whether its transcript is only in the store
 off the host, whether someone declared it done, pinned it, or marked it disposable, what it is
 called, what task it is on. That is not methodology; it is the thing being managed. (User decision,
 2026-09-21, #127.)
@@ -39,8 +39,8 @@ Two kinds of state, kept apart:
 
 | Kind | Examples | Who writes it |
 |---|---|---|
-| **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `archived` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
-| **Declared** — an intent someone recorded | `done` (scope finished), `pinned` (never reclaim), `ephemeral` (delete the transcript when it ends), a `label`, a `task` reference | a person or the session itself, through `ccx` |
+| **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `remote` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
+| **Declared** — an intent someone recorded | `archived` (folded away; the one flag every workflow has, in the Desktop app's word), `done` (scope finished), `pinned` (never reclaim), `ephemeral` (delete the transcript when it ends), a `label`, a `task` reference | a person or the session itself, through `ccx` |
 
 ccx defines these states and carries them with the transcript. What a person *does* with them —
 which sessions get reclaimed, whether a `done` session is closed by hand or by a daemon — stays on
