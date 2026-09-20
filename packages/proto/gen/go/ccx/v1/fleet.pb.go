@@ -24,7 +24,7 @@ const (
 
 // 鍵は (user, machine, session_id) の 3 つ。
 //
-// machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccxd
+// machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccx-agent
 // を自分の権限で動かすため (#92)。2 ユーザは 2 本の別々の流れであって、混ぜると
 // 後から分けられない。
 //
@@ -95,12 +95,12 @@ func (x *SessionKey) GetSessionId() string {
 type Session struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Key   *SessionKey            `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	// 最初と最後に観測した event の受信時刻 (ccxd の時計)。
+	// 最初と最後に観測した event の受信時刻 (ccx-agent の時計)。
 	FirstSeen *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=first_seen,json=firstSeen,proto3" json:"first_seen,omitempty"`
 	LastSeen  *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	// SessionEnd を観測した時刻。未観測なら未設定。
 	//
-	// 「未設定 = まだ動いている」ではない。ccxd が落ちていた・hook が配線されて
+	// 「未設定 = まだ動いている」ではない。ccx-agent が落ちていた・hook が配線されて
 	// いない・セッションが強制終了した、のいずれでも未設定になる。生きているかを
 	// 知りたい読み手は last_seen からの経過も併せて見る。ここで閾値を持たないのは、
 	// 何分で死んだとみなすかが読み手の判断だから。
@@ -202,10 +202,10 @@ func (x *Session) GetLastHook() string {
 	return ""
 }
 
-// 1 件の event。origin と seq は ccxd が付けた値、それ以外の派生値は center が
+// 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
 // payload から導出した値。
 //
-// ingest.proto の Event と別の型なのは、別のものだから。あちらは ccxd が送る「運ぶ
+// ingest.proto の Event と別の型なのは、別のものだから。あちらは ccx-agent が送る「運ぶ
 // 形」、こちらは center が保存して導出まで済ませた「読む形」。同じ名前にすると、
 // パースがどちら側の責務かという設計判断が型から消える。
 type EventRecord struct {
@@ -213,7 +213,7 @@ type EventRecord struct {
 	EventId string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
 	Machine string                 `protobuf:"bytes,2,opt,name=machine,proto3" json:"machine,omitempty"`
 	User    string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
-	// ccxd の spool の rowid。1 つの spool の中でだけ単調増加する (ingest.proto)。
+	// ccx-agent の spool の rowid。1 つの spool の中でだけ単調増加する (ingest.proto)。
 	Seq        uint64                 `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
 	ReceivedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
 	// payload が読めなかったときは false。読めなかった event も落とさずに返す。

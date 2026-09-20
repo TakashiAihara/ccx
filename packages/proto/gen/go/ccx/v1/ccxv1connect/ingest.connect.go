@@ -41,13 +41,13 @@ const (
 type IngestServiceClient interface {
 	// 耐久化は全か無か。RPC が成功したら「バッチ全件が耐久化された」、失敗したら
 	// 「1 件も耐久化されていない」。中間 (一部だけ保存されて成功が返る) は無い。
-	// ccxd はこの all-or-nothing に乗って、成功なら spool を全件消す。
+	// ccx-agent はこの all-or-nothing に乗って、成功なら spool を全件消す。
 	//
 	// これは「accepted == バッチ件数」を意味しない。耐久化には重複無視も含まれる
 	// ので、既知の event が混じれば accepted はバッチ件数より小さくなる (IngestResponse
 	// 参照)。「全件耐久化された」と「全件が新規保存された」は別のこと。
 	//
-	// 転送は at-least-once (ccxd は成功を確認してから spool を消す)。同じ event が
+	// 転送は at-least-once (ccx-agent は成功を確認してから spool を消す)。同じ event が
 	// 二度届くことは正常系であり、center は event_id で潰す。
 	Ingest(context.Context, *connect.Request[v1.IngestRequest]) (*connect.Response[v1.IngestResponse], error)
 }
@@ -86,13 +86,13 @@ func (c *ingestServiceClient) Ingest(ctx context.Context, req *connect.Request[v
 type IngestServiceHandler interface {
 	// 耐久化は全か無か。RPC が成功したら「バッチ全件が耐久化された」、失敗したら
 	// 「1 件も耐久化されていない」。中間 (一部だけ保存されて成功が返る) は無い。
-	// ccxd はこの all-or-nothing に乗って、成功なら spool を全件消す。
+	// ccx-agent はこの all-or-nothing に乗って、成功なら spool を全件消す。
 	//
 	// これは「accepted == バッチ件数」を意味しない。耐久化には重複無視も含まれる
 	// ので、既知の event が混じれば accepted はバッチ件数より小さくなる (IngestResponse
 	// 参照)。「全件耐久化された」と「全件が新規保存された」は別のこと。
 	//
-	// 転送は at-least-once (ccxd は成功を確認してから spool を消す)。同じ event が
+	// 転送は at-least-once (ccx-agent は成功を確認してから spool を消す)。同じ event が
 	// 二度届くことは正常系であり、center は event_id で潰す。
 	Ingest(context.Context, *connect.Request[v1.IngestRequest]) (*connect.Response[v1.IngestResponse], error)
 }

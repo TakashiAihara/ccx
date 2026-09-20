@@ -39,7 +39,7 @@ with Diagram(
 
     with Cluster("machine (one of many)"):
         cli = Server("ccx\none-shot CLI")
-        ccxd = Server("ccxd\nresident agent")
+        agent = Server("ccx-agent\nresident agent")
 
         with Cluster("herdr — session substrate"):
             session = Blank("claude session\n(one per repodir)")
@@ -58,15 +58,15 @@ with Diagram(
     cli >> Edge(label="opens") >> session
 
     # ---- the inbound path: broker to a running session, no keystrokes ----
-    broker >> Edge(label="1. pull", color="firebrick", fontcolor="firebrick") >> ccxd
-    ccxd >> Edge(
+    broker >> Edge(label="1. pull", color="firebrick", fontcolor="firebrick") >> agent
+    agent >> Edge(
         label="2. push — MCP channel\nwakes an idle session",
         color="firebrick",
         fontcolor="firebrick",
         style="bold",
     ) >> session
 
-    # ---- what ccxd watches, and what it sends back ----
-    repodir >> Edge(label="observes — never writes", style="dashed") >> ccxd
-    session >> Edge(label="replies", color="darkgreen", fontcolor="darkgreen", style="dashed") >> ccxd
-    ccxd >> Edge(label="reports state + replies", color="darkgreen", fontcolor="darkgreen") >> broker
+    # ---- what ccx-agent watches, and what it sends back ----
+    repodir >> Edge(label="observes — never writes", style="dashed") >> agent
+    session >> Edge(label="replies", color="darkgreen", fontcolor="darkgreen", style="dashed") >> agent
+    agent >> Edge(label="reports state + replies", color="darkgreen", fontcolor="darkgreen") >> broker

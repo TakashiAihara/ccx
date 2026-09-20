@@ -45,7 +45,7 @@ process.stdin.on("data", (chunk: Buffer) => {
           protocolVersion: msg.params?.protocolVersion ?? "2025-06-18",
           // これが channel server であることの宣言
           capabilities: { experimental: { "claude/channel": {} } },
-          serverInfo: { name: "ccxd-test", version: "0.1.0" },
+          serverInfo: { name: "ccx-agent-test", version: "0.1.0" },
         },
       });
       continue;
@@ -76,7 +76,7 @@ setInterval(async () => {
   send({
     jsonrpc: "2.0",
     method: "notifications/claude/channel",
-    params: { content: text, meta: { origin: "ccxd" } },
+    params: { content: text, meta: { origin: "ccx-agent" } },
   });
   await Bun.write(INBOX, "");
   last = "";

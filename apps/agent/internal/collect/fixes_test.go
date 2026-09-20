@@ -38,7 +38,7 @@ func TestAcceptLoop_ReturnsErrorOnUnexpectedFailure(t *testing.T) {
 	}
 }
 
-// A second ccxd on the same spool is refused by the flock, not by a racy socket
+// A second ccx-agent on the same spool is refused by the flock, not by a racy socket
 // probe. Fix for the review's Medium#3.
 func TestSingleInstanceLock_RefusesSecond(t *testing.T) {
 	dir := t.TempDir()
@@ -48,7 +48,7 @@ func TestSingleInstanceLock_RefusesSecond(t *testing.T) {
 	}
 
 	if _, err := acquireLock(dir); err == nil {
-		t.Error("a second ccxd on the same spool must be refused while the first holds the lock")
+		t.Error("a second ccx-agent on the same spool must be refused while the first holds the lock")
 	}
 
 	// After the first releases, a new one can acquire (crash recovery).
@@ -88,13 +88,13 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 }
 
 // The hook returns within its overall budget even if the socket path stalls (a
-// ccxd that accepts but never acks), rather than hanging the session. Fix for
+// ccx-agent that accepts but never acks), rather than hanging the session. Fix for
 // the review's Medium#5 / Low#6.
 func TestHook_ReturnsWithinBudget_WhenServerStalls(t *testing.T) {
 	dir := t.TempDir()
 	sock := dir + "/s.sock"
 	// A listener that accepts connections but never reads or replies — a wedged
-	// ccxd. The hook must not wait on it beyond its deadlines.
+	// ccx-agent. The hook must not wait on it beyond its deadlines.
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ func TestForwardLoop_AckFailure_BacksOffNotBusyLoop(t *testing.T) {
 
 // A center that accepts the connection but never responds must make Forward
 // time out and RETURN an error (so the loop can back off and retry), not block
-// for the life of ccxd. Fix for the CodeRabbit review's forward finding.
+// for the life of ccx-agent. Fix for the CodeRabbit review's forward finding.
 func TestConnectForwarder_TimesOutOnHungCenter(t *testing.T) {
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -215,7 +215,7 @@ func TestConnectForwarder_TimesOutOnHungCenter(t *testing.T) {
 }
 
 // The single-instance lock must be acquired BEFORE the spool is touched, so two
-// ccxd starting at once cannot both drain incoming/ and race the seq counter
+// ccx-agent starting at once cannot both drain incoming/ and race the seq counter
 // (CodeRabbit Critical). If another instance holds the lock, Run must fail
 // without draining — proven here by the incoming file being left untouched.
 func TestRun_LockPrecedesDrain(t *testing.T) {
@@ -224,12 +224,12 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A hook dropped a fallback event while ccxd was down.
+	// A hook dropped a fallback event while ccx-agent was down.
 	if err := writeIncoming(spool.IncomingDir(), []byte(`{"pending":1}`)); err != nil {
 		t.Fatal(err)
 	}
 
-	// Another ccxd already holds the spool lock.
+	// Another ccx-agent already holds the spool lock.
 	held, err := acquireLock(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	// This instance's Run must fail on the lock — before DrainIncoming runs.
 	c := newCollect(dir+"/s.sock", spool, nil, quietLog)
 	if err := c.Run(context.Background()); err == nil {
-		t.Fatal("Run should fail while another ccxd holds the lock")
+		t.Fatal("Run should fail while another ccx-agent holds the lock")
 	}
 
 	// The incoming event must be untouched: the drain never ran.

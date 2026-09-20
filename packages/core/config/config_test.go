@@ -76,7 +76,7 @@ func TestMachine_DefaultsToHostname_ButIsOverridable(t *testing.T) {
 }
 
 func TestNoConfigAtAll_StillResolves(t *testing.T) {
-	// scope.md: it must run with no configuration. Empty hub is fine — ccxd
+	// scope.md: it must run with no configuration. Empty hub is fine — ccx-agent
 	// spools and simply has nowhere to drain to.
 	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
 	if err != nil {
@@ -98,7 +98,7 @@ func TestSocketPath_PrefersRuntimeDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "/run/user/1000/ccx/ccxd.sock"; c.SocketPath != want {
+	if want := "/run/user/1000/ccx/ccx-agent.sock"; c.SocketPath != want {
 		t.Errorf("socket path: want %q, got %q", want, c.SocketPath)
 	}
 }

@@ -29,13 +29,13 @@ type connectForwarder struct {
 
 // defaultForwardTimeout bounds a single Ingest call. Without it, a center that
 // accepts the TCP connection but never responds would leave Forward blocked for
-// the whole life of ccxd — the forward loop's backoff never fires, because it
+// the whole life of ccx-agent — the forward loop's backoff never fires, because it
 // only fires when Forward RETURNS, and a hung call never returns. A bounded call
 // turns "center hung" into "Forward errored", which the loop already retries.
 const defaultForwardTimeout = 30 * time.Second
 
 // NewForwarder builds a forwarder for the given center URL, or returns nil if
-// no center is configured. A nil forwarder is not an error: ccxd still runs and
+// no center is configured. A nil forwarder is not an error: ccx-agent still runs and
 // spools; it simply has nowhere to drain to until a hub is set. The local side
 // never depends on the center (scope.md).
 func NewForwarder(hubURL string) Forwarder {

@@ -335,7 +335,7 @@ session
     });
     for (const line of table(rows)) console.log(line);
 
-    // 「ended でない」は「動いている」ではない。ccxd が落ちていても hook が
+    // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
     console.error(
       "\nended = a SessionEnd was observed. Its absence is not proof a session is alive;\nread the age column too.",
@@ -400,11 +400,11 @@ session
 
 registerTranscript(program, VERSION);
 
-const agent = program.command("agent").description("Inspect the local resident agent (ccxd)");
+const agent = program.command("agent").description("Inspect the local resident agent (ccx-agent)");
 
 agent
   .command("status")
-  .description("Is ccxd up, how much is waiting, and can it reach the center")
+  .description("Is ccx-agent up, how much is waiting, and can it reach the center")
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
@@ -417,11 +417,11 @@ agent
 
     const rows: string[][] = [
       // socket ファイルの存在では見ない。掴んでいたプロセスが死んでも残るため
-      ["ccxd", st.socketConnectable ? "running" : st.socketPresent ? "socket present, not answering" : "not running"],
+      ["ccx-agent", st.socketConnectable ? "running" : st.socketPresent ? "socket present, not answering" : "not running"],
       ["socket", st.socketPath],
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
-      ["center", st.hubUrl ?? "not configured (ccxd spools only)"],
+      ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);
 

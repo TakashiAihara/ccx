@@ -1,4 +1,4 @@
-// Package testcenter is a minimal stand-in for ccx-center (#91), used by ccxd's
+// Package testcenter is a minimal stand-in for ccx-center (#91), used by ccx-agent's
 // tests to exercise the REAL Connect/protobuf wire — the collect unit tests and
 // the binary integration test both talk to it. It implements IngestService,
 // dedups by event_id, and can be flipped "unavailable" to simulate an outage.

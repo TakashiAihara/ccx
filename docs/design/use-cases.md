@@ -4,7 +4,7 @@ Each use case states what happens, in order, and what has to be true for it to c
 
 The conditions are written to be checkable. "The session receives the message" is not checkable. "The message appears in the session's transcript wrapped in a `<channel>` tag, with no keystroke sent" is.
 
-Terms: **ccxd** is the resident agent, one per machine. **PM** is the orchestrating session. **worker** is a session with no human watching it.
+Terms: **ccx-agent** is the resident agent, one per machine. **PM** is the orchestrating session. **worker** is a session with no human watching it.
 
 ---
 
@@ -15,22 +15,22 @@ A worker is created, opened, and starts working. Nobody types anything.
 ```mermaid
 sequenceDiagram
     participant PM
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant M as bare mirror
     participant RD as repodir
     participant S as worker session
 
-    PM->>CCXD: create a worker for issue #13
-    CCXD->>M: remote update (only if stale)
-    CCXD->>RD: hardlink clone
+    PM->>AGENT: create a worker for issue #13
+    AGENT->>M: remote update (only if stale)
+    AGENT->>RD: hardlink clone
     Note over RD: .git/ccx.json<br/>role=worker, initialTask, goal
-    CCXD->>RD: post-create (deps, tooling)
-    CCXD->>S: launch: claude "/ccx-worker"
+    AGENT->>RD: post-create (deps, tooling)
+    AGENT->>S: launch: claude "/ccx-worker"
     S->>RD: read .git/ccx.json
     Note over S: I am a worker.<br/>My task is here.<br/>Nobody will answer questions.
     S->>S: starts working
-    S-->>CCXD: SessionStart hook
-    CCXD-->>PM: worker is up
+    S-->>AGENT: SessionStart hook
+    AGENT-->>PM: worker is up
 ```
 
 **Satisfied when**
@@ -39,7 +39,7 @@ sequenceDiagram
 - `.git/ccx.json` carries `role`, `initialTask` and `goal` — **`goal` is populated, not empty.** (#65 exists because it never was.)
 - The session begins work with **no keystroke sent to it** — the launch argument is the whole instruction.
 - The task was **read from `ccx.json`**, not passed on the command line.
-- `SessionStart` reaches ccxd, so the PM learns the worker exists without polling.
+- `SessionStart` reaches ccx-agent, so the PM learns the worker exists without polling.
 
 Issues: #4, #57, #65, #69, #82
 
@@ -53,14 +53,14 @@ The PM tells a worker something. The worker is mid-task and must not be interrup
 sequenceDiagram
     participant PM
     participant B as broker
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant C as channel
     participant S as worker session
 
     PM->>B: message for worker X (priority: normal)
-    B->>CCXD: deliver
-    CCXD->>C: notifications/claude/channel
-    C->>S: <channel source="ccxd">…</channel>
+    B->>AGENT: deliver
+    AGENT->>C: notifications/claude/channel
+    C->>S: <channel source="ccx-agent">…</channel>
 
     alt worker is mid-turn
         Note over S: not interrupted
@@ -70,9 +70,9 @@ sequenceDiagram
         S->>S: wakes, handles it immediately
     end
 
-    S-->>CCXD: UserPromptSubmit hook — received
-    S-->>CCXD: Stop hook — turn finished
-    CCXD-->>PM: delivered, then completed
+    S-->>AGENT: UserPromptSubmit hook — received
+    S-->>AGENT: Stop hook — turn finished
+    AGENT-->>PM: delivered, then completed
 ```
 
 **Satisfied when**
@@ -96,24 +96,24 @@ The merge order changed. Four workers need to know.
 sequenceDiagram
     participant PM
     participant B as broker
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant W1 as worker 1
     participant W2 as worker 2
     participant W3 as worker 3
 
     PM->>B: publish to group "chain-A" (once)
-    B->>CCXD: fan out
+    B->>AGENT: fan out
     par
-        CCXD->>W1: channel push
+        AGENT->>W1: channel push
     and
-        CCXD->>W2: channel push
+        AGENT->>W2: channel push
     and
-        CCXD->>W3: channel push
+        AGENT->>W3: channel push
     end
-    W1-->>CCXD: received
-    W2-->>CCXD: received
+    W1-->>AGENT: received
+    W2-->>AGENT: received
     Note over W3: no receipt
-    CCXD-->>PM: 2 of 3 delivered — worker 3 has not
+    AGENT-->>PM: 2 of 3 delivered — worker 3 has not
 ```
 
 **Satisfied when**
@@ -136,19 +136,19 @@ The worker would normally stop and ask. Nobody is there.
 sequenceDiagram
     participant S as worker session
     participant H as PreToolUse hook
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant PM
 
     S->>H: AskUserQuestion(question, options)
     Note over H: role=worker → no human here
     H-->>S: denied — ask the PM instead, and keep working
-    H->>CCXD: question + options
-    CCXD->>PM: worker X is asking: …
+    H->>AGENT: question + options
+    AGENT->>PM: worker X is asking: …
 
     S->>S: continues with other work
 
-    PM->>CCXD: the answer is B
-    CCXD->>S: <channel source="ccxd">answer: B</channel>
+    PM->>AGENT: the answer is B
+    AGENT->>S: <channel source="ccx-agent">answer: B</channel>
     Note over S: not interrupted;<br/>picked up at end of turn
     S->>S: resumes the blocked path
 ```
@@ -171,23 +171,23 @@ Issues: #80, #81, #82
 sequenceDiagram
     participant S as worker session
     participant SL as statusline
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant C as channel
     participant HUB as hub
 
     loop every assistant message
         S->>SL: context_window, tokens, rate_limits
-        SL->>CCXD: forward
-        CCXD->>HUB: store
+        SL->>AGENT: forward
+        AGENT->>HUB: store
     end
 
-    Note over CCXD: crosses 85%
-    CCXD->>C: warning
+    Note over AGENT: crosses 85%
+    AGENT->>C: warning
     C->>S: <channel severity="warning">context at 85% —<br/>wrap up and hand off, do not compact</channel>
     S->>S: finishes the current unit
     S->>S: writes a handoff
-    S->>CCXD: done
-    CCXD->>CCXD: opens a fresh repodir, continues there
+    S->>AGENT: done
+    AGENT->>AGENT: opens a fresh repodir, continues there
 ```
 
 **Satisfied when**
@@ -210,14 +210,14 @@ sequenceDiagram
     participant S as session
     participant SL as statusline
     participant HK as PreToolUse / PostToolUse
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant HUB as hub
 
     S->>SL: token counters (per assistant message)
     S->>HK: tool name, arguments, output size
-    SL->>CCXD: counters
-    HK->>CCXD: activity
-    CCXD->>HUB: both, keyed by session_id + turn
+    SL->>AGENT: counters
+    HK->>AGENT: activity
+    AGENT->>HUB: both, keyed by session_id + turn
     Note over HUB: join → which tool call cost what
 ```
 
@@ -236,19 +236,19 @@ Issues: #18, #20, #83
 ```mermaid
 sequenceDiagram
     participant S as worker session
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant GC as gc
 
-    S->>CCXD: done (writes .git/ccx.state)
-    Note over CCXD: a declaration, not permission
-    CCXD->>CCXD: waits for the session to actually end
-    CCXD->>GC: check
+    S->>AGENT: done (writes .git/ccx.state)
+    Note over AGENT: a declaration, not permission
+    AGENT->>AGENT: waits for the session to actually end
+    AGENT->>GC: check
     GC->>GC: clean? nothing unpushed? no stash? no session?
     alt all clear
         GC->>GC: remove the repodir
-        GC->>CCXD: close the workspace too
+        GC->>AGENT: close the workspace too
     else work would be lost
-        GC-->>CCXD: refuses, and says what would have been lost
+        GC-->>AGENT: refuses, and says what would have been lost
     end
 ```
 
@@ -269,18 +269,18 @@ Issues: #2, #5, #64
 ```mermaid
 sequenceDiagram
     participant PM
-    participant CCXD as ccxd
+    participant AGENT as ccx-agent
     participant T as terminal
     participant S as session
 
-    PM->>CCXD: stop worker X
-    CCXD->>T: Esc
-    CCXD->>S: read back — did it actually stop?
+    PM->>AGENT: stop worker X
+    AGENT->>T: Esc
+    AGENT->>S: read back — did it actually stop?
     alt stopped
-        CCXD-->>PM: stopped
+        AGENT-->>PM: stopped
     else still running
-        CCXD->>T: Esc again
-        CCXD-->>PM: could not stop it
+        AGENT->>T: Esc again
+        AGENT-->>PM: could not stop it
     end
 ```
 

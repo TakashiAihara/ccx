@@ -17,7 +17,7 @@ export const file_ccx_v1_fleet: GenFile = /*@__PURE__*/
 /**
  * 鍵は (user, machine, session_id) の 3 つ。
  *
- * machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccxd
+ * machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccx-agent
  * を自分の権限で動かすため (#92)。2 ユーザは 2 本の別々の流れであって、混ぜると
  * 後から分けられない。
  *
@@ -63,7 +63,7 @@ export type Session = Message<"ccx.v1.Session"> & {
   key?: SessionKey | undefined;
 
   /**
-   * 最初と最後に観測した event の受信時刻 (ccxd の時計)。
+   * 最初と最後に観測した event の受信時刻 (ccx-agent の時計)。
    *
    * @generated from field: google.protobuf.Timestamp first_seen = 2;
    */
@@ -77,7 +77,7 @@ export type Session = Message<"ccx.v1.Session"> & {
   /**
    * SessionEnd を観測した時刻。未観測なら未設定。
    *
-   * 「未設定 = まだ動いている」ではない。ccxd が落ちていた・hook が配線されて
+   * 「未設定 = まだ動いている」ではない。ccx-agent が落ちていた・hook が配線されて
    * いない・セッションが強制終了した、のいずれでも未設定になる。生きているかを
    * 知りたい読み手は last_seen からの経過も併せて見る。ここで閾値を持たないのは、
    * 何分で死んだとみなすかが読み手の判断だから。
@@ -120,10 +120,10 @@ export const SessionSchema: GenMessage<Session> = /*@__PURE__*/
   messageDesc(file_ccx_v1_fleet, 1);
 
 /**
- * 1 件の event。origin と seq は ccxd が付けた値、それ以外の派生値は center が
+ * 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
  * payload から導出した値。
  *
- * ingest.proto の Event と別の型なのは、別のものだから。あちらは ccxd が送る「運ぶ
+ * ingest.proto の Event と別の型なのは、別のものだから。あちらは ccx-agent が送る「運ぶ
  * 形」、こちらは center が保存して導出まで済ませた「読む形」。同じ名前にすると、
  * パースがどちら側の責務かという設計判断が型から消える。
  *
@@ -146,7 +146,7 @@ export type EventRecord = Message<"ccx.v1.EventRecord"> & {
   user: string;
 
   /**
-   * ccxd の spool の rowid。1 つの spool の中でだけ単調増加する (ingest.proto)。
+   * ccx-agent の spool の rowid。1 つの spool の中でだけ単調増加する (ingest.proto)。
    *
    * @generated from field: uint64 seq = 4;
    */
@@ -337,7 +337,7 @@ export const ListEventsResponseSchema: GenMessage<ListEventsResponse> = /*@__PUR
  * 「解釈した形」を定める。
  *
  * 分けてあるのは、パースの境界が設計判断そのものだから (ingest.proto の
- * IngestService コメント)。ccxd は payload を不透明なバイト列として運ぶ。session
+ * IngestService コメント)。ccx-agent は payload を不透明なバイト列として運ぶ。session
  * も hook 種別も、この契約に出てくる派生値はすべて center が payload から導出する。
  * 生バイトは常に残るので、導出の誤りは後から読み直して直せる。
  *
