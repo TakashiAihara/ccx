@@ -2,10 +2,12 @@ import type { Command } from "commander";
 
 import {
   claudeHome,
+  createRepodir,
   loadConfig,
   localOrigin,
   localTranscripts,
   NoTranscriptStore,
+  parseRepoSpec,
   runningSessionIds,
   TranscriptClient,
   type LocalTranscript,
@@ -50,7 +52,7 @@ async function select(ids: string[], ended: boolean): Promise<{ picked: LocalTra
   throw new Error("give session ids, or --ended for every session that is not running");
 }
 
-export function registerTranscript(program: Command): void {
+export function registerTranscript(program: Command, VERSION: string): void {
   const transcript = program
     .command("transcript")
     .alias("tr")
@@ -80,20 +82,38 @@ export function registerTranscript(program: Command): void {
     .description("Fetch a transcript from the store so that `claude --resume <id>` works here")
     .argument("<session-id>", "full id, or the unique prefix that `ls` prints")
     .option("--force", "replace a local transcript with the same id but different content (the local file is kept as .replaced-<time>)")
+    .option("--no-repodir", "only install the transcript; do not create a repodir for the session's repo")
     .option("--json", "print as JSON")
     .action(async (idOrPrefix: string, o) => {
+      const cfg = await loadConfig();
       const c = await client();
       const id = await c.resolve(idOrPrefix);
       if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
+
+      // 会話だけでは作業できない。session.json の repo から、default branch の最新で
+      // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。
+      // Claude Code は session を id で引くので、JSONL の置き場所と cwd は一致しなくてよい (#110)
+      let repodir: string | undefined;
+      if (o.repodir !== false && r.meta.repo) {
+        const spec = parseRepoSpec(r.meta.repo, { defaultHost: cfg.defaultHost, defaultOwner: cfg.defaultOwner });
+        const made = await createRepodir(cfg, spec, { initialTask: `resume session ${id}`, refresh: true }, VERSION);
+        repodir = made.path;
+      }
+
       if (o.json) {
-        console.log(JSON.stringify(r, null, 2));
+        console.log(JSON.stringify({ ...r, repodir }, null, 2));
         return;
       }
       console.log(`${r.status}  ${r.path}`);
       if (r.replaced) console.log(`the previous local file was kept as ${r.replaced}`);
-      console.log(`resume with:  claude --resume ${id}`);
-      console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}`);
+      if (repodir) {
+        console.log(`repodir       ${repodir}  (${r.meta.repo}, default branch, fresh)`);
+        console.log(`resume with:  cd ${repodir} && claude --resume ${id}`);
+      } else {
+        console.log(`resume with:  claude --resume ${id}${r.meta.repo ? "" : "   (no repo recorded for this session; run it where you like)"}`);
+      }
+      console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
     });
 
   transcript

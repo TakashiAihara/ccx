@@ -92,7 +92,7 @@ be resumed elsewhere.
 ccx tr push --ended           # every local session that is not running (unchanged ones are skipped)
 ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
-ccx tr pull <id>              # fetch it here, then: claude --resume <id>
+ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
 ```
 

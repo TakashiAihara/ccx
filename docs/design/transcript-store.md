@@ -50,7 +50,7 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | verb | does | refuses when |
 |---|---|---|
 | `push [id...] \| --ended` | snapshot the file, put transcript, tool-results (hashed, only the ones not already there), session.json; record `push` | — (unchanged content is skipped, not an error) |
-| `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; record `pull` | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
+| `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; record `pull`; then, when `session.json` names a repo, a **fresh repodir on the default branch** (mirror refreshed) and the `cd … && claude --resume <id>` line to run (`--no-repodir` skips it) | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
 | `ls [-m machine]` | every `session.json`, newest push first, with who last pulled it | — |
 | `prune [id...] \| --ended` | delete the local transcript and tool-results (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript and tool-results; the matching copy, **read back and hashed**, differs from the local files |
 | `search` | DuckDB over `transcripts/**/transcript.jsonl` | — (separate PR) |
@@ -66,7 +66,11 @@ user's marker, whatever it is, fed in as ids.
 
 The pull lands under the **original** cwd's encoded directory even if that path does not exist on
 this machine: Claude Code finds a session by id across project directories (measured in #110), so
-the path is an address, not a requirement.
+the path is an address, not a requirement. The working tree is a separate matter: `push` records the
+cwd's `origin` as `host/owner/repo` in `session.json`, and `pull` makes a new repodir from it on the
+repo's default branch — not on the session's old branch, because whatever that branch had that was
+not pushed is not in the transcript either. The resumed session starts from a clean, current tree
+and reads its own history for what it was doing.
 
 ## Querying
 

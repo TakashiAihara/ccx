@@ -398,7 +398,7 @@ session
     }
   });
 
-registerTranscript(program);
+registerTranscript(program, VERSION);
 
 const agent = program.command("agent").description("Inspect the local resident agent (ccxd)");
 

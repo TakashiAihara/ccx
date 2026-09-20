@@ -297,3 +297,92 @@ describe("transcript: push / pull / prune through the store", () => {
     ]);
   });
 });
+
+describe("transcript: pull materialises a repodir for the session's repo", () => {
+  const REMOTE = "https://github.com/test-owner/demo.git";
+  let tmp: string;
+  let savedGitConfig: string | undefined;
+
+  beforeEach(async () => {
+    tmp = await mkdtemp(join(tmpdir(), "ccx-tr-repo-"));
+    const git = (args: string[], cwd?: string) => Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "ignore" }).exited;
+    const work = join(tmp, "work");
+    await git(["init", "--quiet", "--initial-branch", "main", work]);
+    await git(["config", "user.email", "t@example.com"], work);
+    await git(["config", "user.name", "t"], work);
+    await Bun.write(join(work, "README.md"), "# demo\n");
+    await git(["add", "README.md"], work);
+    await git(["commit", "--quiet", "-m", "init"], work);
+    const source = join(tmp, "source.git");
+    await git(["clone", "--quiet", "--bare", work, source]);
+    await git(["symbolic-ref", "HEAD", "refs/heads/main"], source);
+    // push 側の cwd: origin が REMOTE を指す clone。branch は feature で、default ではない
+    const cwd = join(tmp, "cwd");
+    await git(["clone", "--quiet", source, cwd]);
+    await git(["remote", "set-url", "origin", REMOTE], cwd);
+    await git(["switch", "--quiet", "-c", "feat/x"], cwd);
+    const gitconfig = join(tmp, "gitconfig");
+    await Bun.write(gitconfig, `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n`);
+    savedGitConfig = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = gitconfig;
+
+    const projectDir = join(homeA, "projects", encodeCwd(cwd));
+    await mkdir(projectDir, { recursive: true });
+    await Bun.write(join(projectDir, `${SID}.jsonl`), line({ type: "user", cwd, gitBranch: "feat/x", version: "1", message: "hi" }));
+  });
+
+  afterEach(async () => {
+    if (savedGitConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = savedGitConfig;
+    await rm(tmp, { recursive: true, force: true });
+  });
+
+  test("push records host/owner/repo from origin; pull creates a repodir on the default branch and says where to resume", async () => {
+    const [t] = await localTranscripts(homeA);
+    const pushed = await A.push(t!);
+    expect(pushed.meta.repo).toBe("github.com/test-owner/demo");
+    expect(pushed.meta.gitBranch).toBe("feat/x");
+
+    const ccxRoot = join(tmp, "repodirs");
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", SID.slice(0, 8), "--json"], {
+      env: {
+        ...process.env,
+        CCX_HUB_URL: A.store.endpoint,
+        CCX_TRANSCRIPT_PREFIX: "p",
+        CCX_ROOT: ccxRoot,
+        CLAUDE_CONFIG_DIR: homeB,
+        XDG_CONFIG_HOME: tmp,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect({ code, err }).toEqual({ code: 0, err: expect.any(String) });
+    const r = JSON.parse(out) as { status: string; repodir?: string; path: string };
+    expect(r.status).toBe("pulled");
+    expect(r.repodir).toMatch(new RegExp(`^${ccxRoot}/github.com/test-owner/demo/`));
+    // default branch の最新で、元の feat/x ではない
+    const branch = Bun.spawn(["git", "-C", r.repodir!, "branch", "--show-current"], { stdout: "pipe" });
+    expect((await new Response(branch.stdout).text()).trim()).toBe("main");
+    expect(await Bun.file(join(r.repodir!, "README.md")).text()).toBe("# demo\n");
+    // transcript は元の cwd の encoded dir に (id で引かれるので repodir と一致しなくてよい)
+    expect(r.path).toBe(join(homeB, "projects", encodeCwd(join(tmp, "cwd")), `${SID}.jsonl`));
+  });
+
+  test("--no-repodir leaves the working tree alone; no repo recorded means no repodir", async () => {
+    const [t] = await localTranscripts(homeA);
+    await A.push(t!);
+    const ccxRoot = join(tmp, "repodirs2");
+    const run = (...args: string[]) =>
+      Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", SID, "--json", ...args], {
+        env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: ccxRoot, CLAUDE_CONFIG_DIR: homeB, XDG_CONFIG_HOME: tmp },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    const p = run("--no-repodir");
+    const out = await new Response(p.stdout).text();
+    expect(await p.exited).toBe(0);
+    expect((JSON.parse(out) as { repodir?: string }).repodir).toBeUndefined();
+    expect(await stat(join(ccxRoot, "github.com")).catch(() => null)).toBeNull();
+  });
+});

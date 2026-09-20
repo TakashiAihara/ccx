@@ -25,6 +25,7 @@ import { mkdir, readdir, rename, rm, rmdir, stat, unlink } from "node:fs/promise
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, join } from "node:path";
 
+import { parseRepoSpec } from "./repospec.ts";
 import { encodeCwd } from "./scan.ts";
 
 export type TranscriptStore = {
@@ -61,9 +62,28 @@ export type SessionMeta = {
   sha256: string;
   pushedAt: string;
   toolResults: ToolResult[];
+  /**
+   * cwd の git remote (origin) から取った `host/owner/repo`。pull した側がここから
+   * repodir を作る。cwd が git の外なら無い
+   */
+  repo?: string;
 };
 
 export type ToolResult = { name: string; sha256: string };
+
+/** cwd の origin を `host/owner/repo` に。git の外 / origin 無し / cwd が無い、は undefined */
+export async function repoOf(cwd: string): Promise<string | undefined> {
+  if (!cwd) return undefined;
+  try {
+    const proc = Bun.spawn(["git", "-C", cwd, "remote", "get-url", "origin"], { stdout: "pipe", stderr: "ignore" });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    if (code !== 0 || !out.trim()) return undefined;
+    const s = parseRepoSpec(out.trim(), { defaultHost: "github.com" });
+    return `${s.host}/${s.owner}/${s.repo}`;
+  } catch {
+    return undefined;
+  }
+}
 
 export type HistoryEntry = {
   op: "push" | "pull" | "prune";
@@ -408,6 +428,7 @@ export class TranscriptClient {
         transcriptFacts(snapshot),
         localToolResults(t.toolResultsDir),
       ]);
+      const repo = await repoOf(facts.cwd);
       const size = (await stat(snapshot)).size;
 
       const metaKey = `${prefix}session.json`;
@@ -433,6 +454,7 @@ export class TranscriptClient {
         sha256: digest,
         pushedAt: new Date().toISOString(),
         toolResults,
+        ...(repo ? { repo } : {}),
       };
       await this.s3.write(metaKey, JSON.stringify(meta, null, 2));
       await this.record(prefix, "push");
