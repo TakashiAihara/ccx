@@ -70,6 +70,9 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
   test("normalizeDeclared fills missing keys and drops wrong types; sameDeclared compares every field", () => {
     expect(normalizeDeclared(null)).toEqual(EMPTY_DECLARED);
     expect(normalizeDeclared({ done: "yes", label: 3, task: "t", pinned: true })).toEqual({ ...EMPTY_DECLARED, pinned: true, task: "t" });
+    // 3 つの flag それぞれが `=== true` で見ていること (truthy な文字列は false)
+    expect(normalizeDeclared({ done: "yes", pinned: "yes", ephemeral: "yes" })).toEqual(EMPTY_DECLARED);
+    expect(normalizeDeclared({ done: true, pinned: true, ephemeral: true })).toEqual({ ...EMPTY_DECLARED, done: true, pinned: true, ephemeral: true });
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED })).toBe(true);
     for (const k of ["done", "pinned", "ephemeral"] as const) expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, [k]: true })).toBe(false);
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, label: "a" })).toBe(false);
@@ -80,11 +83,19 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await writeDeclared(SID, { done: true }, home);
     await mkdir(join(home, "sessions", "not-a-uuid"), { recursive: true });
     await Bun.write(join(home, "sessions", "12345.json"), "{}");
+    // 印を外して空になったディレクトリ / Claude Code 自身のファイルしか無いディレクトリは数えない
+    const cleared = `${SID.slice(0, 8)}-0000-4000-8000-000000000000`;
+    await writeDeclared(cleared, { done: true }, home);
+    await writeDeclared(cleared, { done: false }, home);
+    await Bun.write(join(home, "sessions", cleared, "label-history.json"), "{}");
     expect(await markedSessionIds(home)).toEqual([SID]);
     expect(await markedSessionIds(join(home, "nope"))).toEqual([]);
 
     const other = `${SID.slice(0, 8)}-ffff-4fff-8fff-ffffffffffff`;
     expect(resolveSessionId(SID.slice(0, 8), [SID])).toBe(SID);
+    // 大文字で受けても小文字の id に解く (Linux では別ディレクトリになり、push が印を見失う)
+    expect(resolveSessionId(SID.toUpperCase(), [])).toBe(SID);
+    expect(resolveSessionId(SID.slice(0, 8).toUpperCase(), [SID])).toBe(SID);
     expect(() => resolveSessionId(SID.slice(0, 8), [SID, other])).toThrow(/matches 2 sessions/);
     expect(resolveSessionId(SID.slice(0, 10), [SID, other])).toBe(SID);
     expect(() => resolveSessionId("ffffffff", [SID])).toThrow(/no local session/);

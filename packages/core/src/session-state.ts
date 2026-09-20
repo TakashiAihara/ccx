@@ -108,15 +108,24 @@ export async function writeDeclared(sessionId: string, patch: Partial<DeclaredSt
   return readDeclared(sessionId, home);
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** 8-4-4-4-12。Claude Code の session id はこの形 (小文字で書かれる) */
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 印のディレクトリを持つ session の id (transcript の有無は問わない) */
+/**
+ * 印が 1 つでも立っている session の id (transcript の有無は問わない)。ディレクトリが
+ * あるだけでは数えない: 印を外した後や、Claude Code 自身が置くファイル (label の履歴
+ * 等) で空のディレクトリが残るため
+ */
 export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
+  let names: string[];
   try {
-    return (await readdir(join(home, "sessions"))).filter((n) => UUID.test(n));
+    names = (await readdir(join(home, "sessions"))).filter((n) => UUID.test(n));
   } catch {
     return [];
   }
+  const out: string[] = [];
+  for (const id of names) if (!isEmptyDeclared(await readDeclared(id, home))) out.push(id);
+  return out;
 }
 
 /**
@@ -124,10 +133,19 @@ export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
  * 曖昧なら止まる (別の session に印を付けない)
  */
 export function resolveSessionId(idOrPrefix: string, known: Iterable<string>): string {
-  if (UUID.test(idOrPrefix)) return idOrPrefix;
-  const hits = [...new Set(known)].filter((id) => id.startsWith(idOrPrefix)).sort();
-  if (hits.length === 0) throw new Error(`no local session matches ${idOrPrefix}`);
+  // Claude Code の id は小文字。大文字で受けても同じ session を指す (Linux では別のディレクトリになる)
+  const q = idOrPrefix.toLowerCase();
+  if (UUID.test(q)) return q;
+  const hits = [...new Set(known)].filter((id) => id.startsWith(q)).sort();
+  if (hits.length === 0) throw new NoLocalSession(idOrPrefix);
   if (hits.length > 1) throw new Error(`${idOrPrefix} matches ${hits.length} sessions: ${hits.join(", ")}`);
   return hits[0]!;
+}
+
+export class NoLocalSession extends Error {
+  constructor(readonly prefix: string) {
+    super(`no local session matches ${prefix}`);
+    this.name = "NoLocalSession";
+  }
 }
 

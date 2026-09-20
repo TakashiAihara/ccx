@@ -21,17 +21,17 @@ import {
   localOrigin,
   localTranscripts,
   NoTranscriptStore,
-  readDeclared,
   runningSessionIds,
   TranscriptClient,
   type DeclaredState,
+  type Lifecycle,
 } from "@ccx/core";
 
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
-import { lifecycleOf, registerSessionState } from "./session-state.ts";
+import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { registerTranscript } from "./transcript.ts";
 
 export const VERSION = "0.1.0";
@@ -293,7 +293,7 @@ repodir
 
 const session = program
   .command("session")
-  .description("Sessions: what the center has collected, and the state ccx holds for each (#127)");
+  .description("Sessions: what the center has collected, and the state ccx holds for each");
 
 session
   .command("ls")
@@ -324,8 +324,10 @@ session
       return;
     }
 
-    // 状態の列。このマシンの行は手元の印と pid から、他のマシンの行は保存先の
-    // state.json から (保存先が無ければ空)。center の event DB には写さない (#127)
+    // 状態の列。このマシンの行は pid と手元の transcript / 印から (手元に無い archived な
+    // ものだけ保存先の state.json)、他のマシンの行は保存先の state.json から (保存先が
+    // 無ければ空)。保存先へは行ごとに GET 1〜2 回で、一覧は引かない。center の event DB
+    // には写さない (#127)
     const home = claudeHome();
     const me = localOrigin(cfg.machine).machine;
     const store = cfg.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
@@ -335,11 +337,11 @@ session
       res.sessions.map(async (s) => {
         const id = s.key?.sessionId ?? "";
         const origin = { machine: s.key?.machine ?? "", user: s.key?.user ?? "" };
-        let lifecycle: string;
+        let lifecycle: Lifecycle | "";
         let state: DeclaredState | null;
         if (origin.machine === me) {
-          lifecycle = await lifecycleOf(id, home, running, hasTranscript.has(id), store);
-          state = await readDeclared(id, home);
+          lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
+          state = await declaredFor(id, home, lifecycle, store, origin);
         } else {
           // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
           lifecycle = s.endedAt ? "ended" : "";
@@ -366,7 +368,7 @@ session
         shortId(s.key?.sessionId ?? "?"),
         s.key?.machine ?? "?",
         s.key?.user ?? "?",
-        lifecycle === "unknown" ? "" : lifecycle,
+        lifecycle,
         state ? flagsOf(state).join(",") : "",
         String(s.eventCount),
         humanSince(last),
@@ -380,7 +382,7 @@ session
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
     console.error(
-      `\n${me}: running / ended / archived are read here (pid, transcript, store). Other machines: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
+      `\n${me}: running / ended read here (pid, transcript)${store ? ", archived from the store" : "; no store configured, so a pruned session shows unknown"}. Other machines: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
     );
   });
 

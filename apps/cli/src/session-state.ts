@@ -8,14 +8,17 @@ import {
   loadConfig,
   localOrigin,
   localTranscripts,
+  isEmptyDeclared,
   markedSessionIds,
+  NoLocalSession,
   readDeclared,
   resolveSessionId,
   runningSessionIds,
   TranscriptClient,
   writeDeclared,
-  type Lifecycle,
   type DeclaredState,
+  type Lifecycle,
+  type Origin,
 } from "@ccx/core";
 
 import { table } from "./format.ts";
@@ -23,9 +26,10 @@ import { table } from "./format.ts";
 /**
  * `ccx session mark / label / task / status` — 宣言された状態をローカルに書き、読む (#127)。
  *
- * center も保存先も要らない (docs/design/scope.md の invariant)。保存先に運ぶのは
- * `ccx tr push` で、ここは手元の印だけを扱う。id を省くと自分の session
- * (`CLAUDE_CODE_SESSION_ID`。Claude Code が hook / Bash に渡す)。
+ * 書く側 (mark / label / task) は center も保存先も要らない (docs/design/scope.md の
+ * invariant)。読む側 (status) は手元を先に見て、手元に無い session (archived) だけ
+ * 保存先の state.json を読む。保存先が無ければ unknown と言う。id を省くと自分の
+ * session (`CLAUDE_CODE_SESSION_ID`。Claude Code が hook / Bash に渡す)。
  */
 
 async function knownIds(home: string): Promise<string[]> {
@@ -33,8 +37,18 @@ async function knownIds(home: string): Promise<string[]> {
   return [...ts.map((t) => t.sessionId), ...marked];
 }
 
-async function target(idOrPrefix: string | undefined, home: string): Promise<string> {
-  if (idOrPrefix) return resolveSessionId(idOrPrefix, await knownIds(home));
+/** 手元 (transcript と印) で解けなければ、保存先の一覧 (archived な session) でも試す */
+async function target(idOrPrefix: string | undefined, home: string, store: TranscriptClient | null = null): Promise<string> {
+  if (idOrPrefix) {
+    try {
+      return resolveSessionId(idOrPrefix, await knownIds(home));
+    } catch (e) {
+      if (!(e instanceof NoLocalSession) || !store) throw e;
+      const id = await store.resolve(idOrPrefix.toLowerCase()).catch(() => null);
+      if (!id) throw e;
+      return id;
+    }
+  }
   const own = process.env.CLAUDE_CODE_SESSION_ID;
   if (!own) throw new Error("give a session id, or run inside a Claude Code session (CLAUDE_CODE_SESSION_ID)");
   return own;
@@ -48,23 +62,58 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
 
 /**
  * 観測される状態。running は pid、ended は手元に transcript がある、archived は手元に
- * 無く保存先にある。保存先が無いか答えなければ unknown (「無い」とは言わない)
+ * 無く保存先にある。保存先が無いか答えなければ unknown (「無い」とは言わない)。
+ * origin を渡せばその下だけを 1 GET で見る (`session ls` の行ごと用)。渡さなければ
+ * 全 machine を探す (`find`。1 件を見る `status` 用)
  */
 export async function lifecycleOf(
   sessionId: string,
-  home: string,
   running: Set<string>,
   hasTranscript: boolean,
   store: TranscriptClient | null,
+  origin?: Origin,
 ): Promise<Lifecycle> {
   if (running.has(sessionId)) return "running";
   if (hasTranscript) return "ended";
   if (!store) return "unknown";
   try {
-    return (await store.find(sessionId)) ? "archived" : "unknown";
-  } catch {
+    const there = origin ? await store.inStore(sessionId, origin) : (await store.find(sessionId)) !== null;
+    return there ? "archived" : "unknown";
+  } catch (e) {
+    // 「保存先に無い」と「保存先が答えない」を同じ unknown にしない: 後者は stderr に出す
+    warnStore(store, e);
     return "unknown";
   }
+}
+
+let warned = false;
+function warnStore(store: TranscriptClient, e: unknown): void {
+  if (warned) return;
+  warned = true;
+  console.error(`(transcript store ${store.store.endpoint} did not answer: ${e instanceof Error ? e.message : String(e)}; lifecycle and flags from it are unknown)`);
+}
+
+/**
+ * 表示する宣言状態。手元の印があればそれ、無ければ (archived なら) 保存先の state.json。
+ * 手元の印は push で保存先に写るので、両方あるときは手元が新しい
+ */
+export async function declaredFor(
+  sessionId: string,
+  home: string,
+  lifecycle: Lifecycle,
+  store: TranscriptClient | null,
+  origin?: Origin,
+): Promise<DeclaredState> {
+  const local = await readDeclared(sessionId, home);
+  if (!isEmptyDeclared(local) || lifecycle !== "archived" || !store) return local;
+  const remote = await (origin
+    ? store.readRemoteDeclared(sessionId, origin)
+    : store.find(sessionId).then((m) => (m ? store.readRemoteDeclared(sessionId, m) : null))
+  ).catch((e: unknown) => {
+    warnStore(store, e);
+    return null;
+  });
+  return remote ?? local;
 }
 
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
@@ -116,10 +165,12 @@ export function registerSessionState(session: Command): void {
     .option("--json", "print as JSON")
     .action(async (idOrPrefix: string | undefined, o) => {
       const home = claudeHome();
-      const id = await target(idOrPrefix, home);
-      const [running, ts, s, store] = await Promise.all([runningSessionIds(home), localTranscripts(home), readDeclared(id, home), storeOrNull()]);
-      const lifecycle = await lifecycleOf(id, home, running, ts.some((t) => t.sessionId === id), store);
-      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, flags: flagsOf(s), ...s }, null, 2));
+      const store = await storeOrNull();
+      const id = await target(idOrPrefix, home, store);
+      const [running, ts] = await Promise.all([runningSessionIds(home), localTranscripts(home)]);
+      const lifecycle = await lifecycleOf(id, running, ts.some((t) => t.sessionId === id), store);
+      const s = await declaredFor(id, home, lifecycle, store);
+      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s }, null, 2));
       else for (const line of show(id, lifecycle, s)) console.log(line);
     });
 }

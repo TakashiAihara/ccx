@@ -50,8 +50,8 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 
 | verb | does | refuses when |
 |---|---|---|
-| `push [id...] \| --ended \| --done` | snapshot the file, put transcript, tool-results (hashed, only the ones not already there), session.json; record `push`. `state.json` is written whenever the local marks differ from the store's copy, even when the transcript is unchanged (reported as `state`) | — (unchanged content is skipped, not an error) |
-| `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; the store's `state.json` becomes the local marks (only on a fresh install — `already-here` leaves local marks alone); record `pull`; then, when `session.json` names a repo, a **fresh repodir on the default branch** (mirror refreshed) and the `cd … && claude --resume <id>` line to run (`--no-repodir` skips it) | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
+| `push [id...] \| --ended \| --done` | snapshot the file, put transcript, tool-results (hashed, only the ones not already there), session.json; record `push`. `state.json` is written whenever the local marks differ from the store's copy, even when the transcript is unchanged (reported as `state`, recorded as a `state` history entry) | — (unchanged content is skipped, not an error) |
+| `pull <id \| prefix>` | tool-results first (each verified), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; the store's `state.json` becomes the local marks only when this machine holds none for the session (a mark set here — before the transcript, or after an earlier pull — is never overwritten by the store's copy); record `pull`; then, when `session.json` names a repo, a **fresh repodir on the default branch** (mirror refreshed) and the `cd … && claude --resume <id>` line to run (`--no-repodir` skips it) | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
 | `ls [-m machine]` | every `session.json`, newest push first, with its flags and label and who last pulled it | — |
 | `prune [id...] \| --ended \| --done` | delete the local transcript and tool-results (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript and tool-results; the matching copy, **read back and hashed**, differs from the local files |
 | `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl`; `transcripts` and `history` views | — |
@@ -129,8 +129,8 @@ real machines yet — `apps/cli/src/transcript.test.ts` stands two config dirs i
 ## Not here
 
 - ccx-agent pushing and pruning on its own when a session ends and `done` / `ephemeral` say so (#129)
-- a history entry for a state-only push: `history/` records transfers of the transcript; state changes
-  are visible by reading `state.json`
+- a timestamp inside `state.json`: when a mark changed is the `state` entry in `history/`, which
+  names the machine and user too
 - retention in the store
 - transcript deltas for accounting (#120) — a different route with a different consumer
 - a `pull --cwd` to land the file under a different project directory: Claude Code finds the session by

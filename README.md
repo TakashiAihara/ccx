@@ -93,11 +93,13 @@ ccx session status [id]       # lifecycle (running / ended / archived) + flags, 
 ```
 
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `archived` (no transcript
-here, a copy in the store). Declared: `done`, `pinned`, `ephemeral`, plus a free-text `label` and
+here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared: `done`,
+`pinned`, `ephemeral`, plus a free-text `label` and
 one external `task` reference. `ccx session ls` and `ccx tr ls` show the flags and label; `ccx tr
-push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on the
-receiving machine. What you *do* with a flag — which sessions get reclaimed, whether `done` closes
-anything — stays yours; ccx only holds and carries it.
+push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a machine
+that holds none yet (marks already set there are never overwritten). What you *do* with a flag —
+which sessions get reclaimed, whether `done` closes anything — stays yours; ccx only holds and
+carries it.
 
 Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /
 `hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
@@ -112,7 +114,7 @@ be resumed elsewhere.
 
 ```bash
 ccx tr push --ended           # every local session that is not running (unchanged ones are skipped)
-ccx tr push --done            # every local session marked done (ccx session mark done); combine with --ended for both
+ccx tr push --done            # every local session marked done (ccx session mark done); with --ended too: only those that are both
 ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
 ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>

@@ -28,7 +28,7 @@ import { basename, join } from "node:path";
 
 import { parseRepoSpec } from "./repospec.ts";
 import { encodeCwd } from "./scan.ts";
-import { claudeHome, normalizeDeclared, readDeclared, sameDeclared, writeDeclared, type DeclaredState } from "./session-state.ts";
+import { claudeHome, isEmptyDeclared, normalizeDeclared, readDeclared, sameDeclared, UUID, writeDeclared, type DeclaredState } from "./session-state.ts";
 
 export type TranscriptStore = {
   /** S3 互換の endpoint。ccx-center なら hub.url と同じ */
@@ -88,14 +88,12 @@ export async function repoOf(cwd: string): Promise<string | undefined> {
 }
 
 export type HistoryEntry = {
-  op: "push" | "pull" | "prune";
+  /** `state` は state.json だけを書いた (transcript は同じ) */
+  op: "push" | "pull" | "prune" | "state";
   machine: string;
   user: string;
   at: string;
 };
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 
 /** machine は config の `machine` (ccx-agent と同じ規則) を渡す。省けば hostname */
 export const localOrigin = (machine = hostname()): Origin => ({ machine, user: userInfo().username });
@@ -286,6 +284,8 @@ export type PullResult = {
   meta: SessionMeta;
   /** 保存先の state.json。無ければ null (state.json より前に push されたもの) */
   state: DeclaredState | null;
+  /** state を手元の印に写したか。手元に印が既にあれば写さない */
+  stateApplied: boolean;
   path: string;
   /** --force で押し退けた元のファイルの退避先 */
   replaced?: string;
@@ -342,7 +342,7 @@ export class TranscriptClient {
     }
   }
 
-  /** 保存先に session.json があるか。archived (写しがあり、手元に無い) の判定に使う */
+  /** 保存先のその origin の下に session.json があるか。1 GET で済むので `session ls` の archived 判定に使う (`find` は全 machine を list する) */
   async inStore(sessionId: string, origin: Origin = this.origin): Promise<boolean> {
     return (await this.readMeta(`${this.keyPrefix(sessionId, origin)}session.json`)) !== null;
   }
@@ -444,6 +444,9 @@ export class TranscriptClient {
     const syncState = async () => {
       const remote = await this.readRemoteDeclared(t.sessionId);
       if (remote && sameDeclared(remote, state)) return false;
+      // 印が 1 つも無い session に空の state.json を置かない。無いのは空と同じ意味で、
+      // 印を付けたことのない session ごとに PUT が 1 つ増えるだけになる
+      if (!remote && isEmptyDeclared(state)) return false;
       await this.s3.write(`${prefix}state.json`, JSON.stringify(state, null, 2));
       return true;
     };
@@ -460,7 +463,10 @@ export class TranscriptClient {
       const metaKey = `${prefix}session.json`;
       const prev = await this.readMeta(metaKey);
       if (prev && prev.sha256 === digest && prev.size === size && sameToolResults(prev.toolResults, toolResults)) {
-        return { status: (await syncState()) ? "state" : "unchanged", meta: prev, state };
+        if (!(await syncState())) return { status: "unchanged", meta: prev, state };
+        // transcript は運んでいないが、印が変わったことは履歴に残す (いつ・どのマシンが)
+        await this.record(prefix, "state");
+        return { status: "state", meta: prev, state };
       }
 
       await this.s3.write(`${prefix}transcript.jsonl`, Bun.file(snapshot));
@@ -498,8 +504,9 @@ export class TranscriptClient {
    * transcript が無いので次の pull がやり直す。手元に同じ id の別内容があれば、
    * 上書きせず止まる。force で越えるときも、元のファイルは隣に退避して消さない
    * (push されていない続きかもしれない)。
-   * 保存先の state.json は transcript を新しく置いたときだけ手元の印に写す。既に
-   * ある (already-here) ときは触らない — 手元で立て直した印を、古い写しで消さない。
+   * 保存先の state.json は、transcript を新しく置き、かつ手元に印が 1 つも無いときだけ
+   * 写す。手元に印があれば (already-here でも、transcript より先に印だけ付けた場合でも)
+   * 触らない — 手元で立てた印を、古い写しで消さない。
    */
   async pull(sessionId: string, home = claudeHome(), force = false): Promise<PullResult> {
     const meta = await this.find(sessionId);
@@ -518,7 +525,7 @@ export class TranscriptClient {
         // transcript は同じ。tool-results まで揃っていれば何もしない
         const hasTr = (await stat(trDir).catch(() => null))?.isDirectory() ?? false;
         if (sameToolResults(await localToolResults(hasTr ? trDir : null), meta.toolResults)) {
-          return { status: "already-here", meta, state, path };
+          return { status: "already-here", meta, state, stateApplied: false, path };
         }
       } else if (!force) {
         throw new Error(
@@ -551,9 +558,10 @@ export class TranscriptClient {
     } finally {
       await rm(tmp, { force: true });
     }
-    if (state) await writeDeclared(sessionId, state, home);
+    const stateApplied = state !== null && isEmptyDeclared(await readDeclared(sessionId, home));
+    if (stateApplied) await writeDeclared(sessionId, state!, home);
     await this.record(prefix, "pull");
-    return { status: "pulled", meta, state, path, replaced };
+    return { status: "pulled", meta, state, stateApplied, path, replaced };
   }
 
   /**

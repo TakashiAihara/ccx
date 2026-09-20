@@ -14,11 +14,12 @@ import { createApp } from "@ccx/hub/src/server.ts";
 
 import { encodeCwd, EMPTY_DECLARED, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
 
-import { lifecycleOf } from "./session-state.ts";
+import { declaredFor, lifecycleOf } from "./session-state.ts";
 import { select } from "./transcript.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID2 = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const SID3 = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const CWD = "/home/a/.ccx/github.com/o/r/01AAAAAAAAAAAA";
 
 let server: ReturnType<typeof Bun.serve>;
@@ -60,10 +61,14 @@ describe("session state travels with the transcript", () => {
 
   test("push writes state.json from the local marks; a mark changed after push goes up as `state` without re-sending the transcript", async () => {
     const t = await seed(homeA, SID);
+    // 印が 1 つも無ければ state.json を置かない (無い = 空)
+    expect((await A.push(t, homeA)).status).toBe("pushed");
+    expect(await Bun.file(stateKey()).exists()).toBe(false);
+    expect(await A.readRemoteDeclared(SID)).toBeNull();
     await writeDeclared(SID, { done: true, label: "L", task: "kaneo ccx#1" }, homeA);
 
     const r1 = await A.push(t, homeA);
-    expect(r1.status).toBe("pushed");
+    expect(r1.status).toBe("state");
     expect(r1.state).toEqual({ ...EMPTY_DECLARED, done: true, label: "L", task: "kaneo ccx#1" });
     expect(await Bun.file(stateKey()).json()).toEqual(r1.state);
     expect(await A.readRemoteDeclared(SID)).toEqual(r1.state);
@@ -74,8 +79,8 @@ describe("session state travels with the transcript", () => {
     const r2 = await A.push(t, homeA);
     expect(r2.status).toBe("state");
     expect((await Bun.file(stateKey()).json()).pinned).toBe(true);
-    // transcript は置き直していない (history は最初の push の 1 件のまま)
-    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push"]);
+    // transcript は置き直していないが、印が変わったことは履歴に残る
+    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state"]);
 
     // 印を外しても運ぶ (「無い」ではなく「false」を置く)
     await writeDeclared(SID, { done: false, pinned: false, label: "", task: "" }, homeA);
@@ -83,15 +88,16 @@ describe("session state travels with the transcript", () => {
     expect(await A.readRemoteDeclared(SID)).toEqual(EMPTY_DECLARED);
   });
 
-  test("pull installs the store's state as local marks on a fresh machine, but does not touch marks when the transcript is already here", async () => {
+  test("pull installs the store's state as local marks on a fresh machine, but never over marks this machine already holds", async () => {
     const t = await seed(homeA, SID);
     await writeDeclared(SID, { done: true, ephemeral: true, label: "L" }, homeA);
     await A.push(t, homeA);
 
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
+    expect(r.stateApplied).toBe(true);
     expect(r.state).toEqual({ ...EMPTY_DECLARED, done: true, ephemeral: true, label: "L" });
-    expect(await readDeclared(SID, homeB)).toEqual(r.state);
+    expect(await readDeclared(SID, homeB)).toEqual(r.state!);
     // ephemeral は SessionEnd hook が読む名前で置かれる
     expect(await Bun.file(join(homeB, "sessions", SID, "delete")).exists()).toBe(true);
 
@@ -99,12 +105,22 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { done: false, pinned: true }, homeB);
     const again = await B.pull(SID, homeB);
     expect(again.status).toBe("already-here");
+    expect(again.stateApplied).toBe(false);
     expect(again.state?.done).toBe(true);
     expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, ephemeral: true, pinned: true, label: "L" });
+
+    // transcript より先に印だけ付けたマシンに pull しても、その印は残る (保存先の写しは適用しない)
+    await rm(join(homeB, "projects"), { recursive: true, force: true });
+    await writeDeclared(SID, { done: false, pinned: true, ephemeral: false, label: "", task: "" }, homeB);
+    const pre = await B.pull(SID, homeB);
+    expect(pre.status).toBe("pulled");
+    expect(pre.stateApplied).toBe(false);
+    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, pinned: true });
   });
 
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
     const t = await seed(homeA, SID);
+    await writeDeclared(SID, { done: true }, homeA);
     await A.push(t, homeA);
     await rm(stateKey());
     expect(await A.readRemoteDeclared(SID)).toBeNull();
@@ -115,19 +131,35 @@ describe("session state travels with the transcript", () => {
     expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, pinned: true });
   });
 
-  test("lifecycle: running by pid, ended by a local transcript, archived by the store, unknown otherwise", async () => {
+  test("lifecycle: running by pid, ended by a local transcript, archived by the store (any machine's copy, or one origin's), unknown otherwise", async () => {
     const t = await seed(homeA, SID);
-    expect(await lifecycleOf(SID, homeA, new Set([SID]), true, A)).toBe("running");
-    expect(await lifecycleOf(SID, homeA, new Set(), true, A)).toBe("ended");
+    expect(await lifecycleOf(SID, new Set([SID]), true, A)).toBe("running");
+    expect(await lifecycleOf(SID, new Set(), true, A)).toBe("ended");
     // 手元に無く、保存先にも無い → unknown。保存先が無い → unknown (「無い」とは言わない)
-    expect(await lifecycleOf(SID, homeA, new Set(), false, A)).toBe("unknown");
-    expect(await lifecycleOf(SID, homeA, new Set(), false, null)).toBe("unknown");
+    expect(await lifecycleOf(SID, new Set(), false, A)).toBe("unknown");
+    expect(await lifecycleOf(SID, new Set(), false, null)).toBe("unknown");
     await A.push(t, homeA);
-    expect(await lifecycleOf(SID, homeA, new Set(), false, A)).toBe("archived");
-    // 別マシンが push した写しでも archived
-    expect(await lifecycleOf(SID, homeB, new Set(), false, B)).toBe("archived");
-    expect(await A.inStore(SID)).toBe(true);
-    expect(await B.inStore(SID)).toBe(false);
+    expect(await lifecycleOf(SID, new Set(), false, A)).toBe("archived");
+    // 別マシンが push した写しでも archived (origin 無し = 全 machine を探す)
+    expect(await lifecycleOf(SID, new Set(), false, B)).toBe("archived");
+    // origin を渡せばその下だけ: host-a の写しは host-b の下には無い
+    expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-a", user: "alice" })).toBe("archived");
+    expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-b", user: "bob" })).toBe("unknown");
+  });
+
+  test("declaredFor shows local marks first, and the store's state.json only for an archived session with no local marks", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { done: true, label: "L" }, homeA);
+    await A.push(t, homeA);
+    // 手元に印がある → 手元 (保存先とは違えても)
+    await writeDeclared(SID, { label: "newer" }, homeA);
+    expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
+    // archived で手元に印が無い → 保存先
+    expect(await declaredFor(SID, homeB, "archived", B)).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
+    expect(await declaredFor(SID, homeB, "archived", B, { machine: "host-a", user: "alice" })).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
+    // archived でなければ保存先は見ない。保存先が無ければ手元 (空)
+    expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
+    expect(await declaredFor(SID, homeB, "archived", null)).toEqual(EMPTY_DECLARED);
   });
 });
 
@@ -135,6 +167,8 @@ describe("select: --ended / --done", () => {
   test("--done picks sessions marked done (running included for push, excluded for prune); --ended --done is the intersection", async () => {
     await seed(homeA, SID, "one");
     await seed(homeA, SID2, "two");
+    // SID3: ended だが done ではない。--ended と --ended --done を区別するための対照
+    await seed(homeA, SID3, "three");
     await writeDeclared(SID, { done: true }, homeA);
     // SID2 を「動いている」に見せる
     await mkdir(join(homeA, "sessions"), { recursive: true });
@@ -144,7 +178,7 @@ describe("select: --ended / --done", () => {
     const ids = (r: { picked: LocalTranscript[] }) => r.picked.map((t) => t.sessionId).sort();
     expect(ids(await select([], { done: true }, { home: homeA }))).toEqual([SID, SID2]);
     expect(ids(await select([], { done: true }, { home: homeA, excludeRunning: true }))).toEqual([SID]);
-    expect(ids(await select([], { ended: true }, { home: homeA }))).toEqual([SID]);
+    expect(ids(await select([], { ended: true }, { home: homeA }))).toEqual([SID, SID3]);
     expect(ids(await select([], { ended: true, done: true }, { home: homeA }))).toEqual([SID]);
 
     await writeDeclared(SID, { done: false }, homeA);
@@ -154,5 +188,49 @@ describe("select: --ended / --done", () => {
     // 明示の id は選択子を要らない。何も無ければ止まる
     expect(ids(await select([SID.slice(0, 8)], {}, { home: homeA }))).toEqual([SID]);
     await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --done/);
+  });
+});
+
+describe("ccx session (the CLI itself, no center, no store)", () => {
+  const cli = join(import.meta.dir, "index.ts");
+  async function run(args: string[], env: Record<string, string> = {}) {
+    const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", CCX_TRANSCRIPT_ENDPOINT: "", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { out, err, code };
+  }
+
+  test("mark / --off / label '' / task / status resolve the id from the argument, a prefix, or CLAUDE_CODE_SESSION_ID", async () => {
+    await seed(homeA, SID);
+    // 引数無し + env 無し → 止まる
+    const none = await run(["mark", "done"], { CLAUDE_CODE_SESSION_ID: "" });
+    expect(none.code).toBe(1);
+    expect(none.err).toMatch(/CLAUDE_CODE_SESSION_ID/);
+
+    expect((await run(["mark", "done"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
+    expect((await run(["mark", "pinned", SID.slice(0, 8)])).code).toBe(0);
+    expect((await run(["label", "scope｜step", SID])).code).toBe(0);
+    expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
+    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, done: true, pinned: true, label: "scope｜step", task: "kaneo ccx#1" });
+
+    expect((await run(["mark", "done", "--off", SID])).code).toBe(0);
+    expect((await run(["label", "", SID])).code).toBe(0);
+    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
+
+    const bad = await run(["mark", "archived", SID]);
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/unknown flag archived/);
+    expect((await run(["mark", "done", "ffffffff"])).err).toMatch(/no local session matches ffffffff/);
+
+    // status: 保存先が無いので lifecycle は手元から (transcript あり = ended)。--json の形は mark と同じ鍵 + lifecycle
+    const st = await run(["status", SID.slice(0, 8), "--json"]);
+    expect(st.code).toBe(0);
+    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
+    const mark = await run(["mark", "ephemeral", SID, "--json"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "done", "pinned", "ephemeral", "label", "task"]);
+    expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+pinned,ephemeral/);
   });
 });
