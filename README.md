@@ -81,6 +81,37 @@ Point the CLI at a center the same way `ccxd` is pointed at one (`CCX_HUB_URL` /
 `hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
 empty.
 
+### Taking a session's transcript with you
+
+A session's memory is its transcript — the JSONL that `claude --resume <id>` reads. `ccx transcript`
+(alias `tr`) copies it to an S3-compatible store and brings it back on any machine, so a finished
+session's transcript need not linger on the host it happened to run on, and the same conversation can
+be resumed elsewhere.
+
+```bash
+ccx tr push --ended           # every local session that is not running (unchanged ones are skipped)
+ccx tr push <id>...           # just these
+ccx tr ls                     # what the store holds, newest push first, with who last pulled it
+ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
+ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
+```
+
+The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to
+reach it from another machine the center must be bound beyond loopback, see `apps/hub/README.md`), or
+any S3-compatible endpoint via `CCX_TRANSCRIPT_ENDPOINT` / `CCX_TRANSCRIPT_BUCKET` / `[transcript]`
+in the config file. Nothing is set → `ccx transcript` exits `3` like `ccx session` does, and says so;
+every other verb is unaffected.
+
+The layout is Hive-partitioned so DuckDB reads it without a manifest
+(`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
+file, plus `tool-results/`, `session.json` and an append-only `history/` of every push and pull).
+See `docs/design/transcript-store.md`.
+
+`ccx` decides only whether a session is *running* (`--ended` is everything that is not). Whether it is
+*done* is your call — feed it ids from whatever marks completion in your workflow. `prune` refuses a
+running session, a session the store does not have, and any session whose copy in the store does not
+read back byte-identical (transcript and tool-results both) — and it exits `1` if it refused any.
+
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own
 fzf keybindings and layout apply — and a numbered prompt when it is not. Both draw on the terminal,

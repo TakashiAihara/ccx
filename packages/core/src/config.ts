@@ -15,7 +15,7 @@
  * どれも無くても動く。
  */
 
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
 import { parseProtocol, type Protocol } from "./repospec.ts";
@@ -33,8 +33,19 @@ export type Config = {
     agent: string;
     model?: string;
   };
+  /**
+   * このマシンの名前。ccxd と同じ規則 (CCX_MACHINE / ccx.machine / machine / hostname)。
+   * center の event と transcript の保存先の両方でマシンを指す鍵なので、揃っていないと
+   * `ccx session` と `ccx transcript ls` が同じマシンを別名で呼ぶ
+   */
+  machine: string;
   /** 未設定なら hub 無し = ローカル単独動作 */
   hub?: { url: string };
+  /**
+   * transcript の保存先 (S3 互換)。未設定なら `ccx transcript` だけが使えない。
+   * endpoint を書かなければ hub.url (center の object API) が保存先になる
+   */
+  transcript?: { endpoint: string; bucket: string; prefix: string; region?: string };
 };
 
 const DEFAULT_MIRROR_MAX_AGE_MS = 10 * 60 * 1000;
@@ -62,6 +73,12 @@ export function parseDuration(v: unknown): number {
   }
 }
 
+/** key の prefix は空か `/` 終わり、先頭に `/` は無し。`a` と `a/` を別の場所にしない */
+export function normalizePrefix(raw: string): string {
+  const p = raw.replace(/^\/+/, "");
+  return p && !p.endsWith("/") ? `${p}/` : p;
+}
+
 export function configPath(env = process.env): string {
   if (env.CCX_CONFIG) return env.CCX_CONFIG;
   const xdg = env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -74,6 +91,7 @@ export function defaultConfig(): Config {
     root,
     mirrorRoot: join(root, ".mirror"),
     defaultHost: "github.com",
+    machine: hostname(),
     protocol: "https",
     mirrorMaxAgeMs: DEFAULT_MIRROR_MAX_AGE_MS,
     defaults: { agent: "claude" },
@@ -151,6 +169,15 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
     env.CCX_MODEL ?? (await readGit("ccx.model")) ?? (fileDefaults.model as string | undefined);
   const hubUrl = env.CCX_HUB_URL ?? (await readGit("ccx.hubUrl")) ?? (fileHub?.url as string | undefined);
 
+  // [transcript] テーブルは同じ 3 段で引く。endpoint だけは hub.url に落ちる。
+  // ただし center の object API は HTTP なので、hub.url が http(s) でなければ落とさない
+  const t: Sources = { ...s, file: (file.transcript ?? {}) as Record<string, unknown> };
+  const hubHttp = hubUrl && /^https?:\/\//.test(hubUrl) ? hubUrl : undefined;
+  const tEndpoint = (await pick(t, "CCX_TRANSCRIPT_ENDPOINT", "ccx.transcriptEndpoint", "endpoint")) ?? hubHttp;
+  const tBucket = (await pick(t, "CCX_TRANSCRIPT_BUCKET", "ccx.transcriptBucket", "bucket")) ?? "ccx";
+  const tPrefixRaw = (await pick(t, "CCX_TRANSCRIPT_PREFIX", "ccx.transcriptPrefix", "prefix")) ?? "";
+  const tRegion = await pick(t, "CCX_TRANSCRIPT_REGION", "ccx.transcriptRegion", "region");
+
   return {
     root,
     mirrorRoot: mirrorRaw ? expandTilde(mirrorRaw) : join(root, ".mirror"),
@@ -162,6 +189,15 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
       agent: agent || base.defaults.agent,
       model: model || undefined,
     },
+    machine: (await pick(s, "CCX_MACHINE", "ccx.machine", "machine")) ?? hostname(),
     hub: hubUrl ? { url: String(hubUrl) } : undefined,
+    transcript: tEndpoint
+      ? {
+          endpoint: String(tEndpoint),
+          bucket: String(tBucket),
+          prefix: normalizePrefix(tPrefixRaw),
+          region: tRegion || undefined,
+        }
+      : undefined,
   };
 }

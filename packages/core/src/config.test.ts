@@ -38,6 +38,11 @@ beforeAll(async () => {
       "[defaults]",
       'agent = "file-agent"',
       "",
+      "[transcript]",
+      'endpoint = "http://file-store:9000"',
+      'bucket = "file-bucket"',
+      'prefix = "file-prefix"',
+      "",
       "[hub]",
       'url = "nats://file.example:4222"',
       "",
@@ -69,6 +74,7 @@ describe("設定の解決", () => {
     expect(cfg.defaults.agent).toBe("claude");
     expect(cfg.protocol).toBe("https");
     expect(cfg.hub).toBeUndefined();
+    expect(cfg.transcript).toBeUndefined();
   });
 
   test("設定ファイルを読む", async () => {
@@ -81,6 +87,30 @@ describe("設定の解決", () => {
     expect(cfg.protocol).toBe("ssh");
     expect(cfg.defaults.agent).toBe("file-agent");
     expect(cfg.hub?.url).toBe("nats://file.example:4222");
+    // prefix は `/` 終わりに揃う
+    expect(cfg.transcript).toEqual({
+      endpoint: "http://file-store:9000",
+      bucket: "file-bucket",
+      prefix: "file-prefix/",
+      region: undefined,
+    });
+  });
+
+  test("transcript store: env > git > file、endpoint 無指定なら hub.url、bucket の既定は ccx", async () => {
+    const fromEnv = await loadConfig({
+      env: { CCX_CONFIG: cfgFile, CCX_TRANSCRIPT_ENDPOINT: "http://env-store", CCX_TRANSCRIPT_PREFIX: "p/" },
+      git: gitStub({ "ccx.transcriptBucket": "git-bucket", "ccx.transcriptRegion": "ap-northeast-1" }),
+    });
+    expect(fromEnv.transcript).toEqual({ endpoint: "http://env-store", bucket: "git-bucket", prefix: "p/", region: "ap-northeast-1" });
+    const slashPrefix = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_TRANSCRIPT_PREFIX: "/lead/ing" }, git: noGit });
+    expect(slashPrefix.transcript?.prefix).toBe("lead/ing/");
+
+    const hubOnly = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://center:8791" }, git: noGit });
+    expect(hubOnly.transcript).toEqual({ endpoint: "http://center:8791", bucket: "ccx", prefix: "", region: undefined });
+
+    // http でない hub.url (nats 等) は S3 の endpoint にならない
+    const natsHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "nats://center:4222" }, git: noGit });
+    expect(natsHub.transcript).toBeUndefined();
   });
 
   test("git config はファイルより強い", async () => {
@@ -135,6 +165,13 @@ describe("設定の解決", () => {
     expect(cfg.defaults.agent).toBe("opencode");
     expect(cfg.defaults.model).toBe("sonnet-5");
     expect(cfg.hub?.url).toBe("nats://env:4222");
+  });
+
+  test("machine follows ccxd's rule: CCX_MACHINE > ccx.machine > file > hostname", async () => {
+    const { hostname } = await import("node:os");
+    expect((await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome }, git: noGit })).machine).toBe(hostname());
+    expect((await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_MACHINE: "box-1" }, git: noGit })).machine).toBe("box-1");
+    expect((await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome }, git: gitStub({ "ccx.machine": "box-2" }) })).machine).toBe("box-2");
   });
 
   test("protocol も 4 段の優先順位に乗る (env > git config > ファイル > 既定値)", async () => {

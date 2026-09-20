@@ -20,6 +20,9 @@
         "@connectrpc/connect-web": "^2.1.0",
         "commander": "^13.1.0",
       },
+      "devDependencies": {
+        "@ccx/hub": "workspace:*",
+      },
     },
     "apps/hub": {
       "name": "@ccx/hub",
