@@ -50,19 +50,29 @@ the next prompt in a running session may replace it; a pulled label likewise las
 session's first prompt. ccx carries whatever is there — the current name — and does not compete
 with the hook.
 
-In the store the declared state is one object, `state.json`, next to `session.json`
-(`transcript-store.md`). The center's event database does not get a copy: one source of truth per
-kind — local files for this machine, `state.json` for what was pushed.
+Two copies leave the machine, for two readers:
+
+- `state.json` in the store, next to `session.json` (`transcript-store.md`): what `pull` installs on
+  another machine. Written by `ccx tr push`.
+- an event at the center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
+  shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` right after the local
+  write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
+  and the next mark sends the whole state again. The center keeps the latest event per session
+  (`Session.state` in `fleet.proto`); it does not count these as hooks. (User decision, 2026-09-21:
+  the center has a database, the list should come from it rather than from one GET per row.)
+
+The local files stay the source of truth; both copies are projections of them, and a copy that is
+missing (`null`) is "the center / the store has not heard", not "no mark".
 
 ## Verbs
 
 | Verb | Does |
 |---|---|
-| `ccx session mark archived [id] [--off]` | set or clear the flag |
-| `ccx session label <text> [id]` | set the label; an empty string clears it |
-| `ccx session task <ref> [id]` | set the task reference; an empty string clears it |
+| `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to the center if one is configured |
+| `ccx session label <text> [id]` | set the label; an empty string clears it; report as above |
+| `ccx session task <ref> [id]` | set the task reference; an empty string clears it; report as above |
 | `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
-| `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript, one GET to the store under this machine's own prefix — never a listing) and flags from `state.json` for other machines' rows when a store is configured |
+| `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript; one GET to the store under this machine's own prefix for `remote`, never a listing) and, for other machines' rows, the state the center last received from `ccx session mark` — no store access for those |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
 | `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds no declaration for that session; a declaration made here — including clearing the last mark — is never overwritten or revived. Checked on `already-here` too, so a pull that died after the transcript but before the marks is repaired by pulling again |
 | `ccx tr ls` | flags and label per stored session |

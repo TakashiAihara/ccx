@@ -109,9 +109,14 @@ type Session struct {
 	// 「その session の cwd」ではなく「最後に見えた cwd」。
 	Cwd            string `protobuf:"bytes,5,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	TranscriptPath string `protobuf:"bytes,6,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
-	// 観測した event の件数と、最後の hook 種別。
-	EventCount    uint64 `protobuf:"varint,7,opt,name=event_count,json=eventCount,proto3" json:"event_count,omitempty"`
-	LastHook      string `protobuf:"bytes,8,opt,name=last_hook,json=lastHook,proto3" json:"last_hook,omitempty"`
+	// 観測した event の件数と、最後の hook 種別。PRODUCER_CCX_SESSION_STATE の event は
+	// どちらにも数えない (hook ではない)。
+	EventCount uint64 `protobuf:"varint,7,opt,name=event_count,json=eventCount,proto3" json:"event_count,omitempty"`
+	LastHook   string `protobuf:"bytes,8,opt,name=last_hook,json=lastHook,proto3" json:"last_hook,omitempty"`
+	// 最後に届いた宣言状態 (ingest.proto の PRODUCER_CCX_SESSION_STATE)。1 件も届いて
+	// いなければ未設定 — 「印が無い」ではなく「center は知らない」。真実源はその
+	// マシンのファイルで、これは写し (#127)。
+	State         *SessionState `protobuf:"bytes,9,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -202,6 +207,74 @@ func (x *Session) GetLastHook() string {
 	return ""
 }
 
+func (x *Session) GetState() *SessionState {
+	if x != nil {
+		return x.State
+	}
+	return nil
+}
+
+// 宣言された状態。名前と意味は docs/design/session-state.md。
+type SessionState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Archived      bool                   `protobuf:"varint,1,opt,name=archived,proto3" json:"archived,omitempty"`
+	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	Task          string                 `protobuf:"bytes,3,opt,name=task,proto3" json:"task,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionState) Reset() {
+	*x = SessionState{}
+	mi := &file_ccx_v1_fleet_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionState) ProtoMessage() {}
+
+func (x *SessionState) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_fleet_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionState.ProtoReflect.Descriptor instead.
+func (*SessionState) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SessionState) GetArchived() bool {
+	if x != nil {
+		return x.Archived
+	}
+	return false
+}
+
+func (x *SessionState) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *SessionState) GetTask() string {
+	if x != nil {
+		return x.Task
+	}
+	return ""
+}
+
 // 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
 // payload から導出した値。
 //
@@ -231,7 +304,7 @@ type EventRecord struct {
 
 func (x *EventRecord) Reset() {
 	*x = EventRecord{}
-	mi := &file_ccx_v1_fleet_proto_msgTypes[2]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +316,7 @@ func (x *EventRecord) String() string {
 func (*EventRecord) ProtoMessage() {}
 
 func (x *EventRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_fleet_proto_msgTypes[2]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +329,7 @@ func (x *EventRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventRecord.ProtoReflect.Descriptor instead.
 func (*EventRecord) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{2}
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *EventRecord) GetEventId() string {
@@ -344,7 +417,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_ccx_v1_fleet_proto_msgTypes[3]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -356,7 +429,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_fleet_proto_msgTypes[3]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -369,7 +442,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{3}
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListSessionsRequest) GetMachine() string {
@@ -410,7 +483,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_ccx_v1_fleet_proto_msgTypes[4]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -422,7 +495,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_fleet_proto_msgTypes[4]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -435,7 +508,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{4}
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListSessionsResponse) GetSessions() []*Session {
@@ -465,7 +538,7 @@ type ListEventsRequest struct {
 
 func (x *ListEventsRequest) Reset() {
 	*x = ListEventsRequest{}
-	mi := &file_ccx_v1_fleet_proto_msgTypes[5]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -477,7 +550,7 @@ func (x *ListEventsRequest) String() string {
 func (*ListEventsRequest) ProtoMessage() {}
 
 func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_fleet_proto_msgTypes[5]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -490,7 +563,7 @@ func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListEventsRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{5}
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListEventsRequest) GetMachine() string {
@@ -559,7 +632,7 @@ type ListEventsResponse struct {
 
 func (x *ListEventsResponse) Reset() {
 	*x = ListEventsResponse{}
-	mi := &file_ccx_v1_fleet_proto_msgTypes[6]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -571,7 +644,7 @@ func (x *ListEventsResponse) String() string {
 func (*ListEventsResponse) ProtoMessage() {}
 
 func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_fleet_proto_msgTypes[6]
+	mi := &file_ccx_v1_fleet_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -584,7 +657,7 @@ func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListEventsResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{6}
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListEventsResponse) GetEvents() []*EventRecord {
@@ -604,7 +677,7 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\"\xd3\x02\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\"\xff\x02\n" +
 	"\aSession\x12$\n" +
 	"\x03key\x18\x01 \x01(\v2\x12.ccx.v1.SessionKeyR\x03key\x129\n" +
 	"\n" +
@@ -615,7 +688,12 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\x0ftranscript_path\x18\x06 \x01(\tR\x0etranscriptPath\x12\x1f\n" +
 	"\vevent_count\x18\a \x01(\x04R\n" +
 	"eventCount\x12\x1b\n" +
-	"\tlast_hook\x18\b \x01(\tR\blastHook\"\xb0\x02\n" +
+	"\tlast_hook\x18\b \x01(\tR\blastHook\x12*\n" +
+	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"T\n" +
+	"\fSessionState\x12\x1a\n" +
+	"\barchived\x18\x01 \x01(\bR\barchived\x12\x14\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
+	"\x04task\x18\x03 \x01(\tR\x04task\"\xb0\x02\n" +
 	"\vEventRecord\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x18\n" +
 	"\amachine\x18\x02 \x01(\tR\amachine\x12\x12\n" +
@@ -670,36 +748,38 @@ func file_ccx_v1_fleet_proto_rawDescGZIP() []byte {
 	return file_ccx_v1_fleet_proto_rawDescData
 }
 
-var file_ccx_v1_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_ccx_v1_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_ccx_v1_fleet_proto_goTypes = []any{
 	(*SessionKey)(nil),            // 0: ccx.v1.SessionKey
 	(*Session)(nil),               // 1: ccx.v1.Session
-	(*EventRecord)(nil),           // 2: ccx.v1.EventRecord
-	(*ListSessionsRequest)(nil),   // 3: ccx.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),  // 4: ccx.v1.ListSessionsResponse
-	(*ListEventsRequest)(nil),     // 5: ccx.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),    // 6: ccx.v1.ListEventsResponse
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*SessionState)(nil),          // 2: ccx.v1.SessionState
+	(*EventRecord)(nil),           // 3: ccx.v1.EventRecord
+	(*ListSessionsRequest)(nil),   // 4: ccx.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),  // 5: ccx.v1.ListSessionsResponse
+	(*ListEventsRequest)(nil),     // 6: ccx.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),    // 7: ccx.v1.ListEventsResponse
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
 }
 var file_ccx_v1_fleet_proto_depIdxs = []int32{
 	0,  // 0: ccx.v1.Session.key:type_name -> ccx.v1.SessionKey
-	7,  // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
-	7,  // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
-	7,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
-	7,  // 4: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
-	1,  // 5: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
-	7,  // 6: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	7,  // 7: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
-	2,  // 8: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
-	3,  // 9: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
-	5,  // 10: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
-	4,  // 11: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
-	6,  // 12: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	8,  // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
+	8,  // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
+	8,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
+	2,  // 4: ccx.v1.Session.state:type_name -> ccx.v1.SessionState
+	8,  // 5: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
+	1,  // 6: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
+	8,  // 7: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	8,  // 8: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
+	3,  // 9: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
+	4,  // 10: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
+	6,  // 11: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
+	5,  // 12: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
+	7,  // 13: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
+	12, // [12:14] is the sub-list for method output_type
+	10, // [10:12] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_fleet_proto_init() }
@@ -713,7 +793,7 @@ func file_ccx_v1_fleet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_fleet_proto_rawDesc), len(file_ccx_v1_fleet_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

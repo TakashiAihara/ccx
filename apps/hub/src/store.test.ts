@@ -255,3 +255,36 @@ describe("payload は要求されたときだけ SELECT する", () => {
     expect(withPayload).toContain("payload");
   });
 });
+
+describe("session state events (producer 2, #127)", () => {
+  const hook = (sid: string, name = "PostToolUse") => ev({ payload: { session_id: sid, hook_event_name: name, cwd: "/w" } });
+  const state = (sid: string, s: Record<string, unknown>, over: EvOverride = {}) =>
+    ev({ producer: 2, payload: { session_id: sid, state: s }, ...over });
+
+  test("the latest state per session rides on the row; state events do not count as hooks", () => {
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1" }), hook("s2")]);
+    const rows = listSessions(db, { limit: 10 });
+    const s1 = rows.find((r) => r.sessionId === "s1")!;
+    const s2 = rows.find((r) => r.sessionId === "s2")!;
+    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1" });
+    // hook の統計に state event は乗らない
+    expect(s1.eventCount).toBe(1);
+    expect(s1.lastHook).toBe("PostToolUse");
+    // 1 件も届いていない session は null (「印が無い」ではなく「知らない」)
+    expect(s2.state).toBeNull();
+    // 最新は received_at で決まる。後から届いた古い時刻の event は勝たない
+    ingest(db, [state("s1", { archived: false, label: "stale", task: "" }, { receivedAtMs: 500 })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("second");
+  });
+
+  test("a session with only state events is not listed; an unreadable state payload counts as none", () => {
+    ingest(db, [state("only", { archived: true, label: "", task: "" }), hook("s3"), ev({ producer: 2, payload: new Uint8Array([0xff, 0xfe]) }), state("s3", { archived: "yes", label: 1, task: "t" })]);
+    const rows = listSessions(db, { limit: 10 });
+    expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
+    // 型の合わない値は落とす (truthy な文字列は true ではない)
+    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t" });
+    // 一覧の key を持つ session に読めない state しか無ければ null
+    ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();
+  });
+});

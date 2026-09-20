@@ -40,7 +40,18 @@ export type SessionRow = {
   transcriptPath: string;
   lastHook: string;
   eventCount: number;
+  /** 最後に届いた宣言状態 (producer 2)。1 件も無ければ null */
+  state: SessionState | null;
 };
+
+export type SessionState = {
+  archived: boolean;
+  label: string;
+  task: string;
+};
+
+/** ingest.proto の PRODUCER_CCX_SESSION_STATE。hook ではないので session の統計から外す */
+const PRODUCER_SESSION_STATE = 2;
 
 /**
  * SQLite のホスト変数の上限 (32766) に対する余裕を見た刻み幅。1 行 12 列なので
@@ -110,9 +121,13 @@ export type ListSessionsFilter = {
  * ROW_NUMBER で最後の 1 行を選んで取る。SQLite には「MIN/MAX と同じ行の裸の列が
  * 取れる」という方言があるが、MIN と MAX を同時に使うと、どちらの行が選ばれるかは
  * 決まらない。方言に寄りかからずに書く。
+ *
+ * 宣言状態 (producer 2) は hook の統計に混ぜず、一覧に載った session ごとに最新の
+ * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
+ * center が一覧するのは hook が観測した session で、印はその属性。
  */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
-  const where: SQL[] = [sql`session_id != ''`];
+  const where: SQL[] = [sql`session_id != ''`, sql`producer != ${PRODUCER_SESSION_STATE}`];
   if (f.machine) where.push(sql`machine = ${f.machine}`);
   if (f.user) where.push(sql`os_user = ${f.user}`);
 
@@ -154,6 +169,7 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     LIMIT ${f.limit}
   `);
 
+  const states = latestStates(db, rows);
   return rows.map((r) => ({
     machine: r.machine,
     user: r.os_user,
@@ -165,7 +181,45 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     transcriptPath: r.transcript_path,
     lastHook: r.last_hook,
     eventCount: r.event_count,
+    state: states.get(`${r.machine}\0${r.os_user}\0${r.session_id}`) ?? null,
   }));
+}
+
+/** 一覧の session ごとに、最後に届いた宣言状態の payload を読む。読めない payload は無いものとして扱う */
+function latestStates(db: Db, keys: { machine: string; os_user: string; session_id: string }[]): Map<string, SessionState> {
+  const out = new Map<string, SessionState>();
+  if (keys.length === 0) return out;
+  const tuples = keys.map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`);
+  const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: Buffer }>(sql`
+    SELECT machine, os_user, session_id, payload
+    FROM (
+      SELECT machine, os_user, session_id, payload,
+             ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC) AS rn
+      FROM events
+      WHERE producer = ${PRODUCER_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+    )
+    WHERE rn = 1
+  `);
+  for (const r of rows) {
+    const s = parseState(r.payload);
+    if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
+  }
+  return out;
+}
+
+function parseState(payload: Uint8Array): SessionState | null {
+  try {
+    const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload)) as { state?: Record<string, unknown> };
+    const s = o?.state;
+    if (!s || typeof s !== "object") return null;
+    return {
+      archived: s.archived === true,
+      label: typeof s.label === "string" ? s.label : "",
+      task: typeof s.task === "string" ? s.task : "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 export type ListEventsFilter = {

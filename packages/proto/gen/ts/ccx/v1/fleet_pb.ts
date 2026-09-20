@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/fleet.proto.
  */
 export const file_ccx_v1_fleet: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvZmxlZXQucHJvdG8SBmNjeC52MSI/CgpTZXNzaW9uS2V5Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJIoUCCgdTZXNzaW9uEh8KA2tleRgBIAEoCzISLmNjeC52MS5TZXNzaW9uS2V5Ei4KCmZpcnN0X3NlZW4YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KCWxhc3Rfc2VlbhgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZW5kZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA2N3ZBgFIAEoCRIXCg90cmFuc2NyaXB0X3BhdGgYBiABKAkSEwoLZXZlbnRfY291bnQYByABKAQSEQoJbGFzdF9ob29rGAggASgJItcBCgtFdmVudFJlY29yZBIQCghldmVudF9pZBgBIAEoCRIPCgdtYWNoaW5lGAIgASgJEgwKBHVzZXIYAyABKAkSCwoDc2VxGAQgASgEEi8KC3JlY2VpdmVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIOCgZwYXJzZWQYBiABKAgSEgoKc2Vzc2lvbl9pZBgHIAEoCRIXCg9ob29rX2V2ZW50X25hbWUYCCABKAkSCwoDY3dkGAkgASgJEg8KB3BheWxvYWQYCiABKAwiWAoTTGlzdFNlc3Npb25zUmVxdWVzdBIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkSEwoLYWN0aXZlX29ubHkYAyABKAgSDQoFbGltaXQYBCABKA0iOQoUTGlzdFNlc3Npb25zUmVzcG9uc2USIQoIc2Vzc2lvbnMYASADKAsyDy5jY3gudjEuU2Vzc2lvbiLdAQoRTGlzdEV2ZW50c1JlcXVlc3QSDwoHbWFjaGluZRgBIAEoCRIMCgR1c2VyGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSFwoPaG9va19ldmVudF9uYW1lGAQgASgJEikKBXNpbmNlGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIpCgV1bnRpbBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDQoFbGltaXQYByABKA0SFwoPaW5jbHVkZV9wYXlsb2FkGAggASgIIjkKEkxpc3RFdmVudHNSZXNwb25zZRIjCgZldmVudHMYASADKAsyEy5jY3gudjEuRXZlbnRSZWNvcmQyngEKDEZsZWV0U2VydmljZRJJCgxMaXN0U2Vzc2lvbnMSGy5jY3gudjEuTGlzdFNlc3Npb25zUmVxdWVzdBocLmNjeC52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZRJDCgpMaXN0RXZlbnRzEhkuY2N4LnYxLkxpc3RFdmVudHNSZXF1ZXN0GhouY2N4LnYxLkxpc3RFdmVudHNSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvZmxlZXQucHJvdG8SBmNjeC52MSI/CgpTZXNzaW9uS2V5Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJIqoCCgdTZXNzaW9uEh8KA2tleRgBIAEoCzISLmNjeC52MS5TZXNzaW9uS2V5Ei4KCmZpcnN0X3NlZW4YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KCWxhc3Rfc2VlbhgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZW5kZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA2N3ZBgFIAEoCRIXCg90cmFuc2NyaXB0X3BhdGgYBiABKAkSEwoLZXZlbnRfY291bnQYByABKAQSEQoJbGFzdF9ob29rGAggASgJEiMKBXN0YXRlGAkgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZSI9CgxTZXNzaW9uU3RhdGUSEAoIYXJjaGl2ZWQYASABKAgSDQoFbGFiZWwYAiABKAkSDAoEdGFzaxgDIAEoCSLXAQoLRXZlbnRSZWNvcmQSEAoIZXZlbnRfaWQYASABKAkSDwoHbWFjaGluZRgCIAEoCRIMCgR1c2VyGAMgASgJEgsKA3NlcRgEIAEoBBIvCgtyZWNlaXZlZF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDgoGcGFyc2VkGAYgASgIEhIKCnNlc3Npb25faWQYByABKAkSFwoPaG9va19ldmVudF9uYW1lGAggASgJEgsKA2N3ZBgJIAEoCRIPCgdwYXlsb2FkGAogASgMIlgKE0xpc3RTZXNzaW9uc1JlcXVlc3QSDwoHbWFjaGluZRgBIAEoCRIMCgR1c2VyGAIgASgJEhMKC2FjdGl2ZV9vbmx5GAMgASgIEg0KBWxpbWl0GAQgASgNIjkKFExpc3RTZXNzaW9uc1Jlc3BvbnNlEiEKCHNlc3Npb25zGAEgAygLMg8uY2N4LnYxLlNlc3Npb24i3QEKEUxpc3RFdmVudHNSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJEhcKD2hvb2tfZXZlbnRfbmFtZRgEIAEoCRIpCgVzaW5jZRgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASKQoFdW50aWwYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg0KBWxpbWl0GAcgASgNEhcKD2luY2x1ZGVfcGF5bG9hZBgIIAEoCCI5ChJMaXN0RXZlbnRzUmVzcG9uc2USIwoGZXZlbnRzGAEgAygLMhMuY2N4LnYxLkV2ZW50UmVjb3JkMp4BCgxGbGVldFNlcnZpY2USSQoMTGlzdFNlc3Npb25zEhsuY2N4LnYxLkxpc3RTZXNzaW9uc1JlcXVlc3QaHC5jY3gudjEuTGlzdFNlc3Npb25zUmVzcG9uc2USQwoKTGlzdEV2ZW50cxIZLmNjeC52MS5MaXN0RXZlbnRzUmVxdWVzdBoaLmNjeC52MS5MaXN0RXZlbnRzUmVzcG9uc2ViBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * 鍵は (user, machine, session_id) の 3 つ。
@@ -100,7 +100,8 @@ export type Session = Message<"ccx.v1.Session"> & {
   transcriptPath: string;
 
   /**
-   * 観測した event の件数と、最後の hook 種別。
+   * 観測した event の件数と、最後の hook 種別。PRODUCER_CCX_SESSION_STATE の event は
+   * どちらにも数えない (hook ではない)。
    *
    * @generated from field: uint64 event_count = 7;
    */
@@ -110,6 +111,15 @@ export type Session = Message<"ccx.v1.Session"> & {
    * @generated from field: string last_hook = 8;
    */
   lastHook: string;
+
+  /**
+   * 最後に届いた宣言状態 (ingest.proto の PRODUCER_CCX_SESSION_STATE)。1 件も届いて
+   * いなければ未設定 — 「印が無い」ではなく「center は知らない」。真実源はその
+   * マシンのファイルで、これは写し (#127)。
+   *
+   * @generated from field: ccx.v1.SessionState state = 9;
+   */
+  state?: SessionState | undefined;
 };
 
 /**
@@ -118,6 +128,35 @@ export type Session = Message<"ccx.v1.Session"> & {
  */
 export const SessionSchema: GenMessage<Session> = /*@__PURE__*/
   messageDesc(file_ccx_v1_fleet, 1);
+
+/**
+ * 宣言された状態。名前と意味は docs/design/session-state.md。
+ *
+ * @generated from message ccx.v1.SessionState
+ */
+export type SessionState = Message<"ccx.v1.SessionState"> & {
+  /**
+   * @generated from field: bool archived = 1;
+   */
+  archived: boolean;
+
+  /**
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * @generated from field: string task = 3;
+   */
+  task: string;
+};
+
+/**
+ * Describes the message ccx.v1.SessionState.
+ * Use `create(SessionStateSchema)` to create a new message.
+ */
+export const SessionStateSchema: GenMessage<SessionState> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_fleet, 2);
 
 /**
  * 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
@@ -194,7 +233,7 @@ export type EventRecord = Message<"ccx.v1.EventRecord"> & {
  * Use `create(EventRecordSchema)` to create a new message.
  */
 export const EventRecordSchema: GenMessage<EventRecord> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_fleet, 2);
+  messageDesc(file_ccx_v1_fleet, 3);
 
 /**
  * @generated from message ccx.v1.ListSessionsRequest
@@ -232,7 +271,7 @@ export type ListSessionsRequest = Message<"ccx.v1.ListSessionsRequest"> & {
  * Use `create(ListSessionsRequestSchema)` to create a new message.
  */
 export const ListSessionsRequestSchema: GenMessage<ListSessionsRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_fleet, 3);
+  messageDesc(file_ccx_v1_fleet, 4);
 
 /**
  * @generated from message ccx.v1.ListSessionsResponse
@@ -251,7 +290,7 @@ export type ListSessionsResponse = Message<"ccx.v1.ListSessionsResponse"> & {
  * Use `create(ListSessionsResponseSchema)` to create a new message.
  */
 export const ListSessionsResponseSchema: GenMessage<ListSessionsResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_fleet, 4);
+  messageDesc(file_ccx_v1_fleet, 5);
 
 /**
  * @generated from message ccx.v1.ListEventsRequest
@@ -311,7 +350,7 @@ export type ListEventsRequest = Message<"ccx.v1.ListEventsRequest"> & {
  * Use `create(ListEventsRequestSchema)` to create a new message.
  */
 export const ListEventsRequestSchema: GenMessage<ListEventsRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_fleet, 5);
+  messageDesc(file_ccx_v1_fleet, 6);
 
 /**
  * @generated from message ccx.v1.ListEventsResponse
@@ -330,7 +369,7 @@ export type ListEventsResponse = Message<"ccx.v1.ListEventsResponse"> & {
  * Use `create(ListEventsResponseSchema)` to create a new message.
  */
 export const ListEventsResponseSchema: GenMessage<ListEventsResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_fleet, 6);
+  messageDesc(file_ccx_v1_fleet, 7);
 
 /**
  * 集めたものを読み返す口。ingest.proto が「運ぶ形」を定めるのに対し、こちらは

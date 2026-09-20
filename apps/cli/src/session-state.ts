@@ -22,6 +22,13 @@ import {
   type Origin,
 } from "@ccx/core";
 
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
+import { randomUUID } from "node:crypto";
+
+import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
 import { table } from "./format.ts";
 
 /**
@@ -61,6 +68,35 @@ async function target(idOrPrefix: string | undefined, home: string, store: Trans
 async function storeOrNull(): Promise<TranscriptClient | null> {
   const cfg = await loadConfig();
   return cfg.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
+}
+
+/**
+ * 書いた宣言状態を center にも写す (ingest.proto の PRODUCER_CCX_SESSION_STATE)。
+ * center が無ければ何もしない、届かなければ stderr に 1 行出して終わる — 真実源は
+ * 手元のファイルで、center は index。次の mark が送り直す。exit code は変えない
+ */
+export async function reportState(hubUrl: string | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<"sent" | "no-center" | "failed"> {
+  if (!hubUrl) return "no-center";
+  const origin = localOrigin(machine);
+  const client = createClient(IngestService, createConnectTransport({ baseUrl: hubUrl }));
+  try {
+    await client.ingest({
+      events: [
+        {
+          origin: { machine: origin.machine, user: origin.user },
+          eventId: randomUUID(),
+          seq: 0n,
+          receivedAt: timestampFromMs(Date.now()),
+          producer: Producer.CCX_SESSION_STATE,
+          payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state })),
+        },
+      ],
+    });
+    return "sent";
+  } catch (e) {
+    console.error(`(center ${hubUrl} did not take the state: ${e instanceof Error ? e.message : String(e)}; it is recorded locally and will be sent with the next mark)`);
+    return "failed";
+  }
 }
 
 /**
@@ -140,8 +176,10 @@ export function registerSessionState(session: Command): void {
     .action(async (flag: string, idOrPrefix: string | undefined, o) => {
       if (!isFlag(flag)) throw new Error(`unknown flag ${flag}; one of ${FLAGS.join(", ")}`);
       const home = claudeHome();
+      const cfg = await loadConfig();
       const id = await target(idOrPrefix, home);
       const s = await writeDeclared(id, { [flag]: !o.off }, home);
+      await reportState(cfg.hub?.url, cfg.machine, id, s);
       if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
       else console.log(`${flag} ${o.off ? "off" : "on"}  ${id}`);
     });
@@ -155,8 +193,10 @@ export function registerSessionState(session: Command): void {
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {
         const home = claudeHome();
+        const cfg = await loadConfig();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);
+        await reportState(cfg.hub?.url, cfg.machine, id, s);
         if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
         else console.log(`${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`);
       });

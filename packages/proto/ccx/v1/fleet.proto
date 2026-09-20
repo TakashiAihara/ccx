@@ -60,9 +60,22 @@ message Session {
   string cwd = 5;
   string transcript_path = 6;
 
-  // 観測した event の件数と、最後の hook 種別。
+  // 観測した event の件数と、最後の hook 種別。PRODUCER_CCX_SESSION_STATE の event は
+  // どちらにも数えない (hook ではない)。
   uint64 event_count = 7;
   string last_hook = 8;
+
+  // 最後に届いた宣言状態 (ingest.proto の PRODUCER_CCX_SESSION_STATE)。1 件も届いて
+  // いなければ未設定 — 「印が無い」ではなく「center は知らない」。真実源はその
+  // マシンのファイルで、これは写し (#127)。
+  SessionState state = 9;
+}
+
+// 宣言された状態。名前と意味は docs/design/session-state.md。
+message SessionState {
+  bool archived = 1;
+  string label = 2;
+  string task = 3;
 }
 
 // 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が

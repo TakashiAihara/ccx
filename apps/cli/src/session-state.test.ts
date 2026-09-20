@@ -11,8 +11,9 @@ import { join } from "node:path";
 import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
+import { ingest, listSessions } from "@ccx/hub/src/store.ts";
 
-import { encodeCwd, EMPTY_DECLARED, holdsDeclared, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
+import { encodeCwd, EMPTY_DECLARED, holdsDeclared, localOrigin, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
 
 import { declaredFor, lifecycleOf } from "./session-state.ts";
 import { select } from "./transcript.ts";
@@ -298,5 +299,71 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     const mark = await run(["mark", "archived", SID, "--json"]);
     expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
+  });
+});
+
+describe("ccx session with a center: marks are reported as events, and session ls reads them back", () => {
+  const cli = join(import.meta.dir, "index.ts");
+  async function run(args: string[], env: Record<string, string> = {}) {
+    const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { out, err, code };
+  }
+  const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
+  const hook = (machine: string, user: string, sid: string, n: number) => ({
+    eventId: `h-${machine}-${n}`,
+    machine,
+    user,
+    seq: n,
+    receivedAtMs: 1000 + n,
+    producer: 1,
+    payload: enc({ session_id: sid, hook_event_name: "PostToolUse", cwd: "/w" }),
+  });
+
+  test("mark / label / task send one state event each; the center keeps the latest; an unreachable center is a note, not a failure", async () => {
+    await seed(homeA, SID);
+    expect((await run(["mark", "archived", SID])).code).toBe(0);
+    expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
+    // hook が 1 件も無い session は center の一覧に出ないが、event 自体は届いている
+    ingest(db, [hook("host-a", localOrigin().user, SID, 1)]);
+    const rows = listSessions(db, { limit: 10 });
+    const me = rows.find((r) => r.sessionId === SID);
+    expect(me?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1" });
+    // hook の統計は増えない (state event は 2 件届いている)
+    expect(me?.eventCount).toBe(1);
+
+    const down = await run(["mark", "archived", "--off", SID], { CCX_HUB_URL: "http://127.0.0.1:1" });
+    expect(down.code).toBe(0);
+    expect(down.err).toMatch(/did not take the state/);
+    expect((await readDeclared(SID, homeA)).archived).toBe(false);
+    // center は古いまま (送れていない)。次の mark が送り直す
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.archived).toBe(true);
+    expect((await run(["label", "again", SID])).code).toBe(0);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1" });
+  });
+
+  test("session ls: another machine's row shows the center's copy; this machine's row shows the local files", async () => {
+    const user = localOrigin().user;
+    await seed(homeA, SID);
+    await writeDeclared(SID, { archived: true, label: "local" }, homeA);
+    ingest(db, [
+      hook("host-a", user, SID, 1),
+      hook("host-x", "u", SID2, 2),
+      { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "" } }) },
+      hook("host-x", "u", SID3, 4),
+    ]);
+    const r = await run(["ls", "--json"]);
+    expect(r.code).toBe(0);
+    const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string }; lifecycle: string | null; state: unknown }[];
+    const by = (id: string) => rows.find((x) => x.key.sessionId === id)!;
+    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "" });
+    expect(by(SID).lifecycle).toBe("ended");
+    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "" });
+    // center に 1 件も届いていない他マシンの session は null
+    expect(by(SID3).state).toBeNull();
   });
 });
