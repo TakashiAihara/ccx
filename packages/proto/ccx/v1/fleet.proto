@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package ccx.v1;
 
+import "ccx/v1/ingest.proto";
 import "google/protobuf/timestamp.proto";
 
 // 集めたものを読み返す口。ingest.proto が「運ぶ形」を定めるのに対し、こちらは
@@ -99,6 +100,10 @@ message EventRecord {
   // payload が読めなかったときは false。読めなかった event も落とさずに返す。
   // 落とすと「パーサが壊れている」と「その event が無い」の区別がつかなくなる。
   bool parsed = 6;
+
+  // どう呼ばれたか (ingest.proto の Producer)。hook でない event (宣言状態) を読み手が
+  // 見分けるため。
+  Producer producer = 11;
 
   string session_id = 7;
   string hook_event_name = 8;

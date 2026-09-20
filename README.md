@@ -98,7 +98,8 @@ free-text `label` and one external `task` reference. `ccx session ls` and `ccx t
 `ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
 machine that holds none yet (marks already set there are never overwritten). With a center
 configured, every `mark` / `label` / `task` also reports the state there, so `ccx session ls` shows
-other machines' flags from the center's own database. What you *do* with
+other machines' and users' flags from the center's own database (this machine's rows come from its
+own files, plus one store GET to tell `remote` from `unknown`). What you *do* with
 `archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
 
 Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /

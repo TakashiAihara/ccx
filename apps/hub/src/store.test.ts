@@ -289,5 +289,8 @@ describe("session state events (producer 2, #127)", () => {
     // 読めない state しか無ければ null
     ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();
+    // 統計に数えるのは hook (producer 1) だけ。UNSPECIFIED (0) も hook ではない
+    ingest(db, [ev({ producer: 0, payload: { session_id: "s5", hook_event_name: "X" } })]);
+    expect(listSessions(db, { limit: 10 }).map((r) => r.sessionId)).not.toContain("s5");
   });
 });

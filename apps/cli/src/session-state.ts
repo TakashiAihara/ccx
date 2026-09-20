@@ -77,8 +77,8 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
  */
 const REPORT_TIMEOUT_MS = 3000;
 
-export async function reportState(hubUrl: string | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<"sent" | "no-center" | "failed"> {
-  if (!hubUrl) return "no-center";
+export async function reportState(hubUrl: string | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
+  if (!hubUrl) return;
   const origin = localOrigin(machine);
   const client = createClient(IngestService, createConnectTransport({ baseUrl: hubUrl }));
   try {
@@ -99,10 +99,8 @@ export async function reportState(hubUrl: string | undefined, machine: string | 
       // 繋がった後に黙る center で mark を止めない。best effort なので期限切れは届かなかったのと同じ
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
-    return "sent";
   } catch (e) {
     console.error(`(center ${hubUrl} did not take the state: ${e instanceof Error ? e.message : String(e)}; it is recorded locally and will be sent with the next mark)`);
-    return "failed";
   }
 }
 
@@ -186,9 +184,10 @@ export function registerSessionState(session: Command): void {
       const cfg = await loadConfig();
       const id = await target(idOrPrefix, home);
       const s = await writeDeclared(id, { [flag]: !o.off }, home);
-      await reportState(cfg.hub?.url, cfg.machine, id, s);
+      // 書けた事実を先に出す。center が遅くても、書き込みが済んだことは隠れない
       if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
       else console.log(`${flag} ${o.off ? "off" : "on"}  ${id}`);
+      await reportState(cfg.hub?.url, cfg.machine, id, s);
     });
 
   for (const key of ["label", "task"] as const) {
@@ -203,9 +202,9 @@ export function registerSessionState(session: Command): void {
         const cfg = await loadConfig();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);
-        await reportState(cfg.hub?.url, cfg.machine, id, s);
         if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
         else console.log(`${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`);
+        await reportState(cfg.hub?.url, cfg.machine, id, s);
       });
   }
 

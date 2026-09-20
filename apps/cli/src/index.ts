@@ -28,6 +28,8 @@ import {
   type Lifecycle,
 } from "@ccx/core";
 
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
@@ -439,7 +441,9 @@ session
       // パースできなかった event も出す。出さないと「壊れている」と「無い」の
       // 区別がつかなくなる
       const mark = e.parsed ? "" : "  (unparsed)";
-      console.log(`${at}  ${e.hookEventName || "?"}${mark}`);
+      // 宣言状態の event は hook 名を持たない。何の event かは producer で言う
+      const name = e.producer === Producer.CCX_SESSION_STATE ? "ccx.session.state" : e.hookEventName || "?";
+      console.log(`${at}  ${name}${mark}`);
       if (o.payload) console.log(`    ${new TextDecoder().decode(e.payload)}`);
     }
   });

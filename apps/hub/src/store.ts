@@ -1,5 +1,7 @@
 import { and, desc, eq, gte, lt, sql, type SQL } from "drizzle-orm";
 
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
 import type { Db } from "./db/open.ts";
 import { events } from "./db/schema.ts";
 import { derive } from "./derive.ts";
@@ -40,7 +42,7 @@ export type SessionRow = {
   transcriptPath: string;
   lastHook: string;
   eventCount: number;
-  /** 最後に届いた宣言状態 (producer 2)。1 件も無ければ null */
+  /** 最後に届いた宣言状態 (Producer.CCX_SESSION_STATE)。1 件も無ければ null */
   state: SessionState | null;
 };
 
@@ -50,8 +52,7 @@ export type SessionState = {
   task: string;
 };
 
-/** ingest.proto の PRODUCER_CCX_SESSION_STATE。hook ではないので session の統計から外す */
-const PRODUCER_SESSION_STATE = 2;
+
 
 /**
  * SQLite のホスト変数の上限 (32766) に対する余裕を見た刻み幅。1 行 12 列なので
@@ -122,12 +123,14 @@ export type ListSessionsFilter = {
  * 取れる」という方言があるが、MIN と MAX を同時に使うと、どちらの行が選ばれるかは
  * 決まらない。方言に寄りかからずに書く。
  *
- * 宣言状態 (producer 2) は hook の統計に混ぜず、一覧に載った session ごとに最新の
+ * session の統計 (first / last seen、件数、last hook) は hook の event (CLAUDE_CODE_HOOK)
+ * だけから作る。宣言状態 (CCX_SESSION_STATE) は混ぜず、一覧に載った session ごとに最新の
  * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
- * center が一覧するのは hook が観測した session で、印はその属性。
+ * center が一覧するのは hook が観測した session で、印はその属性 (ccx-agent が配線されて
+ * いないマシンの印は届いても見えない)。印が後から立っても last_seen は動かない。
  */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
-  const where: SQL[] = [sql`session_id != ''`, sql`producer != ${PRODUCER_SESSION_STATE}`];
+  const where: SQL[] = [sql`session_id != ''`, sql`producer = ${Producer.CLAUDE_CODE_HOOK}`];
   if (f.machine) where.push(sql`machine = ${f.machine}`);
   if (f.user) where.push(sql`os_user = ${f.user}`);
 
@@ -199,7 +202,7 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
   const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: Buffer }>(sql`
     SELECT machine, os_user, session_id, payload
     FROM events
-    WHERE producer = ${PRODUCER_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+    WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
     ORDER BY rowid DESC
   `);
   for (const r of rows) {

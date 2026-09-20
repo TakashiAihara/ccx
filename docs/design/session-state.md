@@ -58,9 +58,17 @@ Two copies leave the machine, for two readers:
   shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` right after the local
   write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
   and the next mark sends the whole state again; a center that accepts and never answers is cut off
-  after a short deadline. The center keeps the last event per session in *arrival* order
-  (`Session.state` in `fleet.proto`) — not by the sender's clock, which differs per machine — and
-  does not count these as hooks. (User decision, 2026-09-21:
+  after a short deadline; `ccx tr pull` reports the state it installed the same way. The center keeps
+  the last readable event per session in *arrival* order (`Session.state` in `fleet.proto`) — not
+  by the sender's clock, which differs per machine — and does not count these as hooks: a mark never
+  moves `last_seen`, and a session whose only events are marks is not listed (a machine without
+  `ccx-agent` wired sends marks the center accepts but never shows). `ccx session show` prints them
+  as `ccx.session.state`.
+
+The center's copy lags by construction in two cases, both accepted: a report that did not get
+through (the next mark resends the whole state), and `label`, which the auto-label hook rewrites on
+disk without telling ccx — the center's `label` is the last one a `ccx session label` (or `tr pull`)
+sent. (User decision, 2026-09-21:
   the center has a database, the list should come from it rather than from one GET per row.)
 
 The local files stay the source of truth; both copies are projections of them, and a copy that is

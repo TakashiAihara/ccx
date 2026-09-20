@@ -349,6 +349,26 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(listEvents(db, { includePayload: false, limit: 20 }).filter((e) => e.producer === 2).length).toBe(4);
   });
 
+  test("tr pull reports the state it installed; session show names the state events", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { archived: true, task: "kaneo ccx#1" }, homeA);
+    await A.push(t, homeA);
+    const p = Bun.spawn(["bun", "run", cli, "tr", "pull", SID, "--no-repodir"], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect(`${code} ${err}`).toBe("0 ");
+    expect(out).toMatch(/^pulled/);
+    expect(err).not.toMatch(/did not take/);
+    ingest(db, [hook("host-b", localOrigin().user, SID, 9)]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1" });
+    const show = await run(["show", SID, "-m", "host-b"]);
+    expect(show.out).toMatch(/ccx\.session\.state/);
+    expect(show.out).toMatch(/PostToolUse/);
+  });
+
   test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
     await seed(homeA, SID);
     const silent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Promise<Response>(() => {}) });

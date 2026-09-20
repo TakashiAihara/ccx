@@ -101,6 +101,7 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
           seq: BigInt(e.seq),
           receivedAt: timestampFromMs(e.receivedAtMs),
           parsed: e.parsed,
+          producer: e.producer,
           sessionId: e.sessionId,
           hookEventName: e.hookEventName,
           cwd: e.cwd,

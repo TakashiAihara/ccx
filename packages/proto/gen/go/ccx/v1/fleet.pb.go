@@ -291,10 +291,13 @@ type EventRecord struct {
 	ReceivedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
 	// payload が読めなかったときは false。読めなかった event も落とさずに返す。
 	// 落とすと「パーサが壊れている」と「その event が無い」の区別がつかなくなる。
-	Parsed        bool   `protobuf:"varint,6,opt,name=parsed,proto3" json:"parsed,omitempty"`
-	SessionId     string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	HookEventName string `protobuf:"bytes,8,opt,name=hook_event_name,json=hookEventName,proto3" json:"hook_event_name,omitempty"`
-	Cwd           string `protobuf:"bytes,9,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Parsed bool `protobuf:"varint,6,opt,name=parsed,proto3" json:"parsed,omitempty"`
+	// どう呼ばれたか (ingest.proto の Producer)。hook でない event (宣言状態) を読み手が
+	// 見分けるため。
+	Producer      Producer `protobuf:"varint,11,opt,name=producer,proto3,enum=ccx.v1.Producer" json:"producer,omitempty"`
+	SessionId     string   `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	HookEventName string   `protobuf:"bytes,8,opt,name=hook_event_name,json=hookEventName,proto3" json:"hook_event_name,omitempty"`
+	Cwd           string   `protobuf:"bytes,9,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	// hook の stdin をそのまま。既定では返さない (ListEventsRequest.include_payload)。
 	// PostToolUse の payload は数十 KB になるので、既定で載せると一覧が読めなくなる。
 	Payload       []byte `protobuf:"bytes,10,opt,name=payload,proto3" json:"payload,omitempty"`
@@ -372,6 +375,13 @@ func (x *EventRecord) GetParsed() bool {
 		return x.Parsed
 	}
 	return false
+}
+
+func (x *EventRecord) GetProducer() Producer {
+	if x != nil {
+		return x.Producer
+	}
+	return Producer_PRODUCER_UNSPECIFIED
 }
 
 func (x *EventRecord) GetSessionId() string {
@@ -671,7 +681,7 @@ var File_ccx_v1_fleet_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\x12ccx/v1/fleet.proto\x12\x06ccx.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"Y\n" +
+	"\x12ccx/v1/fleet.proto\x12\x06ccx.v1\x1a\x13ccx/v1/ingest.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"Y\n" +
 	"\n" +
 	"SessionKey\x12\x18\n" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
@@ -693,7 +703,7 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\fSessionState\x12\x1a\n" +
 	"\barchived\x18\x01 \x01(\bR\barchived\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
-	"\x04task\x18\x03 \x01(\tR\x04task\"\xb0\x02\n" +
+	"\x04task\x18\x03 \x01(\tR\x04task\"\xde\x02\n" +
 	"\vEventRecord\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x18\n" +
 	"\amachine\x18\x02 \x01(\tR\amachine\x12\x12\n" +
@@ -701,7 +711,8 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\x03seq\x18\x04 \x01(\x04R\x03seq\x12;\n" +
 	"\vreceived_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"receivedAt\x12\x16\n" +
-	"\x06parsed\x18\x06 \x01(\bR\x06parsed\x12\x1d\n" +
+	"\x06parsed\x18\x06 \x01(\bR\x06parsed\x12,\n" +
+	"\bproducer\x18\v \x01(\x0e2\x10.ccx.v1.ProducerR\bproducer\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\a \x01(\tR\tsessionId\x12&\n" +
 	"\x0fhook_event_name\x18\b \x01(\tR\rhookEventName\x12\x10\n" +
@@ -759,6 +770,7 @@ var file_ccx_v1_fleet_proto_goTypes = []any{
 	(*ListEventsRequest)(nil),     // 6: ccx.v1.ListEventsRequest
 	(*ListEventsResponse)(nil),    // 7: ccx.v1.ListEventsResponse
 	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(Producer)(0),                 // 9: ccx.v1.Producer
 }
 var file_ccx_v1_fleet_proto_depIdxs = []int32{
 	0,  // 0: ccx.v1.Session.key:type_name -> ccx.v1.SessionKey
@@ -767,19 +779,20 @@ var file_ccx_v1_fleet_proto_depIdxs = []int32{
 	8,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
 	2,  // 4: ccx.v1.Session.state:type_name -> ccx.v1.SessionState
 	8,  // 5: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
-	1,  // 6: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
-	8,  // 7: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	8,  // 8: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
-	3,  // 9: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
-	4,  // 10: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
-	6,  // 11: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
-	5,  // 12: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
-	7,  // 13: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
-	12, // [12:14] is the sub-list for method output_type
-	10, // [10:12] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	9,  // 6: ccx.v1.EventRecord.producer:type_name -> ccx.v1.Producer
+	1,  // 7: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
+	8,  // 8: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	8,  // 9: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
+	3,  // 10: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
+	4,  // 11: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
+	6,  // 12: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
+	5,  // 13: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
+	7,  // 14: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
+	13, // [13:15] is the sub-list for method output_type
+	11, // [11:13] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_fleet_proto_init() }
@@ -787,6 +800,7 @@ func file_ccx_v1_fleet_proto_init() {
 	if File_ccx_v1_fleet_proto != nil {
 		return
 	}
+	file_ccx_v1_ingest_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
