@@ -1,0 +1,33 @@
+# ccx-center — the data sink, as a *user* service on one machine of the fleet.
+#
+# Install (never as root):
+#   mkdir -p ~/.config/systemd/user
+#   cp ccx-center.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ccx-center
+#   loginctl enable-linger "$USER"     # stays up across logout
+#
+# To be reachable from other machines (ccxd forwarding, `ccx transcript` from
+# elsewhere) it must bind beyond loopback. The center has no authentication and
+# speaks plain HTTP, so that is refused unless the network is declared trusted:
+#   systemctl --user edit ccx-center   # add under [Service]:
+#   Environment=CCX_CENTER_HOST=0.0.0.0
+#   Environment=CCX_CENTER_ALLOW_INSECURE_BIND=1
+# or keep loopback and put a TLS-terminating, authenticating proxy in front.
+
+[Unit]
+Description=ccx-center (collects what ccxd forwards; stores transcripts)
+Documentation=https://github.com/TakashiAihara/ccx
+
+[Service]
+Type=simple
+# ccx-center is not a compiled binary yet: it runs from the repo with bun.
+# %h is the user's home; adjust the path to where the repo is checked out.
+WorkingDirectory=%h/.local/share/ccx/repo
+ExecStart=%h/.bun/bin/bun run apps/hub/src/index.ts serve
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

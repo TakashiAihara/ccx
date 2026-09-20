@@ -170,6 +170,11 @@ loopback の判定は `127.0.0.0/8` 全体と `::1` / `localhost`。`127.0.0.1` 
 bun run apps/hub/src/index.ts serve
 ```
 
+常駐させるなら `systemd/ccx-center.service` (user service。`ccxd.service` と同じ流儀)。
+別マシンから使う (ccxd の転送先 / `ccx transcript` の保存先) には loopback の外に bind する
+必要があり、その条件は下の「非 loopback bind は既定で拒む」。center はまだ単一バイナリでは
+なく、repo の checkout から `bun run` で動く。
+
 ccxd 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub] url`)。
 未設定なら ccxd は spool するだけで、それも正常な状態。
 
