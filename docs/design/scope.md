@@ -26,6 +26,28 @@ The left column is the same for everyone. The right column is yours. ccx must ne
 
 Thinking through a specific way of working is still useful — but its output is a *capability ccx must offer*, never a *structure ccx imposes*. "A worker asks the PM and keeps working" becomes the capability *ask-and-continue*. Whether you have a PM is your call. Design the verbs by imagining sentences; never ship the sentences.
 
+## Session state is ccx's to hold
+
+"Role-agnostic mechanism" is about *roles* — who reviews whom, what a PM is. It does not mean ccx holds
+no state about sessions. ccx is the integrated management of parallel sessions, and a session's
+state is the substance of that: whether it is running or ended, whether its transcript is archived
+off the host, whether someone declared it done, pinned it, or marked it disposable, what it is
+called, what task it is on. That is not methodology; it is the thing being managed. (User decision,
+2026-09-21, #127.)
+
+Two kinds of state, kept apart:
+
+| Kind | Examples | Who writes it |
+|---|---|---|
+| **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `archived` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
+| **Declared** — an intent someone recorded | `done` (scope finished), `pinned` (never reclaim), `ephemeral` (delete the transcript when it ends), a `label`, a `task` reference | a person or the session itself, through `ccx` |
+
+ccx defines these states and carries them with the transcript. What a person *does* with them —
+which sessions get reclaimed, whether a `done` session is closed by hand or by a daemon — stays on
+the methodology side, and `ccx-agent` only ever acts on a declared flag it did not originate (see
+below). Until #127 lands, the declared flags live as files under `~/.claude/sessions/<id>/`, written
+by the user's own scripts; that is a stand-in for ccx holding them, not a design.
+
 ## ccx-agent's verbs
 
 `ccx-agent` is a plain process, one per machine. Its entire purpose is to make it easy for a person to stand up an AI team and get work done — by collecting information and building scaffolding. It has exactly these verbs.
@@ -64,6 +86,7 @@ This keeps the deterministic layer honest. The moment a daemon starts advising, 
 Before building a feature, place it:
 
 - Does it decide something about *how a team works*? Not ours — provide the capability, not the policy.
+- Is it *state about a session* (lifecycle, archived, done, pinned, name, task)? Ours — hold it, carry it with the transcript, let a person or the session set the declared part.
 - Does it require ccx-agent to *reason*, or to *originate an assignment*? Move the reasoning to a session; ccx-agent may only collect, keep alive, and carry.
 - Does it make a local action *depend on the centre*? Redesign so the local action stands alone.
 
