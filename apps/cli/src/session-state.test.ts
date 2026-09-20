@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
-import { ingest, listSessions } from "@ccx/hub/src/store.ts";
+import { ingest, listEvents, listSessions } from "@ccx/hub/src/store.ts";
 
 import { encodeCwd, EMPTY_DECLARED, holdsDeclared, localOrigin, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
 
@@ -327,13 +327,14 @@ describe("ccx session with a center: marks are reported as events, and session l
   test("mark / label / task send one state event each; the center keeps the latest; an unreachable center is a note, not a failure", async () => {
     await seed(homeA, SID);
     expect((await run(["mark", "archived", SID])).code).toBe(0);
+    expect((await run(["label", "L", SID])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
     // hook が 1 件も無い session は center の一覧に出ないが、event 自体は届いている
     ingest(db, [hook("host-a", localOrigin().user, SID, 1)]);
     const rows = listSessions(db, { limit: 10 });
     const me = rows.find((r) => r.sessionId === SID);
-    expect(me?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1" });
-    // hook の統計は増えない (state event は 2 件届いている)
+    expect(me?.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1" });
+    // hook の統計は増えない (state event は 3 件届いている)
     expect(me?.eventCount).toBe(1);
 
     const down = await run(["mark", "archived", "--off", SID], { CCX_HUB_URL: "http://127.0.0.1:1" });
@@ -344,6 +345,8 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.archived).toBe(true);
     expect((await run(["label", "again", SID])).code).toBe(0);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1" });
+    // label は 3 回送っている (mark / label / task / --off の失敗 / label)
+    expect(listEvents(db, { includePayload: false, limit: 20 }).filter((e) => e.producer === 2).length).toBe(4);
   });
 
   test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
@@ -361,24 +364,30 @@ describe("ccx session with a center: marks are reported as events, and session l
     }
   }, 15_000);
 
-  test("session ls: another machine's row shows the center's copy; this machine's row shows the local files", async () => {
+  test("session ls: another machine's or user's row shows the center's copy; this machine's row shows the local files", async () => {
     const user = localOrigin().user;
     await seed(homeA, SID);
     await writeDeclared(SID, { archived: true, label: "local" }, homeA);
     ingest(db, [
       hook("host-a", user, SID, 1),
+      // center は古い写しを持っている: このマシンの行では手元が勝つ
+      { eventId: "st-a", machine: "host-a", user, seq: 0, receivedAtMs: 1001, producer: 2, payload: enc({ session_id: SID, state: { archived: false, label: "stale-center", task: "" } }) },
       hook("host-x", "u", SID2, 2),
       { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "" } }) },
       hook("host-x", "u", SID3, 4),
+      // 同じマシンの別ユーザー: 手元の ~/.claude は別なので center の写し
+      hook("host-a", "someone-else", SID3, 5),
+      { eventId: "st-o", machine: "host-a", user: "someone-else", seq: 0, receivedAtMs: 1006, producer: 2, payload: enc({ session_id: SID3, state: { archived: true, label: "other-user", task: "" } }) },
     ]);
     const r = await run(["ls", "--json"]);
     expect(r.code).toBe(0);
-    const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string }; lifecycle: string | null; state: unknown }[];
-    const by = (id: string) => rows.find((x) => x.key.sessionId === id)!;
+    const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string; user: string }; lifecycle: string | null; state: unknown }[];
+    const by = (id: string, u?: string) => rows.find((x) => x.key.sessionId === id && (!u || x.key.user === u))!;
     expect(by(SID).state).toEqual({ archived: true, label: "local", task: "" });
     expect(by(SID).lifecycle).toBe("ended");
     expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "" });
     // center に 1 件も届いていない他マシンの session は null
-    expect(by(SID3).state).toBeNull();
+    expect(by(SID3, "u").state).toBeNull();
+    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "" });
   });
 });

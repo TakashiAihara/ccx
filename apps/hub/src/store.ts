@@ -186,9 +186,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
 }
 
 /**
- * 一覧の session ごとに、最後に届いた宣言状態の payload を読む。読めない payload は無いものとして扱う。
- * 「最後」は center への到着順 (rowid)。送り手 (ccx の CLI) は seq を持たず、時計は
- * マシンごとに違うので、received_at で並べると同じ ms や戻った時計で古い方が勝つ
+ * 一覧の session ごとに、最後に届いた「読める」宣言状態を返す。読めない payload は
+ * 無いものとして扱う — 最後の 1 件が読めなければその前の読める 1 件 (読めない event を
+ * 墓標にしない)。「最後」は center への到着順 (rowid)。送り手 (ccx の CLI) は seq を
+ * 持たず、時計はマシンごとに違うので、received_at で並べると同じ ms や戻った時計で
+ * 古い方が勝つ。session ごとの state event は mark の回数ぶんしか無いので全件読んでよい
  */
 function latestStates(db: Db, keys: { machine: string; os_user: string; session_id: string }[]): Map<string, SessionState> {
   const out = new Map<string, SessionState>();
@@ -196,17 +198,15 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
   const tuples = keys.map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`);
   const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: Buffer }>(sql`
     SELECT machine, os_user, session_id, payload
-    FROM (
-      SELECT machine, os_user, session_id, payload,
-             ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY rowid DESC) AS rn
-      FROM events
-      WHERE producer = ${PRODUCER_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
-    )
-    WHERE rn = 1
+    FROM events
+    WHERE producer = ${PRODUCER_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+    ORDER BY rowid DESC
   `);
   for (const r of rows) {
+    const key = `${r.machine}\0${r.os_user}\0${r.session_id}`;
+    if (out.has(key)) continue;
     const s = parseState(r.payload);
-    if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
+    if (s) out.set(key, s);
   }
   return out;
 }
@@ -215,7 +215,7 @@ function parseState(payload: Uint8Array): SessionState | null {
   try {
     const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload)) as { state?: Record<string, unknown> };
     const s = o?.state;
-    if (!s || typeof s !== "object") return null;
+    if (!s || typeof s !== "object" || Array.isArray(s)) return null;
     return {
       archived: s.archived === true,
       label: typeof s.label === "string" ? s.label : "",

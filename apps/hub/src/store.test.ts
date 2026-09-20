@@ -278,12 +278,15 @@ describe("session state events (producer 2, #127)", () => {
   });
 
   test("a session with only state events is not listed; an unreadable state payload counts as none", () => {
-    ingest(db, [state("only", { archived: true, label: "", task: "" }), hook("s3"), ev({ producer: 2, payload: new Uint8Array([0xff, 0xfe]) }), state("s3", { archived: "yes", label: 1, task: "t" })]);
+    ingest(db, [state("only", { archived: true, label: "", task: "" }), hook("s3"), state("s3", { archived: "yes", label: 1, task: "t" })]);
     const rows = listSessions(db, { limit: 10 });
     expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
     // 型の合わない値は落とす (truthy な文字列は true ではない)
     expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t" });
-    // 一覧の key を持つ session に読めない state しか無ければ null
+    // その session 宛ての読めない state が後から届いても、前の読める state が残る (墓標にならない)
+    ingest(db, [ev({ producer: 2, payload: { session_id: "s3", state: "broken" } }), ev({ producer: 2, payload: { session_id: "s3", state: ["archived"] } })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t" });
+    // 読めない state しか無ければ null
     ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();
   });
