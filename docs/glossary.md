@@ -12,11 +12,12 @@ believed.
   "repodir state"; never bare "state" when both are in scope. The `done` in `.git/ccx.state` is about
   the working copy, the `done` flag on a session is about the conversation; a session can be done
   while its repodir is not.
-- **ended** vs **done** — *ended* is observed (no live process); *done* is declared (someone marked
-  the scope finished). `--ended` and `--marked done` on `ccx tr` are those two, and nothing else.
 - **archived** vs **remote** — *archived* is declared: someone folded the session away (the word
   the Claude Desktop app uses; user decision 2026-09-21). *remote* is observed: the transcript is in
-  the store and not on this machine. A session can be either without the other.
+  the store and not on this machine. A session can be either without the other. `--archived` and
+  `--ended` on `ccx tr` are the declared and the observed selector, and nothing else.
+- **done** — a repodir word only (`.git/ccx.state`). The user's `~/.claude/sessions/<id>/done`
+  marker is not ccx's; ccx's word for a folded-away session is `archived`.
 
 ## Sessions
 
@@ -24,15 +25,13 @@ believed.
   `~/.claude/projects/<encoded cwd>/<id>.jsonl`.
 - **lifecycle** — the observed state of a session: `running` / `ended` / `remote` / `unknown`
   (`Lifecycle` in `packages/core/src/session-state.ts`). Derived, never written.
-- **declared state** — what a person or the session recorded about it: the flags `archived` /
-  `done` / `pinned` / `ephemeral`, a `label`, a `task` (`DeclaredState`). Local files under
-  `~/.claude/sessions/<id>/`; `state.json` in the store.
-- **flag** — one of the four booleans in the declared state.
+- **declared state** — what a person or the session recorded about it: the flag `archived`, a
+  `label`, a `task` (`DeclaredState`). Local files under `~/.claude/sessions/<id>/`; `state.json`
+  in the store.
+- **flag** — a boolean in the declared state. There is one, `archived` (#135).
 - **archived** — the flag meaning "folded away; not in the working set". Declared, never derived.
 - **remote** — a session whose transcript is in the store and not on this machine. A lifecycle
   value, not a flag.
-- **ephemeral** — the flag meaning "delete the transcript when the session ends". Its local file is
-  named `delete` (the name the SessionEnd hook reads).
 - **label** — a free-text name for a session (`~/.claude/sessions/<id>/label`).
 - **task** — one external reference for what the session is on, e.g. `kaneo ccx#1`
   (`~/.claude/sessions/<id>/task`).

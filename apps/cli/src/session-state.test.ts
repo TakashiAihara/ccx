@@ -65,70 +65,69 @@ describe("session state travels with the transcript", () => {
     expect((await A.push(t, homeA)).status).toBe("pushed");
     expect(await Bun.file(stateKey()).exists()).toBe(false);
     expect(await A.readRemoteDeclared(SID)).toBeNull();
-    await writeDeclared(SID, { done: true, label: "L", task: "kaneo ccx#1" }, homeA);
 
+    await writeDeclared(SID, { archived: true, label: "L", task: "kaneo ccx#1" }, homeA);
     const r1 = await A.push(t, homeA);
     expect(r1.status).toBe("state");
-    expect(r1.state).toEqual({ ...EMPTY_DECLARED, done: true, label: "L", task: "kaneo ccx#1" });
+    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1" });
     expect(await Bun.file(stateKey()).json()).toEqual(r1.state);
     expect(await A.readRemoteDeclared(SID)).toEqual(r1.state);
 
     expect((await A.push(t, homeA)).status).toBe("unchanged");
 
-    await writeDeclared(SID, { pinned: true }, homeA);
+    await writeDeclared(SID, { task: "kaneo ccx#2" }, homeA);
     const r2 = await A.push(t, homeA);
     expect(r2.status).toBe("state");
-    expect((await Bun.file(stateKey()).json()).pinned).toBe(true);
+    expect((await Bun.file(stateKey()).json()).task).toBe("kaneo ccx#2");
     // transcript は置き直していないが、印が変わったことは履歴に残る
     expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state"]);
 
     // 印を外しても運ぶ (「無い」ではなく「false」を置く)
-    await writeDeclared(SID, { done: false, pinned: false, label: "", task: "" }, homeA);
+    await writeDeclared(SID, { archived: false, label: "", task: "" }, homeA);
     expect((await A.push(t, homeA)).status).toBe("state");
     expect(await A.readRemoteDeclared(SID)).toEqual(EMPTY_DECLARED);
   });
 
   test("pull installs the store's state as local marks on a fresh machine, but never over marks this machine already holds", async () => {
     const t = await seed(homeA, SID);
-    await writeDeclared(SID, { done: true, ephemeral: true, label: "L" }, homeA);
+    await writeDeclared(SID, { archived: true, label: "L" }, homeA);
     await A.push(t, homeA);
 
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
     expect(r.stateApplied).toBe(true);
-    expect(r.state).toEqual({ ...EMPTY_DECLARED, done: true, ephemeral: true, label: "L" });
+    expect(r.state).toEqual({ archived: true, label: "L", task: "" });
     expect(await readDeclared(SID, homeB)).toEqual(r.state!);
-    // ephemeral は SessionEnd hook が読む名前で置かれる
-    expect(await Bun.file(join(homeB, "sessions", SID, "delete")).exists()).toBe(true);
+    expect(await Bun.file(join(homeB, "sessions", SID, "archived")).exists()).toBe(true);
 
     // B で印を変えてから再度 pull (already-here) しても、B の印は保存先の古い写しで消えない
-    await writeDeclared(SID, { done: false, pinned: true }, homeB);
+    await writeDeclared(SID, { archived: false, task: "kaneo ccx#9" }, homeB);
     const again = await B.pull(SID, homeB);
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(false);
-    expect(again.state?.done).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, ephemeral: true, pinned: true, label: "L" });
+    expect(again.state?.archived).toBe(true);
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9" });
 
     // transcript より先に印だけ付けたマシンに pull しても、その印は残る (保存先の写しは適用しない)
     await rm(join(homeB, "projects"), { recursive: true, force: true });
-    await writeDeclared(SID, { done: false, pinned: true, ephemeral: false, label: "", task: "" }, homeB);
+    await writeDeclared(SID, { archived: false, label: "", task: "mine" }, homeB);
     const pre = await B.pull(SID, homeB);
     expect(pre.status).toBe("pulled");
     expect(pre.stateApplied).toBe(false);
-    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, pinned: true });
+    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, task: "mine" });
   });
 
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
     const t = await seed(homeA, SID);
-    await writeDeclared(SID, { done: true }, homeA);
+    await writeDeclared(SID, { archived: true }, homeA);
     await A.push(t, homeA);
     await rm(stateKey());
     expect(await A.readRemoteDeclared(SID)).toBeNull();
-    await writeDeclared(SID, { pinned: true }, homeB);
+    await writeDeclared(SID, { task: "mine" }, homeB);
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
     expect(r.state).toBeNull();
-    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, pinned: true });
+    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, task: "mine" });
   });
 
   test("lifecycle: running by pid, ended by a local transcript, remote by the store (any machine's copy, or one origin's), unknown otherwise", async () => {
@@ -147,51 +146,47 @@ describe("session state travels with the transcript", () => {
     expect(await lifecycleOf(SID, new Set(), false, B, { machine: "host-b", user: "bob" })).toBe("unknown");
   });
 
-  test("declaredFor shows local marks first, and the store's state.json only for an archived session with no local marks", async () => {
+  test("declaredFor shows local marks first, and the store's state.json only for a remote session with no local marks", async () => {
     const t = await seed(homeA, SID);
-    await writeDeclared(SID, { done: true, label: "L" }, homeA);
+    await writeDeclared(SID, { archived: true, label: "L" }, homeA);
     await A.push(t, homeA);
     // 手元に印がある → 手元 (保存先とは違えても)
     await writeDeclared(SID, { label: "newer" }, homeA);
     expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
     // remote で手元に印が無い → 保存先
-    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
-    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ ...EMPTY_DECLARED, done: true, label: "L" });
+    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "" });
+    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "" });
     // remote でなければ保存先は見ない。保存先が無ければ手元 (空)
     expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
     expect(await declaredFor(SID, homeB, "remote", null)).toEqual(EMPTY_DECLARED);
   });
 });
 
-describe("select: --ended / --marked", () => {
-  test("--marked <flag> picks sessions with that flag (running included for push, excluded for prune); --ended --marked is the intersection", async () => {
+describe("select: --ended / --archived", () => {
+  test("--archived picks archived sessions (running included for push, excluded for prune); --ended --archived is the intersection", async () => {
     await seed(homeA, SID, "one");
     await seed(homeA, SID2, "two");
-    // SID3: ended だが done ではない。--ended と --ended --done を区別するための対照
+    // SID3: ended だが archived ではない。--ended と --ended --archived を区別するための対照
     await seed(homeA, SID3, "three");
-    await writeDeclared(SID, { done: true }, homeA);
+    await writeDeclared(SID, { archived: true }, homeA);
     // SID2 を「動いている」に見せる
     await mkdir(join(homeA, "sessions"), { recursive: true });
     await Bun.write(join(homeA, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: SID2 }));
-    await writeDeclared(SID2, { done: true }, homeA);
+    await writeDeclared(SID2, { archived: true }, homeA);
 
     const ids = (r: { picked: LocalTranscript[] }) => r.picked.map((t) => t.sessionId).sort();
-    expect(ids(await select([], { marked: "done" }, { home: homeA }))).toEqual([SID, SID2]);
-    expect(ids(await select([], { marked: "done" }, { home: homeA, excludeRunning: true }))).toEqual([SID]);
+    expect(ids(await select([], { archived: true }, { home: homeA }))).toEqual([SID, SID2]);
+    expect(ids(await select([], { archived: true }, { home: homeA, excludeRunning: true }))).toEqual([SID]);
     expect(ids(await select([], { ended: true }, { home: homeA }))).toEqual([SID, SID3]);
-    expect(ids(await select([], { ended: true, marked: "done" }, { home: homeA }))).toEqual([SID]);
-    // flag は 1 つずつ別: archived は誰にも無い
-    expect(ids(await select([], { marked: "archived" }, { home: homeA }))).toEqual([]);
-    await writeDeclared(SID3, { archived: true }, homeA);
-    expect(ids(await select([], { marked: "archived" }, { home: homeA }))).toEqual([SID3]);
+    expect(ids(await select([], { ended: true, archived: true }, { home: homeA }))).toEqual([SID]);
 
-    await writeDeclared(SID, { done: false }, homeA);
-    expect(ids(await select([], { marked: "done" }, { home: homeA }))).toEqual([SID2]);
-    expect(ids(await select([], { ended: true, marked: "done" }, { home: homeA }))).toEqual([]);
+    await writeDeclared(SID, { archived: false }, homeA);
+    expect(ids(await select([], { archived: true }, { home: homeA }))).toEqual([SID2]);
+    expect(ids(await select([], { ended: true, archived: true }, { home: homeA }))).toEqual([]);
 
     // 明示の id は選択子を要らない。何も無ければ止まる
     expect(ids(await select([SID.slice(0, 8)], {}, { home: homeA }))).toEqual([SID]);
-    await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --marked/);
+    await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --archived/);
   });
 });
 
@@ -210,35 +205,33 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
   test("mark / --off / label '' / task / status resolve the id from the argument, a prefix, or CLAUDE_CODE_SESSION_ID", async () => {
     await seed(homeA, SID);
     // 引数無し + env 無し → 止まる
-    const none = await run(["mark", "done"], { CLAUDE_CODE_SESSION_ID: "" });
+    const none = await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: "" });
     expect(none.code).toBe(1);
     expect(none.err).toMatch(/CLAUDE_CODE_SESSION_ID/);
 
-    expect((await run(["mark", "done"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
-    expect((await run(["mark", "pinned", SID.slice(0, 8)])).code).toBe(0);
-    expect((await run(["label", "scope｜step", SID])).code).toBe(0);
+    expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
+    expect((await run(["label", "scope｜step", SID.slice(0, 8)])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, done: true, pinned: true, label: "scope｜step", task: "kaneo ccx#1" });
+    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1" });
 
-    expect((await run(["mark", "done", "--off", SID])).code).toBe(0);
-    expect((await run(["label", "", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
-
-    // remote は観測であって宣言ではない: mark できない
-    const bad = await run(["mark", "remote", SID]);
-    expect(bad.code).toBe(1);
-    expect(bad.err).toMatch(/unknown flag remote/);
-    expect((await run(["mark", "archived", SID])).code).toBe(0);
-    expect((await readDeclared(SID, homeA)).archived).toBe(true);
     expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
-    expect((await run(["mark", "done", "ffffffff"])).err).toMatch(/no local session matches ffffffff/);
+    expect((await run(["label", "", SID])).code).toBe(0);
+    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+
+    // remote は観測、done は利用者側の marker: どちらも mark できない
+    for (const word of ["remote", "done"]) {
+      const bad = await run(["mark", word, SID]);
+      expect(bad.code).toBe(1);
+      expect(bad.err).toMatch(new RegExp(`unknown flag ${word}`));
+    }
+    expect((await run(["mark", "archived", "ffffffff"])).err).toMatch(/no local session matches ffffffff/);
 
     // status: 保存先が無いので lifecycle は手元から (transcript あり = ended)。--json の形は mark と同じ鍵 + lifecycle
     const st = await run(["status", SID.slice(0, 8), "--json"]);
     expect(st.code).toBe(0);
-    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, pinned: true, task: "kaneo ccx#1" });
-    const mark = await run(["mark", "ephemeral", SID, "--json"]);
-    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "done", "pinned", "ephemeral", "label", "task"]);
-    expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+pinned,ephemeral/);
+    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+    const mark = await run(["mark", "archived", SID, "--json"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task"]);
+    expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
   });
 });

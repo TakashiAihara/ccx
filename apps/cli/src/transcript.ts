@@ -3,9 +3,7 @@ import type { Command } from "commander";
 import {
   claudeHome,
   createRepodir,
-  FLAGS,
   flagsOf,
-  isFlag,
   loadConfig,
   localOrigin,
   localTranscripts,
@@ -14,7 +12,6 @@ import {
   readDeclared,
   runningSessionIds,
   TranscriptClient,
-  type Flag,
   type LocalTranscript,
 } from "@ccx/core";
 
@@ -23,8 +20,8 @@ import { humanSince, parseLimit, shortId, table } from "./format.ts";
 /**
  * `ccx transcript` — session の transcript を保存先に置き、別マシンで取り出す (#121)。
  *
- * 対象は session id か選択子で受ける。`--ended` は観測 (動いていない全部)、`--marked <flag>`
- * は宣言 (`ccx session mark <flag>` が立っている全部)。両方付ければ AND (#127)。
+ * 対象は session id か選択子で受ける。`--ended` は観測 (動いていない全部)、`--archived`
+ * は宣言 (`ccx session mark archived` が立っている全部)。両方付ければ AND (#127)。
  * 宣言された状態 (state.json) は push が運び、pull が手元の印に写す。
  */
 
@@ -48,14 +45,10 @@ async function client() {
   return new TranscriptClient(cfg.transcript, localOrigin(cfg.machine));
 }
 
-function parseFlag(v: string): Flag {
-  if (!isFlag(v)) throw new Error(`--marked takes one of ${FLAGS.join(", ")}, got ${v}`);
-  return v;
-}
 
 const human = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)}K` : `${(bytes / 1024 / 1024).toFixed(1)}M`);
 
-export type Selector = { ended?: boolean; marked?: Flag };
+export type Selector = { ended?: boolean; archived?: boolean };
 
 /**
  * 引数の id か、選択子に当たる全部。どちらも無ければ何を指すか分からないので止まる。
@@ -82,11 +75,11 @@ export async function select(
     }
     return { picked, running };
   }
-  if (!sel.ended && !sel.marked) throw new Error(`give session ids, or a selector: --ended (not running) / --marked <${FLAGS.join("|")}>`);
+  if (!sel.ended && !sel.archived) throw new Error("give session ids, or a selector: --ended (not running) / --archived (marked archived)");
   const picked: LocalTranscript[] = [];
   for (const t of all) {
     if ((sel.ended || opts.excludeRunning) && running.has(t.sessionId)) continue;
-    if (sel.marked && !(await readDeclared(t.sessionId, home))[sel.marked]) continue;
+    if (sel.archived && !(await readDeclared(t.sessionId, home)).archived) continue;
     picked.push(t);
   }
   return { picked, running };
@@ -103,11 +96,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .description("Copy local transcripts to the store (unchanged ones are skipped)")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
-    .option("--marked <flag>", `every local session with this flag (${FLAGS.join(" | ")})`, parseFlag)
+    .option("--archived", "every local session marked archived (ccx session mark archived)")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
-      const { picked } = await select(ids, { ended: Boolean(o.ended), marked: o.marked });
+      const { picked } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) });
       const results = [];
       for (const t of picked) {
         const r = await c.push(t);
@@ -256,11 +249,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .description("Delete local transcripts whose copy in the store matches byte for byte")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
-    .option("--marked <flag>", `every local session with this flag and not running (${FLAGS.join(" | ")})`, parseFlag)
+    .option("--archived", "every local session marked archived and not running")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
-      const { picked, running } = await select(ids, { ended: Boolean(o.ended), marked: o.marked }, { excludeRunning: true });
+      const { picked, running } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) }, { excludeRunning: true });
       const results = [];
       let refused = 0;
       for (const t of picked) {

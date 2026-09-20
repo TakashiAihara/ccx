@@ -10,7 +10,7 @@
  *   <prefix>transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl   ローカルと byte 同一
  *                                                            /tool-results/<name>  JSONL が参照する退避ファイル
  *                                                            /session.json         cwd / branch / version / size / sha256
- *                                                            /state.json           宣言された状態 (done / pinned / ephemeral / label / task。session-state.ts)
+ *                                                            /state.json           宣言された状態 (archived / label / task。session-state.ts)
  *                                                            /history/<ms>-<op>-<machine>.json  push / pull / prune の履歴
  *
  * transcript.jsonl は変換しない。Claude Code が `--resume` で読むのはこのファイルその

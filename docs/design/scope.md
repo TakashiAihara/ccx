@@ -31,7 +31,7 @@ Thinking through a specific way of working is still useful — but its output is
 "Role-agnostic mechanism" is about *roles* — who reviews whom, what a PM is. It does not mean ccx holds
 no state about sessions. ccx is the integrated management of parallel sessions, and a session's
 state is the substance of that: whether it is running or ended, whether its transcript is only in the store
-off the host, whether someone declared it done, pinned it, or marked it disposable, what it is
+off the host, whether someone archived it, what it is
 called, what task it is on. That is not methodology; it is the thing being managed. (User decision,
 2026-09-21, #127.)
 
@@ -40,10 +40,10 @@ Two kinds of state, kept apart:
 | Kind | Examples | Who writes it |
 |---|---|---|
 | **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `remote` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
-| **Declared** — an intent someone recorded | `archived` (folded away; the one flag every workflow has, in the Desktop app's word), `done` (scope finished), `pinned` (never reclaim), `ephemeral` (delete the transcript when it ends), a `label`, a `task` reference | a person or the session itself, through `ccx` |
+| **Declared** — an intent someone recorded | `archived` (folded away; the one flag, in the Desktop app's word — `done` / `pinned` / `delete-on-end` stay the user's own markers, #135), a `label`, a `task` reference | a person or the session itself, through `ccx` |
 
 ccx defines these states and carries them with the transcript. What a person *does* with them —
-which sessions get reclaimed, whether a `done` session is closed by hand or by a daemon — stays on
+which sessions get reclaimed, whether an `archived` session is closed by hand or by a daemon — stays on
 the methodology side, and `ccx-agent` only ever acts on a declared flag it did not originate (see
 below). The declared flags live as files under `~/.claude/sessions/<id>/` — the same files the
 user's own scripts had been writing, now ccx's format, written by `ccx session mark` / `label` /
@@ -87,7 +87,7 @@ This keeps the deterministic layer honest. The moment a daemon starts advising, 
 Before building a feature, place it:
 
 - Does it decide something about *how a team works*? Not ours — provide the capability, not the policy.
-- Is it *state about a session* (lifecycle, archived, done, pinned, name, task)? Ours — hold it, carry it with the transcript, let a person or the session set the declared part.
+- Is it *state about a session* (lifecycle, archived, name, task)? Ours — hold it, carry it with the transcript, let a person or the session set the declared part.
 - Does it require ccx-agent to *reason*, or to *originate an assignment*? Move the reasoning to a session; ccx-agent may only collect, keep alive, and carry.
 - Does it make a local action *depend on the centre*? Redesign so the local action stands alone.
 

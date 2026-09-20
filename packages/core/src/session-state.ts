@@ -3,19 +3,17 @@
  * 「Session state is ccx's to hold」)。
  *
  * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
- * 宣言 (archived / done / pinned / ephemeral / label / task) は人か session が書く。
- * archived は Desktop App と同じ語で「一覧から畳む」宣言 (ユーザー判断 2026-09-21)。
- * 「保存先にだけあり手元に無い」観測は remote と呼び、語を分ける。
+ * 宣言 (archived / label / task) は人か session が書く。archived は Desktop App と同じ
+ * 語で「一覧から畳む」宣言。「保存先にだけあり手元に無い」観測は remote と呼び、語を
+ * 分ける。flag が archived だけなのはユーザー判断 (2026-09-21、#135): done は archived
+ * とほぼ同じ、pinned は表示だけの利用者固有の都合、ephemeral は意味が立たない。
+ * それらは利用者側の marker のまま、ccx は持たない。
  *
- * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` で、ファイル名は利用者側の
- * script が以前から使っていたものをそのまま採る (`done` / `pinned` / `delete` の空
- * ファイル、`label` のテキスト)。statusline / SessionEnd hook / idle reaper がその名前を
- * 読んでいるので、ccx が書いた印を今日から読める。`task` だけが新しい。
- *
- * ephemeral のファイルだけ名前が `delete` なのは、SessionEnd hook がその名前で
- * 「終了時に transcript を消す」を判定しているため。CLI と state.json では ephemeral。
- *
- * 保存先には `state.json` 1 つにまとめて置く (transcript.ts が push / pull で運ぶ)。
+ * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` (利用者側の script が marker を
+ * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` は空
+ * ファイル、`label` は auto-label hook が置いていたテキストをそのまま読む、`task` は
+ * 新しいテキスト。保存先には `state.json` 1 つにまとめて置く (transcript.ts が push /
+ * pull で運ぶ)。
  */
 
 import { mkdir, readdir, rm } from "node:fs/promises";
@@ -25,25 +23,22 @@ import { join } from "node:path";
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
   env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 
-export const FLAGS = ["archived", "done", "pinned", "ephemeral"] as const;
+export const FLAGS = ["archived"] as const;
 export type Flag = (typeof FLAGS)[number];
 
 /** 宣言された状態。無いものは false / 空文字 */
 export type DeclaredState = {
   archived: boolean;
-  done: boolean;
-  pinned: boolean;
-  ephemeral: boolean;
   label: string;
   task: string;
 };
 
 export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 
-const FLAG_FILE: Record<Flag, string> = { archived: "archived", done: "done", pinned: "pinned", ephemeral: "delete" };
+const FLAG_FILE: Record<Flag, string> = { archived: "archived" };
 const TEXT_FILE = { label: "label", task: "task" } as const;
 
-export const EMPTY_DECLARED: DeclaredState = { archived: false, done: false, pinned: false, ephemeral: false, label: "", task: "" };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "" };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
@@ -59,9 +54,6 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   return {
     archived: r.archived === true,
-    done: r.done === true,
-    pinned: r.pinned === true,
-    ephemeral: r.ephemeral === true,
     label: typeof r.label === "string" ? r.label : "",
     task: typeof r.task === "string" ? r.task : "",
   };
@@ -80,15 +72,8 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, done, pinned, ephemeral, label, task] = await Promise.all([
-    flag("archived"),
-    flag("done"),
-    flag("pinned"),
-    flag("ephemeral"),
-    text(TEXT_FILE.label),
-    text(TEXT_FILE.task),
-  ]);
-  return { archived, done, pinned, ephemeral, label, task };
+  const [archived, label, task] = await Promise.all([flag("archived"), text(TEXT_FILE.label), text(TEXT_FILE.task)]);
+  return { archived, label, task };
 }
 
 /**
