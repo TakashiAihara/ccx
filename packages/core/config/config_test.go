@@ -203,18 +203,18 @@ func TestHeartbeat_DefaultsAndFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Concerns.Heartbeat || !c.Heartbeat.Default || c.Heartbeat.Interval != 50*time.Minute || c.Heartbeat.MaxIdle != 12*time.Hour {
+	if !c.Concerns.Heartbeat || c.Heartbeat.Default || c.Heartbeat.Interval != 50*time.Minute || c.Heartbeat.MaxIdle != 12*time.Hour {
 		t.Errorf("defaults = %+v / %v", c.Heartbeat, c.Concerns.Heartbeat)
 	}
 
 	p := filepath.Join(t.TempDir(), "config.toml")
-	_ = os.WriteFile(p, []byte("[heartbeat]\nenabled = false\ndefault = false\ninterval = \"40m\"\nmaxIdle = \"off\"\n"), 0o644)
+	_ = os.WriteFile(p, []byte("[heartbeat]\nenabled = false\ndefault = true\ninterval = \"40m\"\nmaxIdle = \"off\"\n"), 0o644)
 	c, err = load(env(map[string]string{"CCX_CONFIG": p, "CCX_HEARTBEAT_INTERVAL": "45m"}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Concerns.Heartbeat || c.Heartbeat.Default || c.Heartbeat.Interval != 45*time.Minute || c.Heartbeat.MaxIdle != 0 {
-		t.Errorf("file + env = %+v / %v, want off, default off, env's 45m, no cap", c.Heartbeat, c.Concerns.Heartbeat)
+	if c.Concerns.Heartbeat || !c.Heartbeat.Default || c.Heartbeat.Interval != 45*time.Minute || c.Heartbeat.MaxIdle != 0 {
+		t.Errorf("file + env = %+v / %v, want off, default on from the file, env's 45m, no cap", c.Heartbeat, c.Concerns.Heartbeat)
 	}
 
 	// A duration typed wrong, or one the cache does not outlive, turns the

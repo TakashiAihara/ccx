@@ -64,8 +64,10 @@ credits) a heartbeat never lands in time; serve sees that in the transcript and 
 Load several channels by listing them after the one flag
 (`server:akapen server:ccx`). A server passed with `--mcp-config` is not accepted as a channel.
 
-The heartbeat's settings live in the configuration table below (`[heartbeat]`);
-one session overrides the default with `ccx session heartbeat on|off|default`.
+The heartbeat's settings live in the configuration table below (`[heartbeat]`).
+Sessions are not kept warm unless they opt in: `ccx session heartbeat on`, run
+by the person or by the session itself (with no id it targets this session).
+A heartbeat is not free on every plan; see docs/design/heartbeat.md.
 A heartbeat turn is a user record carrying `kind="heartbeat"`; tools that count
 a session's activity should skip it.
 
@@ -116,7 +118,7 @@ it simply has no center to forward to.
 | carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |
 | persistence on/off | `CCX_PERSISTENCE` | `ccx.persistence` | `[persistence] enabled` | off |
 | heartbeat on/off | `CCX_HEARTBEAT` | `ccx.heartbeat` | `[heartbeat] enabled` | on |
-| heartbeat for sessions with no declaration | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | `[heartbeat] default` | on |
+| heartbeat for sessions with no declaration | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | `[heartbeat] default` | off |
 | heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
 | heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |

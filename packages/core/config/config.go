@@ -71,7 +71,10 @@ type Config struct {
 
 // Heartbeat is the heartbeat concern's settings.
 type Heartbeat struct {
-	// Default decides for a session that has not declared on or off.
+	// Default decides for a session that has not declared on or off. Off: a
+	// heartbeat costs quota whether or not anyone comes back (measured
+	// 2026-09-23, read counts on a Max plan), so a session, or the person, opts
+	// in with `ccx session heartbeat on` (user decision 2026-09-24).
 	Default bool
 	// Interval after the last request that a heartbeat is due. 50m: an hour of
 	// cache TTL, less generation time and slack.
@@ -199,7 +202,7 @@ func load(
 			Heartbeat:   hbErr == nil && toggle(getenv, gitcfg, "CCX_HEARTBEAT", "ccx.heartbeat", file.Heartbeat.Enabled, true),
 		},
 		Heartbeat: Heartbeat{
-			Default:  toggle(getenv, gitcfg, "CCX_HEARTBEAT_DEFAULT", "ccx.heartbeatDefault", file.Heartbeat.Default, true),
+			Default:  toggle(getenv, gitcfg, "CCX_HEARTBEAT_DEFAULT", "ccx.heartbeatDefault", file.Heartbeat.Default, false),
 			Interval: interval,
 			MaxIdle:  maxIdle,
 			Err:      hbErr,

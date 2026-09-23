@@ -13,9 +13,16 @@ A session left alone for an hour loses its prompt cache, and the next turn rewri
   not beat such a session.
 - Only a turn **in that session** reads its cache. `claude -p --resume <id>` does not: its MCP deltas
   differ, the prefix splits at ~13k tokens, and the rest is written again every time.
-- The read is almost free on a subscription (measured 2026-09-21: 20.0M read tokens moved the 5h window
-  by 0%, 180k written moved it by 1%).
-- Source measurements: vault `claude-code-prompt-cache-keepalive.md`.
+- A heartbeat is not free. On a Max plan (2026-09-23, 3-minute blocks against `api/oauth/usage`), about
+  12.7M read tokens moved the 5h window by about 2% (idle blocks moved it 0-4% from other sessions; three
+  fresh cache writes moved it about 6%). One heartbeat (~210k read) costs about 0.03%; the rewrite it
+  saves on return (~180k written) about 1%. It pays when roughly 1 in 30 heartbeats leads to a return,
+  and a single heartbeat followed by a return pays 30 times over.
+- An earlier measurement (2026-09-21, a company account before its move to a Team plan) moved 0% for
+  20.0M read. Plans may count reads differently; measure the one in use.
+- Hence off by default: a session is kept warm only when it, or its person, says it will be back.
+- Source measurements: vault `claude-code-prompt-cache-keepalive.md`; the 2026-09-23 figures are in kaneo
+  ccx#10.
 
 ## How it works
 
@@ -54,7 +61,7 @@ sequenceDiagram
 | What | config.toml `[heartbeat]` | env | git config | default |
 |---|---|---|---|---|
 | concern on/off | `enabled` | `CCX_HEARTBEAT` | `ccx.heartbeat` | on (inert until a session loads the channel) |
-| sessions with no declaration | `default` | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | on |
+| sessions with no declaration | `default` | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | off |
 | interval | `interval` | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `50m` |
 | stop after no real use for | `maxIdle` | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `12h` (`off` = no cap) |
 | channel socket | — | `CCX_CHANNEL_SOCKET` | — | `ccx-channel.sock` next to the hook socket |
@@ -67,6 +74,8 @@ sequenceDiagram
   collect keeps running.
 - A session overrides `default` for itself with `ccx session heartbeat on|off` (`default` clears it). It is
   declared state (`~/.claude/sessions/<id>/heartbeat`), read on every poll, so it applies within a minute.
+- Without an id the command targets `CLAUDE_CODE_SESSION_ID`, so a session can decide for itself (run it
+  from its own Bash). When a session should turn it on is methodology and stays outside ccx (`scope.md`).
 
 ## Measured end to end (2026-09-23, Claude Code 2.1.280, 40s interval)
 
@@ -108,7 +117,7 @@ sequenceDiagram
 | no real use for `CCX_HEARTBEAT_MAX_IDLE` (12h; `off` = no cap) | a session nobody returns to is not worth waking forever |
 | the last heartbeat is not in the transcript yet, and nothing else happened since | mid-turn, or `/clear` moved the session to a new id; never stack a second. Real use after the push means it was lost, and beating resumes |
 | less than an interval since the last heartbeat landed | a heartbeat whose answer failed must not make the next one due at once |
-| `ccx session heartbeat off`, or `[heartbeat] default = false` and no `on` for the session | declared not wanted |
+| no `ccx session heartbeat on` for the session (the default is off), or `off` declared | not wanted |
 | `[heartbeat] enabled = false`, or `interval = "off"` | turned off for the machine |
 
 "Real use" is any record outside a heartbeat turn. A heartbeat turn runs from its user record to the

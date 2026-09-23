@@ -61,7 +61,7 @@ The MCP **channel server** is a separate process by necessity: Claude Code spawn
 ## Update (2026-09-24): a fourth concern, heartbeat
 
 - `heartbeat` keeps idle sessions' prompt caches warm (`docs/design/heartbeat.md`, #142). It toggles like
-  the others (`[heartbeat] enabled`) and defaults on: it is inert until a session loads the ccx channel,
-  which is opt-in per session.
+  the others (`[heartbeat] enabled`) and defaults on: it is inert until a session loads the ccx channel
+  and declares `ccx session heartbeat on` (sessions default to off; a heartbeat costs quota).
 - It is the first concern to feed the per-session channel server. serve owns the channel socket; each
   `ccx-agent channel` registers its session there and pushes what serve sends.
