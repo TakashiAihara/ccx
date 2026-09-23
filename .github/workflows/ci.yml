@@ -20,8 +20,12 @@ jobs:
       - name: Test
         run: bun test
 
+      # release は tag を --ccx-version で焼き込む。その経路が効かないと全 release が
+      # package.json の版を名乗るので、同じ経路で作って確かめる
       - name: Build
-        run: bun run build
+        run: |
+          bun run scripts/build.ts --ccx-version 0.0.0-ci
+          test "$(./ccx --version)" = 0.0.0-ci
 
       # 単一バイナリ固有の経路 (埋めた asset → cache → dlopen) は bun test では通らない
       - name: Smoke the compiled binary
