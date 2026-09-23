@@ -64,7 +64,19 @@ func (c *Concern) Name() string { return "heartbeat" }
 // bare "invalid argument".
 const maxUnixPath = 104
 
+// Run never fails the process. The concern is on by default and inert for
+// anyone without the channel, so a socket it cannot set up (a path too long, a
+// second serve holding the lock) turns off the heartbeat alone, with the reason
+// in the log; collect keeps running.
 func (c *Concern) Run(ctx context.Context) error {
+	if err := c.run(ctx); err != nil {
+		c.log("heartbeat off: %v", err)
+		<-ctx.Done()
+	}
+	return nil
+}
+
+func (c *Concern) run(ctx context.Context) error {
 	if len(c.socketPath) >= maxUnixPath {
 		return fmt.Errorf("channel socket path is %d bytes, over the %d-byte unix-socket limit: %s\nset CCX_CHANNEL_SOCKET to a shorter path",
 			len(c.socketPath), maxUnixPath, c.socketPath)

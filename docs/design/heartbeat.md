@@ -62,8 +62,9 @@ sequenceDiagram
 - serve reads these at start; restart it to apply (sessions reconnect on their own within a minute). There
   is no reload on SIGHUP: a restart is one command and costs the sessions nothing, and one path is less to
   get wrong. A restart does forget which heartbeats are in flight.
-- A value that cannot be used (a typo, an interval of 1h or more) turns the heartbeat concern off and says
-  why in serve's log; the rest of the config, collect included, still loads.
+- A value that cannot be used (a typo, an interval of 1h or more), or a channel socket that cannot be set up
+  (path too long, another serve holding it), turns the heartbeat concern off and says why in serve's log;
+  collect keeps running.
 - A session overrides `default` for itself with `ccx session heartbeat on|off` (`default` clears it). It is
   declared state (`~/.claude/sessions/<id>/heartbeat`), read on every poll, so it applies within a minute.
 

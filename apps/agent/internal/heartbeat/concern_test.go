@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -90,18 +91,40 @@ func TestConcernRefusesASecondServe(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	second := &Concern{socketPath: sock, log: t.Logf}
-	if err := second.Run(context.Background()); err == nil {
-		t.Fatal("a second serve started")
+	second := &Concern{socketPath: sock}
+	if got := runOff(t, second); !strings.Contains(got, "another ccx-agent serve") {
+		t.Errorf("second serve logged %q, want it to stand down", got)
 	}
 	if _, err := os.Stat(sock); err != nil {
 		t.Errorf("the running serve's socket is gone: %v", err)
 	}
 }
 
+// runOff runs a concern that cannot set up, and returns what it logged. Run
+// must not return an error (that would stop collect too) and must stay up
+// until the process stops.
+func runOff(t *testing.T, c *Concern) string {
+	t.Helper()
+	var logged strings.Builder
+	c.log = func(f string, a ...any) { fmt.Fprintf(&logged, f, a...) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned before the process stopped: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run returned %v; an error here stops collect", err)
+	}
+	return logged.String()
+}
+
 func TestConcernRefusesATooLongSocketPath(t *testing.T) {
-	c := &Concern{socketPath: "/" + strings.Repeat("x", 120) + ".sock", log: t.Logf}
-	if err := c.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "CCX_CHANNEL_SOCKET") {
-		t.Errorf("err = %v, want one that says what to set", err)
+	c := &Concern{socketPath: "/" + strings.Repeat("x", 120) + ".sock"}
+	if got := runOff(t, c); !strings.Contains(got, "heartbeat off") || !strings.Contains(got, "CCX_CHANNEL_SOCKET") {
+		t.Errorf("logged %q, want the heartbeat off and what to set", got)
 	}
 }
