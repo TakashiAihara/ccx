@@ -57,9 +57,9 @@ claude mcp add -s user ccx -- ccx-agent channel
 claude --dangerously-load-development-channels server:ccx
 ```
 
-A user-scope registration starts `ccx-agent channel` in every session, flag or not (about 20MB each);
-without the flag its pushes are dropped. It is meant for subscription accounts: on a 5-minute cache TTL
-(API key, usage credits) a heartbeat never lands in time, so turn the concern off there.
+A user-scope registration starts `ccx-agent channel` in every session, flag or not (about 11MB RSS each,
+measured in review); without the flag its pushes are dropped. On a 5-minute cache TTL (API key, usage
+credits) a heartbeat never lands in time; serve sees that in the transcript and does not beat.
 
 Load several channels by listing them after the one flag
 (`server:akapen server:ccx`). A server passed with `--mcp-config` is not accepted as a channel.

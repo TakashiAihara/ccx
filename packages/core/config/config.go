@@ -79,6 +79,10 @@ type Heartbeat struct {
 	// MaxIdle stops heartbeats for a session nobody has used for this long;
 	// 0 is no cap.
 	MaxIdle time.Duration
+	// Err is why the heartbeat settings could not be used. It turns the concern
+	// off and nothing else: a typo here must not take collect down with it, or
+	// stop a session's channel from reading the rest of the config.
+	Err error
 }
 
 // Concerns is the on/off state of each of ccx-agent's jobs (ADR 0002). Collect
@@ -169,13 +173,15 @@ func load(
 		uname = u.Username
 	}
 
-	interval, err := duration(pick(getenv("CCX_HEARTBEAT_INTERVAL"), gitcfg("ccx.heartbeatInterval"), file.Heartbeat.Interval), 50*time.Minute)
-	if err != nil {
-		return Config{}, err
+	interval, hbErr := duration(pick(getenv("CCX_HEARTBEAT_INTERVAL"), gitcfg("ccx.heartbeatInterval"), file.Heartbeat.Interval), 50*time.Minute)
+	if hbErr == nil && interval >= time.Hour {
+		// The cache lives an hour. A heartbeat due at or after that finds it gone
+		// and is never sent: the setting would silently turn the concern into a no-op.
+		hbErr = errors.New("heartbeat: interval " + interval.String() + " is not under the 1h cache TTL")
 	}
 	maxIdle, err := duration(pick(getenv("CCX_HEARTBEAT_MAX_IDLE"), gitcfg("ccx.heartbeatMaxIdle"), file.Heartbeat.MaxIdle), 12*time.Hour)
-	if err != nil {
-		return Config{}, err
+	if hbErr == nil {
+		hbErr = err
 	}
 
 	return Config{
@@ -190,12 +196,13 @@ func load(
 			Collect:     toggle(getenv, gitcfg, "CCX_COLLECT", "ccx.collect", file.Collect.Enabled, true),
 			Carry:       toggle(getenv, gitcfg, "CCX_CARRY", "ccx.carry", file.Carry.Enabled, false),
 			Persistence: toggle(getenv, gitcfg, "CCX_PERSISTENCE", "ccx.persistence", file.Persistence.Enabled, false),
-			Heartbeat:   toggle(getenv, gitcfg, "CCX_HEARTBEAT", "ccx.heartbeat", file.Heartbeat.Enabled, true),
+			Heartbeat:   hbErr == nil && toggle(getenv, gitcfg, "CCX_HEARTBEAT", "ccx.heartbeat", file.Heartbeat.Enabled, true),
 		},
 		Heartbeat: Heartbeat{
 			Default:  toggle(getenv, gitcfg, "CCX_HEARTBEAT_DEFAULT", "ccx.heartbeatDefault", file.Heartbeat.Default, true),
 			Interval: interval,
 			MaxIdle:  maxIdle,
+			Err:      hbErr,
 		},
 		ChannelSocketPath: channelSocketPath(getenv),
 	}, nil
@@ -301,12 +308,10 @@ func channelSocketPath(getenv func(string) string) string {
 	if p := getenv("CCX_CHANNEL_SOCKET"); p != "" {
 		return p
 	}
-	return filepath.Join(filepath.Dir(socketPath(func(k string) string {
-		if k == "CCX_SOCKET" {
-			return ""
-		}
-		return getenv(k)
-	})), "ccx-channel.sock")
+	// Next to wherever the hook socket resolved, CCX_SOCKET included: a short
+	// CCX_SOCKET is how a path over the unix-socket limit is fixed, and the
+	// channel socket needs the same fix.
+	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike

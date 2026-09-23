@@ -59,7 +59,7 @@ func TestServe(t *testing.T) {
 		t.Errorf("push params = %v, want content and meta.kind", params)
 	}
 	// The session keeps a heartbeat turn short only because it is told to.
-	if !strings.Contains(init["instructions"].(string), `kind="heartbeat"`) {
+	if in := init["instructions"].(string); !strings.Contains(in, `kind="heartbeat"`) || !strings.Contains(in, `single "."`) || !strings.Contains(in, "call no tools") {
 		t.Errorf("instructions do not say what to do with a heartbeat: %v", init["instructions"])
 	}
 	select {

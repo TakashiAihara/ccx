@@ -42,6 +42,9 @@ type Scan struct {
 	LastAssistant time.Time // the last request, heartbeat or not
 	LastReal      time.Time // the last record outside a heartbeat turn
 	LastBeat      time.Time // the last heartbeat that arrived
+	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
+	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
+	ShortTTL bool
 }
 
 // poll is how often a transcript is looked at while nothing is due: a session
@@ -56,8 +59,10 @@ const cacheTTL = time.Hour
 func (h *Heartbeat) Run(ctx context.Context) {
 	var sent time.Time
 	for ctx.Err() == nil {
-		wait := h.step(&sent)
-		h.Sleep(ctx, wait)
+		// Never longer than a poll: a session declared on / off, archived, or used
+		// again is noticed within a minute. The transcript is re-read only when it
+		// changed, so a poll costs a few stats.
+		h.Sleep(ctx, min(h.step(&sent), poll))
 	}
 }
 
@@ -71,6 +76,9 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	s, ok := h.read()
 	if !ok || s.LastAssistant.IsZero() {
 		return poll // no request yet, so no cache to keep
+	}
+	if s.ShortTTL {
+		return h.Interval // a 5-minute cache: every heartbeat would be a full rewrite
 	}
 	if !sent.IsZero() {
 		if s.LastBeat.Before(*sent) && !s.LastReal.After(*sent) {
@@ -96,9 +104,11 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	if due := last.Add(h.Interval); now.Before(due) {
 		return due.Sub(now)
 	}
-	if now.Sub(last) >= cacheTTL {
-		// Already expired (a resume, a suspended host): a heartbeat would only
-		// rewrite the prefix early, and the next real turn does that anyway.
+	if now.Sub(s.LastAssistant) >= cacheTTL {
+		// Already expired (a resume, a suspended host, a heartbeat whose request
+		// failed): a heartbeat would only rewrite the prefix early, and the next
+		// real turn does that anyway. Only a request that answered read the cache,
+		// so this counts from the last one, not from the last heartbeat.
 		return h.Interval
 	}
 	if err := h.Push(); err != nil {
@@ -177,6 +187,12 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			IsMeta    bool      `json:"isMeta"`
 			Message   struct {
 				Content json.RawMessage `json:"content"`
+				Usage   struct {
+					CacheCreation struct {
+						Short int `json:"ephemeral_5m_input_tokens"`
+						Long  int `json:"ephemeral_1h_input_tokens"`
+					} `json:"cache_creation"`
+				} `json:"usage"`
 			} `json:"message"`
 		}
 		if json.Unmarshal(line, &rec) != nil || rec.Timestamp.IsZero() {
@@ -194,6 +210,11 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			}
 		case "assistant":
 			s.LastAssistant = rec.Timestamp
+			// A request that wrote nothing says nothing about the TTL; keep the last
+			// one that did.
+			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
+				s.ShortTTL = cc.Long == 0
+			}
 		default:
 			continue
 		}

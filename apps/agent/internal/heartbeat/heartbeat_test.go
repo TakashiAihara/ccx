@@ -1,6 +1,8 @@
 package heartbeat
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,8 +184,9 @@ func TestStepNeverStacksAnUndeliveredBeat(t *testing.T) {
 	}
 }
 
-// A heartbeat whose answer took five minutes: the cache was read at the start of
-// that last request, so the next one is due from it, not from the heartbeat.
+// A heartbeat whose answer took five minutes: the next one is due from that last
+// request's record, not from the heartbeat. (The cache is read at the request's
+// start, a little before its record; the 10 minutes of slack in 50m covers it.)
 func TestStepCountsFromTheLastRequest(t *testing.T) {
 	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply) +
 		rec("user", "10:50:06", beat) + rec("assistant", "10:55:00", reply)
@@ -192,6 +195,11 @@ func TestStepCountsFromTheLastRequest(t *testing.T) {
 	h.step(&sent)
 	if *pushes != 0 {
 		t.Errorf("before last request + interval: pushes=%d, want 0", *pushes)
+	}
+	h.Now = func() time.Time { return at("11:45:00") }
+	h.step(&sent)
+	if *pushes != 1 {
+		t.Errorf("at last request + interval: pushes=%d, want 1", *pushes)
 	}
 }
 
@@ -221,10 +229,12 @@ func TestStepDoesNotRepeatAnUnansweredBeat(t *testing.T) {
 	if *pushes != 0 {
 		t.Fatalf("a minute after an unanswered beat: pushes=%d, want 0", *pushes)
 	}
+	// An interval after it the cache is gone: the last request that answered was
+	// 10:00:05. The failed heartbeat read nothing, so it does not keep it alive.
 	h.Now = func() time.Time { return at("11:40:06") }
 	h.step(&sent)
-	if *pushes != 1 {
-		t.Fatalf("an interval after it: pushes=%d, want 1", *pushes)
+	if *pushes != 0 {
+		t.Fatalf("after a failed beat, past the TTL: pushes=%d, want 0", *pushes)
 	}
 }
 
@@ -302,5 +312,44 @@ func TestStepWaitsForATranscript(t *testing.T) {
 	var sent time.Time
 	if wait := h.step(&sent); *pushes != 0 || wait != poll {
 		t.Errorf("no transcript: pushes=%d wait=%v", *pushes, wait)
+	}
+}
+
+// Run never sleeps past a poll, even with the next heartbeat 20 minutes away:
+// a declaration made in between must be seen within a minute.
+func TestRunSleepsAtMostAPoll(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	h, _, _ := fixture(t, tr, at("10:30:05"))
+	ctx, cancel := context.WithCancel(context.Background())
+	var slept time.Duration
+	h.Sleep = func(_ context.Context, d time.Duration) { slept = d; cancel() }
+	h.Run(ctx)
+	if slept != poll {
+		t.Errorf("slept %v, want %v", slept, poll)
+	}
+}
+
+// A session whose cache is written for 5 minutes (API key, usage credits) is
+// never beaten: 50 minutes later it is always gone. A request that wrote no
+// cache does not change what is known.
+func TestStepSkipsAFiveMinuteCache(t *testing.T) {
+	usage := func(short, long int) string {
+		return fmt.Sprintf(`,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d}}}`, short, long)
+	}
+	for _, c := range []struct {
+		name string
+		tr   string
+		want int
+	}{
+		{"5m", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(180000, 0)), 0},
+		{"1h", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(0, 180000)), 1},
+		{"5m, then a request writing nothing", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", usage(180000, 0)) + rec("assistant", "10:00:05", usage(0, 0)), 0},
+	} {
+		h, pushes, _ := fixture(t, c.tr, at("10:50:05"))
+		var sent time.Time
+		h.step(&sent)
+		if *pushes != c.want {
+			t.Errorf("%s: pushes=%d, want %d", c.name, *pushes, c.want)
+		}
 	}
 }

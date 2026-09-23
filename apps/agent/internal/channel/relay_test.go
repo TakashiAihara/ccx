@@ -48,12 +48,12 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 	s := NewServer("ccx", "0", out)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go Relay(ctx, sock, "sid-1", s, t.Logf)
+	go Relay(ctx, sock, "sid-1", "/custom/claude", s, t.Logf)
 
 	select {
 	case line := <-got:
 		var reg map[string]string
-		if json.Unmarshal([]byte(line), &reg) != nil || reg["session"] != "sid-1" {
+		if json.Unmarshal([]byte(line), &reg) != nil || reg["session"] != "sid-1" || reg["claudeHome"] != "/custom/claude" {
 			t.Errorf("registration = %q", line)
 		}
 	case <-time.After(2 * time.Second):
@@ -74,5 +74,36 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 	if json.Unmarshal([]byte(strings.TrimSpace(out.String())), &msg) != nil ||
 		msg.Method != "notifications/claude/channel" || msg.Params.Meta["kind"] != "heartbeat" || msg.Params.Content != "heartbeat" {
 		t.Errorf("pushed %q", out.String())
+	}
+}
+
+// serve not there yet (not started, or restarted to apply config) is normal:
+// the relay keeps trying and registers once it appears.
+func TestRelayWaitsForServe(t *testing.T) {
+	old := retry
+	retry = 50 * time.Millisecond
+	defer func() { retry = old }()
+
+	sock := filepath.Join(t.TempDir(), "ch.sock")
+	s := NewServer("ccx", "0", &syncBuf{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Relay(ctx, sock, "sid-2", "", s, t.Logf)
+	time.Sleep(200 * time.Millisecond)
+
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_ = ln.(*net.UnixListener).SetDeadline(time.Now().Add(2 * time.Second))
+	conn, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("relay never came back: %v", err)
+	}
+	defer conn.Close()
+	line, _ := bufio.NewReader(conn).ReadString('\n')
+	if !strings.Contains(line, `"sid-2"`) {
+		t.Errorf("registration = %q", line)
 	}
 }

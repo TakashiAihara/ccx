@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"syscall"
 	"time"
 
 	"github.com/TakashiAihara/ccx/packages/core/config"
@@ -20,7 +22,14 @@ import (
 // Register is the one line a channel sends after connecting.
 type Register struct {
 	Session string `json:"session"`
+	// ClaudeHome is the session's CLAUDE_CONFIG_DIR, when it set one. serve runs
+	// under systemd with its own environment and would look in ~/.claude.
+	ClaudeHome string `json:"claudeHome,omitempty"`
 }
+
+// sessionID is the shape Claude Code gives a session. Anything else is refused:
+// the id becomes a path and a glob.
+var sessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Event is one line serve sends a channel: push this into the session.
 type Event struct {
@@ -51,19 +60,30 @@ func New(cfg config.Config, log func(string, ...any)) *Concern {
 func (c *Concern) Name() string { return "heartbeat" }
 
 // maxUnixPath is the unix socket path limit (108 on Linux, 104 on the BSDs,
-// with the terminator). Over it, bind fails with a bare "invalid argument".
+// with the terminator, so 103 usable there). At or over it, bind fails with a
+// bare "invalid argument".
 const maxUnixPath = 104
 
 func (c *Concern) Run(ctx context.Context) error {
-	if len(c.socketPath) > maxUnixPath {
+	if len(c.socketPath) >= maxUnixPath {
 		return fmt.Errorf("channel socket path is %d bytes, over the %d-byte unix-socket limit: %s\nset CCX_CHANNEL_SOCKET to a shorter path",
 			len(c.socketPath), maxUnixPath, c.socketPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(c.socketPath), 0o700); err != nil {
 		return err
 	}
-	// ponytail: a leftover socket is removed without a lock. One serve per user
-	// (systemd); take collect's lock if two ever race here.
+	// Held before the socket is touched: a second serve must not remove the
+	// socket the running one is listening on (collect's lock does not cover
+	// this; the concerns start at once, and collect may be off).
+	lock, err := os.OpenFile(c.socketPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("another ccx-agent serve holds %s.lock: %w", c.socketPath, err)
+	}
+	// Under the lock, a socket left here is from a serve that died.
 	if err := os.Remove(c.socketPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -97,9 +117,13 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := r.ReadBytes('\n')
 	var reg Register
-	if err != nil || json.Unmarshal(line, &reg) != nil || reg.Session == "" {
-		c.log("heartbeat: a channel connected without registering a session")
+	if err != nil || json.Unmarshal(line, &reg) != nil || !sessionID.MatchString(reg.Session) {
+		c.log("heartbeat: a channel connected without registering a session id")
 		return
+	}
+	home := c.claudeHome
+	if reg.ClaudeHome != "" && filepath.IsAbs(reg.ClaudeHome) {
+		home = reg.ClaudeHome
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 
@@ -110,7 +134,7 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 
 	out := json.NewEncoder(conn)
 	h := &Heartbeat{
-		SessionID: reg.Session, ClaudeHome: c.claudeHome,
+		SessionID: reg.Session, ClaudeHome: home,
 		Interval: c.cfg.Interval, MaxIdle: c.cfg.MaxIdle, Default: c.cfg.Default,
 		Push: func() error {
 			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))

@@ -26,8 +26,9 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 			`{"type":"assistant","timestamp":"` + stamp(ago) + `","message":{"content":[]}}` + "\n"
 		_ = os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(tr), 0o644)
 	}
-	write("due", 51*time.Minute)
-	write("fresh", time.Minute)
+	const due, fresh = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"
+	write(due, 51*time.Minute)
+	write(fresh, time.Minute)
 
 	sock := filepath.Join(t.TempDir(), "ch.sock")
 	c := &Concern{socketPath: sock, claudeHome: home, log: t.Logf,
@@ -54,7 +55,7 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 		return bufio.NewReader(conn)
 	}
 
-	line, err := dial("due").ReadBytes('\n')
+	line, err := dial(due).ReadBytes('\n')
 	if err != nil {
 		t.Fatalf("due session got nothing: %v", err)
 	}
@@ -63,8 +64,38 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 		t.Errorf("event = %s", line)
 	}
 
-	if line, err := dial("fresh").ReadBytes('\n'); err == nil {
-		t.Errorf("fresh session got %s", line)
+	// Still connected, and nothing came: a read that times out, not one that ends.
+	line, err = dial(fresh).ReadBytes('\n')
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Errorf("fresh session: got %q, err %v; want a timeout on a live connection", line, err)
+	}
+
+	// An id that is not a session id is dropped: it becomes a path and a glob.
+	if _, err := dial("../../etc").ReadBytes('\n'); err == nil || isTimeout(err) {
+		t.Errorf("bad id: err %v, want the connection closed", err)
+	}
+}
+
+func isTimeout(err error) bool { ne, ok := err.(net.Error); return ok && ne.Timeout() }
+
+func TestConcernRefusesASecondServe(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "ch.sock")
+	first := &Concern{socketPath: sock, log: t.Logf}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = first.Run(ctx) }()
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	second := &Concern{socketPath: sock, log: t.Logf}
+	if err := second.Run(context.Background()); err == nil {
+		t.Fatal("a second serve started")
+	}
+	if _, err := os.Stat(sock); err != nil {
+		t.Errorf("the running serve's socket is gone: %v", err)
 	}
 }
 

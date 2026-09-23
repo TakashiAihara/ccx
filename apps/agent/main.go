@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/channel"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
@@ -94,6 +95,9 @@ func cmdServe() int {
 		}
 		concerns = append(concerns, c)
 	}
+	if cfg.Heartbeat.Err != nil {
+		logger("heartbeat off: %v", cfg.Heartbeat.Err)
+	}
 	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
 		concerns = append(concerns, heartbeat.New(cfg, logger))
 	}
@@ -124,21 +128,26 @@ func cmdChannel() int {
 		return 2
 	}
 	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) }
-	cfg, err := config.Load()
-	if err != nil {
-		// A broken config must not take the session's MCP server down with it.
-		logf("ccx-agent channel: config: %v; not relaying", err)
-	}
 
 	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
 	// the process up. Default termination is what a stdio child wants.
 	srv := channel.NewServer("ccx", "0", os.Stdout)
-	if err == nil {
-		go func() {
-			<-srv.Ready()
-			channel.Relay(context.Background(), cfg.ChannelSocketPath, sid, srv, logf)
-		}()
-	}
+	go func() {
+		<-srv.Ready()
+		// A broken config must not take the session's MCP server down, and fixing
+		// it must not need a session restart: read it again until it loads.
+		for said := false; ; time.Sleep(time.Minute) {
+			cfg, err := config.Load()
+			if err == nil {
+				channel.Relay(context.Background(), cfg.ChannelSocketPath, sid, os.Getenv("CLAUDE_CONFIG_DIR"), srv, logf)
+				return
+			}
+			if !said {
+				logf("ccx-agent channel: config: %v; not relaying until it loads", err)
+				said = true
+			}
+		}
+	}()
 	if err := srv.Serve(os.Stdin); err != nil {
 		logf("ccx-agent channel: %v", err)
 		return 1
