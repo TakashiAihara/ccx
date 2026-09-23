@@ -255,3 +255,75 @@ describe("payload は要求されたときだけ SELECT する", () => {
     expect(withPayload).toContain("payload");
   });
 });
+
+describe("session state events (producer 2, #127)", () => {
+  const hook = (sid: string, name = "PostToolUse") => ev({ payload: { session_id: sid, hook_event_name: name, cwd: "/w" } });
+  const state = (sid: string, s: Record<string, unknown>, over: EvOverride = {}) =>
+    ev({ producer: 2, payload: { session_id: sid, state: s }, ...over });
+
+  test("the latest state per session rides on the row; state events do not count as hooks", () => {
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1" }), hook("s2")]);
+    const rows = listSessions(db, { limit: 10 });
+    const s1 = rows.find((r) => r.sessionId === "s1")!;
+    const s2 = rows.find((r) => r.sessionId === "s2")!;
+    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1" });
+    // hook の統計に state event は乗らない
+    expect(s1.eventCount).toBe(1);
+    expect(s1.lastHook).toBe("PostToolUse");
+    // 1 件も届いていない session は null (「印が無い」ではなく「知らない」)
+    expect(s2.state).toBeNull();
+    // rev の無い event どうしは到着順。received_at (ccx-agent の時計) は見ない
+    ingest(db, [state("s1", { archived: false, label: "later-but-older-clock", task: "" }, { receivedAtMs: 500, seq: 0 })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
+  });
+
+  test("state events leave first_seen / last_seen / ended_at to the hooks", () => {
+    ingest(db, [
+      ev({ payload: { session_id: "s1", hook_event_name: "SessionStart", cwd: "/w" }, receivedAtMs: 1000 }),
+      ev({ payload: { session_id: "s1", hook_event_name: "PostToolUse", cwd: "/w" }, receivedAtMs: 2000 }),
+      // hook より前と後に届いた state。SessionEnd という名前を持たせても終了にはならない
+      ev({ producer: 2, payload: { session_id: "s1", hook_event_name: "SessionEnd", state: { archived: true } }, receivedAtMs: 500 }),
+      ev({ producer: 2, payload: { session_id: "s1", hook_event_name: "SessionEnd", state: { archived: true } }, receivedAtMs: 9000 }),
+    ]);
+    const s1 = listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!;
+    expect([s1.firstSeenMs, s1.lastSeenMs, s1.endedAtMs, s1.eventCount]).toEqual([1000, 2000, null, 2]);
+  });
+
+  test("the sender's rev decides which state is latest, not arrival; ties fall back to arrival", () => {
+    const withRev = (sid: string, label: string, rev: number) => ev({ producer: 2, payload: { session_id: sid, state: { archived: false, label, task: "" }, rev } });
+    // B が後に書いて先に届き、A の古い写しが遅れて届く
+    ingest(db, [hook("s1"), withRev("s1", "B-newer", 2000), withRev("s1", "A-older-arrived-late", 1000)]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("B-newer");
+    // 同じ rev なら後から届いた方
+    ingest(db, [withRev("s1", "same-ms-later", 2000)]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("same-ms-later");
+  });
+
+  test("the same session id on two origins keeps two states", () => {
+    ingest(db, [
+      hook("s1"),
+      ev({ user: "other", payload: { session_id: "s1", hook_event_name: "PostToolUse", cwd: "/w" } }),
+      state("s1", { archived: true, label: "mine", task: "" }),
+      ev({ user: "other", producer: 2, payload: { session_id: "s1", state: { archived: false, label: "theirs", task: "" } } }),
+    ]);
+    const rows = listSessions(db, { limit: 10 }).filter((r) => r.sessionId === "s1");
+    expect(Object.fromEntries(rows.map((r) => [r.user, r.state?.label]))).toEqual({ dev: "mine", other: "theirs" });
+  });
+
+  test("a session with only state events is not listed; an unreadable state payload counts as none", () => {
+    ingest(db, [state("only", { archived: true, label: "", task: "" }), hook("s3"), state("s3", { archived: "yes", label: 1, task: "t" })]);
+    const rows = listSessions(db, { limit: 10 });
+    expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
+    // 型の合わない値は落とす (truthy な文字列は true ではない)
+    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t" });
+    // その session 宛ての読めない state が後から届いても、前の読める state が残る (墓標にならない)
+    ingest(db, [ev({ producer: 2, payload: { session_id: "s3", state: "broken" } }), ev({ producer: 2, payload: { session_id: "s3", state: ["archived"] } })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t" });
+    // 読めない state しか無ければ null
+    ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();
+    // 統計に数えるのは hook (producer 1) だけ。UNSPECIFIED (0) も hook ではない
+    ingest(db, [ev({ producer: 0, payload: { session_id: "s5", hook_event_name: "X" } })]);
+    expect(listSessions(db, { limit: 10 }).map((r) => r.sessionId)).not.toContain("s5");
+  });
+});

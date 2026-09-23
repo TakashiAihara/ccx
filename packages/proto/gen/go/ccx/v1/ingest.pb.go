@@ -28,6 +28,15 @@ const (
 	Producer_PRODUCER_UNSPECIFIED Producer = 0
 	// `ccx-agent hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
 	Producer_PRODUCER_CLAUDE_CODE_HOOK Producer = 1
+	// `ccx session mark / label / task` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
+	// `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "..."}, "rev": <ms>}`。
+	// 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
+	// session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。
+	//
+	// 真実源はそのマシンの `~/.claude/sessions/<id>/` で、center はその写しを index として
+	// 持つ。ccx-agent を経由せず ccx が直接送る (印を書いたプロセスが送るのが一番近い)。
+	// 届かなければ印はローカルにだけ残り、次の mark で送り直される。
+	Producer_PRODUCER_CCX_SESSION_STATE Producer = 2
 )
 
 // Enum value maps for Producer.
@@ -35,10 +44,12 @@ var (
 	Producer_name = map[int32]string{
 		0: "PRODUCER_UNSPECIFIED",
 		1: "PRODUCER_CLAUDE_CODE_HOOK",
+		2: "PRODUCER_CCX_SESSION_STATE",
 	}
 	Producer_value = map[string]int32{
-		"PRODUCER_UNSPECIFIED":      0,
-		"PRODUCER_CLAUDE_CODE_HOOK": 1,
+		"PRODUCER_UNSPECIFIED":       0,
+		"PRODUCER_CLAUDE_CODE_HOOK":  1,
+		"PRODUCER_CCX_SESSION_STATE": 2,
 	}
 )
 
@@ -349,10 +360,11 @@ const file_ccx_v1_ingest_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\",\n" +
 	"\x0eIngestResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\rR\baccepted*C\n" +
+	"\baccepted\x18\x01 \x01(\rR\baccepted*c\n" +
 	"\bProducer\x12\x18\n" +
 	"\x14PRODUCER_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19PRODUCER_CLAUDE_CODE_HOOK\x10\x012H\n" +
+	"\x19PRODUCER_CLAUDE_CODE_HOOK\x10\x01\x12\x1e\n" +
+	"\x1aPRODUCER_CCX_SESSION_STATE\x10\x022H\n" +
 	"\rIngestService\x127\n" +
 	"\x06Ingest\x12\x15.ccx.v1.IngestRequest\x1a\x16.ccx.v1.IngestResponseB\x93\x01\n" +
 	"\n" +

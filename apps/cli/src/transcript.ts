@@ -16,6 +16,7 @@ import {
 } from "@ccx/core";
 
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
+import { reportState } from "./session-state.ts";
 
 /**
  * `ccx transcript` — session の transcript を保存先に置き、別マシンで取り出す (#121)。
@@ -125,6 +126,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const id = await c.resolve(idOrPrefix);
       if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
+      // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
+      if (r.stateApplied && r.state) await reportState(cfg.hub?.url, cfg.machine, id, r.state);
 
       // 会話だけでは作業できない。session.json の repo から、default branch の最新で
       // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。

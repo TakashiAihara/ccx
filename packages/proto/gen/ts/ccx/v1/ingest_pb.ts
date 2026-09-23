@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/ingest.proto.
  */
 export const file_ccx_v1_ingest: GenFile = /*@__PURE__*/
-  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qQwoIUHJvZHVjZXISGAoUUFJPRFVDRVJfVU5TUEVDSUZJRUQQABIdChlQUk9EVUNFUl9DTEFVREVfQ09ERV9IT09LEAEySAoNSW5nZXN0U2VydmljZRI3CgZJbmdlc3QSFS5jY3gudjEuSW5nZXN0UmVxdWVzdBoWLmNjeC52MS5Jbmdlc3RSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qYwoIUHJvZHVjZXISGAoUUFJPRFVDRVJfVU5TUEVDSUZJRUQQABIdChlQUk9EVUNFUl9DTEFVREVfQ09ERV9IT09LEAESHgoaUFJPRFVDRVJfQ0NYX1NFU1NJT05fU1RBVEUQAjJICg1Jbmdlc3RTZXJ2aWNlEjcKBkluZ2VzdBIVLmNjeC52MS5Jbmdlc3RSZXF1ZXN0GhYuY2N4LnYxLkluZ2VzdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.IngestRequest
@@ -174,6 +174,20 @@ export enum Producer {
    * @generated from enum value: PRODUCER_CLAUDE_CODE_HOOK = 1;
    */
   CLAUDE_CODE_HOOK = 1,
+
+  /**
+   * `ccx session mark / label / task` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
+   * `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "..."}, "rev": <ms>}`。
+   * 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
+   * session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。
+   *
+   * 真実源はそのマシンの `~/.claude/sessions/<id>/` で、center はその写しを index として
+   * 持つ。ccx-agent を経由せず ccx が直接送る (印を書いたプロセスが送るのが一番近い)。
+   * 届かなければ印はローカルにだけ残り、次の mark で送り直される。
+   *
+   * @generated from enum value: PRODUCER_CCX_SESSION_STATE = 2;
+   */
+  CCX_SESSION_STATE = 2,
 }
 
 /**

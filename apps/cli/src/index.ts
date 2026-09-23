@@ -20,12 +20,15 @@ import {
   flagsOf,
   localOrigin,
   localTranscripts,
+  normalizeDeclared,
   NoTranscriptStore,
   runningSessionIds,
   TranscriptClient,
   type DeclaredState,
   type Lifecycle,
 } from "@ccx/core";
+
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
@@ -324,10 +327,10 @@ session
       return;
     }
 
-    // 状態の列。このマシンの行は pid と手元の transcript / 印から (手元に無い remote な
-    // ものだけ保存先の state.json)、他のマシンの行は保存先の state.json から (保存先が
-    // 無ければ空)。保存先へは行ごとに GET 1〜2 回で、一覧は引かない。center の event DB
-    // には写さない (#127)
+    // 状態の列。このマシンの行は手元のファイルが真実源 (手元に無い remote なものだけ
+    // 保存先の state.json)。他のマシンの行は center が持つ写し (`ccx session mark` が送った
+    // 最後の event) で、保存先 (S3) には行かない。center が 1 件も受けていなければ null
+    // (「印が無い」とは別) (#127)
     const home = claudeHome();
     // 鍵は (machine, user)。同じマシンの別ユーザーの session は別の ~/.claude を持つので「他」
     const me = localOrigin(cfg.machine);
@@ -346,7 +349,7 @@ session
         } else {
           // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
           lifecycle = s.endedAt ? "ended" : "";
-          state = store ? await store.readRemoteDeclared(id, origin).catch(() => null) : null;
+          state = s.state ? normalizeDeclared(s.state) : null;
         }
         return { s, lifecycle, state };
       }),
@@ -438,7 +441,9 @@ session
       // パースできなかった event も出す。出さないと「壊れている」と「無い」の
       // 区別がつかなくなる
       const mark = e.parsed ? "" : "  (unparsed)";
-      console.log(`${at}  ${e.hookEventName || "?"}${mark}`);
+      // 宣言状態の event は hook 名を持たない。何の event かは producer で言う
+      const name = e.producer === Producer.CCX_SESSION_STATE ? "ccx.session.state" : e.hookEventName || "?";
+      console.log(`${at}  ${name}${mark}`);
       if (o.payload) console.log(`    ${new TextDecoder().decode(e.payload)}`);
     }
   });

@@ -75,6 +75,7 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
           transcriptPath: s.transcriptPath,
           eventCount: BigInt(s.eventCount),
           lastHook: s.lastHook,
+          state: s.state ? { $typeName: "ccx.v1.SessionState" as const, ...s.state } : undefined,
         })),
       };
     },
@@ -100,6 +101,7 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
           seq: BigInt(e.seq),
           receivedAt: timestampFromMs(e.receivedAtMs),
           parsed: e.parsed,
+          producer: e.producer,
           sessionId: e.sessionId,
           hookEventName: e.hookEventName,
           cwd: e.cwd,

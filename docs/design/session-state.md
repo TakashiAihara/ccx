@@ -50,19 +50,43 @@ the next prompt in a running session may replace it; a pulled label likewise las
 session's first prompt. ccx carries whatever is there — the current name — and does not compete
 with the hook.
 
-In the store the declared state is one object, `state.json`, next to `session.json`
-(`transcript-store.md`). The center's event database does not get a copy: one source of truth per
-kind — local files for this machine, `state.json` for what was pushed.
+Two copies leave the machine, for two readers:
+
+- `state.json` in the store, next to `session.json` (`transcript-store.md`): what `pull` installs on
+  another machine. Written by `ccx tr push`.
+- an event at the center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
+  shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` right after the local
+  write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
+  and the next mark sends the whole state again; a center that accepts and never answers is cut off
+  after a short deadline (and reported as "not confirmed", since it may have been recorded); a config
+  that cannot be read skips the report but not the local write; `ccx tr pull` reports the state it
+  installed the same way. Each report carries `rev`, the sender's clock just before sending; within
+  one (machine, user, session) that is one clock, so the center keeps the readable event with the
+  highest `rev` (arrival order only breaks ties) — a report written first but delivered late does not
+  overwrite a newer one. It reads one row per session, not the history (`Session.state` in
+  `fleet.proto`), and does not count these as hooks: a mark never
+  moves `last_seen`, and a session whose only events are marks is not listed (a machine without
+  `ccx-agent` wired sends marks the center accepts but never shows). `ccx session show` prints them
+  as `ccx.session.state`.
+
+The center's copy lags by construction in two cases, both accepted: a report that did not get
+through (the next mark resends the whole state), and `label`, which the auto-label hook rewrites on
+disk without telling ccx — the center's `label` is the last one a `ccx session label` (or `tr pull`)
+sent. (User decision, 2026-09-21:
+  the center has a database, the list should come from it rather than from one GET per row.)
+
+The local files stay the source of truth; both copies are projections of them, and a copy that is
+missing (`null`) is "the center / the store has not heard", not "no mark".
 
 ## Verbs
 
 | Verb | Does |
 |---|---|
-| `ccx session mark archived [id] [--off]` | set or clear the flag |
-| `ccx session label <text> [id]` | set the label; an empty string clears it |
-| `ccx session task <ref> [id]` | set the task reference; an empty string clears it |
+| `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to the center if one is configured |
+| `ccx session label <text> [id]` | set the label; an empty string clears it; report as above |
+| `ccx session task <ref> [id]` | set the task reference; an empty string clears it; report as above |
 | `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
-| `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript, one GET to the store under this machine's own prefix — never a listing) and flags from `state.json` for other machines' rows when a store is configured |
+| `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript; one GET to the store under this machine's own prefix for `remote`, never a listing) and, for other machines' rows, the state the center last received from `ccx session mark` — no store access for those |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
 | `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds no declaration for that session; a declaration made here — including clearing the last mark — is never overwritten or revived. Checked on `already-here` too, so a pull that died after the transcript but before the marks is repaired by pulling again |
 | `ccx tr ls` | flags and label per stored session |
