@@ -29,8 +29,9 @@ const (
 	// `ccx-agent hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
 	Producer_PRODUCER_CLAUDE_CODE_HOOK Producer = 1
 	// `ccx session mark / label / task` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
-	// `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "..."}}`。
-	// 全部の鍵を毎回持つ (差分ではない)。
+	// `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "..."}, "rev": <ms>}`。
+	// 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
+	// session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。
 	//
 	// 真実源はそのマシンの `~/.claude/sessions/<id>/` で、center はその写しを index として
 	// 持つ。ccx-agent を経由せず ccx が直接送る (印を書いたプロセスが送るのが一番近い)。

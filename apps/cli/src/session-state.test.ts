@@ -21,6 +21,7 @@ import { select } from "./transcript.ts";
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID2 = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID3 = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const SID4 = "3f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const CWD = "/home/a/.ccx/github.com/o/r/01AAAAAAAAAAAA";
 
 let server: ReturnType<typeof Bun.serve>;
@@ -339,14 +340,31 @@ describe("ccx session with a center: marks are reported as events, and session l
 
     const down = await run(["mark", "archived", "--off", SID], { CCX_HUB_URL: "http://127.0.0.1:1" });
     expect(down.code).toBe(0);
-    expect(down.err).toMatch(/did not take the state/);
+    expect(down.err).toMatch(/did not confirm the state/);
     expect((await readDeclared(SID, homeA)).archived).toBe(false);
     // center は古いまま (送れていない)。次の mark が送り直す
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.archived).toBe(true);
     expect((await run(["label", "again", SID])).code).toBe(0);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1" });
-    // label は 3 回送っている (mark / label / task / --off の失敗 / label)
-    expect(listEvents(db, { includePayload: false, limit: 20 }).filter((e) => e.producer === 2).length).toBe(4);
+    // 届いたのは 4 回 (mark / label / task / label。--off は center が落ちていて届いていない)
+    const sent = listEvents(db, { includePayload: true, limit: 20 }).filter((e) => e.producer === 2);
+    expect(sent.length).toBe(4);
+    // どの報告も送り手の rev (送る直前の時刻) を持ち、送った順に増える (center はこれで最新を決める)
+    const revs = sent.map((e) => JSON.parse(new TextDecoder().decode(e.payload!)).rev as number).reverse();
+    expect(revs.every((r) => typeof r === "number" && r > 1_700_000_000_000)).toBe(true);
+    expect([...revs].sort((x, y) => x - y)).toEqual(revs);
+  });
+
+  test("a broken unrelated setting does not stop the local write (only the report is skipped)", async () => {
+    await seed(homeA, SID);
+    const r = await run(["mark", "archived", SID], { CCX_PROTOCOL: "gopher" });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^archived on/);
+    expect(r.err).toMatch(/config could not be read/);
+    expect((await readDeclared(SID, homeA)).archived).toBe(true);
+    const st = await run(["status", SID, "--json"], { CCX_PROTOCOL: "gopher" });
+    expect(st.code).toBe(0);
+    expect(JSON.parse(st.out).archived).toBe(true);
   });
 
   test("tr pull reports the state it installed; session show names the state events", async () => {
@@ -371,13 +389,35 @@ describe("ccx session with a center: marks are reported as events, and session l
 
   test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
     await seed(homeA, SID);
-    const silent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Promise<Response>(() => {}) });
+    let received = 0;
+    const silent = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        received += 1;
+        return new Promise<Response>(() => {});
+      },
+    });
     try {
       const started = Date.now();
-      const r = await run(["mark", "archived", SID], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
-      expect(r.code).toBe(0);
-      expect(r.err).toMatch(/did not take the state/);
-      expect(Date.now() - started).toBeLessThan(10_000);
+      const p = Bun.spawn(["bun", "run", cli, "session", "mark", "archived", SID], {
+        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${silent.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // 結果行は center の返事を待たずに出る: 最初の出力が、終了 (= 期限切れ) より十分前に届く
+      const reader = p.stdout.getReader();
+      const first = await reader.read();
+      const firstAt = Date.now();
+      expect(new TextDecoder().decode(first.value)).toMatch(/^archived on/);
+      const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+      const exitedAt = Date.now();
+      expect(code).toBe(0);
+      expect(err).toMatch(/did not confirm the state/);
+      expect(exitedAt - firstAt).toBeGreaterThan(1500);
+      expect(exitedAt - started).toBeLessThan(10_000);
+      // 期限切れで諦めたのであって、送っていないのではない
+      expect(received).toBeGreaterThan(0);
       expect((await readDeclared(SID, homeA)).archived).toBe(true);
     } finally {
       void silent.stop(true);
@@ -395,6 +435,9 @@ describe("ccx session with a center: marks are reported as events, and session l
       hook("host-x", "u", SID2, 2),
       { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "" } }) },
       hook("host-x", "u", SID3, 4),
+      // 同じ session id を別の origin も持ち、別の state を持つ (session id だけで束ねると取り違える)
+      { eventId: "st-x3", machine: "host-x", user: "u", seq: 5, receivedAtMs: 1007, producer: 2, payload: enc({ session_id: SID3, state: { archived: false, label: "x3", task: "" } }) },
+      hook("host-x", "u", SID4, 6),
       // 同じマシンの別ユーザー: 手元の ~/.claude は別なので center の写し
       hook("host-a", "someone-else", SID3, 5),
       { eventId: "st-o", machine: "host-a", user: "someone-else", seq: 0, receivedAtMs: 1006, producer: 2, payload: enc({ session_id: SID3, state: { archived: true, label: "other-user", task: "" } }) },
@@ -406,8 +449,9 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(by(SID).state).toEqual({ archived: true, label: "local", task: "" });
     expect(by(SID).lifecycle).toBe("ended");
     expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "" });
-    // center に 1 件も届いていない他マシンの session は null
-    expect(by(SID3, "u").state).toBeNull();
+    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "" });
     expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "" });
+    // center に 1 件も届いていない他マシンの session は null
+    expect(by(SID4).state).toBeNull();
   });
 });

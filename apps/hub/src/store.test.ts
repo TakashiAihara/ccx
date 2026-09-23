@@ -272,9 +272,42 @@ describe("session state events (producer 2, #127)", () => {
     expect(s1.lastHook).toBe("PostToolUse");
     // 1 件も届いていない session は null (「印が無い」ではなく「知らない」)
     expect(s2.state).toBeNull();
-    // 最新は center への到着順。送り手の時計が戻っていても (received_at が古くても) 後から届いた方が勝つ
+    // rev の無い event どうしは到着順。received_at (ccx-agent の時計) は見ない
     ingest(db, [state("s1", { archived: false, label: "later-but-older-clock", task: "" }, { receivedAtMs: 500, seq: 0 })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
+  });
+
+  test("state events leave first_seen / last_seen / ended_at to the hooks", () => {
+    ingest(db, [
+      ev({ payload: { session_id: "s1", hook_event_name: "SessionStart", cwd: "/w" }, receivedAtMs: 1000 }),
+      ev({ payload: { session_id: "s1", hook_event_name: "PostToolUse", cwd: "/w" }, receivedAtMs: 2000 }),
+      // hook より前と後に届いた state。SessionEnd という名前を持たせても終了にはならない
+      ev({ producer: 2, payload: { session_id: "s1", hook_event_name: "SessionEnd", state: { archived: true } }, receivedAtMs: 500 }),
+      ev({ producer: 2, payload: { session_id: "s1", hook_event_name: "SessionEnd", state: { archived: true } }, receivedAtMs: 9000 }),
+    ]);
+    const s1 = listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!;
+    expect([s1.firstSeenMs, s1.lastSeenMs, s1.endedAtMs, s1.eventCount]).toEqual([1000, 2000, null, 2]);
+  });
+
+  test("the sender's rev decides which state is latest, not arrival; ties fall back to arrival", () => {
+    const withRev = (sid: string, label: string, rev: number) => ev({ producer: 2, payload: { session_id: sid, state: { archived: false, label, task: "" }, rev } });
+    // B が後に書いて先に届き、A の古い写しが遅れて届く
+    ingest(db, [hook("s1"), withRev("s1", "B-newer", 2000), withRev("s1", "A-older-arrived-late", 1000)]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("B-newer");
+    // 同じ rev なら後から届いた方
+    ingest(db, [withRev("s1", "same-ms-later", 2000)]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("same-ms-later");
+  });
+
+  test("the same session id on two origins keeps two states", () => {
+    ingest(db, [
+      hook("s1"),
+      ev({ user: "other", payload: { session_id: "s1", hook_event_name: "PostToolUse", cwd: "/w" } }),
+      state("s1", { archived: true, label: "mine", task: "" }),
+      ev({ user: "other", producer: 2, payload: { session_id: "s1", state: { archived: false, label: "theirs", task: "" } } }),
+    ]);
+    const rows = listSessions(db, { limit: 10 }).filter((r) => r.sessionId === "s1");
+    expect(Object.fromEntries(rows.map((r) => [r.user, r.state?.label]))).toEqual({ dev: "mine", other: "theirs" });
   });
 
   test("a session with only state events is not listed; an unreadable state payload counts as none", () => {

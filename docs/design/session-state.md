@@ -58,9 +58,13 @@ Two copies leave the machine, for two readers:
   shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` right after the local
   write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
   and the next mark sends the whole state again; a center that accepts and never answers is cut off
-  after a short deadline; `ccx tr pull` reports the state it installed the same way. The center keeps
-  the last readable event per session in *arrival* order (`Session.state` in `fleet.proto`) — not
-  by the sender's clock, which differs per machine — and does not count these as hooks: a mark never
+  after a short deadline (and reported as "not confirmed", since it may have been recorded); a config
+  that cannot be read skips the report but not the local write; `ccx tr pull` reports the state it
+  installed the same way. Each report carries `rev`, the sender's clock just before sending; within
+  one (machine, user, session) that is one clock, so the center keeps the readable event with the
+  highest `rev` (arrival order only breaks ties) — a report written first but delivered late does not
+  overwrite a newer one. It reads one row per session, not the history (`Session.state` in
+  `fleet.proto`), and does not count these as hooks: a mark never
   moves `last_seen`, and a session whose only events are marks is not listed (a machine without
   `ccx-agent` wired sends marks the center accepts but never shows). `ccx session show` prints them
   as `ccx.session.state`.

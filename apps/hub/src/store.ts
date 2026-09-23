@@ -189,27 +189,39 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
 }
 
 /**
- * 一覧の session ごとに、最後に届いた「読める」宣言状態を返す。読めない payload は
- * 無いものとして扱う — 最後の 1 件が読めなければその前の読める 1 件 (読めない event を
- * 墓標にしない)。「最後」は center への到着順 (rowid)。送り手 (ccx の CLI) は seq を
- * 持たず、時計はマシンごとに違うので、received_at で並べると同じ ms や戻った時計で
- * 古い方が勝つ。session ごとの state event は mark の回数ぶんしか無いので全件読んでよい
+ * 一覧の session ごとに、最新の「読める」宣言状態を 1 件だけ返す (履歴を全部は読まない)。
+ *
+ * - 読めない payload は無いものとして扱う — 最新が読めなければその前の読める 1 件
+ *   (読めない event を墓標にしない)
+ * - 「最新」は送り手が付けた `rev` (その machine の CLI が送る直前の時刻 ms)。1 つの
+ *   (machine, user, session) の中では同じ時計なので比べられる。到着順だけで決めると、
+ *   先に書いて遅れて届いた古い写しが後から勝つ。rev が同じ (同じ ms) か無い (rev を
+ *   送らない版) ときだけ到着順 (rowid)
  */
 function latestStates(db: Db, keys: { machine: string; os_user: string; session_id: string }[]): Map<string, SessionState> {
   const out = new Map<string, SessionState>();
   if (keys.length === 0) return out;
   const tuples = keys.map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`);
-  const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: Buffer }>(sql`
+  const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: string }>(sql`
     SELECT machine, os_user, session_id, payload
-    FROM events
-    WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
-    ORDER BY rowid DESC
+    FROM (
+      SELECT machine, os_user, session_id, doc AS payload,
+             ROW_NUMBER() OVER (
+               PARTITION BY machine, os_user, session_id
+               ORDER BY coalesce(json_extract(doc, '$.rev'), 0) DESC, rid DESC
+             ) AS rn
+      FROM (
+        SELECT machine, os_user, session_id, rowid AS rid, CAST(payload AS TEXT) AS doc
+        FROM events
+        WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+      )
+      WHERE json_valid(doc) AND json_type(doc, '$.state') = 'object'
+    )
+    WHERE rn = 1
   `);
   for (const r of rows) {
-    const key = `${r.machine}\0${r.os_user}\0${r.session_id}`;
-    if (out.has(key)) continue;
-    const s = parseState(r.payload);
-    if (s) out.set(key, s);
+    const s = parseState(new TextEncoder().encode(r.payload));
+    if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
   }
   return out;
 }

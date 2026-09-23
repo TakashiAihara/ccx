@@ -64,10 +64,30 @@ async function target(idOrPrefix: string | undefined, home: string, store: Trans
   return own.toLowerCase();
 }
 
+/**
+ * 設定を読む。読めなければ stderr に 1 行出して null — 手元の宣言を読み書きするだけの
+ * 操作 (mark / label / task / status) を、関係の無い設定 (clone の protocol 等) の誤りで
+ * 止めない
+ */
+async function configOrNull(): Promise<Awaited<ReturnType<typeof loadConfig>> | null> {
+  try {
+    return await loadConfig();
+  } catch (e) {
+    console.error(`(ccx config could not be read: ${e instanceof Error ? e.message : String(e)}; center and store are skipped)`);
+    return null;
+  }
+}
+
 /** 保存先が設定されていれば client、無ければ null。無いのはエラーではない (見えないだけ) */
 async function storeOrNull(): Promise<TranscriptClient | null> {
-  const cfg = await loadConfig();
-  return cfg.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
+  const cfg = await configOrNull();
+  return cfg?.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
+}
+
+/** 手元に書いた後で center に写す。設定が読めなければ写さない (書き込みは済んでいる) */
+async function reportAfterWrite(sessionId: string, state: DeclaredState): Promise<void> {
+  const cfg = await configOrNull();
+  if (cfg) await reportState(cfg.hub?.url, cfg.machine, sessionId, state);
 }
 
 /**
@@ -88,19 +108,22 @@ export async function reportState(hubUrl: string | undefined, machine: string | 
           {
             origin: { machine: origin.machine, user: origin.user },
             eventId: randomUUID(),
-            // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は center の到着順
+            // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は payload の rev
             seq: 0n,
             receivedAt: timestampFromMs(Date.now()),
             producer: Producer.CCX_SESSION_STATE,
-            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state })),
+            // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
+            // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
+            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state, rev: Date.now() })),
           },
         ],
       },
-      // 繋がった後に黙る center で mark を止めない。best effort なので期限切れは届かなかったのと同じ
+      // 繋がった後に黙る center で mark を止めない。期限切れは「受け取ったと言われなかった」で
+      // あって「届かなかった」ではない (center が書いた後に返事だけ遅れたこともありうる)
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
   } catch (e) {
-    console.error(`(center ${hubUrl} did not take the state: ${e instanceof Error ? e.message : String(e)}; it is recorded locally and will be sent with the next mark)`);
+    console.error(`(center ${hubUrl} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
   }
 }
 
@@ -181,13 +204,12 @@ export function registerSessionState(session: Command): void {
     .action(async (flag: string, idOrPrefix: string | undefined, o) => {
       if (!isFlag(flag)) throw new Error(`unknown flag ${flag}; one of ${FLAGS.join(", ")}`);
       const home = claudeHome();
-      const cfg = await loadConfig();
       const id = await target(idOrPrefix, home);
       const s = await writeDeclared(id, { [flag]: !o.off }, home);
       // 書けた事実を先に出す。center が遅くても、書き込みが済んだことは隠れない
       if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
       else console.log(`${flag} ${o.off ? "off" : "on"}  ${id}`);
-      await reportState(cfg.hub?.url, cfg.machine, id, s);
+      await reportAfterWrite(id, s);
     });
 
   for (const key of ["label", "task"] as const) {
@@ -199,12 +221,11 @@ export function registerSessionState(session: Command): void {
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {
         const home = claudeHome();
-        const cfg = await loadConfig();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);
         if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
         else console.log(`${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`);
-        await reportState(cfg.hub?.url, cfg.machine, id, s);
+        await reportAfterWrite(id, s);
       });
   }
 
