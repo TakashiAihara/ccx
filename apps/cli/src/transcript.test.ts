@@ -30,6 +30,9 @@ const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const CWD_A = "/home/a/.ccx/github.com/o/r/01AAAAAAAAAAAA";
 const SUB = "agent-a1.jsonl";
 const WF = "workflows/wf_1/agent-b2.jsonl";
+// <session>/workflows/ (subagents/ の外) は run の記録と script
+const RUN = "wf_1.json";
+const SCRIPT = "scripts/review-wf_1.js";
 
 let server: ReturnType<typeof Bun.serve>;
 let db: ReturnType<typeof openDb>;
@@ -54,6 +57,8 @@ async function seedA(): Promise<LocalTranscript> {
   // subagents は入れ子を持つ (workflows/wf_*/)
   await Bun.write(join(projectDir, SID, "subagents", SUB), "subagent line\n");
   await Bun.write(join(projectDir, SID, "subagents", WF), "workflow agent line\n");
+  await Bun.write(join(projectDir, SID, "workflows", RUN), '{"runId":"wf_1"}');
+  await Bun.write(join(projectDir, SID, "workflows", SCRIPT), "export const meta = {}\n");
   // uuid でない名前は transcript ではない
   await Bun.write(join(projectDir, "notes.jsonl"), "x\n");
   const [t] = await localTranscripts(homeA);
@@ -83,6 +88,7 @@ describe("transcript: local side", () => {
     expect((await localTranscripts(homeA)).map((x) => x.sessionId)).toEqual([SID]);
     expect(t.toolResultsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "tool-results"));
     expect(t.subagentsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "subagents"));
+    expect(t.workflowsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "workflows"));
     expect(await localTranscripts(join(homeA, "nope"))).toEqual([]);
   });
 
@@ -136,6 +142,11 @@ describe("transcript: push / pull / prune through the store", () => {
       { name: WF, sha256: await sha256(join(t.subagentsDir!, WF)) },
     ]);
     expect(await A.s3.file(`${prefixA}subagents/${WF}`).text()).toBe("workflow agent line\n");
+    expect(r1.meta.workflows).toEqual([
+      { name: SCRIPT, sha256: await sha256(join(t.workflowsDir!, SCRIPT)) },
+      { name: RUN, sha256: await sha256(join(t.workflowsDir!, RUN)) },
+    ]);
+    expect(await A.s3.file(`${prefixA}workflows/${SCRIPT}`).text()).toBe("export const meta = {}\n");
     expect(await Bun.file(join(root, "ccx", `${prefixA}session.json`)).exists()).toBe(true);
     expect((await A.history(r1.meta)).map((e) => [e.op, e.machine])).toEqual([["push", "host-a"]]);
     // スナップショットは残らない
@@ -157,10 +168,17 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(join(t.subagentsDir!, SUB), "subagent line\n");
     expect((await A.push(t)).status).toBe("pushed");
 
+    // workflow の run が書き足しても同じ
+    await Bun.write(join(t.workflowsDir!, RUN), '{"runId":"wf_1","result":"done"}');
+    expect((await A.push(t)).status).toBe("pushed");
+    expect(await A.s3.file(`${prefixA}workflows/${RUN}`).text()).toBe('{"runId":"wf_1","result":"done"}');
+    await Bun.write(join(t.workflowsDir!, RUN), '{"runId":"wf_1"}');
+    expect((await A.push(t)).status).toBe("pushed");
+
     // 内容が変わればもう一度置く
     await Bun.write(t.path, `${transcriptBody}${line({ type: "user", message: "more" })}`);
     expect((await A.push(t)).status).toBe("pushed");
-    expect((await A.history(r1.meta)).map((e) => e.op)).toEqual(["push", "push", "push", "push", "push"]);
+    expect((await A.history(r1.meta)).map((e) => e.op)).toEqual(["push", "push", "push", "push", "push", "push", "push"]);
   });
 
   test("push hashes and uploads subagents from one snapshot, so a subagent appending mid-push cannot split session.json from the object", async () => {
@@ -196,6 +214,7 @@ describe("transcript: push / pull / prune through the store", () => {
     expect(await sha256(r.path)).toBe(await sha256(t.path));
     expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "tool-results", "abc.txt")).text()).toBe("big tool output");
     expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "subagents", WF)).text()).toBe("workflow agent line\n");
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows", SCRIPT)).text()).toBe("export const meta = {}\n");
 
     const h = await B.history(r.meta);
     expect(h.map((e) => [e.op, e.machine, e.user])).toEqual([
@@ -222,6 +241,11 @@ describe("transcript: push / pull / prune through the store", () => {
     await rm(join(homeB, "projects", encodeCwd(CWD_A), SID, "subagents"), { recursive: true, force: true });
     expect((await B.pull(SID, homeB)).status).toBe("pulled");
     expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "subagents", SUB)).text()).toBe("subagent line\n");
+
+    // workflows が欠けていても already-here にはならず、埋め直す
+    await rm(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows"), { recursive: true, force: true });
+    expect((await B.pull(SID, homeB)).status).toBe("pulled");
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows", RUN)).text()).toBe('{"runId":"wf_1"}');
 
     // tool-results が欠けていれば already-here にはならず、埋め直す
     await rm(join(homeB, "projects", encodeCwd(CWD_A), SID), { recursive: true, force: true });
@@ -268,6 +292,14 @@ describe("transcript: push / pull / prune through the store", () => {
     const wfDest = join(homeB, "projects", encodeCwd(CWD_A), SID, "subagents", WF);
     expect(await Bun.file(wfDest).exists()).toBe(false);
     expect(await Bun.file(`${wfDest}.pull-tmp`).exists()).toBe(false);
+
+    // workflows の破損も同じ
+    await rm(sessionDirB, { recursive: true, force: true });
+    await Bun.write(join(root, "ccx", `${prefixA}subagents/${WF}`), "workflow agent line\n");
+    await Bun.write(join(root, "ccx", `${prefixA}workflows/${RUN}`), "corrupt");
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/workflows\/wf_1.json/);
+    expect(await Bun.file(path).exists()).toBe(false);
+    expect(await Bun.file(join(sessionDirB, "workflows", RUN)).exists()).toBe(false);
 
     // 保存先が projectDir の外を指す名前を書いていても置かない
     const metaKey = join(root, "ccx", `${prefixA}session.json`);
@@ -331,6 +363,11 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(metaKey, JSON.stringify(old));
     expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("before subagents were carried") });
     expect(await Bun.file(join(t.subagentsDir!, WF)).exists()).toBe(true);
+    // workflows も同じ
+    const { workflows: __, ...noWf } = JSON.parse(current) as Record<string, unknown>;
+    await Bun.write(metaKey, JSON.stringify(noWf));
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("before workflows were carried") });
+    expect(await Bun.file(join(t.workflowsDir!, RUN)).exists()).toBe(true);
     await Bun.write(metaKey, current);
     expect(await A.prune(t, new Set([SID]))).toMatchObject({ status: "refused", reason: "session is running" });
     expect(await Bun.file(t.path).exists()).toBe(true);
@@ -352,6 +389,16 @@ describe("transcript: push / pull / prune through the store", () => {
     expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("does not read back") });
     await Bun.write(join(root, "ccx", `${prefixA}subagents/${WF}`), "workflow agent line\n");
 
+    // workflows の実体が壊れていても消さない
+    await Bun.write(join(root, "ccx", `${prefixA}workflows/${RUN}`), "corrupt");
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("does not read back") });
+    await Bun.write(join(root, "ccx", `${prefixA}workflows/${RUN}`), '{"runId":"wf_1"}');
+
+    // push 後に workflow の run が増えていても消さない
+    await Bun.write(join(t.workflowsDir!, "wf_2.json"), "unpushed");
+    expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("no copy in the store matches") });
+    await rm(join(t.workflowsDir!, "wf_2.json"));
+
     // push 後に subagent が増えていても消さない
     await Bun.write(join(t.subagentsDir!, "agent-late.jsonl"), "unpushed");
     expect(await A.prune(t, new Set())).toMatchObject({ status: "refused", reason: expect.stringContaining("no copy in the store matches") });
@@ -372,6 +419,7 @@ describe("transcript: push / pull / prune through the store", () => {
     expect(await Bun.file(t.path).exists()).toBe(false);
     expect(await Bun.file(join(t.projectDir, SID, "tool-results", "abc.txt")).exists()).toBe(false);
     expect(await stat(join(t.projectDir, SID, "subagents")).catch(() => null)).toBeNull();
+    expect(await stat(join(t.projectDir, SID, "workflows")).catch(() => null)).toBeNull();
     expect(await Bun.file(join(t.projectDir, SID, "other", "x.jsonl")).text()).toBe("keep");
     expect((await A.history(r.meta!)).map((e) => e.op)).toEqual(["push", "prune"]);
 
@@ -379,6 +427,7 @@ describe("transcript: push / pull / prune through the store", () => {
     expect((await A.pull(SID, homeA)).status).toBe("pulled");
     expect(await Bun.file(t.path).text()).toBe(transcriptBody);
     expect(await Bun.file(join(t.projectDir, SID, "subagents", WF)).text()).toBe("workflow agent line\n");
+    expect(await Bun.file(join(t.projectDir, SID, "workflows", SCRIPT)).text()).toBe("export const meta = {}\n");
   });
 
   test("prune on the machine that pulled (not the one that pushed) works, and folds an empty session dir", async () => {
