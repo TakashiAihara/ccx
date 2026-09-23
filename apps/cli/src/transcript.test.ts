@@ -451,6 +451,12 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(metaKey, JSON.stringify(old));
 
     expect((await A.push(t0!)).status).toBe("unchanged");
+
+    // 手元の workflows が「ディレクトリでない」なら空と読まず (already-here にしない)、pull は止まる
+    expect((await B.pull(SID, homeB)).status).toBe("pulled");
+    await Bun.write(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows"), "not a dir");
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/ENOTDIR/);
+
     expect((await A.prune(t0!, new Set())).status).toBe("pruned");
   });
 

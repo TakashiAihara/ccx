@@ -253,8 +253,13 @@ const isDir = (p: string) => stat(p).then((x) => x.isDirectory()).catch(() => fa
 
 /** dir の下の全ファイルの相対パスと sha256。無ければ空。subagents は workflows/wf_<id>/ の入れ子を持つ */
 async function localFiles(dir: string | null): Promise<ToolResult[]> {
-  if (!dir || !(await isDir(dir))) return [];
-  const names = (await readdir(dir, { recursive: true, withFileTypes: true }))
+  if (!dir) return [];
+  // 無いのは空と同じ。読めない / ディレクトリでない、を空と読むと prune が運んでいないものを消す
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true }).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  });
+  const names = entries
     .filter((d) => d.isFile())
     .map((d) => relative(dir, join(d.parentPath, d.name)))
     .sort(byString);
