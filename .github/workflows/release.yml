@@ -102,13 +102,18 @@ jobs:
 
       # bun は cross compile でき、DuckDB の asset も scripts/build.ts が target ぶん取る。
       # 4 つを 1 台で作るのは、runner を OS ごとに分けると同じ入力から作った保証が弱まるため
+      # 版は tag から焼き込む (`ccx --version` と ccx.json の ccxVersion)。package.json の版の
+      # ままだと、自動で切る rc が全部同じ版を名乗る
       - name: Build
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
         run: |
           set -eux
           mkdir -p dist
           for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
-            bun run scripts/build.ts --target "bun-$t" --outfile "dist/ccx-$t"
+            bun run scripts/build.ts --target "bun-$t" --outfile "dist/ccx-$t" --ccx-version "${TAG#v}"
           done
+          test "$(./dist/ccx-linux-x64 --version)" = "${TAG#v}"
           cd dist && sha256sum ccx-* > SHA256SUMS && cat SHA256SUMS
 
       # この runner で動かせる 1 つだけ。単一バイナリ固有の経路 (埋めた DuckDB) まで通す
