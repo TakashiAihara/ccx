@@ -41,10 +41,11 @@ believed.
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
 - **center** — `ccx-center`, the hub that collects hook events and, by default, serves the store.
 - **ccx-agent** — the per-machine resident process (formerly `ccxd`, #131).
-- **channel** — `ccx-agent channel`, the MCP server Claude Code spawns per session to push events into it
-  (`apps/agent/internal/channel`).
+- **channel** — `ccx-agent channel`, the MCP server Claude Code spawns per session. It registers the session
+  with `ccx-agent serve` and pushes into the session what serve sends (`apps/agent/internal/channel`).
 - **heartbeat** — a channel event with `kind="heartbeat"` that wakes an idle session for one short turn so
   its prompt cache does not expire (`docs/design/heartbeat.md`). Not a message; a heartbeat turn is not use.
+  Decided by the `heartbeat` concern in serve; a session's own `on` / `off` is declared state.
 
 ## Repodirs
 

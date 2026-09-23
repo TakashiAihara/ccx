@@ -10,7 +10,7 @@ Observing repodirs, starting sessions, delivering channels, threshold
 warnings — all of that sits on top of this and is out of scope here (#7, #20,
 #23, #83).
 
-## One process, three concerns (ADR 0002)
+## One process, four concerns (ADR 0002)
 
 ccx-agent is a modular monolith: one binary, but its jobs are separate internal
 modules behind an interface, each independently toggled in config.
@@ -20,11 +20,13 @@ modules behind an interface, each independently toggled in config.
 | **collect** | hooks → center | on (inert without a center) | built (#90) |
 | **carry** | broker → session | off (inert without a broker) | later (#23) |
 | **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
+| **heartbeat** | keep idle sessions' prompt caches warm | on (inert until a session loads the channel) | built (#142) |
 
 Persistence is off by default because it is the only *active* verb — it spawns
-and restarts sessions (START), so it is never on by surprise. Only `collect` is
-implemented here; the other two slot into the same `concern.Run` the same way
-when built. `internal/concern` is the interface, `internal/collect` the module.
+and restarts sessions (START), so it is never on by surprise. `collect` and
+`heartbeat` are implemented; the other two slot into the same `concern.Run` the
+same way when built. `internal/concern` is the interface; `internal/collect` and
+`internal/heartbeat` are modules.
 A ccx-agent with every concern off is a valid state.
 
 ## The two commands
@@ -43,8 +45,9 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
 
 ```text
 ccx-agent channel  the MCP channel server Claude Code spawns for each session.
-                   Today it keeps an idle session's prompt cache warm with a
-                   heartbeat turn every 50 minutes (docs/design/heartbeat.md).
+                   It registers the session with serve and pushes what serve
+                   sends: today, a heartbeat that keeps an idle session's
+                   prompt cache warm (docs/design/heartbeat.md).
 ```
 
 Register it once, then load it as a channel:
@@ -56,18 +59,15 @@ claude --dangerously-load-development-channels server:ccx
 
 A user-scope registration starts `ccx-agent channel` in every session, flag or not (about 20MB each);
 without the flag its pushes are dropped. It is meant for subscription accounts: on a 5-minute cache TTL
-(API key, usage credits) a heartbeat never lands in time, so set `CCX_HEARTBEAT_INTERVAL=off`.
+(API key, usage credits) a heartbeat never lands in time, so turn the concern off there.
 
 Load several channels by listing them after the one flag
 (`server:akapen server:ccx`). A server passed with `--mcp-config` is not accepted as a channel.
 
-| What | env | default |
-|---|---|---|
-| heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `50m` (`off` disables) |
-| stop after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `12h` (`off` = no cap) |
-
-Set them with `claude mcp add ... -e KEY=value`. A heartbeat turn is a user record carrying
-`kind="heartbeat"`; tools that count a session's activity should skip it.
+The heartbeat's settings live in the configuration table below (`[heartbeat]`);
+one session overrides the default with `ccx session heartbeat on|off|default`.
+A heartbeat turn is a user record carrying `kind="heartbeat"`; tools that count
+a session's activity should skip it.
 
 ## The path a hook event takes
 
@@ -115,6 +115,11 @@ it simply has no center to forward to.
 | collect on/off | `CCX_COLLECT` | `ccx.collect` | `[collect] enabled` | on |
 | carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |
 | persistence on/off | `CCX_PERSISTENCE` | `ccx.persistence` | `[persistence] enabled` | off |
+| heartbeat on/off | `CCX_HEARTBEAT` | `ccx.heartbeat` | `[heartbeat] enabled` | on |
+| heartbeat for sessions with no declaration | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | `[heartbeat] default` | on |
+| heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
+| heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
+| channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 

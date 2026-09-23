@@ -8,7 +8,7 @@ A session left alone for an hour loses its prompt cache, and the next turn rewri
 - Claude Code requests a 1-hour TTL for the main conversation on a subscription (5 minutes on an API key
   or usage credits). No setting makes it longer. The hour counts from the start of the last request
   that read the entry, so each read restarts it.
-- On a 5-minute TTL a heartbeat can never land in time. Turn it off there (`CCX_HEARTBEAT_INTERVAL=off`).
+- On a 5-minute TTL a heartbeat can never land in time. Turn it off there (`[heartbeat] enabled = false`).
 - Only a turn **in that session** reads its cache. `claude -p --resume <id>` does not: its MCP deltas
   differ, the prefix splits at ~13k tokens, and the rest is written again every time.
 - The read is almost free on a subscription (measured 2026-09-21: 20.0M read tokens moved the 5h window
@@ -19,26 +19,47 @@ A session left alone for an hour loses its prompt cache, and the next turn rewri
 
 ```mermaid
 sequenceDiagram
-    participant C as ccx-agent channel
-    participant T as transcript (jsonl)
     participant S as claude session
+    participant C as ccx-agent channel (per session)
+    participant A as ccx-agent serve (heartbeat concern)
+    participant T as transcript (jsonl)
 
-    loop
-        C->>T: read: last assistant record, last heartbeat, last real use
-        alt now < (last assistant or heartbeat, whichever is later) + 50m
-            C->>C: sleep until then
-        else due, and the previous heartbeat has landed
-            C->>S: notifications/claude/channel (meta kind=heartbeat)
-            S->>T: user record <channel ... kind="heartbeat">
-            S->>T: assistant "." (cache read, tiny write)
+    S->>C: spawn over stdio, initialize
+    C->>A: connect channel socket, {"session": id}
+    loop while connected
+        A->>T: read: last request, last heartbeat, last real use
+        A->>A: read ~/.claude/sessions/<id>/ (archived, heartbeat on/off)
+        alt not wanted, not due, or cache already expired
+            A->>A: sleep
+        else due
+            A->>C: {"content":"heartbeat","meta":{"kind":"heartbeat"}}
+            C->>S: notifications/claude/channel
+            S->>T: user record <channel ... kind="heartbeat">, assistant "."
         end
     end
 ```
 
 - Claude Code spawns `ccx-agent channel` per session over stdio (ADR 0002); it exits when stdin closes.
-- The clock is the session's own transcript, found by `CLAUDE_CODE_SESSION_ID`. No `ccx-agent serve`,
-  no center: the invariant in `scope.md` holds.
+  It only relays: it registers the session with serve and pushes what serve sends. With serve down it
+  keeps serving MCP and retries every minute.
+- serve decides. The clock is the session's own transcript; the settings are ccx's config, so changing
+  them needs no session restart. ccx holds the session's state (`scope.md`), and whether a session is
+  kept warm is part of it (user decision 2026-09-24).
 - The server's instructions tell the session to answer a heartbeat with `.` and nothing else.
+
+## Settings
+
+| What | config.toml `[heartbeat]` | env | git config | default |
+|---|---|---|---|---|
+| concern on/off | `enabled` | `CCX_HEARTBEAT` | `ccx.heartbeat` | on (inert until a session loads the channel) |
+| sessions with no declaration | `default` | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | on |
+| interval | `interval` | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `50m` |
+| stop after no real use for | `maxIdle` | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `12h` (`off` = no cap) |
+| channel socket | — | `CCX_CHANNEL_SOCKET` | — | `ccx-channel.sock` next to the hook socket |
+
+- serve reads these at start; restart it to apply (sessions reconnect on their own within a minute).
+- A session overrides `default` for itself with `ccx session heartbeat on|off` (`default` clears it). It is
+  declared state (`~/.claude/sessions/<id>/heartbeat`), read on every poll, so it applies within a minute.
 
 ## Measured end to end (2026-09-23, Claude Code 2.1.280, 40s interval)
 
@@ -79,7 +100,8 @@ sequenceDiagram
 | no real use for `CCX_HEARTBEAT_MAX_IDLE` (12h; `off` = no cap) | a session nobody returns to is not worth waking forever |
 | the last heartbeat is not in the transcript yet, and nothing else happened since | mid-turn, or `/clear` moved the session to a new id; never stack a second. Real use after the push means it was lost, and beating resumes |
 | less than an interval since the last heartbeat landed | a heartbeat whose answer failed must not make the next one due at once |
-| `CCX_HEARTBEAT_INTERVAL=off` | turned off |
+| `ccx session heartbeat off`, or `[heartbeat] default = false` and no `on` for the session | declared not wanted |
+| `[heartbeat] enabled = false`, or `interval = "off"` | turned off for the machine |
 
 "Real use" is any record outside a heartbeat turn. A heartbeat turn runs from its user record to the
 next user prompt or channel event that is not a heartbeat. Only the opening tag of an `isMeta` channel
@@ -98,11 +120,19 @@ registered the server under.
 
 ## Rejected
 
-- Timer in `ccx-agent serve`, pushed through a socket to the channel: the heartbeat would stop whenever the
-  resident agent is down, for no gain. `serve` is where broker messages (#23) will come from; the
-  heartbeat needs nothing from it.
+- Timer in the channel process, settings as env on the MCP registration (the first cut of #142): it keeps
+  working without serve, but the settings are fixed per session at spawn and cannot be changed without
+  restarting every session, and it keeps a piece of session state outside ccx (user decision 2026-09-24).
+  The serve → channel connection is also the local half of what #23 and #138 need.
 - Measuring idleness from the transcript mtime: records written after the last request (titles, snapshots)
   move it later than the request, and the heartbeat would land after the TTL.
 - Stop hook times from `collect`: needs hooks wired and `serve` running; the transcript already has them.
 - Blocking the heartbeat prompt in a UserPromptSubmit hook: a blocked prompt makes no request, so it
   reads no cache.
+
+## Later
+
+- ccx-center should see every machine's ccx-agent settings, while each machine keeps them in its local
+  file (user, 2026-09-24: "the final shape"). Not built. Today the declared-state event sent to the
+  center carries a session's heartbeat override, but the center indexes only archived / label / task, and
+  nothing sends `config.toml`.

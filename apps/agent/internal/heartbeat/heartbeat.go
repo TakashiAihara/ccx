@@ -1,4 +1,4 @@
-package channel
+package heartbeat
 
 import (
 	"bufio"
@@ -24,7 +24,8 @@ type Heartbeat struct {
 	SessionID  string
 	ClaudeHome string        // ~/.claude, or CLAUDE_CONFIG_DIR
 	Interval   time.Duration // 50m: an hour of TTL, less generation time and slack
-	MaxIdle    time.Duration // stop once no one has used the session for this long
+	MaxIdle    time.Duration // stop once no one has used the session for this long; 0 is no cap
+	Default    bool          // for a session that has not declared on or off
 	Push       func() error
 	Log        func(string, ...any)
 	Now        func() time.Time
@@ -62,9 +63,10 @@ func (h *Heartbeat) Run(ctx context.Context) {
 
 // step decides one thing and returns how long to wait before the next.
 func (h *Heartbeat) step(sent *time.Time) time.Duration {
-	if h.archived() {
-		// Folded away: its cache is not wanted. Unarchiving it resumes.
-		return h.Interval
+	if !h.wanted() {
+		// Declared off, or folded away. Looked at again each poll, so turning it
+		// back on takes effect within a minute.
+		return poll
 	}
 	s, ok := h.read()
 	if !ok || s.LastAssistant.IsZero() {
@@ -107,9 +109,24 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	return poll
 }
 
-func (h *Heartbeat) archived() bool {
-	_, err := os.Stat(filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "archived"))
-	return err == nil
+// wanted reads the session's declared state: archived never, then its own
+// on / off (`ccx session heartbeat`), then the machine's default.
+func (h *Heartbeat) wanted() bool {
+	dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
+	if _, err := os.Stat(filepath.Join(dir, "archived")); err == nil {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "heartbeat"))
+	if err != nil {
+		return h.Default
+	}
+	switch strings.TrimSpace(string(b)) {
+	case "on":
+		return true
+	case "off":
+		return false
+	}
+	return h.Default
 }
 
 // read scans the transcript, or returns the last scan if the file has not moved.

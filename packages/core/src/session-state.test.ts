@@ -39,20 +39,36 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "" });
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "" });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "" });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "" });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1" });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "" });
     expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
+  });
+
+  test("heartbeat is on / off / unset; anything else in the file or the store reads as unset", async () => {
+    const file = join(home, "sessions", SID, "heartbeat");
+    expect((await writeDeclared(SID, { heartbeat: "off" }, home)).heartbeat).toBe("off");
+    expect(await Bun.file(file).text()).toBe("off\n");
+    expect(isEmptyDeclared(await readDeclared(SID, home))).toBe(false);
+    expect((await writeDeclared(SID, { heartbeat: "on" }, home)).heartbeat).toBe("on");
+    expect((await writeDeclared(SID, { heartbeat: "" }, home)).heartbeat).toBe("");
+    expect(await Bun.file(file).exists()).toBe(false);
+
+    await Bun.write(file, "maybe\n");
+    expect((await readDeclared(SID, home)).heartbeat).toBe("");
+    expect(normalizeDeclared({ heartbeat: "yes" }).heartbeat).toBe("");
+    expect(normalizeDeclared({ heartbeat: "off" }).heartbeat).toBe("off");
+    expect(sameDeclared({ ...EMPTY_DECLARED, heartbeat: "on" }, EMPTY_DECLARED)).toBe(false);
   });
 
   test("normalizeDeclared fills missing keys and drops wrong types; sameDeclared compares every field", () => {

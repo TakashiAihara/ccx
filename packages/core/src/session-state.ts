@@ -31,12 +31,18 @@ export type DeclaredState = {
   archived: boolean;
   label: string;
   task: string;
+  /** この session の heartbeat の上書き。空なら ccx-agent の既定に従う (docs/design/heartbeat.md) */
+  heartbeat: Heartbeat;
 };
+
+export const HEARTBEATS = ["on", "off"] as const;
+export type Heartbeat = (typeof HEARTBEATS)[number] | "";
+const asHeartbeat = (v: unknown): Heartbeat => (HEARTBEATS as readonly unknown[]).includes(v) ? (v as Heartbeat) : "";
 
 export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 
 const FLAG_FILE: Record<Flag, string> = { archived: "archived" };
-const TEXT_FILE = { label: "label", task: "task" } as const;
+const TEXT_FILE = { label: "label", task: "task", heartbeat: "heartbeat" } as const;
 
 /**
  * ccx を通して宣言したことがある、の印。空の状態 (全部外した) と「一度も宣言していない」を
@@ -45,13 +51,13 @@ const TEXT_FILE = { label: "label", task: "task" } as const;
  */
 const DECLARED_FILE = ".ccx-declared";
 
-export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "" };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", heartbeat: "" };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
 export const isFlag = (s: string): s is Flag => (FLAGS as readonly string[]).includes(s);
 
-export const isEmptyDeclared = (s: DeclaredState) => flagsOf(s).length === 0 && !s.label && !s.task;
+export const isEmptyDeclared = (s: DeclaredState) => flagsOf(s).length === 0 && !s.label && !s.task && !s.heartbeat;
 
 /** 立っている flag の名前。`ls` の列と JSON の両方で使う */
 export const flagsOf = (s: DeclaredState): Flag[] => FLAGS.filter((f) => s[f]);
@@ -63,11 +69,12 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
     archived: r.archived === true,
     label: typeof r.label === "string" ? r.label : "",
     task: typeof r.task === "string" ? r.task : "",
+    heartbeat: asHeartbeat(r.heartbeat),
   };
 }
 
 export const sameDeclared = (a: DeclaredState, b: DeclaredState) =>
-  FLAGS.every((f) => a[f] === b[f]) && a.label === b.label && a.task === b.task;
+  FLAGS.every((f) => a[f] === b[f]) && a.label === b.label && a.task === b.task && a.heartbeat === b.heartbeat;
 
 export async function readDeclared(sessionId: string, home = claudeHome()): Promise<DeclaredState> {
   const dir = sessionDir(sessionId, home);
@@ -79,12 +86,17 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, label, task] = await Promise.all([flag("archived"), text(TEXT_FILE.label), text(TEXT_FILE.task)]);
-  return { archived, label, task };
+  const [archived, label, task, heartbeat] = await Promise.all([
+    flag("archived"),
+    text(TEXT_FILE.label),
+    text(TEXT_FILE.task),
+    text(TEXT_FILE.heartbeat),
+  ]);
+  return { archived, label, task, heartbeat: asHeartbeat(heartbeat) };
 }
 
 /**
- * 差分だけ書く。flag は空ファイルの有無、label / task は中身 (空文字なら消す)。
+ * 差分だけ書く。flag は空ファイルの有無、label / task / heartbeat は中身 (空文字なら消す)。
  * 渡さなかった鍵は触らない
  */
 export async function writeDeclared(sessionId: string, patch: Partial<DeclaredState>, home = claudeHome()): Promise<DeclaredState> {
@@ -97,7 +109,7 @@ export async function writeDeclared(sessionId: string, patch: Partial<DeclaredSt
     if (patch[f]) await Bun.write(p, "");
     else await rm(p, { force: true });
   }
-  for (const k of ["label", "task"] as const) {
+  for (const k of ["label", "task", "heartbeat"] as const) {
     if (patch[k] === undefined) continue;
     const p = join(dir, TEXT_FILE[k]);
     if (patch[k]) await Bun.write(p, `${patch[k]}\n`);

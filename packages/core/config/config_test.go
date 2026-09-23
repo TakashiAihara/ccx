@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // noGit stands in for a machine with nothing in git config.
@@ -194,5 +195,41 @@ func TestConfigFile_UnreadableIsSurfaced(t *testing.T) {
 	// is NOT os.ErrNotExist, so it must be surfaced, not swallowed.
 	if _, err := load(env(map[string]string{"CCX_CONFIG": dir}), noGit, fixedHost("h")); err == nil {
 		t.Error("an existing-but-unreadable config path should surface an error, not be swallowed")
+	}
+}
+
+func TestHeartbeat_DefaultsAndFile(t *testing.T) {
+	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Concerns.Heartbeat || !c.Heartbeat.Default || c.Heartbeat.Interval != 50*time.Minute || c.Heartbeat.MaxIdle != 12*time.Hour {
+		t.Errorf("defaults = %+v / %v", c.Heartbeat, c.Concerns.Heartbeat)
+	}
+
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("[heartbeat]\nenabled = false\ndefault = false\ninterval = \"40m\"\nmaxIdle = \"off\"\n"), 0o644)
+	c, err = load(env(map[string]string{"CCX_CONFIG": p, "CCX_HEARTBEAT_INTERVAL": "45m"}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Concerns.Heartbeat || c.Heartbeat.Default || c.Heartbeat.Interval != 45*time.Minute || c.Heartbeat.MaxIdle != 0 {
+		t.Errorf("file + env = %+v / %v, want off, default off, env's 45m, no cap", c.Heartbeat, c.Concerns.Heartbeat)
+	}
+
+	// A duration someone typed wrong is an error, not a silent default.
+	if _, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_HEARTBEAT_INTERVAL": "50 minutes"}), noGit, fixedHost("h")); err == nil {
+		t.Error("bad interval accepted")
+	}
+}
+
+func TestChannelSocket_NextToTheHookSocket(t *testing.T) {
+	c, _ := load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "CCX_SOCKET": "/elsewhere/hook.sock"}), noGit, fixedHost("h"))
+	if c.ChannelSocketPath != "/run/user/1000/ccx/ccx-channel.sock" {
+		t.Errorf("channel socket = %q", c.ChannelSocketPath)
+	}
+	c, _ = load(env(map[string]string{"CCX_CHANNEL_SOCKET": "/x/ch.sock"}), noGit, fixedHost("h"))
+	if c.ChannelSocketPath != "/x/ch.sock" {
+		t.Errorf("override = %q", c.ChannelSocketPath)
 	}
 }

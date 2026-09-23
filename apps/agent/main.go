@@ -7,7 +7,7 @@
 //	                   ccx-agent over the local socket, exit. Wired into Claude Code hooks.
 //	ccx-agent serve    resident: run every enabled concern until stopped.
 //	ccx-agent channel  per session: the MCP channel server Claude Code spawns
-//	                   over stdio. Keeps the prompt cache warm (docs/design/heartbeat.md).
+//	                   over stdio. Pushes what serve sends it (docs/design/heartbeat.md).
 //
 // In #90 only the collect concern is built (hooks → center). Carry (#23) and
 // persistence (#20) slot into the same runner when built.
@@ -21,11 +21,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/channel"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
@@ -94,12 +94,16 @@ func cmdServe() int {
 		}
 		concerns = append(concerns, c)
 	}
+	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
+		concerns = append(concerns, heartbeat.New(cfg, logger))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v)",
-		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect)
+	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v heartbeat=%v interval=%v default=%v)",
+		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect,
+		cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval, cfg.Heartbeat.Default)
 	if err := concern.Run(ctx, logger, concerns...); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
 		return 1
@@ -108,77 +112,38 @@ func cmdServe() int {
 }
 
 // cmdChannel is the per-session MCP channel server Claude Code spawns over
-// stdio. It stands alone: no ccx-agent serve, no center (scope.md, the invariant).
+// stdio. It pushes what ccx-agent serve sends for this session; the deciding
+// (when a heartbeat is due) happens in serve. With serve down it still serves
+// MCP and keeps retrying: a channel must never fail the session.
 func cmdChannel() int {
 	sid := os.Getenv("CLAUDE_CODE_SESSION_ID")
 	if sid == "" {
-		// The heartbeat's clock is this session's transcript. Without an id there is
-		// nothing to keep warm, and saying so beats sitting silent.
+		// serve addresses a session by this id. Without one there is nothing to
+		// register, and saying so beats sitting silent.
 		fmt.Fprintln(os.Stderr, "ccx-agent channel: needs CLAUDE_CODE_SESSION_ID; it is meant to be spawned by Claude Code")
 		return 2
 	}
-	interval, err := envDuration("CCX_HEARTBEAT_INTERVAL", 50*time.Minute)
+	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) }
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)
-		return 2
-	}
-	// off (0) means no cap: keep a session warm for as long as it lives.
-	maxIdle, err := envDuration("CCX_HEARTBEAT_MAX_IDLE", 12*time.Hour)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)
-		return 2
-	}
-	home := os.Getenv("CLAUDE_CONFIG_DIR")
-	if home == "" {
-		h, _ := os.UserHomeDir()
-		home = filepath.Join(h, ".claude")
+		// A broken config must not take the session's MCP server down with it.
+		logf("ccx-agent channel: config: %v; not relaying", err)
 	}
 
 	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
 	// the process up. Default termination is what a stdio child wants.
 	srv := channel.NewServer("ccx", "0", os.Stdout)
-	ctx := context.Background()
-	if interval > 0 {
-		hb := &channel.Heartbeat{
-			SessionID: sid, ClaudeHome: home, Interval: interval, MaxIdle: maxIdle,
-			Push: func() error {
-				return srv.Push("heartbeat", map[string]string{"kind": "heartbeat"})
-			},
-			Log: func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) },
-			Now: time.Now,
-			Sleep: func(ctx context.Context, d time.Duration) {
-				select {
-				case <-ctx.Done():
-				case <-time.After(d):
-				}
-			},
-		}
+	if err == nil {
 		go func() {
 			<-srv.Ready()
-			hb.Run(ctx)
+			channel.Relay(context.Background(), cfg.ChannelSocketPath, sid, srv, logf)
 		}()
 	}
 	if err := srv.Serve(os.Stdin); err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)
+		logf("ccx-agent channel: %v", err)
 		return 1
 	}
 	return 0
-}
-
-// envDuration reads a Go duration; "0" or "off" turns the thing off (0).
-func envDuration(key string, def time.Duration) (time.Duration, error) {
-	v := os.Getenv(key)
-	switch v {
-	case "":
-		return def, nil
-	case "off":
-		return 0, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		return 0, fmt.Errorf("%s=%q: want a duration like 50m, or off", key, v)
-	}
-	return d, nil
 }
 
 func usage() {
