@@ -253,7 +253,7 @@ const isDir = (p: string) => stat(p).then((x) => x.isDirectory()).catch(() => fa
 
 /** dir の下の全ファイルの相対パスと sha256。無ければ空。subagents は workflows/wf_<id>/ の入れ子を持つ */
 async function localFiles(dir: string | null): Promise<ToolResult[]> {
-  if (!dir) return [];
+  if (!dir || !(await isDir(dir))) return [];
   const names = (await readdir(dir, { recursive: true, withFileTypes: true }))
     .filter((d) => d.isFile())
     .map((d) => relative(dir, join(d.parentPath, d.name)))
@@ -489,7 +489,7 @@ export class TranscriptClient {
    * スナップショットから取る (追記の途中で読むと session.json と実体がずれる)。
    * 順序は transcript → tool-results → subagents / workflows → session.json で、session.json が最後。
    * subagents / workflows は動いている subagent / run が書き足すので、transcript と同じくスナップショット (tmpdir に
-   * push ごとに作る) から送る。transcript とは別の瞬間に取るので、両者が同じ時点の写しとは限らない。
+   * push ごとに 1 つずつ作る) から送る。transcript とも互いとも別の瞬間に取るので、同じ時点の写しとは限らない。
    * 途中で落ちれば session.json が古いままなので、次の push が同じ判定で書き直す。
    * state.json は transcript と独立に、ローカルの印と違うときだけ書く (印は transcript
    * が変わらなくても変わる)。
@@ -607,11 +607,7 @@ export class TranscriptClient {
       const localDigest = await sha256(path);
       if (localDigest === meta.sha256) {
         // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
-        const isDirs = Object.fromEntries(await Promise.all(CARRIED.map(async (k) => [k, await isDir(dirOf(k))] as const)));
-        const [tr, carried] = await Promise.all([
-          localFiles((await isDir(trDir)) ? trDir : null),
-          carriedFiles((k) => (isDirs[k] ? dirOf(k) : null)),
-        ]);
+        const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
         if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
           // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
           return { status: "already-here", meta, state, stateApplied: await this.applyState(sessionId, state, home), path };

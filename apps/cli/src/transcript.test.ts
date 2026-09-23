@@ -191,6 +191,7 @@ describe("transcript: push / pull / prune through the store", () => {
       if (!appended && key.endsWith("transcript.jsonl")) {
         appended = true;
         await Bun.write(join(t.subagentsDir!, SUB), "subagent line\nappended mid-push\n");
+        await Bun.write(join(t.workflowsDir!, RUN), '{"runId":"wf_1","appended":"mid-push"}');
       }
       return r;
     }) as typeof A.s3.write;
@@ -199,6 +200,8 @@ describe("transcript: push / pull / prune through the store", () => {
     const listed = r.meta.subagents!.find((x) => x.name === SUB)!;
     const h = new Bun.CryptoHasher("sha256").update(await A.s3.file(`${prefixA}subagents/${SUB}`).bytes()).digest("hex");
     expect(h).toBe(listed.sha256);
+    const run = r.meta.workflows!.find((x) => x.name === RUN)!;
+    expect(new Bun.CryptoHasher("sha256").update(await A.s3.file(`${prefixA}workflows/${RUN}`).bytes()).digest("hex")).toBe(run.sha256);
   });
 
   test("pull on another machine lands where claude --resume finds it, records who pulled, and refuses to clobber", async () => {
@@ -246,6 +249,7 @@ describe("transcript: push / pull / prune through the store", () => {
     await rm(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows"), { recursive: true, force: true });
     expect((await B.pull(SID, homeB)).status).toBe("pulled");
     expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows", RUN)).text()).toBe('{"runId":"wf_1"}');
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(CWD_A), SID, "workflows", SCRIPT)).text()).toBe("export const meta = {}\n");
 
     // tool-results が欠けていれば already-here にはならず、埋め直す
     await rm(join(homeB, "projects", encodeCwd(CWD_A), SID), { recursive: true, force: true });
@@ -300,6 +304,8 @@ describe("transcript: push / pull / prune through the store", () => {
     await expect(B.pull(SID, homeB)).rejects.toThrow(/workflows\/wf_1.json/);
     expect(await Bun.file(path).exists()).toBe(false);
     expect(await Bun.file(join(sessionDirB, "workflows", RUN)).exists()).toBe(false);
+    expect(await Bun.file(join(sessionDirB, "workflows", `${RUN}.pull-tmp`)).exists()).toBe(false);
+    await Bun.write(join(root, "ccx", `${prefixA}workflows/${RUN}`), '{"runId":"wf_1"}');
 
     // 保存先が projectDir の外を指す名前を書いていても置かない
     const metaKey = join(root, "ccx", `${prefixA}session.json`);
@@ -307,6 +313,10 @@ describe("transcript: push / pull / prune through the store", () => {
     const outside = join(homeB, "projects", encodeCwd(CWD_A), "escape.jsonl");
     await Bun.write(outside, "must stay");
     await Bun.write(metaKey, JSON.stringify({ ...meta, subagents: [{ name: "../../escape.jsonl", sha256: "x" }] }));
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/refusing to install/);
+    expect(await Bun.file(outside).text()).toBe("must stay");
+    // workflows の名前も同じ
+    await Bun.write(metaKey, JSON.stringify({ ...meta, workflows: [{ name: "../../escape.jsonl", sha256: "x" }] }));
     await expect(B.pull(SID, homeB)).rejects.toThrow(/refusing to install/);
     expect(await Bun.file(outside).text()).toBe("must stay");
     expect(await Bun.file(path).exists()).toBe(false);
@@ -428,6 +438,20 @@ describe("transcript: push / pull / prune through the store", () => {
     expect(await Bun.file(t.path).text()).toBe(transcriptBody);
     expect(await Bun.file(join(t.projectDir, SID, "subagents", WF)).text()).toBe("workflow agent line\n");
     expect(await Bun.file(join(t.projectDir, SID, "workflows", SCRIPT)).text()).toBe("export const meta = {}\n");
+  });
+
+  test("a copy pushed before workflows were carried still matches a session that has none (no re-push, prune goes through)", async () => {
+    const t = await seedA();
+    await rm(t.workflowsDir!, { recursive: true });
+    const [t0] = await localTranscripts(homeA);
+    expect(t0!.workflowsDir).toBeNull();
+    await A.push(t0!);
+    const metaKey = join(root, "ccx", `${prefixA}session.json`);
+    const { workflows: _, ...old } = (await Bun.file(metaKey).json()) as Record<string, unknown>;
+    await Bun.write(metaKey, JSON.stringify(old));
+
+    expect((await A.push(t0!)).status).toBe("unchanged");
+    expect((await A.prune(t0!, new Set())).status).toBe("pruned");
   });
 
   test("prune on the machine that pulled (not the one that pushed) works, and folds an empty session dir", async () => {
