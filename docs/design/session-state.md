@@ -61,19 +61,22 @@ kind — local files for this machine, `state.json` for what was pushed.
 | `ccx session mark archived [id] [--off]` | set or clear the flag |
 | `ccx session label <text> [id]` | set the label; an empty string clears it |
 | `ccx session task <ref> [id]` | set the task reference; an empty string clears it |
-| `ccx session status [id]` | lifecycle + declared state. Local marks win; the store's `state.json` is read only for a `remote` session with no local marks. A prefix that nothing local knows is tried against the store |
+| `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
 | `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript, one GET to the store under this machine's own prefix — never a listing) and flags from `state.json` for other machines' rows when a store is configured |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
-| `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds none for that session; marks set here are never overwritten (`already-here`, or a mark that preceded the transcript) |
+| `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds no declaration for that session; a declaration made here — including clearing the last mark — is never overwritten or revived. Checked on `already-here` too, so a pull that died after the transcript but before the marks is repaired by pulling again |
 | `ccx tr ls` | flags and label per stored session |
 | `--archived` on `push` / `prune` | selector: every local session with the flag; `prune` also skips running ones |
 
-`[id]` defaults to `CLAUDE_CODE_SESSION_ID`, so a session can mark itself from a hook or a skill. A
+`[id]` defaults to `CLAUDE_CODE_SESSION_ID` (validated and lowercased like an argument), so a session can mark itself from a hook or a skill. A
 prefix is accepted when it is unique among local transcripts and marked sessions; a full id is
 accepted even when nothing local knows it (a mark may precede the transcript). Ids are lowercased:
 Claude Code's are, and on Linux `0F9A…/archived` would be a different directory that `push` never
-reads. A directory under `~/.claude/sessions/` counts as marked only while a mark file is in it —
-clearing the flag leaves the directory (the hook keeps its own files there) but not the mark.
+reads. A directory under `~/.claude/sessions/` counts as marked (for prefix resolution) only while a
+mark file is in it. Separately, every `ccx session mark / label / task` leaves `.ccx-declared` there:
+"this machine has declared state for this session", which is what keeps a cleared `archived` from
+coming back from an older copy in the store. The store is read strictly: a missing `state.json` is
+"no state", but a store that does not answer is an error, never an empty store.
 
 ## Not here
 

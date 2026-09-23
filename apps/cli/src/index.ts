@@ -329,7 +329,8 @@ session
     // 無ければ空)。保存先へは行ごとに GET 1〜2 回で、一覧は引かない。center の event DB
     // には写さない (#127)
     const home = claudeHome();
-    const me = localOrigin(cfg.machine).machine;
+    // 鍵は (machine, user)。同じマシンの別ユーザーの session は別の ~/.claude を持つので「他」
+    const me = localOrigin(cfg.machine);
     const store = cfg.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
     const [running, local] = await Promise.all([runningSessionIds(home), localTranscripts(home)]);
     const hasTranscript = new Set(local.map((t) => t.sessionId));
@@ -339,7 +340,7 @@ session
         const origin = { machine: s.key?.machine ?? "", user: s.key?.user ?? "" };
         let lifecycle: Lifecycle | "";
         let state: DeclaredState | null;
-        if (origin.machine === me) {
+        if (origin.machine === me.machine && origin.user === me.user) {
           lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
           state = await declaredFor(id, home, lifecycle, store, origin);
         } else {
@@ -382,7 +383,7 @@ session
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
     console.error(
-      `\n${me}: running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
+      `\n${me.machine} (${me.user}): running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines and users: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
     );
   });
 

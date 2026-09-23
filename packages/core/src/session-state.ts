@@ -38,6 +38,13 @@ export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 const FLAG_FILE: Record<Flag, string> = { archived: "archived" };
 const TEXT_FILE = { label: "label", task: "task" } as const;
 
+/**
+ * ccx を通して宣言したことがある、の印。空の状態 (全部外した) と「一度も宣言していない」を
+ * 分けるためだけに置く。これが無いと、手元で archived を外した session に保存先の古い
+ * archived が pull や status で戻ってくる
+ */
+const DECLARED_FILE = ".ccx-declared";
+
 export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "" };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
@@ -83,6 +90,7 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
 export async function writeDeclared(sessionId: string, patch: Partial<DeclaredState>, home = claudeHome()): Promise<DeclaredState> {
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
+  await Bun.write(join(dir, DECLARED_FILE), "");
   for (const f of FLAGS) {
     if (patch[f] === undefined) continue;
     const p = join(dir, FLAG_FILE[f]);
@@ -100,6 +108,16 @@ export async function writeDeclared(sessionId: string, patch: Partial<DeclaredSt
 
 /** 8-4-4-4-12。Claude Code の session id はこの形 (小文字で書かれる) */
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * この machine が、その session の宣言状態を持っているか。宣言を 1 度でも書いた (全部
+ * 外した後も含む) か、印が 1 つでもある (label は auto-label hook が ccx を通さず書く) とき。
+ * 持っているなら、保存先の写しで上書きも補完もしない
+ */
+export async function holdsDeclared(sessionId: string, home = claudeHome()): Promise<boolean> {
+  if (await Bun.file(join(sessionDir(sessionId, home), DECLARED_FILE)).exists()) return true;
+  return !isEmptyDeclared(await readDeclared(sessionId, home));
+}
 
 /**
  * 印が 1 つでも立っている session の id (transcript の有無は問わない)。ディレクトリが

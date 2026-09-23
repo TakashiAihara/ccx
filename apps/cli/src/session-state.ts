@@ -8,13 +8,14 @@ import {
   loadConfig,
   localOrigin,
   localTranscripts,
-  isEmptyDeclared,
+  holdsDeclared,
   markedSessionIds,
   NoLocalSession,
   readDeclared,
   resolveSessionId,
   runningSessionIds,
   TranscriptClient,
+  UUID,
   writeDeclared,
   type DeclaredState,
   type Lifecycle,
@@ -51,7 +52,9 @@ async function target(idOrPrefix: string | undefined, home: string, store: Trans
   }
   const own = process.env.CLAUDE_CODE_SESSION_ID;
   if (!own) throw new Error("give a session id, or run inside a Claude Code session (CLAUDE_CODE_SESSION_ID)");
-  return own;
+  // 引数と同じ規則で通す (小文字化 + UUID 検証)。UUID でない値をパスに使わない
+  if (!UUID.test(own)) throw new Error(`CLAUDE_CODE_SESSION_ID is not a session id: ${own}`);
+  return own.toLowerCase();
 }
 
 /** 保存先が設定されていれば client、無ければ null。無いのはエラーではない (見えないだけ) */
@@ -94,8 +97,9 @@ function warnStore(store: TranscriptClient, e: unknown): void {
 }
 
 /**
- * 表示する宣言状態。手元の印があればそれ、無ければ (remote なら) 保存先の state.json。
- * 手元の印は push で保存先に写るので、両方あるときは手元が新しい
+ * 表示する宣言状態。この machine が宣言を持っていればそれ (全部外した状態を含む)、持って
+ * いなければ (remote なら) 保存先の state.json。手元が勝つのは方針であって、手元が新しい
+ * 保証ではない — 別の machine が後から保存先を書き換えていることはある
  */
 export async function declaredFor(
   sessionId: string,
@@ -105,7 +109,7 @@ export async function declaredFor(
   origin?: Origin,
 ): Promise<DeclaredState> {
   const local = await readDeclared(sessionId, home);
-  if (!isEmptyDeclared(local) || lifecycle !== "remote" || !store) return local;
+  if ((await holdsDeclared(sessionId, home)) || lifecycle !== "remote" || !store) return local;
   const remote = await (origin
     ? store.readRemoteDeclared(sessionId, origin)
     : store.find(sessionId).then((m) => (m ? store.readRemoteDeclared(sessionId, m) : null))

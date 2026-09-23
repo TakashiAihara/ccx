@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,7 +12,7 @@ import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
 
-import { encodeCwd, EMPTY_DECLARED, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
+import { encodeCwd, EMPTY_DECLARED, holdsDeclared, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
 
 import { declaredFor, lifecycleOf } from "./session-state.ts";
 import { select } from "./transcript.ts";
@@ -76,7 +76,12 @@ describe("session state travels with the transcript", () => {
     expect((await A.push(t, homeA)).status).toBe("unchanged");
 
     await writeDeclared(SID, { task: "kaneo ccx#2" }, homeA);
+    const storedTranscript = join(root, "ccx", `p/transcripts/machine=host-a/user=alice/session_id=${SID}/transcript.jsonl`);
+    const before = (await stat(storedTranscript)).mtimeMs;
+    await Bun.sleep(20);
     const r2 = await A.push(t, homeA);
+    // transcript の object は書き直されていない
+    expect((await stat(storedTranscript)).mtimeMs).toBe(before);
     expect(r2.status).toBe("state");
     expect((await Bun.file(stateKey()).json()).task).toBe("kaneo ccx#2");
     // transcript は置き直していないが、印が変わったことは履歴に残る
@@ -117,12 +122,65 @@ describe("session state travels with the transcript", () => {
     expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, task: "mine" });
   });
 
+  test("clearing the last mark is a declaration: the store's old archived does not come back through status or pull", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { archived: true }, homeA);
+    await A.push(t, homeA);
+    expect((await A.prune(t, new Set())).status).toBe("pruned");
+    // 手元で外す (transcript はもう手元に無い = remote)
+    await writeDeclared(SID, { archived: false }, homeA);
+    expect(await holdsDeclared(SID, homeA)).toBe(true);
+    expect(await declaredFor(SID, homeA, "remote", A)).toEqual(EMPTY_DECLARED);
+    const r = await A.pull(SID, homeA);
+    expect(r.status).toBe("pulled");
+    expect(r.stateApplied).toBe(false);
+    expect((await readDeclared(SID, homeA)).archived).toBe(false);
+    // 外した状態は次の push で保存先にも届く
+    const [back] = await localTranscripts(homeA);
+    expect((await A.push(back!, homeA)).status).toBe("state");
+    expect(await A.readRemoteDeclared(SID)).toEqual(EMPTY_DECLARED);
+  });
+
+  test("an unreachable store is an error, not an empty store: push does not report unchanged, reads throw", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { archived: true }, homeA);
+    await A.push(t, homeA);
+    await writeDeclared(SID, { archived: false }, homeA);
+    const dead = new TranscriptClient({ endpoint: "http://127.0.0.1:1", bucket: "ccx", prefix: "p/" }, { machine: "host-a", user: "alice" });
+    await expect(dead.readRemoteDeclared(SID)).rejects.toThrow();
+    await expect(dead.inStore(SID)).rejects.toThrow();
+    await expect(dead.push(t, homeA)).rejects.toThrow();
+    // 本物の保存先ではまだ archived のまま (送れていない) — 次の push が送る
+    expect((await A.readRemoteDeclared(SID))?.archived).toBe(true);
+    expect((await A.push(t, homeA)).status).toBe("state");
+  });
+
+  test("a pull that died after the transcript but before the marks is repaired by pulling again", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { archived: true, task: "kaneo ccx#1" }, homeA);
+    await A.push(t, homeA);
+    expect((await B.pull(SID, homeB)).stateApplied).toBe(true);
+    // 印を写す前に落ちた状態を作る
+    await rm(join(homeB, "sessions", SID), { recursive: true, force: true });
+    const again = await B.pull(SID, homeB);
+    expect(again.status).toBe("already-here");
+    expect(again.stateApplied).toBe(true);
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1" });
+  });
+
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
     const t = await seed(homeA, SID);
     await writeDeclared(SID, { archived: true }, homeA);
     await A.push(t, homeA);
     await rm(stateKey());
     expect(await A.readRemoteDeclared(SID)).toBeNull();
+    // 新しい machine (印も無い) に pull しても、無い state は何も書かない (空を書いて「宣言済み」にしない)
+    const fresh = await B.pull(SID, homeB);
+    expect(fresh.status).toBe("pulled");
+    expect(fresh.state).toBeNull();
+    expect(fresh.stateApplied).toBe(false);
+    expect(await holdsDeclared(SID, homeB)).toBe(false);
+    await rm(join(homeB, "projects"), { recursive: true, force: true });
     await writeDeclared(SID, { task: "mine" }, homeB);
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
@@ -208,6 +266,13 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     const none = await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: "" });
     expect(none.code).toBe(1);
     expect(none.err).toMatch(/CLAUDE_CODE_SESSION_ID/);
+    // env の id も引数と同じ規則: UUID でなければ止まる、大文字は小文字の id に書く
+    const bad = await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: "../../etc" });
+    expect(bad.code).toBe(1);
+    expect(bad.err).toMatch(/not a session id/);
+    expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID.toUpperCase() })).code).toBe(0);
+    expect((await readDeclared(SID, homeA)).archived).toBe(true);
+    expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
 
     expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect((await run(["label", "scope｜step", SID.slice(0, 8)])).code).toBe(0);

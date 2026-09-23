@@ -9,9 +9,9 @@ believed.
   `docs/design/session-state.md` (`DeclaredState` in `packages/core/src/session-state.ts`; observed
   lifecycle in `apps/cli/src/session-state.ts`). A *repodir's* state is `.git/ccx.state`
   (`RepodirState` in `packages/core/src/meta.ts`, `desired` / `done`). Prose says "session state" or
-  "repodir state"; never bare "state" when both are in scope. The `done` in `.git/ccx.state` is about
-  the working copy, the `done` flag on a session is about the conversation; a session can be done
-  while its repodir is not.
+  "repodir state"; never bare "state" when both are in scope. `done` in `.git/ccx.state` is about the
+  working copy; a session has no `done` (its flag is `archived`), so an archived session's repodir can
+  still be not done.
 - **archived** vs **remote** — *archived* is declared: someone folded the session away (the word
   the Claude Desktop app uses; user decision 2026-09-21). *remote* is observed: the transcript is in
   the store and not on this machine. A session can be either without the other. `--archived` and

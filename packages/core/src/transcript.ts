@@ -28,7 +28,7 @@ import { basename, join } from "node:path";
 
 import { parseRepoSpec } from "./repospec.ts";
 import { encodeCwd } from "./scan.ts";
-import { claudeHome, isEmptyDeclared, normalizeDeclared, readDeclared, sameDeclared, UUID, writeDeclared, type DeclaredState } from "./session-state.ts";
+import { claudeHome, holdsDeclared, isEmptyDeclared, normalizeDeclared, readDeclared, sameDeclared, UUID, writeDeclared, type DeclaredState } from "./session-state.ts";
 
 export type TranscriptStore = {
   /** S3 互換の endpoint。ccx-center なら hub.url と同じ */
@@ -333,18 +333,23 @@ export class TranscriptClient {
     }
   }
 
-  /** 保存先の state.json。無ければ null (「無い」と「全部 false」を混ぜない) */
+  /**
+   * 保存先の state.json。無ければ null (「無い」と「全部 false」を混ぜない)。null を返すのは
+   * 無いと確かめられたときだけで、保存先が答えない / 読めない JSON は投げる — 握りつぶすと
+   * push が「保存先は空」と読んで手元の解除を送らず、unchanged と報告する
+   */
   async readRemoteDeclared(sessionId: string, origin: Origin = this.origin): Promise<DeclaredState | null> {
-    try {
-      return normalizeDeclared(await this.s3.file(`${this.keyPrefix(sessionId, origin)}state.json`).json());
-    } catch {
-      return null;
-    }
+    const f = this.s3.file(`${this.keyPrefix(sessionId, origin)}state.json`);
+    if (!(await f.exists())) return null;
+    return normalizeDeclared(await f.json());
   }
 
-  /** 保存先のその origin の下に session.json があるか。1 GET で済むので `session ls` の remote 判定に使う (`find` は全 machine を list する) */
+  /**
+   * 保存先のその origin の下に session.json があるか。1 HEAD で済むので `session ls` の remote
+   * 判定に使う (`find` は全 machine を list する)。保存先が答えなければ投げる (「無い」にしない)
+   */
   async inStore(sessionId: string, origin: Origin = this.origin): Promise<boolean> {
-    return (await this.readMeta(`${this.keyPrefix(sessionId, origin)}session.json`)) !== null;
+    return this.s3.file(`${this.keyPrefix(sessionId, origin)}session.json`).exists();
   }
 
   /**
@@ -504,9 +509,10 @@ export class TranscriptClient {
    * transcript が無いので次の pull がやり直す。手元に同じ id の別内容があれば、
    * 上書きせず止まる。force で越えるときも、元のファイルは隣に退避して消さない
    * (push されていない続きかもしれない)。
-   * 保存先の state.json は、transcript を新しく置き、かつ手元に印が 1 つも無いときだけ
-   * 写す。手元に印があれば (already-here でも、transcript より先に印だけ付けた場合でも)
-   * 触らない — 手元で立てた印を、古い写しで消さない。
+   * 保存先の state.json は、この machine がその session の宣言を持っていないときだけ写す
+   * (holdsDeclared)。持っていれば (印を付けた / 全部外した / transcript より先に付けた)
+   * 触らない — 手元の宣言を古い写しで上書きも復活もさせない。already-here でも同じ判定で
+   * 写すので、前の pull が印を写す前に落ちていても、pull をやり直せば直る。
    */
   async pull(sessionId: string, home = claudeHome(), force = false): Promise<PullResult> {
     const meta = await this.find(sessionId);
@@ -525,7 +531,8 @@ export class TranscriptClient {
         // transcript は同じ。tool-results まで揃っていれば何もしない
         const hasTr = (await stat(trDir).catch(() => null))?.isDirectory() ?? false;
         if (sameToolResults(await localToolResults(hasTr ? trDir : null), meta.toolResults)) {
-          return { status: "already-here", meta, state, stateApplied: false, path };
+          // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
+          return { status: "already-here", meta, state, stateApplied: await this.applyState(sessionId, state, home), path };
         }
       } else if (!force) {
         throw new Error(
@@ -558,10 +565,15 @@ export class TranscriptClient {
     } finally {
       await rm(tmp, { force: true });
     }
-    const stateApplied = state !== null && isEmptyDeclared(await readDeclared(sessionId, home));
-    if (stateApplied) await writeDeclared(sessionId, state!, home);
+    const stateApplied = await this.applyState(sessionId, state, home);
     await this.record(prefix, "pull");
     return { status: "pulled", meta, state, stateApplied, path, replaced };
+  }
+
+  private async applyState(sessionId: string, state: DeclaredState | null, home: string): Promise<boolean> {
+    if (!state || (await holdsDeclared(sessionId, home))) return false;
+    await writeDeclared(sessionId, state, home);
+    return true;
   }
 
   /**
