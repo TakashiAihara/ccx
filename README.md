@@ -77,6 +77,28 @@ ccx session show <id> --hook PostToolUse --payload
 check — a session whose machine lost its ccx-agent, or that was killed, never sends one either. Read the
 age column alongside it.
 
+### What ccx holds about a session
+
+A session's state is ccx's to keep (`docs/design/scope.md`), and it needs no center: the declared
+part lives as files under `~/.claude/sessions/<id>/`, the observed part is read from pids, local
+transcripts and the store.
+
+```bash
+ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
+ccx session mark archived --off <id>
+ccx session label "scope｜step"
+ccx session task "kaneo ccx#1"
+ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task
+```
+
+Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
+here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared:
+`archived` (folded away — the word the Claude Desktop app uses; the only flag, on purpose), a
+free-text `label` and one external `task` reference. `ccx session ls` and `ccx tr ls` show them;
+`ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
+machine that holds none yet (marks already set there are never overwritten). What you *do* with
+`archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
+
 Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /
 `hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
 empty.
@@ -90,10 +112,12 @@ be resumed elsewhere.
 
 ```bash
 ccx tr push --ended           # every local session that is not running (unchanged ones are skipped)
+ccx tr push --archived        # every local session marked archived; with --ended too: only those that are both
 ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
 ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
+ccx tr prune --archived       # the same, for archived sessions that are not running
 ccx tr search "rate limit"    # every transcript in the store, searched with the DuckDB inside ccx
 ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
 ```
@@ -106,15 +130,16 @@ every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
-file, plus `tool-results/`, `session.json` and an append-only `history/` of every push and pull).
+file, plus `tool-results/`, `session.json`, `state.json` (the declared flags, label and task) and an
+append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
 `~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that
 reason). `--sql` gets two views, `transcripts` and `history`, with `machine` / `user` / `session_id`
 as columns. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
 target. See `docs/design/transcript-store.md`.
 
-`ccx` decides only whether a session is *running* (`--ended` is everything that is not). Whether it is
-*done* is your call — feed it ids from whatever marks completion in your workflow. `prune` refuses a
+`--ended` is what ccx observes (not running); `--archived` is what someone declared (`ccx session
+mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript and tool-results both) — and it exits `1` if it refused any.
 

@@ -1,3 +1,5 @@
+import { UUID } from "@ccx/core";
+
 /** epoch ミリ秒からの経過を「今から見てどれくらい前か」で表す。 */
 export function humanSince(ms: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -24,8 +26,6 @@ export function table(rows: string[][]): string[] {
   );
 }
 
-/** 8-4-4-4-12。Claude Code の session id はこの形。 */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * session id を短く出す。UUID の先頭 8 文字は実用上ぶつからない。

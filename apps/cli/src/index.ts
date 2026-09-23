@@ -16,13 +16,22 @@ import {
   summarizeProblems,
   type Goal,
   type PrIntent,
+  claudeHome,
+  flagsOf,
+  localOrigin,
+  localTranscripts,
   NoTranscriptStore,
+  runningSessionIds,
+  TranscriptClient,
+  type DeclaredState,
+  type Lifecycle,
 } from "@ccx/core";
 
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
+import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { registerTranscript } from "./transcript.ts";
 
 export const VERSION = "0.1.0";
@@ -284,7 +293,7 @@ repodir
 
 const session = program
   .command("session")
-  .description("Inspect sessions the center has collected");
+  .description("Sessions: what the center has collected, and the state ccx holds for each");
 
 session
   .command("ls")
@@ -309,28 +318,64 @@ session
         throw unreachable(cfg.hub!.url, e);
       });
 
-    if (o.json) {
-      console.log(JSON.stringify(res.sessions, null, 2));
-      return;
-    }
-
     if (res.sessions.length === 0) {
-      console.error("no sessions");
+      if (o.json) console.log("[]");
+      else console.error("no sessions");
       return;
     }
 
-    const rows = res.sessions.map((s) => {
+    // 状態の列。このマシンの行は pid と手元の transcript / 印から (手元に無い remote な
+    // ものだけ保存先の state.json)、他のマシンの行は保存先の state.json から (保存先が
+    // 無ければ空)。保存先へは行ごとに GET 1〜2 回で、一覧は引かない。center の event DB
+    // には写さない (#127)
+    const home = claudeHome();
+    // 鍵は (machine, user)。同じマシンの別ユーザーの session は別の ~/.claude を持つので「他」
+    const me = localOrigin(cfg.machine);
+    const store = cfg.transcript ? new TranscriptClient(cfg.transcript, localOrigin(cfg.machine)) : null;
+    const [running, local] = await Promise.all([runningSessionIds(home), localTranscripts(home)]);
+    const hasTranscript = new Set(local.map((t) => t.sessionId));
+    const annotated = await Promise.all(
+      res.sessions.map(async (s) => {
+        const id = s.key?.sessionId ?? "";
+        const origin = { machine: s.key?.machine ?? "", user: s.key?.user ?? "" };
+        let lifecycle: Lifecycle | "";
+        let state: DeclaredState | null;
+        if (origin.machine === me.machine && origin.user === me.user) {
+          lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
+          state = await declaredFor(id, home, lifecycle, store, origin);
+        } else {
+          // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
+          lifecycle = s.endedAt ? "ended" : "";
+          state = store ? await store.readRemoteDeclared(id, origin).catch(() => null) : null;
+        }
+        return { s, lifecycle, state };
+      }),
+    );
+
+    if (o.json) {
+      console.log(
+        JSON.stringify(
+          annotated.map(({ s, lifecycle, state }) => ({ ...s, lifecycle: lifecycle || null, state })),
+          (_k, v) => (typeof v === "bigint" ? String(v) : v),
+          2,
+        ),
+      );
+      return;
+    }
+
+    const rows = annotated.map(({ s, lifecycle, state }) => {
       const last = s.lastSeen ? Number(s.lastSeen.seconds) * 1000 : 0;
       return [
         shortId(s.key?.sessionId ?? "?"),
         s.key?.machine ?? "?",
         s.key?.user ?? "?",
-        // SessionEnd を観測したかどうかだけ。動いているかの判定はしない
-        s.endedAt ? "ended" : "",
+        lifecycle,
+        state ? flagsOf(state).join(",") : "",
         String(s.eventCount),
         humanSince(last),
         s.lastHook,
         s.cwd,
+        state?.label ?? "",
       ];
     });
     for (const line of table(rows)) console.log(line);
@@ -338,7 +383,7 @@ session
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
     console.error(
-      "\nended = a SessionEnd was observed. Its absence is not proof a session is alive;\nread the age column too.",
+      `\n${me.machine} (${me.user}): running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines and users: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
     );
   });
 
@@ -398,6 +443,7 @@ session
     }
   });
 
+registerSessionState(session);
 registerTranscript(program, VERSION);
 
 const agent = program.command("agent").description("Inspect the local resident agent (ccx-agent)");
