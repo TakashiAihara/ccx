@@ -133,7 +133,7 @@ every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
-file, plus `tool-results/`, `subagents/`, `session.json`, `state.json` (the declared flags, label and task) and an
+file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.json` (the declared flags, label and task) and an
 append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
 `~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that
@@ -144,7 +144,7 @@ target. See `docs/design/transcript-store.md`.
 `--ended` is what ccx observes (not running); `--archived` is what someone declared (`ccx session
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
-read back byte-identical (transcript, tool-results and subagents) — and it exits `1` if it refused any.
+read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
 
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own

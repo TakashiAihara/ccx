@@ -10,6 +10,7 @@
  *   <prefix>transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl   ローカルと byte 同一
  *                                                            /tool-results/<name>  JSONL が参照する退避ファイル
  *                                                            /subagents/<path>     subagent の transcript と meta (入れ子あり)
+ *                                                            /workflows/<path>     Workflow の run (wf_<id>.json) と script (scripts/)
  *                                                            /session.json         cwd / branch / version / size / sha256
  *                                                            /state.json           宣言された状態 (archived / label / task。session-state.ts)
  *                                                            /history/<ms>-<op>-<machine>.json  push / pull / prune の履歴
@@ -52,7 +53,16 @@ export type LocalTranscript = {
   toolResultsDir: string | null;
   /** <projectDir>/<sessionId>/subagents。無ければ null */
   subagentsDir: string | null;
+  /** <projectDir>/<sessionId>/workflows。無ければ null */
+  workflowsDir: string | null;
 };
+
+/**
+ * tool-results の外で transcript と一緒に運ぶ <sessionId>/ の下のディレクトリ。subagents/ の入れ子
+ * (workflows/wf_<id>/) は subagent の transcript で、<sessionId>/workflows/ は run の記録と script
+ */
+const CARRIED = ["subagents", "workflows"] as const;
+type Carried = (typeof CARRIED)[number];
 
 /** session.json。保存先に置いた時点の事実 */
 export type SessionMeta = {
@@ -69,6 +79,8 @@ export type SessionMeta = {
   toolResults: ToolResult[];
   /** subagents/ の下の全ファイル (相対パス)。無いのは subagents を運ぶ前に push された写し */
   subagents?: ToolResult[];
+  /** workflows/ の下の全ファイル。無いのは workflows を運ぶ前に push された写し */
+  workflows?: ToolResult[];
   /**
    * cwd の git remote (origin) から取った `host/owner/repo`。pull した側がここから
    * repodir を作る。cwd が git の外なら無い
@@ -129,6 +141,7 @@ export async function localTranscripts(home = claudeHome()): Promise<LocalTransc
       const s = await stat(path);
       const tr = join(projectDir, sessionId, "tool-results");
       const sa = join(projectDir, sessionId, "subagents");
+      const wf = join(projectDir, sessionId, "workflows");
       out.push({
         sessionId,
         path,
@@ -136,6 +149,7 @@ export async function localTranscripts(home = claudeHome()): Promise<LocalTransc
         mtime: s.mtime,
         toolResultsDir: (await isDir(tr)) ? tr : null,
         subagentsDir: (await isDir(sa)) ? sa : null,
+        workflowsDir: (await isDir(wf)) ? wf : null,
       });
     }
   }
@@ -240,7 +254,12 @@ const isDir = (p: string) => stat(p).then((x) => x.isDirectory()).catch(() => fa
 /** dir の下の全ファイルの相対パスと sha256。無ければ空。subagents は workflows/wf_<id>/ の入れ子を持つ */
 async function localFiles(dir: string | null): Promise<ToolResult[]> {
   if (!dir) return [];
-  const names = (await readdir(dir, { recursive: true, withFileTypes: true }))
+  // 無いのは空と同じ。読めない / ディレクトリでない、を空と読むと prune が運んでいないものを消す
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true }).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return [];
+    throw e;
+  });
+  const names = entries
     .filter((d) => d.isFile())
     .map((d) => relative(dir, join(d.parentPath, d.name)))
     .sort(byString);
@@ -252,7 +271,15 @@ async function localFiles(dir: string | null): Promise<ToolResult[]> {
 const sameFiles = (a: ToolResult[], b: ToolResult[]) =>
   a.length === b.length && a.every((x, i) => x.name === b[i]!.name && x.sha256 === b[i]!.sha256);
 
-const subagentsOf = (m: SessionMeta) => m.subagents ?? [];
+const carriedOf = (m: SessionMeta, k: Carried) => m[k] ?? [];
+const carriedDir = (t: LocalTranscript, k: Carried) => t[`${k}Dir` as const];
+const sameCarried = (m: SessionMeta, local: Record<Carried, ToolResult[]>) => CARRIED.every((k) => sameFiles(carriedOf(m, k), local[k]));
+
+/** 運ぶディレクトリごとの全ファイル */
+async function carriedFiles(dirs: (k: Carried) => string | null): Promise<Record<Carried, ToolResult[]>> {
+  const lists = await Promise.all(CARRIED.map((k) => localFiles(dirs(k))));
+  return Object.fromEntries(CARRIED.map((k, i) => [k, lists[i]!])) as Record<Carried, ToolResult[]>;
+}
 
 /** 保存先が書いた相対パスを dir の下に解く。外へ出る名前 (絶対パス / ..) は置かない */
 function under(dir: string, name: string): string {
@@ -462,12 +489,12 @@ export class TranscriptClient {
   }
 
   /**
-   * 置く。同じ内容 (transcript の sha256 と、tool-results / subagents の名前と sha256 が一致) なら
+   * 置く。同じ内容 (transcript の sha256 と、tool-results / subagents / workflows の名前と sha256 が一致) なら
    * 何も書かない。動いている session でも push できるが、ハッシュと転送は同じ
    * スナップショットから取る (追記の途中で読むと session.json と実体がずれる)。
-   * 順序は transcript → tool-results → subagents → session.json で、session.json が最後。
-   * subagents は動いている subagent が追記するので、transcript と同じくスナップショット (tmpdir に
-   * push ごとに作る) から送る。transcript とは別の瞬間に取るので、両者が同じ時点の写しとは限らない。
+   * 順序は transcript → tool-results → subagents / workflows → session.json で、session.json が最後。
+   * subagents / workflows は動いている subagent / run が書き足すので、transcript と同じくスナップショット (tmpdir に
+   * push ごとに 1 つずつ作る) から送る。transcript とも互いとも別の瞬間に取るので、同じ時点の写しとは限らない。
    * 途中で落ちれば session.json が古いままなので、次の push が同じ判定で書き直す。
    * state.json は transcript と独立に、ローカルの印と違うときだけ書く (印は transcript
    * が変わらなくても変わる)。
@@ -475,7 +502,7 @@ export class TranscriptClient {
   async push(t: LocalTranscript, home = claudeHome()): Promise<PushResult> {
     const prefix = this.keyPrefix(t.sessionId);
     const snapshot = `${t.path}.push-tmp`;
-    let saSnapshot: string | null = null;
+    const snapshots: Partial<Record<Carried, string>> = {};
     const state = await readDeclared(t.sessionId, home);
     const syncState = async () => {
       const remote = await this.readRemoteDeclared(t.sessionId);
@@ -488,15 +515,17 @@ export class TranscriptClient {
     };
     try {
       await Bun.write(snapshot, Bun.file(t.path));
-      if (t.subagentsDir) {
-        saSnapshot = await mkdtemp(join(tmpdir(), "ccx-push-subagents-"));
-        await cp(t.subagentsDir, saSnapshot, { recursive: true });
+      for (const k of CARRIED) {
+        const dir = carriedDir(t, k);
+        if (!dir) continue;
+        snapshots[k] = await mkdtemp(join(tmpdir(), `ccx-push-${k}-`));
+        await cp(dir, snapshots[k]!, { recursive: true });
       }
-      const [digest, facts, toolResults, subagents] = await Promise.all([
+      const [digest, facts, toolResults, carried] = await Promise.all([
         sha256(snapshot),
         transcriptFacts(snapshot),
         localFiles(t.toolResultsDir),
-        localFiles(saSnapshot),
+        carriedFiles((k) => snapshots[k] ?? null),
       ]);
       const repo = await repoOf(facts.cwd);
       const size = (await stat(snapshot)).size;
@@ -508,7 +537,7 @@ export class TranscriptClient {
         prev.sha256 === digest &&
         prev.size === size &&
         sameFiles(prev.toolResults, toolResults) &&
-        sameFiles(subagentsOf(prev), subagents)
+        sameCarried(prev, carried)
       ) {
         if (!(await syncState())) return { status: "unchanged", meta: prev, state };
         // transcript は運んでいないが、印が変わったことは履歴に残す (いつ・どのマシンが)
@@ -523,10 +552,12 @@ export class TranscriptClient {
         if (already.get(r.name) === r.sha256) continue;
         await this.s3.write(`${prefix}tool-results/${r.name}`, Bun.file(join(t.toolResultsDir!, r.name)));
       }
-      const prevSa = new Map((prev ? subagentsOf(prev) : []).map((r) => [r.name, r.sha256]));
-      for (const r of subagents) {
-        if (prevSa.get(r.name) === r.sha256) continue;
-        await this.s3.write(`${prefix}subagents/${r.name}`, Bun.file(join(saSnapshot!, r.name)));
+      for (const k of CARRIED) {
+        const was = new Map((prev ? carriedOf(prev, k) : []).map((r) => [r.name, r.sha256]));
+        for (const r of carried[k]) {
+          if (was.get(r.name) === r.sha256) continue;
+          await this.s3.write(`${prefix}${k}/${r.name}`, Bun.file(join(snapshots[k]!, r.name)));
+        }
       }
 
       const meta: SessionMeta = {
@@ -538,7 +569,7 @@ export class TranscriptClient {
         sha256: digest,
         pushedAt: new Date().toISOString(),
         toolResults,
-        subagents,
+        ...carried,
         ...(repo ? { repo } : {}),
       };
       await this.s3.write(metaKey, JSON.stringify(meta, null, 2));
@@ -547,14 +578,14 @@ export class TranscriptClient {
       return { status: "pushed", meta, state };
     } finally {
       await rm(snapshot, { force: true });
-      if (saSnapshot) await rm(saSnapshot, { recursive: true, force: true });
+      for (const s of Object.values(snapshots)) await rm(s, { recursive: true, force: true });
     }
   }
 
   /**
    * 取り出して `claude --resume <id>` が見つける場所に置く。置き場所は元の cwd の
    * encoded dir。そのパスがこのマシンに無くても Claude Code は id で引く (#110)。
-   * tool-results と subagents を先に置き (手元に同じ名前の別内容があれば、transcript と同じく
+   * tool-results と subagents / workflows を先に置き (手元に同じ名前の別内容があれば、transcript と同じく
    * force なしでは止まり、force なら隣に退避する)、transcript は最後に rename で現れる。途中で落ちても
    * transcript が無いので次の pull がやり直す。手元に同じ id の別内容があれば、
    * 上書きせず止まる。force で越えるときも、元のファイルは隣に退避して消さない
@@ -573,19 +604,16 @@ export class TranscriptClient {
     const projectDir = join(home, "projects", encodeCwd(meta.cwd || "unknown"));
     const path = join(projectDir, `${sessionId}.jsonl`);
     const trDir = join(projectDir, sessionId, "tool-results");
-    const saDir = join(projectDir, sessionId, "subagents");
+    const dirOf = (k: Carried) => join(projectDir, sessionId, k);
 
     let replaced: string | undefined;
     const stamp = Date.now();
     if (await Bun.file(path).exists()) {
       const localDigest = await sha256(path);
       if (localDigest === meta.sha256) {
-        // transcript は同じ。tool-results と subagents まで揃っていれば何もしない
-        const [tr, sa] = await Promise.all([
-          localFiles((await isDir(trDir)) ? trDir : null),
-          localFiles((await isDir(saDir)) ? saDir : null),
-        ]);
-        if (sameFiles(tr, meta.toolResults) && sameFiles(sa, subagentsOf(meta))) {
+        // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
+        const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
+        if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
           // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
           return { status: "already-here", meta, state, stateApplied: await this.applyState(sessionId, state, home), path };
         }
@@ -601,7 +629,7 @@ export class TranscriptClient {
     // 付属ファイルも手元の別内容を黙って上書きしない (subagent は push 後も追記されうる)。何か書く前に全部を見る
     const plan = [
       ...meta.toolResults.map((r) => ({ key: `tool-results/${r.name}`, dest: under(trDir, r.name), sha256: r.sha256 })),
-      ...subagentsOf(meta).map((r) => ({ key: `subagents/${r.name}`, dest: under(saDir, r.name), sha256: r.sha256 })),
+      ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => ({ key: `${k}/${r.name}`, dest: under(dirOf(k), r.name), sha256: r.sha256 }))),
     ];
     const todo: ((typeof plan)[number] & { replace: boolean })[] = [];
     for (const f of plan) {
@@ -654,9 +682,9 @@ export class TranscriptClient {
 
   /**
    * ローカルの写しを消す。消してよいのは、保存先のどれかの写し (どのマシンが push
-   * したものでもよい) が transcript も tool-results も subagents も今のローカルと byte 一致
+   * したものでもよい) が transcript も tool-results も subagents / workflows も今のローカルと byte 一致
    * すると読み戻せたときだけ。動いている session は消さない。消すのは transcript と
-   * tool-results と subagents だけで、<projectDir>/<id>/ に他のものがあれば残す。
+   * tool-results と subagents / workflows だけで、<projectDir>/<id>/ に他のものがあれば残す。
    */
   async prune(t: LocalTranscript, running: Set<string>): Promise<PruneResult> {
     if (running.has(t.sessionId)) return { status: "refused", reason: "session is running", meta: null };
@@ -664,15 +692,15 @@ export class TranscriptClient {
     if (copies.length === 0) return { status: "refused", reason: "not in the store (push first)", meta: null };
 
     const localDigest = await sha256(t.path);
-    const [localTr, localSa] = await Promise.all([localFiles(t.toolResultsDir), localFiles(t.subagentsDir)]);
-    const candidates = copies.filter(
-      (m) => m.sha256 === localDigest && sameFiles(m.toolResults, localTr) && sameFiles(subagentsOf(m), localSa),
-    );
+    const [localTr, local] = await Promise.all([localFiles(t.toolResultsDir), carriedFiles((k) => carriedDir(t, k))]);
+    const candidates = copies.filter((m) => m.sha256 === localDigest && sameFiles(m.toolResults, localTr) && sameCarried(m, local));
     if (candidates.length === 0) {
-      // subagents を運ぶ前の写しは一覧を持たない。消せば一度も運んでいない subagents を失う
-      const old = copies.some((m) => !m.subagents && localSa.length && m.sha256 === localDigest && sameFiles(m.toolResults, localTr));
-      const reason = old
-        ? "the store's copy was pushed before subagents were carried (push again)"
+      // subagents / workflows を運ぶ前の写しは一覧を持たない。消せば一度も運んでいないものを失う
+      const missing = CARRIED.find((k) =>
+        copies.some((m) => !m[k] && local[k].length && m.sha256 === localDigest && sameFiles(m.toolResults, localTr)),
+      );
+      const reason = missing
+        ? `the store's copy was pushed before ${missing} were carried (push again)`
         : "no copy in the store matches the local files (push again)";
       return { status: "refused", reason, meta: copies[0]! };
     }
@@ -684,7 +712,7 @@ export class TranscriptClient {
       let ok = true;
       const files = [
         ...meta.toolResults.map((r) => [`tool-results/${r.name}`, r.sha256] as const),
-        ...subagentsOf(meta).map((r) => [`subagents/${r.name}`, r.sha256] as const),
+        ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => [`${k}/${r.name}`, r.sha256] as const)),
       ];
       for (const [key, digest] of files) {
         if ((await this.remoteSha256(`${prefix}${key}`)) !== digest) {
@@ -702,7 +730,7 @@ export class TranscriptClient {
     }
 
     await unlink(t.path);
-    for (const dir of [t.toolResultsDir, t.subagentsDir]) if (dir) await rm(dir, { recursive: true, force: true });
+    for (const dir of [t.toolResultsDir, ...CARRIED.map((k) => carriedDir(t, k))]) if (dir) await rm(dir, { recursive: true, force: true });
     // 運んだものしか無かったなら親も畳む。他に何かあれば触らない
     await rmdir(join(t.projectDir, t.sessionId)).catch(() => undefined);
     await this.record(this.keyPrefix(t.sessionId, verified), "prune");
