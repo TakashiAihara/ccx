@@ -23,15 +23,17 @@ permissions:
   id-token: write
   attestations: write
 
-# 2 本が同じ最大 tag を読んで同じ次の番号を取らないよう、1 本ずつ
+# 自動 release は 2 本が同じ最大 tag を読んで同じ次の番号を取らないよう、1 本ずつ。
+# 同じ group の待ちは新しい run に置き換えられるので、人が指定した tag と CI が落ちた回
+# (job は skip されるだけ) は別 group にして、release する run を押し出さないようにする
 concurrency:
-  group: release
+  group: release-${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && 'auto' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
-  # action は tag ではなく commit で固定する。この job は contents:write を持ち provenance に
-  # 署名するので、動かされた tag の下で差し替わった action が ccx のものとして attest される。
-  # 版は行末のコメントに置く
+  # action は tag ではなく commit で固定する。この workflow は contents:write を持ち、build は
+  # provenance に署名するので、動かされた tag の下で差し替わった action が ccx のものとして
+  # attest される。版は行末のコメントに置く
   tag:
     # workflow_run は main という名前の branch の CI 全部で発火し、fork の main からの PR も
     # 含む。この repository の main への push だけを release にする
@@ -46,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || (github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag)) || github.ref }}
           # 次の番号を数えるための全 tag と、main が先に進んだかを見るための origin/main
           fetch-depth: 0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -59,18 +61,29 @@ jobs:
         run: |
           set -eu
           if [ "$EVENT" != workflow_run ]; then
+            # branch 名や SHA も checkout は通るので、そのまま `main` という release ができる
+            case "$GIVEN" in
+              v[0-9]*) ;;
+              *) echo "not a v* tag: $GIVEN" >&2; exit 1 ;;
+            esac
             echo "tag=$GIVEN" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # main には新しい commit が既にあり、その run が release する。後からこちらを出すと
           # 古いコードが latest になる
-          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+          # if の条件の中では set -e が効かず、取れなかった origin/main が「先に進んだ」に化けて
+          # 緑の skip になる。先に代入で取り、取れなければ落とす
+          main="$(git rev-parse origin/main)"
+          if [ "$main" != "$(git rev-parse HEAD)" ]; then
             echo "main has moved past this commit; not releasing it"
             exit 0
           fi
           # 同じ commit の re-run は別の番号を切らず、付いている tag を使い直す
-          existing="$(git tag --points-at HEAD --list 'v*' | head -n 1)"
-          echo "tag=${existing:-$(bun scripts/next-tag.ts)}" >> "$GITHUB_OUTPUT"
+          # 代入に分けるのは、echo の引数の中のコマンド置換は失敗しても set -e で止まらず、
+          # `tag=` が書かれて release なしの緑になるため
+          tag="$(git tag --points-at HEAD --list 'v*' | head -n 1)"
+          [ -n "$tag" ] || tag="$(bun scripts/next-tag.ts)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: tag
@@ -78,11 +91,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 手動 run では inputs.tag と default branch の HEAD が食い違う。ref を明示しないと
-      # tag と中身の合わないバイナリが release に載り、後から見分けられない。無い tag は
-      # ここで落ちるので、存在しない tag の release は作られない
+      # tag と中身の合わないバイナリが release に載り、後から見分けられない。refs/tags/ を
+      # 付けるのは、同名の branch があると checkout がそちらを取るため。無い tag はここで
+      # 落ちるので、存在しない tag の release は作られない
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || (github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag)) || github.ref }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: bun install --frozen-lockfile
 

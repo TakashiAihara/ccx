@@ -33,10 +33,11 @@ describe('nextTag', () => {
   });
 
   test('ignores tags in any other shape', () => {
-    expect(nextTag(['v0.1.0-rc.3', 'v9', 'latest', 'v2.0.0-beta.1', ''])).toBe('v0.1.0-rc.4');
+    // 捨てるべき tag を先に置く。後ろに置くと、reduce が先頭の正しい版を持ったまま通ってしまう
+    expect(nextTag(['v9', 'latest', 'v2.0.0-beta.1', '', 'v0.1.0-rc.3'])).toBe('v0.1.0-rc.4');
   });
 
   test('refuses to invent a first version', () => {
-    expect(() => nextTag(['latest', ''])).toThrow();
+    expect(() => nextTag(['latest', ''])).toThrow('no vX.Y.Z or vX.Y.Z-rc.N tag to count from');
   });
 });

@@ -15,6 +15,7 @@
   },
   "include": [
     "packages/*/src/**/*.ts",
-    "apps/*/src/**/*.ts"
+    "apps/*/src/**/*.ts",
+    "scripts/next-tag*.ts"
   ]
 }
