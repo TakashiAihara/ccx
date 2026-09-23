@@ -39,6 +39,32 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
                    invoke. It never fails a session — it always exits 0.
 ```
 
+## The per-session channel
+
+```text
+ccx-agent channel  the MCP channel server Claude Code spawns for each session.
+                   Today it keeps an idle session's prompt cache warm with a
+                   heartbeat turn every 50 minutes (docs/design/heartbeat.md).
+```
+
+Register it once, then load it as a channel:
+
+```bash
+claude mcp add -s user ccx -- ccx-agent channel
+claude --dangerously-load-development-channels server:ccx
+```
+
+Load several channels by listing them after the one flag
+(`server:akapen server:ccx`). A server passed with `--mcp-config` is not accepted as a channel.
+
+| What | env | default |
+|---|---|---|
+| heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `50m` (`off` disables) |
+| stop after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `12h` |
+
+Set them with `claude mcp add ... -e KEY=value`. A heartbeat turn is a user record carrying
+`kind="heartbeat"`; tools that count a session's activity should skip it.
+
 ## The path a hook event takes
 
 ```text
