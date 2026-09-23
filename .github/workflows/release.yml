@@ -127,5 +127,14 @@ jobs:
           TAG: ${{ needs.tag.outputs.tag }}
         run: |
           set -eux
-          gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes dist/ccx-* dist/SHA256SUMS \
-            || gh release upload "$TAG" dist/ccx-* dist/SHA256SUMS --clobber
+          head="$(git rev-parse HEAD)"
+          gh release create "$TAG" --target "$head" --title "$TAG" --generate-notes dist/ccx-* dist/SHA256SUMS && exit 0
+          # 同じ commit の re-run だけ asset を差し替える。tag が別 commit を指しているのは、
+          # 人が同名 tag を先に push したか、auto と別 group の run が競ったかで、上書きすると
+          # tag と中身の合わない release になる
+          tagged="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+          if [ "$tagged" != "$head" ]; then
+            echo "$TAG points at $tagged, not the built $head; not overwriting its assets" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" dist/ccx-* dist/SHA256SUMS --clobber
