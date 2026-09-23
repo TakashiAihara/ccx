@@ -49,10 +49,24 @@ sequenceDiagram
 | 3 person | 209,387 | 43 |
 | 4 heartbeat | 209,387 | 77 |
 
-- Turn 2 (here a heartbeat) rewrote the prefix; turn 3 (a person) then read all of it. Only the heartbeat
-  was observed as turn 2, so whether a person's turn 2 splits the same way is not measured. From turn 3
-  a heartbeat reads exactly what a person's turn reads.
+- Turn 2 rewrites the prefix whatever arrives: a second session where turn 2 was a person read 26,899 and
+  wrote 182,615, the same as the heartbeat here. From turn 3 a heartbeat reads exactly what a person's
+  turn reads.
 - The session answered `.` and closed the turn.
+- At the default 50 minutes (same day, second session):
+
+| turn | at | cache read | cache write |
+|---|---|---|---|
+| 2 person | 12:44:14 | 26,899 | 182,615 |
+| 3 heartbeat | 13:34:14 (+50m) | 26,899 | 182,649 |
+| 4 person | 13:37:22 | 209,548 | 38 |
+| 5 heartbeat | 14:27:25 (+50m) | 209,548 | 72 |
+
+- Turn 5 is the claim: a heartbeat 50 minutes after the last request reads the whole 1h cache. Turn 3 split
+  at the same point as turn 2, and nothing was written to the transcript in between; the cause is not
+  identified. It is not the TTL (every write was `ephemeral_1h`, and a person's turn in another session read
+  364,157 after a 49-minute gap) and not the heartbeat (turn 4 read what turn 3 wrote). The likely cause is
+  the MCP connection state changing during the hour, which splits a person's turn the same way.
 - The channel must be registered in `~/.claude.json` (`claude mcp add`); a server passed with
   `--mcp-config` is refused as `no MCP server configured with that name`.
 
