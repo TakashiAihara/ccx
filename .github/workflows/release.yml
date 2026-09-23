@@ -34,8 +34,9 @@ jobs:
 
       # DuckDB (libduckdb + httpfs) を target の platform ぶん埋める。scripts/build.ts が
       # bindings と拡張を取ってから bun build --compile する
+      # 版は tag から焼き込む (`ccx --version` と ccx.json の ccxVersion)
       - name: Build binary
-        run: bun run scripts/build.ts --target ${{ matrix.target }} --outfile ${{ matrix.artifact }}
+        run: bun run scripts/build.ts --target ${{ matrix.target }} --outfile ${{ matrix.artifact }} --ccx-version "${GITHUB_REF_NAME#v}"
 
       - uses: actions/upload-artifact@v4
         with:
