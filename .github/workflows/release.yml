@@ -1,60 +1,117 @@
 name: Release
 
 on:
+  # CI を通った main への push はすべて release する。install.sh は latest を取るので、
+  # これで最後に切った tag ではなく main にあるものが配られる
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # 手で push した tag はその tag で release する。正式版はこれで切る
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release する tag (例: v0.2.0)"
+        required: true
 
 permissions:
   contents: write
+  # 同じ release の checksum は真正性を示さない。どの workflow がどの commit から作ったかを
+  # 検証できるよう provenance を付ける
+  id-token: write
+  attestations: write
+
+# 2 本が同じ最大 tag を読んで同じ次の番号を取らないよう、1 本ずつ
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: bun-linux-x64
-            artifact: ccx-linux-x64
-          - os: ubuntu-latest
-            target: bun-linux-arm64
-            artifact: ccx-linux-arm64
-          - os: macos-latest
-            target: bun-darwin-arm64
-            artifact: ccx-darwin-arm64
-          - os: ubuntu-latest
-            target: bun-darwin-x64
-            artifact: ccx-darwin-x64
-    runs-on: ${{ matrix.os }}
+  # action は tag ではなく commit で固定する。この job は contents:write を持ち provenance に
+  # 署名するので、動かされた tag の下で差し替わった action が ccx のものとして attest される。
+  # 版は行末のコメントに置く
+  tag:
+    # workflow_run は main という名前の branch の CI 全部で発火し、fork の main からの PR も
+    # 含む。この repository の main への push だけを release にする
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-
-      - run: bun install --frozen-lockfile
-
-      # DuckDB (libduckdb + httpfs) を target の platform ぶん埋める。scripts/build.ts が
-      # bindings と拡張を取ってから bun build --compile する
-      # 版は tag から焼き込む (`ccx --version` と ccx.json の ccxVersion)
-      - name: Build binary
-        run: bun run scripts/build.ts --target ${{ matrix.target }} --outfile ${{ matrix.artifact }} --ccx-version "${GITHUB_REF_NAME#v}"
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.ref }}
+          # 次の番号を数えるための全 tag と、main が先に進んだかを見るための origin/main
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-  release:
-    needs: build
+      - name: Decide the tag
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          GIVEN: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          if [ "$EVENT" != workflow_run ]; then
+            echo "tag=$GIVEN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # main には新しい commit が既にあり、その run が release する。後からこちらを出すと
+          # 古いコードが latest になる
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo "main has moved past this commit; not releasing it"
+            exit 0
+          fi
+          # 同じ commit の re-run は別の番号を切らず、付いている tag を使い直す
+          existing="$(git tag --points-at HEAD --list 'v*' | head -n 1)"
+          echo "tag=${existing:-$(bun scripts/next-tag.ts)}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      # 手動 run では inputs.tag と default branch の HEAD が食い違う。ref を明示しないと
+      # tag と中身の合わないバイナリが release に載り、後から見分けられない。無い tag は
+      # ここで落ちるので、存在しない tag の release は作られない
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: artifacts
-          merge-multiple: true
+          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.tag || github.ref }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: bun install --frozen-lockfile
 
-      - name: Create release
+      # bun は cross compile でき、DuckDB の asset も scripts/build.ts が target ぶん取る。
+      # 4 つを 1 台で作るのは、runner を OS ごとに分けると同じ入力から作った保証が弱まるため
+      - name: Build
+        run: |
+          set -eux
+          mkdir -p dist
+          for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            bun run scripts/build.ts --target "bun-$t" --outfile "dist/ccx-$t"
+          done
+          cd dist && sha256sum ccx-* > SHA256SUMS && cat SHA256SUMS
+
+      # この runner で動かせる 1 つだけ。単一バイナリ固有の経路 (埋めた DuckDB) まで通す
+      - name: Smoke the linux-x64 binary
+        run: scripts/smoke.sh ./dist/ccx-linux-x64
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/ccx-*"
+
+      # --target は tag が無ければ build した commit に作る。この token が作った tag は
+      # workflow を起動しないので、上の tag push の trigger で二重に release されない
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.ref_name }} --generate-notes artifacts/*
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          set -eux
+          gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --generate-notes dist/ccx-* dist/SHA256SUMS \
+            || gh release upload "$TAG" dist/ccx-* dist/SHA256SUMS --clobber
