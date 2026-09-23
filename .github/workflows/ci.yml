@@ -20,8 +20,17 @@ jobs:
       - name: Test
         run: bun test
 
+      # release は tag を --ccx-version で焼き込む。その経路が効かないと全 release が
+      # package.json の版を名乗るので、同じ経路で作って確かめる
       - name: Build
-        run: bun run build
+        run: |
+          bun run scripts/build.ts --ccx-version 0.0.0-ci
+          got="$(./ccx --version)"
+          [ "$got" = 0.0.0-ci ] || { echo "ccx --version printed $got, not 0.0.0-ci"; exit 1; }
+          # 焼き込まない経路は package.json の版を名乗る
+          want="$(jq -r .version apps/cli/package.json)"
+          got="$(bun apps/cli/src/index.ts --version)"
+          [ "$got" = "$want" ] || { echo "unstamped ccx --version printed $got, not $want"; exit 1; }
 
       # 単一バイナリ固有の経路 (埋めた asset → cache → dlopen) は bun test では通らない
       - name: Smoke the compiled binary

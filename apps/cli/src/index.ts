@@ -30,6 +30,8 @@ import {
 
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
+import pkg from "../package.json" with { type: "json" };
+
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
@@ -37,7 +39,11 @@ import { pickRepodir } from "./pick.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { registerTranscript } from "./transcript.ts";
 
-export const VERSION = "0.1.0";
+// release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
+// (bun run / 手元の build) は package.json の版。定数を別に持つと ccx.json の ccxVersion がずれる (#67)。
+// 焼き込まない build では実行時に存在しないので、typeof 以外で読まない
+declare const CCX_BUILD_VERSION: string | undefined;
+export const VERSION: string = typeof CCX_BUILD_VERSION === "string" ? CCX_BUILD_VERSION : pkg.version;
 
 const program = new Command();
 
