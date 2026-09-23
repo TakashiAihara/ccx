@@ -16,6 +16,9 @@ believed.
   the Claude Desktop app uses; user decision 2026-09-21). *remote* is observed: the transcript is in
   the store and not on this machine. A session can be either without the other. `--archived` and
   `--ended` on `ccx tr` are the declared and the observed selector, and nothing else.
+- **channel (Claude Code)** vs **channel (ccx)** — a *Claude Code channel* is the mechanism: an MCP server
+  whose `notifications/claude/channel` pushes an event into a session. The *ccx channel* is one such
+  server, `ccx-agent channel`. Prose says "the ccx channel" for ours.
 - **done** — a repodir word only (`.git/ccx.state`). The user's `~/.claude/sessions/<id>/done`
   marker is not ccx's; ccx's word for a folded-away session is `archived`.
 

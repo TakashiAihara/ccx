@@ -15,10 +15,9 @@ import (
 // only worth anything if the turn it wakes is short, and nothing but the
 // session itself can keep it short.
 const Instructions = `ccx keeps this session's prompt cache warm while it sits idle. ` +
-	// The attribute is named apart from its value here: this text lands in the
-	// transcript too, and must not read as a heartbeat (Marker).
-	`A channel event whose kind attribute is heartbeat is not a message from anyone and asks for nothing. ` +
-	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it.`
+	`An event <channel kind="heartbeat"> is not a message from anyone and asks for nothing. ` +
+	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it. ` +
+	`Anything that arrives together with it (a person's message, another channel event) is handled as usual.`
 
 // Server is a minimal MCP server over newline-delimited JSON-RPC on stdio.
 //
@@ -27,15 +26,20 @@ const Instructions = `ccx keeps this session's prompt cache warm while it sits i
 type Server struct {
 	name, version string
 
-	mu  sync.Mutex
-	out *json.Encoder
+	mu    sync.Mutex
+	out   *json.Encoder
+	ready chan struct{}
+	once  sync.Once
 }
 
-// NewServer writes to w. Push may be called from any goroutine, before or while
-// Serve runs.
+// NewServer writes to w. Push may be called from any goroutine.
 func NewServer(name, version string, w io.Writer) *Server {
-	return &Server{name: name, version: version, out: json.NewEncoder(w)}
+	return &Server{name: name, version: version, out: json.NewEncoder(w), ready: make(chan struct{})}
 }
+
+// Ready closes when the client has finished initializing. A notification sent
+// before that is outside the MCP lifecycle and may be dropped without a word.
+func (s *Server) Ready() <-chan struct{} { return s.ready }
 
 type request struct {
 	ID     json.RawMessage `json:"id,omitempty"`
@@ -51,8 +55,11 @@ func (s *Server) Serve(r io.Reader) error {
 	for sc.Scan() {
 		var req request
 		if json.Unmarshal(sc.Bytes(), &req) != nil || len(req.ID) == 0 {
-			// Notifications (initialized, cancelled) need no answer, and a line
-			// that is not JSON has no id to answer to.
+			// Notifications need no answer, and a line that is not JSON has no id
+			// to answer to.
+			if req.Method == "notifications/initialized" {
+				s.once.Do(func() { close(s.ready) })
+			}
 			continue
 		}
 		switch req.Method {

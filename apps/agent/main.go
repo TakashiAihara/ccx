@@ -122,6 +122,7 @@ func cmdChannel() int {
 		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)
 		return 2
 	}
+	// off (0) means no cap: keep a session warm for as long as it lives.
 	maxIdle, err := envDuration("CCX_HEARTBEAT_MAX_IDLE", 12*time.Hour)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)
@@ -133,9 +134,10 @@ func cmdChannel() int {
 		home = filepath.Join(h, ".claude")
 	}
 
+	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
+	// the process up. Default termination is what a stdio child wants.
 	srv := channel.NewServer("ccx", "0", os.Stdout)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	ctx := context.Background()
 	if interval > 0 {
 		hb := &channel.Heartbeat{
 			SessionID: sid, ClaudeHome: home, Interval: interval, MaxIdle: maxIdle,
@@ -151,7 +153,10 @@ func cmdChannel() int {
 				}
 			},
 		}
-		go hb.Run(ctx)
+		go func() {
+			<-srv.Ready()
+			hb.Run(ctx)
+		}()
 	}
 	if err := srv.Serve(os.Stdin); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent channel: %v\n", err)

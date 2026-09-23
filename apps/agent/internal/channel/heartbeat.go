@@ -2,7 +2,6 @@ package channel
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -11,9 +10,10 @@ import (
 	"time"
 )
 
-// Marker is what identifies a heartbeat turn in a transcript. Tools that count
-// a session's turns (idle reapers, retro metrics) skip user records carrying it.
-const Marker = `kind=\"heartbeat\"`
+// Marker is the attribute that identifies a heartbeat in the opening tag of a
+// channel event (an isMeta user record). Tools that count a session's turns
+// (idle reapers, retro metrics) skip records carrying it.
+const Marker = `kind="heartbeat"`
 
 // Heartbeat keeps one session's prompt cache from expiring (docs/design/heartbeat.md).
 //
@@ -47,6 +47,10 @@ type Scan struct {
 // that is not there yet, a heartbeat that has not arrived.
 const poll = time.Minute
 
+// cacheTTL is what Claude Code requests for the main conversation on a
+// subscription. With 5m (API key, usage credits) a heartbeat never lands in time.
+const cacheTTL = time.Hour
+
 // Run pushes heartbeats until ctx ends.
 func (h *Heartbeat) Run(ctx context.Context) {
 	var sent time.Time
@@ -67,21 +71,33 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		return poll // no request yet, so no cache to keep
 	}
 	if !sent.IsZero() {
-		if s.LastBeat.Before(*sent) {
-			// Pushed but not in the transcript. Either the session is mid-turn and
-			// will take it when the turn ends, or this is not its transcript any
-			// more (/clear starts a new id). Either way, never push a second one
-			// over it: that is how a stale channel would beat forever.
+		if s.LastBeat.Before(*sent) && !s.LastReal.After(*sent) {
+			// Pushed but not in the transcript, and nothing else happened since.
+			// Either the session is mid-turn and will take it when the turn ends,
+			// or this is not its transcript any more (/clear starts a new id): never
+			// push a second one over it, or a stale channel beats forever. Real use
+			// after the push means the session is alive and the push was lost.
 			return poll
 		}
 		*sent = time.Time{}
 	}
 	now := h.Now()
-	if now.Sub(s.LastReal) > h.MaxIdle {
+	if h.MaxIdle > 0 && now.Sub(s.LastReal) > h.MaxIdle {
 		return h.Interval // left alone too long to be worth keeping; real use resumes it
 	}
-	if due := s.LastAssistant.Add(h.Interval); now.Before(due) {
+	// Counted from the later of the two: a heartbeat whose answer failed must not
+	// make the next one due at once.
+	last := s.LastAssistant
+	if s.LastBeat.After(last) {
+		last = s.LastBeat
+	}
+	if due := last.Add(h.Interval); now.Before(due) {
 		return due.Sub(now)
+	}
+	if now.Sub(last) >= cacheTTL {
+		// Already expired (a resume, a suspended host): a heartbeat would only
+		// rewrite the prefix early, and the next real turn does that anyway.
+		return h.Interval
 	}
 	if err := h.Push(); err != nil {
 		h.Log("ccx channel: heartbeat push failed: %v", err)
@@ -118,14 +134,20 @@ func (h *Heartbeat) read() (Scan, bool) {
 		return Scan{}, false
 	}
 	defer f.Close()
-	h.last, h.mtime, h.size = ScanTranscript(f), st.ModTime(), st.Size()
+	s, err := ScanTranscript(f)
+	if err != nil {
+		// A scan cut short would date the session from an old record and push.
+		h.Log("ccx channel: reading %s: %v", h.file, err)
+		return Scan{}, false
+	}
+	h.last, h.mtime, h.size = s, st.ModTime(), st.Size()
 	return h.last, true
 }
 
 // ScanTranscript walks the records in order. A heartbeat turn runs from a user
 // record carrying Marker to the next user prompt that does not; nothing inside
 // it counts as the session being used.
-func ScanTranscript(r interface{ Read([]byte) (int, error) }) Scan {
+func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
 	sc := bufio.NewScanner(r)
@@ -145,9 +167,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) Scan {
 		}
 		switch rec.Type {
 		case "user":
-			if bytes.Contains(line, []byte(Marker)) {
+			tag := channelTag(rec.Message.Content)
+			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
-			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || isChannel(rec.Message.Content)) {
+			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
 				// Channel events are meta records too, and a comment arriving on
 				// akapen is the session being used.
 				inBeat = false
@@ -161,12 +184,20 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) Scan {
 			s.LastReal = rec.Timestamp
 		}
 	}
-	return s
+	return s, sc.Err()
 }
 
-func isChannel(content json.RawMessage) bool {
+// channelTag is the opening <channel ...> tag of a channel event, or "". Only
+// the tag is looked at: a person or a tool quoting the attribute is not a beat.
+func channelTag(content json.RawMessage) string {
 	var s string
-	return json.Unmarshal(content, &s) == nil && strings.HasPrefix(s, "<channel ")
+	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<channel ") {
+		return ""
+	}
+	if i := strings.IndexByte(s, '>'); i > 0 {
+		return s[:i+1]
+	}
+	return ""
 }
 
 func isToolResult(content json.RawMessage) bool {
