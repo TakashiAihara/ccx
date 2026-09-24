@@ -287,6 +287,13 @@ func TestStepDoesNotRepeatAnUnansweredBeat(t *testing.T) {
 	}
 	// An interval after it the cache is gone: the last request that answered was
 	// 10:00:00. The failed heartbeat read nothing, so it does not keep it alive.
+	// Past turnStart it no longer looks like a running turn, and it is still not
+	// sent again: the next is due an interval after the unanswered one.
+	h.Now = func() time.Time { return at("10:56:06") }
+	h.step(&sent)
+	if *pushes != 0 {
+		t.Fatalf("6 minutes after an unanswered beat, cache warm: pushes=%d, want 0", *pushes)
+	}
 	// It backs off rather than polling as if a turn were still running.
 	h.Now = func() time.Time { return at("11:40:06") }
 	if wait := h.step(&sent); *pushes != 0 || wait != h.Interval {

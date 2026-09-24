@@ -135,7 +135,10 @@ answer.
 
 "A turn is running" is a tool that has not returned, or a user record newer than the last response and
 under 5 minutes old. Some user records never get a response (Esc, a manual `/compact`, a stopped task's
-notice); past 5 minutes they are not a turn (measured 2026-09-24: input to response p99 30s, max 116s).
+notice); past 5 minutes they are taken not to be a turn (measured 2026-09-24: input to response p99 30s,
+max 116s). This is a heuristic, not a completion signal: a response slower than 5 minutes gets one extra
+heartbeat turn queued behind it (about 0.03% of the 5h window), which costs less than stopping keepalive
+after every Esc.
 
 The heartbeat starts only after the client sends `notifications/initialized`: a push before that is
 outside the MCP lifecycle and can be dropped silently.

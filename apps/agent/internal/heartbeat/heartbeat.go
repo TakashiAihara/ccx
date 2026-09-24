@@ -110,8 +110,10 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		// A turn is running: a tool has not returned, or input just arrived and
 		// the response has not started. A heartbeat pushed now would queue behind
 		// the turn and run as an extra turn after it. Input with no response for
-		// longer than turnStart is one that never gets one (Esc, a manual
-		// /compact, a stopped task's notice), not a turn.
+		// longer than turnStart is taken to be one that never gets one (Esc, a
+		// manual /compact, a stopped task's notice). That is a heuristic: a
+		// response slower than turnStart gets one extra heartbeat turn (~0.03% of
+		// the 5h window), which is cheaper than stopping keepalive after every Esc.
 		return poll
 	}
 	if !sent.IsZero() {
@@ -128,9 +130,14 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	if h.MaxIdle > 0 && now.Sub(s.LastReal) > h.MaxIdle {
 		return h.Interval // left alone too long to be worth keeping; real use resumes it
 	}
-	// A heartbeat that landed but was never answered leaves its input newer than
-	// the last response, which the running-turn test above already holds back.
-	if due := s.LastRequest.Add(h.Interval); now.Before(due) {
+	// Counted from the later of the two: a heartbeat that landed but was never
+	// answered looks like a running turn for turnStart only, and must not be sent
+	// again as soon as that passes.
+	last := s.LastRequest
+	if s.LastBeat.After(last) {
+		last = s.LastBeat
+	}
+	if due := last.Add(h.Interval); now.Before(due) {
 		return due.Sub(now)
 	}
 	if err := h.Push(); err != nil {
