@@ -191,6 +191,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["flags", flagsOf(s).join(",") || "-"],
     ["label", s.label || "-"],
     ["task", s.task || "-"],
+    ["heartbeat", s.heartbeat || "default"],
   ]);
 
 export function registerSessionState(session: Command): void {
@@ -228,6 +229,22 @@ export function registerSessionState(session: Command): void {
         await reportAfterWrite(id, s);
       });
   }
+
+  session
+    .command("heartbeat")
+    .description("Keep this session's prompt cache warm or not, over ccx-agent's default (default clears the override)")
+    .argument("<setting>", "on | off | default")
+    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .option("--json", "print the resulting state as JSON")
+    .action(async (setting: string, idOrPrefix: string | undefined, o) => {
+      if (!["on", "off", "default"].includes(setting)) throw new Error(`unknown setting ${setting}; one of on, off, default`);
+      const home = claudeHome();
+      const id = await target(idOrPrefix, home);
+      const s = await writeDeclared(id, { heartbeat: setting === "default" ? "" : (setting as "on" | "off") }, home);
+      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
+      else console.log(`heartbeat ${s.heartbeat || "default"}  ${id}`);
+      await reportAfterWrite(id, s);
+    });
 
   session
     .command("status")

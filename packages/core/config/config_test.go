@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // noGit stands in for a machine with nothing in git config.
@@ -194,5 +195,54 @@ func TestConfigFile_UnreadableIsSurfaced(t *testing.T) {
 	// is NOT os.ErrNotExist, so it must be surfaced, not swallowed.
 	if _, err := load(env(map[string]string{"CCX_CONFIG": dir}), noGit, fixedHost("h")); err == nil {
 		t.Error("an existing-but-unreadable config path should surface an error, not be swallowed")
+	}
+}
+
+func TestHeartbeat_DefaultsAndFile(t *testing.T) {
+	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Concerns.Heartbeat || c.Heartbeat.Default || c.Heartbeat.Interval != 50*time.Minute || c.Heartbeat.MaxIdle != 12*time.Hour {
+		t.Errorf("defaults = %+v / %v", c.Heartbeat, c.Concerns.Heartbeat)
+	}
+
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("[heartbeat]\nenabled = false\ndefault = true\ninterval = \"40m\"\nmaxIdle = \"off\"\n"), 0o644)
+	c, err = load(env(map[string]string{"CCX_CONFIG": p, "CCX_HEARTBEAT_INTERVAL": "45m"}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Concerns.Heartbeat || !c.Heartbeat.Default || c.Heartbeat.Interval != 45*time.Minute || c.Heartbeat.MaxIdle != 0 {
+		t.Errorf("file + env = %+v / %v, want off, default on from the file, env's 45m, no cap", c.Heartbeat, c.Concerns.Heartbeat)
+	}
+
+	// A duration typed wrong, or one the cache does not outlive, turns the
+	// heartbeat off with a reason, not silently to a default. Everything else in
+	// the config still loads: collect keeps running.
+	for k, v := range map[string]string{"CCX_HEARTBEAT_INTERVAL": "50 minutes", "CCX_HEARTBEAT_MAX_IDLE": "forever"} {
+		c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", k: v, "CCX_MACHINE": "m"}), noGit, fixedHost("h"))
+		if err != nil || c.Concerns.Heartbeat || c.Heartbeat.Err == nil || !c.Concerns.Collect || c.Machine != "m" {
+			t.Errorf("%s=%s: err=%v heartbeat=%v reason=%v collect=%v", k, v, err, c.Concerns.Heartbeat, c.Heartbeat.Err, c.Concerns.Collect)
+		}
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_HEARTBEAT_INTERVAL": "1h"}), noGit, fixedHost("h"))
+	if c.Concerns.Heartbeat || c.Heartbeat.Err == nil {
+		t.Errorf("interval of 1h: heartbeat=%v reason=%v, want off with a reason", c.Concerns.Heartbeat, c.Heartbeat.Err)
+	}
+}
+
+func TestChannelSocket_NextToTheHookSocket(t *testing.T) {
+	c, _ := load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000"}), noGit, fixedHost("h"))
+	if c.ChannelSocketPath != "/run/user/1000/ccx/ccx-channel.sock" {
+		t.Errorf("channel socket = %q", c.ChannelSocketPath)
+	}
+	c, _ = load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "CCX_SOCKET": "/s/hook.sock"}), noGit, fixedHost("h"))
+	if c.ChannelSocketPath != "/s/ccx-channel.sock" {
+		t.Errorf("with CCX_SOCKET = %q, want next to it", c.ChannelSocketPath)
+	}
+	c, _ = load(env(map[string]string{"CCX_CHANNEL_SOCKET": "/x/ch.sock"}), noGit, fixedHost("h"))
+	if c.ChannelSocketPath != "/x/ch.sock" {
+		t.Errorf("override = %q", c.ChannelSocketPath)
 	}
 }

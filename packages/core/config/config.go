@@ -22,6 +22,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -56,11 +57,40 @@ type Config struct {
 	// or disable through the usual ladder. A ccx-agent with every concern off is
 	// valid — someone who wants the CLI but none of the daemon's behaviours.
 	Concerns Concerns
+
+	// Heartbeat is how the heartbeat concern keeps idle sessions' prompt caches
+	// warm (docs/design/heartbeat.md). A session can override Default for
+	// itself (`ccx session heartbeat on|off`); the rest applies to all.
+	Heartbeat Heartbeat
+
+	// ChannelSocketPath is where each session's `ccx-agent channel` registers
+	// with serve. Apart from the hook socket: the hook wire is one frame and an
+	// ack, this one stays open for the life of the session.
+	ChannelSocketPath string
 }
 
-// Concerns is the on/off state of each of ccx-agent's three jobs (ADR 0002). Only
-// Collect is implemented in #90; Carry and Persistence have their toggle here so
-// they slot in the same shape when built, and so a reader sees the full set.
+// Heartbeat is the heartbeat concern's settings.
+type Heartbeat struct {
+	// Default decides for a session that has not declared on or off. Off: a
+	// heartbeat costs quota whether or not anyone comes back (measured
+	// 2026-09-23, read counts on a Max plan), so a session, or the person, opts
+	// in with `ccx session heartbeat on` (user decision 2026-09-24).
+	Default bool
+	// Interval after the last request that a heartbeat is due. 50m: an hour of
+	// cache TTL, less generation time and slack.
+	Interval time.Duration
+	// MaxIdle stops heartbeats for a session nobody has used for this long;
+	// 0 is no cap.
+	MaxIdle time.Duration
+	// Err is why the heartbeat settings could not be used. It turns the concern
+	// off and nothing else: a typo here must not take collect down with it, or
+	// stop a session's channel from reading the rest of the config.
+	Err error
+}
+
+// Concerns is the on/off state of each of ccx-agent's jobs (ADR 0002). Collect
+// and Heartbeat are built; Carry and Persistence have their toggle here so they
+// slot in the same shape when built, and so a reader sees the full set.
 type Concerns struct {
 	// Collect — hooks → center. Defaults ON: it is inert without a center
 	// configured (it forwards nowhere), so on-by-default is harmless.
@@ -75,6 +105,10 @@ type Concerns struct {
 	// never on by surprise — the same stance as the worker gate and
 	// `desired: running` itself (#20, not built yet).
 	Persistence bool
+
+	// Heartbeat — keep idle sessions' prompt caches warm. Defaults ON: inert
+	// until a session loads the ccx channel, which is itself opt-in per session.
+	Heartbeat bool
 }
 
 // fileShape is the subset of ~/.config/ccx/config.toml this port reads.
@@ -87,6 +121,12 @@ type fileShape struct {
 	Collect     struct{ Enabled *bool } `toml:"collect"`
 	Carry       struct{ Enabled *bool } `toml:"carry"`
 	Persistence struct{ Enabled *bool } `toml:"persistence"`
+	Heartbeat   struct {
+		Enabled  *bool  `toml:"enabled"`
+		Default  *bool  `toml:"default"`
+		Interval string `toml:"interval"`
+		MaxIdle  string `toml:"maxIdle"`
+	} `toml:"heartbeat"`
 }
 
 // Load resolves the config from the real environment.
@@ -136,6 +176,17 @@ func load(
 		uname = u.Username
 	}
 
+	interval, hbErr := duration(pick(getenv("CCX_HEARTBEAT_INTERVAL"), gitcfg("ccx.heartbeatInterval"), file.Heartbeat.Interval), 50*time.Minute)
+	if hbErr == nil && interval >= time.Hour {
+		// The cache lives an hour. A heartbeat due at or after that finds it gone
+		// and is never sent: the setting would silently turn the concern into a no-op.
+		hbErr = errors.New("heartbeat: interval " + interval.String() + " is not under the 1h cache TTL")
+	}
+	maxIdle, err := duration(pick(getenv("CCX_HEARTBEAT_MAX_IDLE"), gitcfg("ccx.heartbeatMaxIdle"), file.Heartbeat.MaxIdle), 12*time.Hour)
+	if hbErr == nil {
+		hbErr = err
+	}
+
 	return Config{
 		HubURL:     hub,
 		Machine:    machine,
@@ -148,13 +199,39 @@ func load(
 			Collect:     toggle(getenv, gitcfg, "CCX_COLLECT", "ccx.collect", file.Collect.Enabled, true),
 			Carry:       toggle(getenv, gitcfg, "CCX_CARRY", "ccx.carry", file.Carry.Enabled, false),
 			Persistence: toggle(getenv, gitcfg, "CCX_PERSISTENCE", "ccx.persistence", file.Persistence.Enabled, false),
+			Heartbeat:   hbErr == nil && toggle(getenv, gitcfg, "CCX_HEARTBEAT", "ccx.heartbeat", file.Heartbeat.Enabled, true),
 		},
+		Heartbeat: Heartbeat{
+			Default:  toggle(getenv, gitcfg, "CCX_HEARTBEAT_DEFAULT", "ccx.heartbeatDefault", file.Heartbeat.Default, false),
+			Interval: interval,
+			MaxIdle:  maxIdle,
+			Err:      hbErr,
+		},
+		ChannelSocketPath: channelSocketPath(getenv),
 	}, nil
 }
 
-// toggle resolves one concern's enabled flag through the usual ladder
-// (env → git config → file → default). It is the single shape all three
-// concerns share, so adding Carry/Persistence wiring later is one line each.
+// duration reads a Go duration ("50m"); "off" or "0" is 0. Unlike a toggle, a
+// bad value is an error: the value is a number someone chose, and falling
+// back to a default would run the heartbeat on a schedule nobody set.
+func duration(v string, def time.Duration) (time.Duration, error) {
+	switch strings.TrimSpace(v) {
+	case "":
+		return def, nil
+	case "off", "0":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil || d < 0 {
+		return 0, errors.New("heartbeat: " + v + ": want a duration like 50m, or off")
+	}
+	return d, nil
+}
+
+// toggle resolves one on/off setting through the usual ladder
+// (env → git config → file → default). Every concern's switch and the
+// heartbeat default share it, so adding Carry/Persistence wiring later is one
+// line each.
 func toggle(getenv func(string) string, gitcfg func(string) string, envKey, gitKey string, fileVal *bool, def bool) bool {
 	// An unparsable value at one level is treated as "not set here" and falls
 	// through to the next source — a typo in CCX_COLLECT must not silently
@@ -226,6 +303,18 @@ func socketPath(getenv func(string) string) string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ccx", "run", "ccx-agent.sock")
+}
+
+// channelSocketPath is CCX_CHANNEL_SOCKET, else ccx-channel.sock next to the
+// hook socket's default.
+func channelSocketPath(getenv func(string) string) string {
+	if p := getenv("CCX_CHANNEL_SOCKET"); p != "" {
+		return p
+	}
+	// Next to wherever the hook socket resolved, CCX_SOCKET included: a short
+	// CCX_SOCKET is how a path over the unix-socket limit is fixed, and the
+	// channel socket needs the same fix.
+	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike

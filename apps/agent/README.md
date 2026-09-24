@@ -10,7 +10,7 @@ Observing repodirs, starting sessions, delivering channels, threshold
 warnings — all of that sits on top of this and is out of scope here (#7, #20,
 #23, #83).
 
-## One process, three concerns (ADR 0002)
+## One process, four concerns (ADR 0002)
 
 ccx-agent is a modular monolith: one binary, but its jobs are separate internal
 modules behind an interface, each independently toggled in config.
@@ -20,11 +20,13 @@ modules behind an interface, each independently toggled in config.
 | **collect** | hooks → center | on (inert without a center) | built (#90) |
 | **carry** | broker → session | off (inert without a broker) | later (#23) |
 | **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
+| **heartbeat** | keep idle sessions' prompt caches warm | on (inert until a session loads the channel) | built (#142) |
 
 Persistence is off by default because it is the only *active* verb — it spawns
-and restarts sessions (START), so it is never on by surprise. Only `collect` is
-implemented here; the other two slot into the same `concern.Run` the same way
-when built. `internal/concern` is the interface, `internal/collect` the module.
+and restarts sessions (START), so it is never on by surprise. `collect` and
+`heartbeat` are implemented; the other two slot into the same `concern.Run` the
+same way when built. `internal/concern` is the interface; `internal/collect` and
+`internal/heartbeat` are modules.
 A ccx-agent with every concern off is a valid state.
 
 ## The two commands
@@ -38,6 +40,36 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
                    ccx-agent over the local socket, exit. This is what Claude Code hooks
                    invoke. It never fails a session — it always exits 0.
 ```
+
+## The per-session channel
+
+```text
+ccx-agent channel  the MCP channel server Claude Code spawns for each session.
+                   It registers the session with serve and pushes what serve
+                   sends: today, a heartbeat that keeps an idle session's
+                   prompt cache warm (docs/design/heartbeat.md).
+```
+
+Register it once, then load it as a channel:
+
+```bash
+claude mcp add -s user ccx -- ccx-agent channel
+claude --dangerously-load-development-channels server:ccx
+```
+
+A user-scope registration starts `ccx-agent channel` in every session, flag or not (about 11MB RSS each,
+measured in review); without the flag its pushes are dropped. On a 5-minute cache TTL (API key, usage
+credits) a heartbeat never lands in time; serve sees that in the transcript and does not beat.
+
+Load several channels by listing them after the one flag
+(`server:akapen server:ccx`). A server passed with `--mcp-config` is not accepted as a channel.
+
+The heartbeat's settings live in the configuration table below (`[heartbeat]`).
+Sessions are not kept warm unless they opt in: `ccx session heartbeat on`, run
+by the person or by the session itself (with no id it targets this session).
+A heartbeat is not free on every plan; see docs/design/heartbeat.md.
+A heartbeat turn is a user record carrying `kind="heartbeat"`; tools that count
+a session's activity should skip it.
 
 ## The path a hook event takes
 
@@ -85,6 +117,11 @@ it simply has no center to forward to.
 | collect on/off | `CCX_COLLECT` | `ccx.collect` | `[collect] enabled` | on |
 | carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |
 | persistence on/off | `CCX_PERSISTENCE` | `ccx.persistence` | `[persistence] enabled` | off |
+| heartbeat on/off | `CCX_HEARTBEAT` | `ccx.heartbeat` | `[heartbeat] enabled` | on |
+| heartbeat for sessions with no declaration | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | `[heartbeat] default` | off |
+| heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
+| heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
+| channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 

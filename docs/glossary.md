@@ -16,6 +16,9 @@ believed.
   the Claude Desktop app uses; user decision 2026-09-21). *remote* is observed: the transcript is in
   the store and not on this machine. A session can be either without the other. `--archived` and
   `--ended` on `ccx tr` are the declared and the observed selector, and nothing else.
+- **channel (Claude Code)** vs **channel (ccx)** — a *Claude Code channel* is the mechanism: an MCP server
+  whose `notifications/claude/channel` pushes an event into a session. The *ccx channel* is one such
+  server, `ccx-agent channel`. Prose says "the ccx channel" for ours.
 - **done** — a repodir word only (`.git/ccx.state`). The user's `~/.claude/sessions/<id>/done`
   marker is not ccx's; ccx's word for a folded-away session is `archived`.
 
@@ -38,6 +41,11 @@ believed.
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
 - **center** — `ccx-center`, the hub that collects hook events and, by default, serves the store.
 - **ccx-agent** — the per-machine resident process (formerly `ccxd`, #131).
+- **channel** — `ccx-agent channel`, the MCP server Claude Code spawns per session. It registers the session
+  with `ccx-agent serve` and pushes into the session what serve sends (`apps/agent/internal/channel`).
+- **heartbeat** — a channel event with `kind="heartbeat"` that wakes an idle session for one short turn so
+  its prompt cache does not expire (`docs/design/heartbeat.md`). Not a message; a heartbeat turn is not use.
+  Decided by the `heartbeat` concern in serve; a session's own `on` / `off` is declared state.
 
 ## Repodirs
 

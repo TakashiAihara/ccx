@@ -6,6 +6,8 @@
 //	ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
 //	                   ccx-agent over the local socket, exit. Wired into Claude Code hooks.
 //	ccx-agent serve    resident: run every enabled concern until stopped.
+//	ccx-agent channel  per session: the MCP channel server Claude Code spawns
+//	                   over stdio. Pushes what serve sends it (docs/design/heartbeat.md).
 //
 // In #90 only the collect concern is built (hooks → center). Carry (#23) and
 // persistence (#20) slot into the same runner when built.
@@ -19,9 +21,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/channel"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
@@ -40,6 +45,8 @@ func run(args []string) int {
 		return cmdHook()
 	case "serve":
 		return cmdServe()
+	case "channel":
+		return cmdChannel()
 	case "-h", "--help", "help":
 		usage()
 		return 0
@@ -88,14 +95,61 @@ func cmdServe() int {
 		}
 		concerns = append(concerns, c)
 	}
+	if cfg.Heartbeat.Err != nil {
+		logger("heartbeat off: %v", cfg.Heartbeat.Err)
+	}
+	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
+		concerns = append(concerns, heartbeat.New(cfg, logger))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v)",
-		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect)
+	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v heartbeat=%v interval=%v default=%v)",
+		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect,
+		cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval, cfg.Heartbeat.Default)
 	if err := concern.Run(ctx, logger, concerns...); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// cmdChannel is the per-session MCP channel server Claude Code spawns over
+// stdio. It pushes what ccx-agent serve sends for this session; the deciding
+// (when a heartbeat is due) happens in serve. With serve down it still serves
+// MCP and keeps retrying: a channel must never fail the session.
+func cmdChannel() int {
+	sid := os.Getenv("CLAUDE_CODE_SESSION_ID")
+	if sid == "" {
+		// serve addresses a session by this id. Without one there is nothing to
+		// register, and saying so beats sitting silent.
+		fmt.Fprintln(os.Stderr, "ccx-agent channel: needs CLAUDE_CODE_SESSION_ID; it is meant to be spawned by Claude Code")
+		return 2
+	}
+	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) }
+
+	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
+	// the process up. Default termination is what a stdio child wants.
+	srv := channel.NewServer("ccx", "0", os.Stdout)
+	go func() {
+		<-srv.Ready()
+		// A broken config must not take the session's MCP server down, and fixing
+		// it must not need a session restart: read it again until it loads.
+		for said := false; ; time.Sleep(time.Minute) {
+			cfg, err := config.Load()
+			if err == nil {
+				channel.Relay(context.Background(), cfg.ChannelSocketPath, sid, os.Getenv("CLAUDE_CONFIG_DIR"), srv, logf)
+				return
+			}
+			if !said {
+				logf("ccx-agent channel: config: %v; not relaying until it loads", err)
+				said = true
+			}
+		}
+	}()
+	if err := srv.Serve(os.Stdin); err != nil {
+		logf("ccx-agent channel: %v", err)
 		return 1
 	}
 	return 0
@@ -107,6 +161,7 @@ func usage() {
 usage:
   ccx-agent serve    run the resident agent (the enabled concerns)
   ccx-agent hook     forward one hook payload from stdin to the running agent
+  ccx-agent channel  the per-session MCP channel server (spawned by Claude Code)
 
 ccx-agent runs as your user, never root. See docs for the systemd user unit.
 `)

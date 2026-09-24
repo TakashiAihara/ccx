@@ -57,3 +57,11 @@ The MCP **channel server** is a separate process by necessity: Claude Code spawn
 - `apps/agent` is one Go binary with role subcommands, internally modular (collect / carry / persistence as separate packages behind interfaces).
 - Persistence (keep-alive) is deferred anyway (it conflicts with herdr's own resume — a future concern), so near-term ccx-agent is mostly collect. The single-process decision holds regardless of build order.
 - Containerising ccx-agent is not on the table: it must spawn host processes and watch the host filesystem (ADR 0001), so it is host-native. Container-per-concern therefore does not apply.
+
+## Update (2026-09-24): a fourth concern, heartbeat
+
+- `heartbeat` keeps idle sessions' prompt caches warm (`docs/design/heartbeat.md`, #142). It toggles like
+  the others (`[heartbeat] enabled`) and defaults on: it is inert until a session loads the ccx channel
+  and declares `ccx session heartbeat on` (sessions default to off; a heartbeat costs quota).
+- It is the first concern to feed the per-session channel server. serve owns the channel socket; each
+  `ccx-agent channel` registers its session there and pushes what serve sends.
