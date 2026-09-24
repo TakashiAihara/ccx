@@ -62,7 +62,7 @@ afterEach(() => {
 async function install(args: string[], env: Record<string, string> = {}) {
   const home = join(work, "home");
   const p = Bun.spawn(["sh", join(ROOT, "scripts", "install.sh"), ...args], {
-    // 壊した実装が相対パスへ書いても、repo ではなく一時ディレクトリに落ちるように
+    // 壊した実装が相対パスへ書いても、テストランナーの cwd (通常は repo) ではなく一時ディレクトリに落ちるように
     cwd: work,
     stdout: "pipe",
     stderr: "pipe",
@@ -81,7 +81,7 @@ async function install(args: string[], env: Record<string, string> = {}) {
 }
 
 const bin = (name: string) => join(work, "bin", name);
-const run = (path: string) => Bun.spawnSync([path]).stdout.toString().trim();
+const run = (path: string) => Bun.spawnSync([path], { cwd: work }).stdout.toString().trim();
 
 test("without --with-agent, only ccx is installed and no service is touched", async () => {
   const r = await install([]);
