@@ -119,7 +119,7 @@ echo "ccx: installed to $DEST/ccx-agent ($agent_version)"
 if [ "$service" = manual ]; then
   echo "ccx: 'systemctl --user' cannot reach a user manager here (or this is macOS), so no service was set up." >&2
   echo "ccx: keep '$DEST/ccx-agent serve' running as your user under your own supervisor." >&2
-  echo "ccx: then point it at a center and wire the hooks:" >&2
+  echo "ccx: then point it at a center and wire the hooks with the command '$DEST/ccx-agent hook':" >&2
   echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install" >&2
   exit 0
 fi
@@ -140,5 +140,5 @@ if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" !
   echo "ccx: to keep ccx-agent up across logout, run: loginctl enable-linger $(id -un)"
 fi
 
-echo "ccx: next, point it at a center and wire the hooks:"
+echo "ccx: next, point it at a center and wire the hooks with the command '$DEST/ccx-agent hook':"
 echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install"

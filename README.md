@@ -43,7 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/inst
 `CCX_VERSION` pins a version; `CCX_INSTALL_DIR` chooses the destination.
 
 To see sessions across machines, add the resident agent too. `--with-agent` installs `ccx-agent` from
-the same release and runs it as a systemd **user** service (never a system unit); the hooks and the center URL
+the same release and, where `systemctl --user` works, runs it as a systemd **user** service (never a
+system unit; elsewhere it says how to supervise it yourself). The hooks and the center URL
 are separate steps, in [apps/agent/README.md](apps/agent/README.md#install):
 
 ```bash
@@ -260,8 +261,8 @@ With no configuration at all, `ccx rd new owner/repo` works.
 
 ## Status
 
-`ccx repodir new`, `ls`, `cd`, `rm` and `gc` work. `open`, the resident agent and the cross-machine
-hub are next.
+`ccx repodir new`, `ls`, `cd`, `rm` and `gc` work, and so do the resident agent (`ccx-agent`) and the
+center across machines. `open` is next.
 
 ## License
 

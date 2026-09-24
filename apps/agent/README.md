@@ -158,8 +158,10 @@ To keep it up across logout, the user needs lingering: `loginctl enable-linger "
 Then two steps install does not do for you:
 
 1. Point it at a center: `git config --global ccx.hubUrl http://<center>:8791` (or
-   `CCX_HUB_URL`, see Configuration). Without one it spools and forwards nowhere.
-   It reads the setting at start, so `systemctl --user restart ccx-agent` after.
+   `[hub] url` in the config file). Without one it spools and forwards nowhere. It
+   reads the setting at start, so `systemctl --user restart ccx-agent` after. An
+   exported `CCX_HUB_URL` does not reach the service; that takes a drop-in with
+   `Environment=`.
 2. Wire the hooks (below).
 
 ## Wiring the hooks
@@ -171,7 +173,7 @@ arrives. The smallest set that keeps that list right:
 | Event | Why |
 |---|---|
 | `SessionStart` | the session appears as soon as it starts, before its first prompt |
-| `UserPromptSubmit` | activity while a turn is running, not only at its end |
+| `UserPromptSubmit` | activity when a turn starts, not only when it ends |
 | `Stop` | the end of each turn |
 | `SessionEnd` | the only signal that it ended (`--active`) |
 
