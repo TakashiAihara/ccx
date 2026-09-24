@@ -133,15 +133,66 @@ Note: a unix socket path is capped near 108 bytes by the kernel. ccx-agent fails
 with a clear message if `CCX_SOCKET` (or the default under a very deep `$HOME`)
 exceeds that — set `CCX_SOCKET` to something shorter.
 
-## Running it
+## Install
 
-Wire the hook (per hook event you want collected) in Claude Code settings:
+From a release, with the CLI:
 
-```json
-{ "hooks": { "Stop": [ { "hooks": [
-  { "type": "command", "command": "ccx-agent hook" }
-] } ] } }
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
 ```
 
-Run the daemon as a user service — see `systemd/ccx-agent.service` for the unit and
-the `loginctl enable-linger` note that keeps it up across logout.
+This puts `ccx` and `ccx-agent` (same version) in `~/.local/bin`, writes
+`~/.config/systemd/user/ccx-agent.service` from the same release, and enables it with
+`systemctl --user`. Run it again to upgrade: it restarts the agent on the new binary.
+It removes a leftover `ccxd` unit from before the rename. Without a systemd user
+manager (and on macOS, for now) it installs the binary and tells you to supervise
+`ccx-agent serve` yourself.
+
+From source, with Go: `bun run install:agent` builds `~/.local/bin/ccx-agent`; install
+the unit from `systemd/ccx-agent.service` by hand (its header says how).
+
+To keep it up across logout, the user needs lingering: `loginctl enable-linger "$USER"`.
+
+Then two steps install does not do for you:
+
+1. Point it at a center: `git config --global ccx.hubUrl http://<center>:8791` (or
+   `CCX_HUB_URL`, see Configuration). Without one it spools and forwards nowhere.
+   It reads the setting at start, so `systemctl --user restart ccx-agent` after.
+2. Wire the hooks (below).
+
+## Wiring the hooks
+
+The center builds `ccx session ls` from hook events alone: a session appears with its
+first event, its age is its latest event, and it counts as ended once a `SessionEnd`
+arrives. The smallest set that keeps that list right:
+
+| Event | Why |
+|---|---|
+| `SessionStart` | the session appears as soon as it starts, before its first prompt |
+| `UserPromptSubmit` | activity while a turn is running, not only at its end |
+| `Stop` | the end of each turn |
+| `SessionEnd` | the only signal that it ended (`--active`) |
+
+```json
+{ "hooks": {
+  "SessionStart":     [ { "hooks": [ { "type": "command", "command": "ccx-agent hook" } ] } ],
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "ccx-agent hook" } ] } ],
+  "Stop":             [ { "hooks": [ { "type": "command", "command": "ccx-agent hook" } ] } ],
+  "SessionEnd":       [ { "hooks": [ { "type": "command", "command": "ccx-agent hook" } ] } ]
+} }
+```
+
+Any other event can be added the same way; `ccx session show` then has more to show.
+`PostToolUse` is the one to think about: its payload is often tens of KB, and it
+fires on every tool call.
+
+## Checking it end to end
+
+```bash
+ccx agent status          # running, spool 0, center reachable
+ccx session ls            # a row with this machine's name appears after the next hook
+ccx session mark archived # from inside a session; the flag shows in `ccx session ls` on any other machine
+```
+
+`incoming` in `ccx agent status` counts events hooks dropped while the agent was down;
+they are taken in when it starts.

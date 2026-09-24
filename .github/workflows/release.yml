@@ -99,6 +99,9 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || (github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag)) || github.ref }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: bun install --frozen-lockfile
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
 
       # bun は cross compile でき、DuckDB の asset も scripts/build.ts が target ぶん取る。
       # 4 つを 1 台で作るのは、runner を OS ごとに分けると同じ入力から作った保証が弱まるため
@@ -114,6 +117,19 @@ jobs:
             bun run scripts/build.ts --target "bun-$t" --outfile "dist/ccx-$t" --ccx-version "${TAG#v}"
           done
           test "$(./dist/ccx-linux-x64 --version)" = "${TAG#v}"
+          # ccx-agent は同じ tag の同じ版を名乗る。1 repo 1 tag なので、CLI と別の版を持つ理由が無い。
+          # 名前を ccx-agent-<os>-<arch> に揃えるのは、install.sh が ccx と同じ規則で引くため
+          for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            os="${t%-*}" arch="${t#*-}"
+            [ "$arch" = x64 ] && arch=amd64
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=${TAG#v}" -o "dist/ccx-agent-$t" ./apps/agent
+          done
+          test "$(./dist/ccx-agent-linux-x64 --version)" = "${TAG#v}"
+          # unit は install.sh --with-agent が同じ release から取る。main の最新を取ると、
+          # 古い版を pin したときに binary と unit の組が食い違う。名前が ccx-* なので、
+          # 下の SHA256SUMS / attest / upload の glob にそのまま入る
+          cp apps/agent/systemd/ccx-agent.service dist/
           cd dist && sha256sum ccx-* > SHA256SUMS && cat SHA256SUMS
 
       # この runner で動かせる 1 つだけ。単一バイナリ固有の経路 (埋めた DuckDB) まで通す

@@ -42,6 +42,14 @@ curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/inst
 
 `CCX_VERSION` pins a version; `CCX_INSTALL_DIR` chooses the destination.
 
+To see sessions across machines, add the resident agent too. `--with-agent` installs `ccx-agent` from
+the same release and runs it as a systemd **user** service (never root); the hooks and the center URL
+are separate steps, in [apps/agent/README.md](apps/agent/README.md#install):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
+```
+
 ## Usage
 
 ```bash
@@ -63,7 +71,7 @@ ccd() {
 
 Once a resident agent (`ccx-agent`) is collecting and a `ccx-center` is up, the same CLI reads what they
 gathered. Both are optional: without them, everything above still works, you just have no view
-across machines.
+across machines. Setting up the agent is in [apps/agent/README.md](apps/agent/README.md#install).
 
 ```bash
 ccx agent status              # is the local ccx-agent up, how much is waiting, can it reach the center
