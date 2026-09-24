@@ -27,7 +27,10 @@ beforeEach(() => {
   mkdirSync(fake);
   writeFileSync(
     join(fake, "systemctl"),
-    `#!/bin/sh\necho "systemctl $*" >> "${work}/calls"\n[ "$*" = "--user show-environment" ] && [ -n "$NO_MANAGER" ] && exit 1\nexit 0\n`,
+    `#!/bin/sh\necho "systemctl $*" >> "${work}/calls"\n[ "$*" = "--user show-environment" ] && [ -n "$NO_MANAGER" ] && exit 1\n` +
+      // user.control と transient は */systemd/user で終わらない。先に並ぶのは本物の UnitPath と同じ
+      // 後ろの system 側の dir もテストの中に置く。取り違えたときに本物の /etc に書かないため
+      `[ "$*" = "--user show -p UnitPath --value" ] && echo "\${UNIT_PATH:-$HOME/.config/systemd/user.control /run/user/1/systemd/transient $HOME/.config/systemd/user $HOME/etc/systemd/user}"\nexit 0\n`,
   );
   writeFileSync(join(fake, "loginctl"), `#!/bin/sh\necho "loginctl $*" >> "${work}/calls"\n`);
   for (const c of ["systemctl", "loginctl"]) chmodSync(join(fake, c), 0o755);
@@ -102,7 +105,7 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
   const systemctl = r.calls.split("\n").filter((l) => l.startsWith("systemctl"));
   expect(systemctl).toEqual([
     "systemctl --user show-environment",
-    "systemctl --user show-environment",
+    "systemctl --user show -p UnitPath --value",
     "systemctl --user daemon-reload",
     "systemctl --user enable ccx-agent",
     "systemctl --user restart ccx-agent",
@@ -111,11 +114,32 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
 
 });
 
-test.skipIf(!linux)("the unit goes where the user manager looks, not where this shell's XDG_CONFIG_HOME points", async () => {
-  const r = await install(["--with-agent"], { XDG_CONFIG_HOME: join(work, "shell-config") });
+test.skipIf(!linux)("the unit goes to the user manager's own unit dir, not this shell's idea of it", async () => {
+  const managerDir = join(work, "manager-config", "systemd", "user");
+  const r = await install(["--with-agent"], {
+    XDG_CONFIG_HOME: join(work, "shell-config"),
+    UNIT_PATH: `${join(work, "manager-config", "systemd", "user.control")} ${managerDir} ${join(work, "etc", "systemd", "user")}`,
+  });
   expect(r.code).toBe(0);
-  expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(true);
+  expect(readFileSync(join(managerDir, "ccx-agent.service"), "utf8")).toContain(`ExecStart=${bin("ccx-agent")} serve`);
+  expect(existsSync(join(work, "etc", "systemd", "user", "ccx-agent.service"))).toBe(false);
+  expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(false);
   expect(existsSync(join(work, "shell-config", "systemd", "user", "ccx-agent.service"))).toBe(false);
+});
+
+test.skipIf(!linux)("a manager whose UnitPath has no user dir stops before anything is downloaded", async () => {
+  const r = await install(["--with-agent"], { UNIT_PATH: `${join(work, "etc", "systemd", "user.control")} relative/systemd/user` });
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("cannot find the user manager's unit directory");
+  expect(requests).toBe(0);
+});
+
+test.skipIf(!linux)("an unwritable unit dir stops before anything is downloaded", async () => {
+  writeFileSync(join(work, "not-a-dir"), "");
+  const r = await install(["--with-agent"], { UNIT_PATH: join(work, "not-a-dir", "systemd", "user") });
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("cannot write the user manager's unit directory");
+  expect(requests).toBe(0);
 });
 
 test.skipIf(!linux)("a pinned release without ccx-agent fails before ccx is replaced", async () => {
