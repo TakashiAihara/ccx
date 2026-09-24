@@ -17,6 +17,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -33,6 +34,11 @@ type Config struct {
 	// still runs and spools; it just has nowhere to drain to yet. The local
 	// side never depends on the center existing (scope.md).
 	HubURL string
+
+	// HubToken is the center's CCX_CENTER_TOKEN, sent as a Bearer on every call
+	// (#158). CCX_HUB_TOKEN, else the file hub-token next to config.toml. Never
+	// git config or config.toml: those get shared along with dotfiles.
+	HubToken string
 
 	// Machine names this host in the (user, machine, session) key (#92). The
 	// default is the hostname, but the default is NOT the single source of
@@ -161,6 +167,10 @@ func load(
 	}
 
 	hub := pick(getenv("CCX_HUB_URL"), gitcfg("ccx.hubUrl"), file.Hub.URL)
+	token, err := hubToken(getenv)
+	if err != nil {
+		return Config{}, err
+	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
 	if machine == "" {
@@ -189,6 +199,7 @@ func load(
 
 	return Config{
 		HubURL:     hub,
+		HubToken:   token,
 		Machine:    machine,
 		User:       uname,
 		SocketPath: socketPath(getenv),
@@ -272,6 +283,34 @@ func pick(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// hubToken fails rather than ignoring a token file it cannot use: a silently
+// empty token turns into "every event refused" with nothing pointing at why.
+func hubToken(getenv func(string) string) (string, error) {
+	if t := strings.TrimSpace(getenv("CCX_HUB_TOKEN")); t != "" {
+		return t, nil
+	}
+	p := configPath(getenv)
+	if p == "" {
+		return "", nil
+	}
+	path := filepath.Join(filepath.Dir(p), "hub-token")
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds the center's token)", path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // configPath is CCX_CONFIG, else $XDG_CONFIG_HOME/ccx/config.toml, else

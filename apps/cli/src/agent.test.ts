@@ -146,4 +146,26 @@ describe("agentStatus", () => {
       await srv.stop(true);
     }
   });
+
+  test("healthz は答えても token を受けない center は hubTokenAccepted=false (#158)", async () => {
+    const want = "tok-for-agent-status";
+    const srv = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (req) =>
+        new URL(req.url).pathname === "/healthz" || req.headers.get("authorization") === `Bearer ${want}`
+          ? new Response("{}")
+          : new Response("", { status: 401 }),
+    });
+    const env = { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: join(dir, "spool") };
+    try {
+      const refused = await agentStatus(`http://127.0.0.1:${srv.port}`, env, "wrong");
+      expect(refused.hubReachable).toBe(true);
+      expect(refused.hubTokenAccepted).toBe(false);
+      const ok = await agentStatus(`http://127.0.0.1:${srv.port}`, env, want);
+      expect(ok.hubTokenAccepted).toBe(true);
+    } finally {
+      await srv.stop(true);
+    }
+  });
 });

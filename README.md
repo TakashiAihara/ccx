@@ -234,6 +234,7 @@ config file lives.
 | agent to run | `CCX_AGENT` | `ccx.agent` | `defaults.agent` |
 | model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
 | hub to report to | `CCX_HUB_URL` | `ccx.hubUrl` | `hub.url` |
+| the hub's token | `CCX_HUB_TOKEN` | — | `hub-token` file next to `config.toml` |
 
 Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.
 `mirrorRoot` follows `root` unless you set it separately.

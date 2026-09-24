@@ -23,11 +23,12 @@ import {
 } from "@ccx/core";
 
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { randomUUID } from "node:crypto";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
+import { centerTransport, type Hub } from "./fleet.ts";
 
 import { table } from "./format.ts";
 
@@ -87,7 +88,7 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
 /** 手元に書いた後で center に写す。設定が読めなければ写さない (書き込みは済んでいる) */
 async function reportAfterWrite(sessionId: string, state: DeclaredState): Promise<void> {
   const cfg = await configOrNull();
-  if (cfg) await reportState(cfg.hub?.url, cfg.machine, sessionId, state);
+  if (cfg) await reportState(cfg.hub, cfg.machine, sessionId, state);
 }
 
 /**
@@ -97,10 +98,10 @@ async function reportAfterWrite(sessionId: string, state: DeclaredState): Promis
  */
 const REPORT_TIMEOUT_MS = 3000;
 
-export async function reportState(hubUrl: string | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
-  if (!hubUrl) return;
+export async function reportState(hub: Hub | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
+  if (!hub) return;
   const origin = localOrigin(machine);
-  const client = createClient(IngestService, createConnectTransport({ baseUrl: hubUrl }));
+  const client = createClient(IngestService, centerTransport(hub));
   try {
     await client.ingest(
       {
@@ -123,7 +124,7 @@ export async function reportState(hubUrl: string | undefined, machine: string | 
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
   } catch (e) {
-    console.error(`(center ${hubUrl} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
+    console.error(`(center ${hub.url} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
   }
 }
 

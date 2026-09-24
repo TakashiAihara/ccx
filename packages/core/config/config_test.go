@@ -246,3 +246,43 @@ func TestChannelSocket_NextToTheHookSocket(t *testing.T) {
 		t.Errorf("override = %q", c.ChannelSocketPath)
 	}
 }
+
+// The token comes from CCX_HUB_TOKEN, else the hub-token file next to
+// config.toml, and never from git config (git config travels with dotfiles).
+func TestHubToken_EnvThenFile_NeverGit(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	git := func(key string) string { return "from-git" }
+
+	c, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), git, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.HubToken != "" {
+		t.Errorf("no env, no file: want empty, got %q", c.HubToken)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath}), git, fixedHost("h"))
+	if c.HubToken != "from-file" {
+		t.Errorf("file: want trimmed from-file, got %q", c.HubToken)
+	}
+
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_HUB_TOKEN": " from-env "}), git, fixedHost("h"))
+	if c.HubToken != "from-env" {
+		t.Errorf("env should beat file, got %q", c.HubToken)
+	}
+}
+
+// A token file other users can read is refused, not used and not ignored.
+func TestHubToken_RefusesOtherReadableFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := load(env(map[string]string{"CCX_CONFIG": filepath.Join(dir, "config.toml")}), noGit, fixedHost("h")); err == nil {
+		t.Fatal("a 0644 hub-token must fail the load")
+	}
+}

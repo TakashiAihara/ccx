@@ -20,6 +20,8 @@ env:
   CCX_CENTER_DB     sqlite file (default $CCX_ROOT/center.db, or ~/.ccx/center.db)
   CCX_CENTER_OBJECTS  directory behind the S3-compatible object API
                     (default $CCX_ROOT/center-objects, or ~/.ccx/center-objects)
+  CCX_CENTER_TOKEN  shared token every endpoint but /healthz requires; clients send
+                    it as CCX_HUB_TOKEN. With it set the center may bind beyond loopback
 `);
 }
 
@@ -37,7 +39,7 @@ function serve(): void {
 
   const db = openDb(cfg.dbPath);
   mkdirSync(cfg.objectsDir, { recursive: true });
-  const app = createApp(db, new ObjectStore(cfg.objectsDir));
+  const app = createApp(db, new ObjectStore(cfg.objectsDir), { token: cfg.token });
 
   const server = Bun.serve({
     hostname: cfg.host,
@@ -50,7 +52,7 @@ function serve(): void {
     maxRequestBodySize: 1024 * 1024 * 1024,
   });
   console.error(
-    `ccx-center listening on http://${cfg.host}:${server.port} (db=${cfg.dbPath}, objects=${cfg.objectsDir})`,
+    `ccx-center listening on http://${cfg.host}:${server.port} (db=${cfg.dbPath}, objects=${cfg.objectsDir}, token=${cfg.token ? "required" : "none"})`,
   );
 
   const stop = () => {

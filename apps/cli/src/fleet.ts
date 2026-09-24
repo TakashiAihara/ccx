@@ -1,4 +1,4 @@
-import { createClient, type Client } from "@connectrpc/connect";
+import { Code, ConnectError, createClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
@@ -26,9 +26,20 @@ export class NoCenterConfigured extends Error {
   }
 }
 
-export function fleetClient(hubUrl: string | undefined): Client<typeof FleetService> {
-  if (!hubUrl) throw new NoCenterConfigured();
-  return createClient(FleetService, createConnectTransport({ baseUrl: hubUrl }));
+export type Hub = { url: string; token?: string };
+
+/** center への Connect の transport。token があれば全要求に Bearer で付ける (#158) */
+export function centerTransport(hub: Hub): Transport {
+  const auth: Interceptor = (next) => (req) => {
+    req.header.set("Authorization", `Bearer ${hub.token}`);
+    return next(req);
+  };
+  return createConnectTransport({ baseUrl: hub.url, interceptors: hub.token ? [auth] : [] });
+}
+
+export function fleetClient(hub: Hub | undefined): Client<typeof FleetService> {
+  if (!hub) throw new NoCenterConfigured();
+  return createClient(FleetService, centerTransport(hub));
 }
 
 /**
@@ -36,6 +47,12 @@ export function fleetClient(hubUrl: string | undefined): Client<typeof FleetServ
  * まではこちらから言えないので、言えることだけを言う。
  */
 export function unreachable(hubUrl: string, cause: unknown): Error {
+  // 届いたうえで断られたのは「届かない」ではない。直し方が違うので分けて言う
+  if (ConnectError.from(cause).code === Code.Unauthenticated) {
+    return new Error(
+      `ccx-center at ${hubUrl} refused the token: set CCX_HUB_TOKEN (or ~/.config/ccx/hub-token) to the center's CCX_CENTER_TOKEN`,
+    );
+  }
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(`ccx-center at ${hubUrl} did not answer: ${detail}`);
 }

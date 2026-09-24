@@ -23,6 +23,12 @@ export type AgentStatus = {
   hubUrl?: string;
   /** hub が未設定なら undefined。設定されていて届かなければ false */
   hubReachable?: boolean;
+  /**
+   * center がこの手元の token を受けたか (#158)。`/healthz` は token 無しで答えるので、
+   * reachable だけでは「全 event が 401 で spool に溜まり続けている」が見えない。
+   * 見ているのは ccx CLI の token で、ccx-agent (systemd の環境) の token ではない
+   */
+  hubTokenAccepted?: boolean;
 };
 
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -75,6 +81,7 @@ async function countFiles(dir: string, suffix: string): Promise<number> {
 export async function agentStatus(
   hubUrl: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  token?: string,
 ): Promise<AgentStatus> {
   const socketPath = defaultSocketPath(env);
   const spoolDir = defaultSpoolDir(env);
@@ -112,6 +119,19 @@ export async function agentStatus(
     hubReachable = false;
   }
 
+  let hubTokenAccepted: boolean | undefined;
+  if (healthz && hubReachable) {
+    // 最小の認証付き呼び出し。401 だけを「受けなかった」とし、それ以外の失敗は判定しない
+    hubTokenAccepted = await fetch(new URL("/ccx.v1.FleetService/ListSessions", healthz), {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ limit: 1 }),
+      signal: AbortSignal.timeout(2000),
+    })
+      .then((r) => (r.status === 401 ? false : r.ok ? true : undefined))
+      .catch(() => undefined);
+  }
+
   return {
     socketPath,
     socketPresent,
@@ -121,6 +141,7 @@ export async function agentStatus(
     incoming,
     hubUrl,
     hubReachable,
+    ...(hubTokenAccepted !== undefined ? { hubTokenAccepted } : {}),
     ...(hubUrlInvalid ? { hubUrlInvalid: true } : {}),
   };
 }

@@ -16,7 +16,7 @@
  */
 
 import { homedir, hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { parseProtocol, type Protocol } from "./repospec.ts";
 
@@ -39,13 +39,17 @@ export type Config = {
    * `ccx session` と `ccx transcript ls` が同じマシンを別名で呼ぶ
    */
   machine: string;
-  /** 未設定なら hub 無し = ローカル単独動作 */
-  hub?: { url: string };
+  /**
+   * 未設定なら hub 無し = ローカル単独動作。token は center の CCX_CENTER_TOKEN と
+   * 同じ値 (#158)。CCX_HUB_TOKEN か、config.toml の隣の `hub-token` ファイルから
+   */
+  hub?: { url: string; token?: string };
   /**
    * transcript の保存先 (S3 互換)。未設定なら `ccx transcript` だけが使えない。
-   * endpoint を書かなければ hub.url (center の object API) が保存先になる
+   * endpoint を書かなければ hub.url (center の object API) が保存先になる。token を持つのは
+   * 保存先が center のとき (無指定か、hub.url と同じ origin) だけ。外部の S3 に center の token を送らない
    */
-  transcript?: { endpoint: string; bucket: string; prefix: string; region?: string };
+  transcript?: { endpoint: string; bucket: string; prefix: string; region?: string; token?: string };
 };
 
 const DEFAULT_MIRROR_MAX_AGE_MS = 10 * 60 * 1000;
@@ -77,6 +81,33 @@ export function parseDuration(v: unknown): number {
 export function normalizePrefix(raw: string): string {
   const p = raw.replace(/^\/+/, "");
   return p && !p.endsWith("/") ? `${p}/` : p;
+}
+
+/**
+ * center の token。git config と config.toml には置かない (dotfiles ごと共有・公開
+ * されやすい置き場所なので)。env か、config.toml の隣の専用ファイル
+ */
+async function readHubToken(env: Record<string, string | undefined>): Promise<string | undefined> {
+  const fromEnv = env.CCX_HUB_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  const path = join(dirname(configPath(env)), "hub-token");
+  const f = Bun.file(path);
+  if (!(await f.exists())) return undefined;
+  // 読めない / 他人に読める token を黙って無視すると、「設定したのに 401」の原因が見えなくなる
+  if (((await f.stat()).mode & 0o077) !== 0) {
+    throw new Error(`${path} is readable by other users; chmod 600 it (it holds the center's token)`);
+  }
+  return (await f.text()).trim() || undefined;
+}
+
+/** transcript の endpoint を明示していても、それが center 自身なら center の token を渡す */
+function sameOrigin(a: string, b: string | undefined): boolean {
+  if (!b) return false;
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }
 
 export function configPath(env = process.env): string {
@@ -168,12 +199,14 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
   const model =
     env.CCX_MODEL ?? (await readGit("ccx.model")) ?? (fileDefaults.model as string | undefined);
   const hubUrl = env.CCX_HUB_URL ?? (await readGit("ccx.hubUrl")) ?? (fileHub?.url as string | undefined);
+  const hubToken = await readHubToken(env);
 
   // [transcript] テーブルは同じ 3 段で引く。endpoint だけは hub.url に落ちる。
   // ただし center の object API は HTTP なので、hub.url が http(s) でなければ落とさない
   const t: Sources = { ...s, file: (file.transcript ?? {}) as Record<string, unknown> };
   const hubHttp = hubUrl && /^https?:\/\//.test(hubUrl) ? hubUrl : undefined;
-  const tEndpoint = (await pick(t, "CCX_TRANSCRIPT_ENDPOINT", "ccx.transcriptEndpoint", "endpoint")) ?? hubHttp;
+  const tExplicit = await pick(t, "CCX_TRANSCRIPT_ENDPOINT", "ccx.transcriptEndpoint", "endpoint");
+  const tEndpoint = tExplicit ?? hubHttp;
   const tBucket = (await pick(t, "CCX_TRANSCRIPT_BUCKET", "ccx.transcriptBucket", "bucket")) ?? "ccx";
   const tPrefixRaw = (await pick(t, "CCX_TRANSCRIPT_PREFIX", "ccx.transcriptPrefix", "prefix")) ?? "";
   const tRegion = await pick(t, "CCX_TRANSCRIPT_REGION", "ccx.transcriptRegion", "region");
@@ -190,13 +223,14 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
       model: model || undefined,
     },
     machine: (await pick(s, "CCX_MACHINE", "ccx.machine", "machine")) ?? hostname(),
-    hub: hubUrl ? { url: String(hubUrl) } : undefined,
+    hub: hubUrl ? { url: String(hubUrl), ...(hubToken ? { token: hubToken } : {}) } : undefined,
     transcript: tEndpoint
       ? {
           endpoint: String(tEndpoint),
           bucket: String(tBucket),
           prefix: normalizePrefix(tPrefixRaw),
           region: tRegion || undefined,
+          ...(hubToken && (tExplicit === null || sameOrigin(tExplicit, hubHttp)) ? { token: hubToken } : {}),
         }
       : undefined,
   };

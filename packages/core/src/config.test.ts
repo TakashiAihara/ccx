@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -111,6 +111,53 @@ describe("設定の解決", () => {
     // http でない hub.url (nats 等) は S3 の endpoint にならない
     const natsHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "nats://center:4222" }, git: noGit });
     expect(natsHub.transcript).toBeUndefined();
+  });
+
+  test("hub の token: CCX_HUB_TOKEN > config.toml の隣の hub-token。git config は読まない", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ccx-tok-"));
+    const cfgPath = join(dir, "config.toml");
+    const git = gitStub({ "ccx.hubToken": "from-git" });
+
+    const none = await loadConfig({ env: { CCX_CONFIG: cfgPath, CCX_HUB_URL: "http://c" }, git });
+    expect(none.hub).toEqual({ url: "http://c" });
+
+    await Bun.write(join(dir, "hub-token"), "from-file\n");
+    await chmod(join(dir, "hub-token"), 0o600);
+    const fromFile = await loadConfig({ env: { CCX_CONFIG: cfgPath, CCX_HUB_URL: "http://c" }, git });
+    expect(fromFile.hub?.token).toBe("from-file");
+
+    const fromEnv = await loadConfig({ env: { CCX_CONFIG: cfgPath, CCX_HUB_URL: "http://c", CCX_HUB_TOKEN: "from-env" }, git });
+    expect(fromEnv.hub?.token).toBe("from-env");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("transcript が hub の token を持つのは、保存先が center (endpoint 無指定) のときだけ", async () => {
+    const onHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_HUB_TOKEN: "t" }, git: noGit });
+    expect(onHub.transcript?.token).toBe("t");
+    // 外部の S3 に center の token を送らない
+    const external = await loadConfig({
+      env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_HUB_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://s3" },
+      git: noGit,
+    });
+    expect(external.transcript?.token).toBeUndefined();
+    // endpoint を明示していても、それが center 自身なら token を渡す
+    const explicitCenter = await loadConfig({
+      env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c:8791", CCX_HUB_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://c:8791/" },
+      git: noGit,
+    });
+    expect(explicitCenter.transcript?.token).toBe("t");
+  });
+
+  test("他人に読める hub-token は黙って使わず、止める", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ccx-tok-"));
+    const path = join(dir, "hub-token");
+    await Bun.write(path, "from-file\n");
+    await chmod(path, 0o644);
+    await expect(loadConfig({ env: { CCX_CONFIG: join(dir, "config.toml"), CCX_HUB_URL: "http://c" }, git: noGit })).rejects.toThrow(/chmod 600/);
+    await chmod(path, 0o600);
+    const ok = await loadConfig({ env: { CCX_CONFIG: join(dir, "config.toml"), CCX_HUB_URL: "http://c" }, git: noGit });
+    expect(ok.hub?.token).toBe("from-file");
+    await rm(dir, { recursive: true, force: true });
   });
 
   test("git config はファイルより強い", async () => {

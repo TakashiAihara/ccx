@@ -39,7 +39,7 @@ func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newCollect(cfg.SocketPath, spool, NewForwarder(cfg.HubURL), log), nil
+	return newCollect(cfg.SocketPath, spool, NewForwarder(cfg.HubURL, cfg.HubToken), log), nil
 }
 
 // newCollect is the lower-level constructor with the spool and forwarder

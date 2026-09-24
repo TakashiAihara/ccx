@@ -26,6 +26,15 @@ type Center struct {
 	order   []*ccxv1.Event
 	unavail bool
 	srv     *httptest.Server
+	// token, when set, is required as a Bearer on Ingest (the center's #158 check).
+	token string
+}
+
+// RequireToken makes Ingest refuse calls without "Authorization: Bearer <token>".
+func (c *Center) RequireToken(token string) {
+	c.mu.Lock()
+	c.token = token
+	c.mu.Unlock()
 }
 
 // Start brings up a real Connect server and returns the Center and its URL. Call
@@ -53,6 +62,9 @@ func (c *Center) Ingest(_ context.Context, req *connect.Request[ccxv1.IngestRequ
 	defer c.mu.Unlock()
 	if c.unavail {
 		return nil, connect.NewError(connect.CodeUnavailable, nil)
+	}
+	if c.token != "" && req.Header().Get("Authorization") != "Bearer "+c.token {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 	var accepted uint32
 	for _, ev := range req.Msg.GetEvents() {

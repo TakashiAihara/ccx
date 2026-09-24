@@ -2,6 +2,7 @@ import { createConnectRouter } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { Hono } from "hono";
 
+import { requireToken } from "./auth.ts";
 import type { Db } from "./db/open.ts";
 import { mountObjects, type ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
@@ -15,12 +16,16 @@ import { fleetImpl, ingestImpl } from "./services.ts";
  * createFetchHandler が UniversalHandler を Request → Response に変換してくれる
  * ので、それを Hono の route に載せる。
  */
-export function createApp(db: Db, objects: ObjectStore): Hono {
+export function createApp(db: Db, objects: ObjectStore, opts: { token?: string } = {}): Hono {
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db));
   router.service(FleetService, fleetImpl(db));
 
   const app = new Hono();
+
+  // 他のどの route よりも先に載せる。後に載せると、それより前に登録した route は
+  // 素通りする (Hono は登録順に照合する)
+  if (opts.token) app.use("*", requireToken(opts.token));
 
   for (const uHandler of router.handlers) {
     const handler = createFetchHandler(uHandler);

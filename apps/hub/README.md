@@ -142,24 +142,57 @@ AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url http://127.0.0.1:
 | bind port | `CCX_CENTER_PORT` | `8791` |
 | sqlite file | `CCX_CENTER_DB` | `$CCX_ROOT/center.db` (既定 `~/.ccx/center.db`) |
 | object API の置き場所 | `CCX_CENTER_OBJECTS` | `$CCX_ROOT/center-objects` (既定 `~/.ccx/center-objects`) |
-| 非 loopback bind を許す | `CCX_CENTER_ALLOW_INSECURE_BIND` | 未設定 = 許さない |
+| 共有 token | `CCX_CENTER_TOKEN` | 未設定 = 認証なし |
+| 非 loopback bind を許す (token 無しで) | `CCX_CENTER_ALLOW_INSECURE_BIND` | 未設定 = 許さない |
 
-### 非 loopback bind は既定で拒む
+### 共有 token (#158)
 
-この時点の center には**認証が無く、平文 HTTP で話す**。届く相手は誰でも event を
-書けるし、集まった payload を全部読める。
+`CCX_CENTER_TOKEN` を設定すると、`/healthz` 以外の全口 (Connect の RPC と S3 互換 object API) が
+token を要求し、合わなければ 401 を返す。受ける形は 3 つ。
 
-なので loopback 以外への bind は起動時に拒否する (exit 2)。README に書いておくだけ
-では、環境変数を 1 つ足した人には届かない。
+- `Authorization: Bearer <token>` — ccx-agent と ccx CLI の Connect 呼び出し
+- S3 の署名の access key id が token — S3 クライアント (`ccx transcript`、DuckDB、aws cli)
+
+S3 の署名そのものは検証しない。access key id は平文で流れるので、強さは Bearer と同じ。
+presigned URL は受けない (署名も期限も見ないので、受けると URL が無期限の鍵になる)。受けなくても、
+presigned URL の `X-Amz-Credential` には token がそのまま入るので、作って人に渡さない。
+`GET` / `HEAD /healthz` だけは token 無しで答える。
+
+token は 16 文字以上の `A-Z a-z 0-9 . _ ~ -` に限る (S3 は `Credential=<token>/...` の形で運ぶので、
+`/` や `,` を含むと切れる)。作るなら `openssl rand -hex 32`。
+TLS は無いので token は LAN を平文で流れる。LAN を信頼する前提は変わらず、無認証ではなくなるだけ。
+
+クライアント側 (ccx-agent / ccx CLI) は同じ値を `CCX_HUB_TOKEN` か `~/.config/ccx/hub-token`
+(`config.toml` の隣) から読む。git config と `config.toml` には置かない (dotfiles ごと共有されやすいため)。
+ccx-agent は systemd の user unit で動くので、shell の `CCX_HUB_TOKEN` は届かない。`hub-token` ファイルに置く。
+ファイルは mode 600 にする。他人に読める `hub-token` は、ccx-agent も ccx CLI も読まずにエラーで止まる。
+
+有効にする順番と入れ替え:
+
+1. 各ホストの `~/.config/ccx/hub-token` に新しい値を置き、`systemctl --user restart ccx-agent` (agent は起動時にしか読まない)
+2. center に `CCX_CENTER_TOKEN` を設定して再起動。`CCX_CENTER_ALLOW_INSECURE_BIND` は外す
+3. 各ホストで `ccx agent status` を見る。token が合っていなければ `refuses this token (401)` と出る
+
+1 と 2 の間 (と、2 の後に置き忘れたホスト) は、center が event を 401 で断り、ccx-agent は spool に溜めて
+送り直し続ける。失われはしないが、揃うまで center には届かない。
+
+### 非 loopback bind は token が無ければ拒む
+
+token の無い center は**認証が無く、平文 HTTP で話す**。届く相手は誰でも event を
+書けるし、集まった payload と transcript を全部読める。
+
+なので token 無しで loopback 以外に bind しようとすると起動時に拒否する (exit 2)。README に
+書いておくだけでは、環境変数を 1 つ足した人には届かない。
 
 ```console
 $ CCX_CENTER_HOST=0.0.0.0 ccx-center serve
-ccx-center: refusing to bind 0.0.0.0: ccx-center has no authentication and speaks plain HTTP.
+ccx-center: refusing to bind 0.0.0.0: ccx-center has no token set and speaks plain HTTP.
 ...
 ```
 
-複数機械から使うときは、loopback のまま **TLS 終端と認証を持つ proxy を前に置く**。
-その network を信頼していて承知のうえなら `CCX_CENTER_ALLOW_INSECURE_BIND=1` で越えられる。
+複数機械から使うときは `CCX_CENTER_TOKEN` を設定する。TLS まで要るなら loopback のまま
+**TLS 終端と認証を持つ proxy を前に置く**。その network を信頼していて承知のうえなら
+`CCX_CENTER_ALLOW_INSECURE_BIND=1` で token 無しでも越えられる。
 
 loopback の判定は `127.0.0.0/8` 全体と `::1` / `localhost`。`127.0.0.1` だけを見ると
 `127.0.0.2` を取りこぼす。
