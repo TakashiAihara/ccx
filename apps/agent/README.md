@@ -68,7 +68,8 @@ The heartbeat's settings live in the configuration table below (`[heartbeat]`).
 Sessions are not kept warm unless they opt in: `ccx session heartbeat on`, run
 by the person or by the session itself (with no id it targets this session).
 A heartbeat is not free on every plan; see docs/design/heartbeat.md.
-A heartbeat turn is a user record carrying `kind="heartbeat"`; tools that count
+A heartbeat turn is an isMeta user record whose opening `<channel>` tag carries
+the attribute ` kind="heartbeat"` (leading space: the whole name); tools that count
 a session's activity should skip it.
 
 ## The path a hook event takes

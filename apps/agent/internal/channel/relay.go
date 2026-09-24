@@ -11,12 +11,18 @@ import (
 
 // retry is how soon a channel tries serve again after it was not there or went
 // away. A heartbeat is due at most once in 50 minutes, so a minute costs nothing.
-var retry = time.Minute
+const retry = time.Minute
 
 // Relay registers this session with ccx-agent serve and pushes every event serve
 // sends, until ctx ends. serve being down is normal (not started yet,
 // restarted to pick up config): keep trying, never fail the session.
 func Relay(ctx context.Context, socketPath, sessionID, claudeHome string, s *Server, log func(string, ...any)) {
+	relay(ctx, socketPath, sessionID, claudeHome, s, log, retry)
+}
+
+// relay takes the pause as an argument so a test can shorten it without
+// touching state another test's relay is still reading.
+func relay(ctx context.Context, socketPath, sessionID, claudeHome string, s *Server, log func(string, ...any), retry time.Duration) {
 	quiet := false
 	for ctx.Err() == nil {
 		connected, err := relayOnce(ctx, socketPath, sessionID, claudeHome, s)
