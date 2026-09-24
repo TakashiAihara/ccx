@@ -102,12 +102,20 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
   const systemctl = r.calls.split("\n").filter((l) => l.startsWith("systemctl"));
   expect(systemctl).toEqual([
     "systemctl --user show-environment",
+    "systemctl --user show-environment",
     "systemctl --user daemon-reload",
     "systemctl --user enable ccx-agent",
     "systemctl --user restart ccx-agent",
   ]);
   expect(r.out).toContain("loginctl enable-linger");
 
+});
+
+test.skipIf(!linux)("the unit goes where the user manager looks, not where this shell's XDG_CONFIG_HOME points", async () => {
+  const r = await install(["--with-agent"], { XDG_CONFIG_HOME: join(work, "shell-config") });
+  expect(r.code).toBe(0);
+  expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(true);
+  expect(existsSync(join(work, "shell-config", "systemd", "user", "ccx-agent.service"))).toBe(false);
 });
 
 test.skipIf(!linux)("a pinned release without ccx-agent fails before ccx is replaced", async () => {

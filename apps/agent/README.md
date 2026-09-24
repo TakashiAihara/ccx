@@ -151,7 +151,7 @@ for now, it installs both binaries, sets up no service, and tells you to keep
 `ccx-agent serve` running as your user under your own supervisor.
 
 From source, with Go: `bun run install:agent` builds `~/.local/bin/ccx-agent`; install
-the unit from `systemd/ccx-agent.service` by hand (its header says how).
+the unit from `apps/agent/systemd/ccx-agent.service` by hand (its header says how).
 
 To keep it up across logout, the user needs lingering: `loginctl enable-linger "$USER"`.
 

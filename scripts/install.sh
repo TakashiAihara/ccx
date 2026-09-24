@@ -125,7 +125,9 @@ if [ "$service" = manual ]; then
 fi
 
 # A user unit, never a system one: it runs as whoever ran this script (#90).
-units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+# The manager searches its own XDG_CONFIG_HOME, which need not match this shell's.
+manager_config=$(systemctl --user show-environment | sed -n 's/^XDG_CONFIG_HOME=//p')
+units="${manager_config:-$HOME/.config}/systemd/user"
 mkdir -p "$units"
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
 sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$units/ccx-agent.service"
