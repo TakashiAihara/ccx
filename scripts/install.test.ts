@@ -119,10 +119,13 @@ test.skipIf(!linux)("a pinned release without ccx-agent fails before ccx is repl
   expect(r.calls).not.toContain("restart");
 });
 
-test.skipIf(!linux)("without a user manager, --with-agent refuses before downloading anything", async () => {
+test.skipIf(!linux)("without a user manager, --with-agent installs the binaries and says how to supervise it", async () => {
   const r = await install(["--with-agent"], { NO_MANAGER: "1" });
-  expect(r.code).toBe(1);
-  expect(requests).toBe(0);
+  expect(r.code).toBe(0);
+  expect(run(bin("ccx-agent"))).toBe("agent-v1.2.3");
+  expect(r.out).toContain("ccx-agent serve' running as your user");
+  expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(false);
+  expect(r.calls.split("\n").filter((l) => l.startsWith("systemctl"))).toEqual(["systemctl --user show-environment"]);
 });
 
 test.skipIf(!linux)("--with-agent refuses an install dir that would break ExecStart", async () => {

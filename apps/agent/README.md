@@ -147,8 +147,8 @@ This puts `ccx` and `ccx-agent` from one release in `~/.local/bin`, writes
 unit. Run it again to upgrade: it restarts the agent on the new binary and rewrites
 the unit, so put local changes in a drop-in (`systemctl --user edit ccx-agent`), not
 in the unit file. Where `systemctl --user` cannot reach a user manager, and on macOS
-for now, `--with-agent` stops before installing anything; install without it and keep
-`ccx-agent serve` running as your user yourself.
+for now, it installs both binaries, sets up no service, and tells you to keep
+`ccx-agent serve` running as your user under your own supervisor.
 
 From source, with Go: `bun run install:agent` builds `~/.local/bin/ccx-agent`; install
 the unit from `systemd/ccx-agent.service` by hand (its header says how).

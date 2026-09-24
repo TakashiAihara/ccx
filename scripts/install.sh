@@ -43,18 +43,16 @@ esac
 
 # The service decision comes before any download: nothing is replaced when the
 # agent part cannot be done.
+# none: ccx only. manual: ccx-agent too, supervised by the user. systemd: and a user unit.
 service=none
 if [ "$WITH_AGENT" = 1 ]; then
-  if [ "$os" != linux ]; then
-    # ponytail: no launchd agent yet (#92); nothing runs ccx-agent on macOS today
-    echo "ccx: --with-agent sets up a systemd user service, which macOS does not have (#92)" >&2
-    exit 1
+  service=manual
+  # ponytail: no launchd agent yet (#92); nothing runs ccx-agent on macOS today
+  if [ "$os" = linux ] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    service=systemd
   fi
-  if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
-    echo "ccx: --with-agent needs a systemd user manager, and 'systemctl --user' cannot reach one here" >&2
-    echo "ccx: install without --with-agent and keep 'ccx-agent serve' running as your user yourself" >&2
-    exit 1
-  fi
+fi
+if [ "$service" = systemd ]; then
   mkdir -p "$DEST"
   DEST=$(cd "$DEST" && pwd)
   # The path goes into the unit's ExecStart, where spaces split it and systemd
@@ -62,7 +60,6 @@ if [ "$WITH_AGENT" = 1 ]; then
   case "$DEST" in
     *[!A-Za-z0-9/._-]*) echo "ccx: --with-agent needs an install dir of plain characters, got: $DEST" >&2; exit 1 ;;
   esac
-  service=systemd
 fi
 
 # latest moves on every push to main. Resolve it once, so ccx, ccx-agent and the
@@ -94,10 +91,12 @@ fetch() {
 
 fetch "ccx-${os}-${arch}" ccx
 chmod +x "$stage/ccx"
-if [ "$service" = systemd ]; then
+if [ "$service" != none ]; then
   fetch "ccx-agent-${os}-${arch}" ccx-agent
-  fetch ccx-agent.service ccx-agent.service
   chmod +x "$stage/ccx-agent"
+fi
+if [ "$service" = systemd ]; then
+  fetch ccx-agent.service ccx-agent.service
 fi
 
 mv "$stage/ccx" "$DEST/ccx"
@@ -110,12 +109,20 @@ esac
 
 "$DEST/ccx" --version
 
-[ "$service" = systemd ] || exit 0
+[ "$service" != none ] || exit 0
 
 mv "$stage/ccx-agent" "$DEST/ccx-agent"
 # An assignment of its own: inside echo's arguments a failing binary would not stop set -e.
 agent_version=$("$DEST/ccx-agent" --version)
 echo "ccx: installed to $DEST/ccx-agent ($agent_version)"
+
+if [ "$service" = manual ]; then
+  echo "ccx: 'systemctl --user' cannot reach a user manager here (or this is macOS), so no service was set up." >&2
+  echo "ccx: keep '$DEST/ccx-agent serve' running as your user under your own supervisor." >&2
+  echo "ccx: then point it at a center and wire the hooks:" >&2
+  echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install" >&2
+  exit 0
+fi
 
 # A user unit, never a system one: it runs as whoever ran this script (#90).
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
