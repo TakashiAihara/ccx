@@ -23,7 +23,7 @@ Documentation=https://github.com/TakashiAihara/ccx
 
 [Service]
 Type=simple
-# %h is the user's home; ccx-agent is expected on PATH (installed to ~/.local/bin, #55).
+# %h is the user's home. install.sh --with-agent rewrites this path to its install dir.
 ExecStart=%h/.local/bin/ccx-agent serve
 Restart=on-failure
 RestartSec=2

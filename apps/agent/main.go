@@ -30,6 +30,10 @@ import (
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
+// version is stamped by the release (-ldflags "-X main.version=...") with the same
+// version as the ccx CLI in that release: both come from one tag of one repo.
+var version = "0.0.0-dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -47,6 +51,9 @@ func run(args []string) int {
 		return cmdServe()
 	case "channel":
 		return cmdChannel()
+	case "version", "--version":
+		fmt.Println(version)
+		return 0
 	case "-h", "--help", "help":
 		usage()
 		return 0
@@ -162,6 +169,7 @@ usage:
   ccx-agent serve    run the resident agent (the enabled concerns)
   ccx-agent hook     forward one hook payload from stdin to the running agent
   ccx-agent channel  the per-session MCP channel server (spawned by Claude Code)
+  ccx-agent version  print the version
 
 ccx-agent runs as your user, never root. See docs for the systemd user unit.
 `)
