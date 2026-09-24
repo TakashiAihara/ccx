@@ -142,7 +142,8 @@ curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/inst
 ```
 
 This puts `ccx` and `ccx-agent` from one release in `~/.local/bin`, writes
-`~/.config/systemd/user/ccx-agent.service` from that release, and enables it with
+`ccx-agent.service` from that release into the user manager's unit directory
+(usually `~/.config/systemd/user`), and enables it with
 `systemctl --user` — a user unit, running as whoever ran the script, never a system
 unit. Run it again to upgrade: it restarts the agent on the new binary and rewrites
 the unit, so put local changes in a drop-in (`systemctl --user edit ccx-agent`), not

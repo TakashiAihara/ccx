@@ -29,7 +29,8 @@ beforeEach(() => {
     join(fake, "systemctl"),
     `#!/bin/sh\necho "systemctl $*" >> "${work}/calls"\n[ "$*" = "--user show-environment" ] && [ -n "$NO_MANAGER" ] && exit 1\n` +
       // user.control と transient は */systemd/user で終わらない。先に並ぶのは本物の UnitPath と同じ
-      `[ "$*" = "--user show -p UnitPath --value" ] && echo "\${UNIT_PATH:-$HOME/.config/systemd/user.control /run/user/1/systemd/transient $HOME/.config/systemd/user /etc/systemd/user}"\nexit 0\n`,
+      // 後ろの system 側の dir もテストの中に置く。取り違えたときに本物の /etc に書かないため
+      `[ "$*" = "--user show -p UnitPath --value" ] && echo "\${UNIT_PATH:-$HOME/.config/systemd/user.control /run/user/1/systemd/transient $HOME/.config/systemd/user $HOME/etc/systemd/user}"\nexit 0\n`,
   );
   writeFileSync(join(fake, "loginctl"), `#!/bin/sh\necho "loginctl $*" >> "${work}/calls"\n`);
   for (const c of ["systemctl", "loginctl"]) chmodSync(join(fake, c), 0o755);
@@ -117,17 +118,27 @@ test.skipIf(!linux)("the unit goes to the user manager's own unit dir, not this 
   const managerDir = join(work, "manager-config", "systemd", "user");
   const r = await install(["--with-agent"], {
     XDG_CONFIG_HOME: join(work, "shell-config"),
-    UNIT_PATH: `${join(work, "manager-config", "systemd", "user.control")} ${managerDir} /etc/systemd/user`,
+    UNIT_PATH: `${join(work, "manager-config", "systemd", "user.control")} ${managerDir} ${join(work, "etc", "systemd", "user")}`,
   });
   expect(r.code).toBe(0);
-  expect(existsSync(join(managerDir, "ccx-agent.service"))).toBe(true);
+  expect(readFileSync(join(managerDir, "ccx-agent.service"), "utf8")).toContain(`ExecStart=${bin("ccx-agent")} serve`);
+  expect(existsSync(join(work, "etc", "systemd", "user", "ccx-agent.service"))).toBe(false);
   expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(false);
   expect(existsSync(join(work, "shell-config", "systemd", "user", "ccx-agent.service"))).toBe(false);
 });
 
 test.skipIf(!linux)("a manager whose UnitPath has no user dir stops before anything is downloaded", async () => {
-  const r = await install(["--with-agent"], { UNIT_PATH: "/etc/systemd/user.control" });
+  const r = await install(["--with-agent"], { UNIT_PATH: `${join(work, "etc", "systemd", "user.control")} relative/systemd/user` });
   expect(r.code).toBe(1);
+  expect(r.out).toContain("cannot find the user manager's unit directory");
+  expect(requests).toBe(0);
+});
+
+test.skipIf(!linux)("an unwritable unit dir stops before anything is downloaded", async () => {
+  writeFileSync(join(work, "not-a-dir"), "");
+  const r = await install(["--with-agent"], { UNIT_PATH: join(work, "not-a-dir", "systemd", "user") });
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("cannot write the user manager's unit directory");
   expect(requests).toBe(0);
 });
 

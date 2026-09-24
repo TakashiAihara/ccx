@@ -42,8 +42,8 @@ case "$arch" in
 esac
 
 # The service decision comes before any download, so a host that cannot take the
-# agent's service replaces nothing. (A failure after the binaries are in place,
-# in enable or restart, leaves them in place.)
+# agent's service replaces nothing. (A failure after the binaries are in place —
+# the agent's --version, writing the unit, or any systemctl call — leaves them in place.)
 # none: ccx only. manual: ccx-agent too, supervised by the user. systemd: and a user unit.
 service=none
 if [ "$WITH_AGENT" = 1 ]; then
@@ -62,15 +62,24 @@ if [ "$service" = systemd ]; then
     *[!A-Za-z0-9/._-]*) echo "ccx: --with-agent needs an install dir of plain characters, got: $DEST" >&2; exit 1 ;;
   esac
   # The manager's own config dir is the first */systemd/user entry of its
-  # UnitPath. show-environment is what units are given, not what the manager
+  # UnitPath (unless the manager runs with SYSTEMD_UNIT_PATH set, which replaces
+  # the list). show-environment is what units are given, not what the manager
   # searches, so an XDG_CONFIG_HOME there (or in this shell) can point elsewhere.
-  # ponytail: UnitPath is space-separated, so a dir with a space in it is not found
-  units=""
-  for p in $(systemctl --user show -p UnitPath --value); do
-    case "$p" in */systemd/user) units=$p; break ;; esac
+  # ponytail: UnitPath is space-separated; a dir with a space splits into pieces,
+  # and only an absolute piece is taken, so such a dir is not found
+  # An assignment of its own: a failing command substitution in a for list does not stop set -e.
+  unit_path=$(systemctl --user show -p UnitPath --value)
+  unit_dir=""
+  for p in $unit_path; do
+    case "$p" in /*/systemd/user) unit_dir=$p; break ;; esac
   done
-  if [ -z "$units" ]; then
+  if [ -z "$unit_dir" ]; then
     echo "ccx: cannot find the user manager's unit directory in its UnitPath" >&2
+    exit 1
+  fi
+  mkdir -p "$unit_dir" 2>/dev/null || true
+  if [ ! -w "$unit_dir" ]; then
+    echo "ccx: cannot write the user manager's unit directory: $unit_dir" >&2
     exit 1
   fi
 fi
@@ -138,9 +147,9 @@ if [ "$service" = manual ]; then
 fi
 
 # A user unit, never a system one: it runs as whoever ran this script (#90).
-mkdir -p "$units"
+
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
-sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$units/ccx-agent.service"
+sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
 
 systemctl --user daemon-reload
 systemctl --user enable ccx-agent
