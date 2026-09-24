@@ -17,6 +17,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -166,6 +167,10 @@ func load(
 	}
 
 	hub := pick(getenv("CCX_HUB_URL"), gitcfg("ccx.hubUrl"), file.Hub.URL)
+	token, err := hubToken(getenv)
+	if err != nil {
+		return Config{}, err
+	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
 	if machine == "" {
@@ -194,7 +199,7 @@ func load(
 
 	return Config{
 		HubURL:     hub,
-		HubToken:   hubToken(getenv),
+		HubToken:   token,
 		Machine:    machine,
 		User:       uname,
 		SocketPath: socketPath(getenv),
@@ -280,19 +285,32 @@ func pick(vals ...string) string {
 	return ""
 }
 
-func hubToken(getenv func(string) string) string {
+// hubToken fails rather than ignoring a token file it cannot use: a silently
+// empty token turns into "every event refused" with nothing pointing at why.
+func hubToken(getenv func(string) string) (string, error) {
 	if t := strings.TrimSpace(getenv("CCX_HUB_TOKEN")); t != "" {
-		return t
+		return t, nil
 	}
 	p := configPath(getenv)
 	if p == "" {
-		return ""
+		return "", nil
 	}
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(p), "hub-token"))
+	path := filepath.Join(filepath.Dir(p), "hub-token")
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(string(b))
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds the center's token)", path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // configPath is CCX_CONFIG, else $XDG_CONFIG_HOME/ccx/config.toml, else

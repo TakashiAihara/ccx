@@ -311,18 +311,24 @@ export class NoTranscriptStore extends Error {
 }
 
 /**
- * 資格情報は S3 クライアントの標準の env (AWS_* / S3_*) から。無ければ center 向けで、
- * access key id に center の token を置く (center は署名を検証せず access key id だけを
- * 見る)。token も無ければダミー
+ * S3 の access key id。保存先が center なら center の token が最優先 (center は署名を検証せず
+ * access key id だけを見る)。手元に別用途の AWS_ACCESS_KEY_ID が export されていても、それを
+ * center に送って 401 にしない。center でなければ S3 クライアントの標準の env、どれも無ければダミー
+ * (外部の S3 に資格情報無しで行けば、そちらが AccessDenied で名指しする)。
+ * Bun.S3Client と DuckDB の両方がこれを使う
  */
+export function s3AccessKeyId(store: TranscriptStore, env: Record<string, string | undefined> = process.env): string {
+  return store.token ?? env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? "ccx";
+}
+
+/** 資格情報は s3AccessKeyId と S3 クライアントの標準の env (AWS_* / S3_*) から */
 function makeS3(store: TranscriptStore): Bun.S3Client {
   const env = process.env;
   return new Bun.S3Client({
     endpoint: store.endpoint,
     bucket: store.bucket,
     region: store.region ?? "us-east-1",
-    // 外部の S3 に資格情報無しで行けば、そちらが AccessDenied で名指しする
-    accessKeyId: env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? store.token ?? "ccx",
+    accessKeyId: s3AccessKeyId(store, env),
     secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx",
   });
 }

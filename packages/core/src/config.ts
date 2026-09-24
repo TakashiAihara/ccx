@@ -46,8 +46,8 @@ export type Config = {
   hub?: { url: string; token?: string };
   /**
    * transcript の保存先 (S3 互換)。未設定なら `ccx transcript` だけが使えない。
-   * endpoint を書かなければ hub.url (center の object API) が保存先になり、そのときだけ
-   * hub の token を持つ (外部の S3 に center の token を送らない)
+   * endpoint を書かなければ hub.url (center の object API) が保存先になる。token を持つのは
+   * 保存先が center のとき (無指定か、hub.url と同じ origin) だけ。外部の S3 に center の token を送らない
    */
   transcript?: { endpoint: string; bucket: string; prefix: string; region?: string; token?: string };
 };
@@ -90,9 +90,24 @@ export function normalizePrefix(raw: string): string {
 async function readHubToken(env: Record<string, string | undefined>): Promise<string | undefined> {
   const fromEnv = env.CCX_HUB_TOKEN?.trim();
   if (fromEnv) return fromEnv;
-  const f = Bun.file(join(dirname(configPath(env)), "hub-token"));
+  const path = join(dirname(configPath(env)), "hub-token");
+  const f = Bun.file(path);
   if (!(await f.exists())) return undefined;
+  // 読めない / 他人に読める token を黙って無視すると、「設定したのに 401」の原因が見えなくなる
+  if (((await f.stat()).mode & 0o077) !== 0) {
+    throw new Error(`${path} is readable by other users; chmod 600 it (it holds the center's token)`);
+  }
   return (await f.text()).trim() || undefined;
+}
+
+/** transcript の endpoint を明示していても、それが center 自身なら center の token を渡す */
+function sameOrigin(a: string, b: string | undefined): boolean {
+  if (!b) return false;
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }
 
 export function configPath(env = process.env): string {
@@ -215,7 +230,7 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
           bucket: String(tBucket),
           prefix: normalizePrefix(tPrefixRaw),
           region: tRegion || undefined,
-          ...(tExplicit === null && hubToken ? { token: hubToken } : {}),
+          ...(hubToken && (tExplicit === null || sameOrigin(tExplicit, hubHttp)) ? { token: hubToken } : {}),
         }
       : undefined,
   };

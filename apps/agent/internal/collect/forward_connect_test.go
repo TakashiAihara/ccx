@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"connectrpc.com/connect"
+
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
@@ -66,15 +68,16 @@ func TestConnectForwarder_DedupByEventID(t *testing.T) {
 }
 
 // The configured token reaches the center as a Bearer; without it a center that
-// requires one refuses the event, so it stays spooled (#158).
+// requires one refuses the event with Unauthenticated (#158). Forward returning
+// an error is what keeps the event spooled (TestConnectForwarder_UnavailableReturnsError).
 func TestConnectForwarder_SendsHubToken(t *testing.T) {
 	c, url := testcenter.Start()
 	defer c.Close()
 	c.RequireToken("tok-for-test")
 	ev := &ccxv1.Event{Origin: &ccxv1.Origin{Machine: "d1", User: "root"}, EventId: "01J-tok", Payload: []byte(`{}`)}
 
-	if err := NewForwarder(url, "").Forward(context.Background(), ev); err == nil {
-		t.Fatal("without a token the center must refuse")
+	if err := NewForwarder(url, "").Forward(context.Background(), ev); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("without a token the center must refuse with Unauthenticated, got %v", err)
 	}
 	if err := NewForwarder(url, "tok-for-test").Forward(context.Background(), ev); err != nil {
 		t.Fatalf("with the token: %v", err)

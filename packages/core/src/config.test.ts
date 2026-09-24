@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,6 +122,7 @@ describe("設定の解決", () => {
     expect(none.hub).toEqual({ url: "http://c" });
 
     await Bun.write(join(dir, "hub-token"), "from-file\n");
+    await chmod(join(dir, "hub-token"), 0o600);
     const fromFile = await loadConfig({ env: { CCX_CONFIG: cfgPath, CCX_HUB_URL: "http://c" }, git });
     expect(fromFile.hub?.token).toBe("from-file");
 
@@ -139,6 +140,24 @@ describe("設定の解決", () => {
       git: noGit,
     });
     expect(external.transcript?.token).toBeUndefined();
+    // endpoint を明示していても、それが center 自身なら token を渡す
+    const explicitCenter = await loadConfig({
+      env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c:8791", CCX_HUB_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://c:8791/" },
+      git: noGit,
+    });
+    expect(explicitCenter.transcript?.token).toBe("t");
+  });
+
+  test("他人に読める hub-token は黙って使わず、止める", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ccx-tok-"));
+    const path = join(dir, "hub-token");
+    await Bun.write(path, "from-file\n");
+    await chmod(path, 0o644);
+    await expect(loadConfig({ env: { CCX_CONFIG: join(dir, "config.toml"), CCX_HUB_URL: "http://c" }, git: noGit })).rejects.toThrow(/chmod 600/);
+    await chmod(path, 0o600);
+    const ok = await loadConfig({ env: { CCX_CONFIG: join(dir, "config.toml"), CCX_HUB_URL: "http://c" }, git: noGit });
+    expect(ok.hub?.token).toBe("from-file");
+    await rm(dir, { recursive: true, force: true });
   });
 
   test("git config はファイルより強い", async () => {

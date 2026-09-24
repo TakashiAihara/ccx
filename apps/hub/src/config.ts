@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { TOKEN_SHAPE } from "./auth.ts";
+
 /**
  * center 自身の設定。`packages/core` の Config とは別物なので分けてある。
  * あちらは「どの center に送るか」(hub.url) を持つ側、こちらは「どこで待つか」を
@@ -40,6 +42,12 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
   // 空文字は未設定として扱う。空の token を「設定済み」と読むと、空の Bearer を
   // 送る要求が全部通る
   const token = env.CCX_CENTER_TOKEN?.trim() || undefined;
+  if (token !== undefined && !TOKEN_SHAPE.test(token)) {
+    throw new Error(
+      "CCX_CENTER_TOKEN must be 16+ characters of A-Z a-z 0-9 . _ ~ - (S3 clients carry it inside " +
+        "`Credential=<token>/...`, so `/`, `,` or spaces break it). Generate one with: openssl rand -hex 32",
+    );
+  }
 
   // 設定だけで越えられる線にしない。README に書いてあることは、環境変数を 1 つ
   // 足した人には届かない。踏むときに手が止まる形にしておく。

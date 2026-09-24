@@ -275,3 +275,14 @@ func TestHubToken_EnvThenFile_NeverGit(t *testing.T) {
 		t.Errorf("env should beat file, got %q", c.HubToken)
 	}
 }
+
+// A token file other users can read is refused, not used and not ignored.
+func TestHubToken_RefusesOtherReadableFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := load(env(map[string]string{"CCX_CONFIG": filepath.Join(dir, "config.toml")}), noGit, fixedHost("h")); err == nil {
+		t.Fatal("a 0644 hub-token must fail the load")
+	}
+}

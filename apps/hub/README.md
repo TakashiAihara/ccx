@@ -152,14 +152,28 @@ token を要求し、合わなければ 401 を返す。受ける形は 3 つ。
 
 - `Authorization: Bearer <token>` — ccx-agent と ccx CLI の Connect 呼び出し
 - S3 の署名の access key id が token — S3 クライアント (`ccx transcript`、DuckDB、aws cli)
-- presigned URL の `X-Amz-Credential` の access key id が token
 
 S3 の署名そのものは検証しない。access key id は平文で流れるので、強さは Bearer と同じ。
+presigned URL は受けない (署名も期限も見ないので、URL を渡すと token を無期限で渡すことになる)。
+`GET` / `HEAD /healthz` だけは token 無しで答える。
+
+token は 16 文字以上の `A-Z a-z 0-9 . _ ~ -` に限る (S3 は `Credential=<token>/...` の形で運ぶので、
+`/` や `,` を含むと切れる)。作るなら `openssl rand -hex 32`。
 TLS は無いので token は LAN を平文で流れる。LAN を信頼する前提は変わらず、無認証ではなくなるだけ。
 
 クライアント側 (ccx-agent / ccx CLI) は同じ値を `CCX_HUB_TOKEN` か `~/.config/ccx/hub-token`
 (`config.toml` の隣) から読む。git config と `config.toml` には置かない (dotfiles ごと共有されやすいため)。
 ccx-agent は systemd の user unit で動くので、shell の `CCX_HUB_TOKEN` は届かない。`hub-token` ファイルに置く。
+ファイルは mode 600 にする。他人に読める `hub-token` は、ccx-agent も ccx CLI も読まずにエラーで止まる。
+
+有効にする順番と入れ替え:
+
+1. 各ホストの `~/.config/ccx/hub-token` に新しい値を置き、`systemctl --user restart ccx-agent` (agent は起動時にしか読まない)
+2. center に `CCX_CENTER_TOKEN` を設定して再起動。`CCX_CENTER_ALLOW_INSECURE_BIND` は外す
+3. 各ホストで `ccx agent status` を見る。token が合っていなければ `refuses this token (401)` と出る
+
+1 と 2 の間 (と、2 の後に置き忘れたホスト) は、center が event を 401 で断り、ccx-agent は spool に溜めて
+送り直し続ける。失われはしないが、揃うまで center には届かない。
 
 ### 非 loopback bind は token が無ければ拒む
 

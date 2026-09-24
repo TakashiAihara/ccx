@@ -1,4 +1,4 @@
-import { createClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
+import { Code, ConnectError, createClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
@@ -47,6 +47,12 @@ export function fleetClient(hub: Hub | undefined): Client<typeof FleetService> {
  * まではこちらから言えないので、言えることだけを言う。
  */
 export function unreachable(hubUrl: string, cause: unknown): Error {
+  // 届いたうえで断られたのは「届かない」ではない。直し方が違うので分けて言う
+  if (ConnectError.from(cause).code === Code.Unauthenticated) {
+    return new Error(
+      `ccx-center at ${hubUrl} refused the token: set CCX_HUB_TOKEN (or ~/.config/ccx/hub-token) to the center's CCX_CENTER_TOKEN`,
+    );
+  }
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(`ccx-center at ${hubUrl} did not answer: ${detail}`);
 }

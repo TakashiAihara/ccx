@@ -465,7 +465,7 @@ agent
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const st = await agentStatus(cfg.hub?.url);
+    const st = await agentStatus(cfg.hub?.url, process.env, cfg.hub?.token);
 
     if (o.json) {
       console.log(JSON.stringify(st, null, 2));
@@ -481,6 +481,9 @@ agent
       ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);
+    if (st.hubTokenAccepted === false) {
+      rows.push(["", "refuses this token (401): events stay spooled until CCX_HUB_TOKEN / ~/.config/ccx/hub-token matches the center"]);
+    }
 
     for (const line of table(rows)) console.log(line);
   });

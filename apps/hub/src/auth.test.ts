@@ -51,6 +51,9 @@ function transport(token?: string) {
 
 const s3 = (key: string) => new Bun.S3Client({ endpoint: base, bucket: "ccx", accessKeyId: key, secretAccessKey: "unused" });
 
+/** S3 クライアントの署名と同じ形の Authorization。署名部分は center が見ないので何でもよい */
+const sigv4 = (key: string) => `AWS4-HMAC-SHA256 Credential=${key}/20260924/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=00`;
+
 describe("token が設定された center", () => {
   beforeEach(() => start(TOKEN));
 
@@ -76,24 +79,28 @@ describe("token が設定された center", () => {
     expect((await createClient(IngestService, transport(TOKEN)).ingest({ events: [ev] })).accepted).toBe(1);
   });
 
-  test("object API: access key id が token の S3 クライアントだけが読み書きできる", async () => {
+  test("object API: access key id が token の S3 クライアントは読み書きでき、他は 401", async () => {
     await s3(TOKEN).write("a/b.txt", "hello");
     expect(await s3(TOKEN).file("a/b.txt").text()).toBe("hello");
     for (const k of ["ccx", "wrong"]) {
-      const err = await s3(k).file("a/b.txt").text().catch((e) => e);
-      expect(err).toBeInstanceOf(Error);
+      const r = await fetch(`${base}/ccx/a/b.txt`, { headers: { authorization: sigv4(k) } });
+      expect(r.status).toBe(401);
+      // S3 クライアントが Message を出せるよう XML で返す
+      expect(await r.text()).toContain("<Code>AccessDenied</Code>");
     }
     expect((await fetch(`${base}/ccx/a/b.txt`)).status).toBe(401);
   });
 
-  test("presigned URL は X-Amz-Credential の access key id で通る", async () => {
+  test("presigned URL は受けない (署名も期限も見ないので、渡すと token を無期限で渡すことになる)", async () => {
     await s3(TOKEN).write("p.txt", "presigned");
-    expect(await (await fetch(s3(TOKEN).presign("p.txt"))).text()).toBe("presigned");
-    expect((await fetch(s3("wrong").presign("p.txt"))).status).toBe(401);
+    expect((await fetch(s3(TOKEN).presign("p.txt"))).status).toBe(401);
   });
 
-  test("/healthz は token 無しで答える (生死の確認と `ccx agent status`)", async () => {
+  test("GET / HEAD /healthz だけが token 無しで通る。PUT /healthz は bucket 作成なので守る", async () => {
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
+    expect((await fetch(`${base}/healthz`, { method: "HEAD" })).status).toBe(200);
+    expect((await fetch(`${base}/healthz`, { method: "PUT" })).status).toBe(401);
+    expect((await fetch(`${base}/healthzx`)).status).toBe(401);
   });
 });
 
@@ -102,25 +109,20 @@ describe("token の無い center", () => {
 
   test("今までどおり開いている", async () => {
     expect((await createClient(FleetService, transport()).listSessions({})).sessions).toEqual([]);
-    expect((await fetch(`${base}/ccx`)).status).not.toBe(401);
+    await s3("anything").write("x.txt", "open");
+    expect(await (await fetch(`${base}/ccx/x.txt`)).text()).toBe("open");
   });
 });
 
 describe("presentedToken", () => {
-  const u = new URL("http://h/b/k");
-
-  test("Bearer / SigV4 の Credential / presigned の X-Amz-Credential を読む", () => {
-    expect(presentedToken("Bearer abc", u)).toBe("abc");
-    expect(
-      presentedToken("AWS4-HMAC-SHA256 Credential=abc/20260924/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=x", u),
-    ).toBe("abc");
-    const pre = new URL("http://h/b/k?X-Amz-Credential=abc%2F20260924%2Fus-east-1%2Fs3%2Faws4_request");
-    expect(presentedToken(undefined, pre)).toBe("abc");
+  test("Bearer と SigV4 の Credential を読む", () => {
+    expect(presentedToken("Bearer abc")).toBe("abc");
+    expect(presentedToken(sigv4("abc"))).toBe("abc");
   });
 
   test("読めない形は undefined (Basic や素の文字列を token として通さない)", () => {
-    expect(presentedToken("Basic abc", u)).toBeUndefined();
-    expect(presentedToken("abc", u)).toBeUndefined();
-    expect(presentedToken(undefined, u)).toBeUndefined();
+    expect(presentedToken("Basic abc")).toBeUndefined();
+    expect(presentedToken("abc")).toBeUndefined();
+    expect(presentedToken(undefined)).toBeUndefined();
   });
 });

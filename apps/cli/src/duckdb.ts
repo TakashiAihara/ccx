@@ -4,7 +4,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { normalizePrefix, type TranscriptStore } from "@ccx/core";
+import { normalizePrefix, s3AccessKeyId, type TranscriptStore } from "@ccx/core";
 
 import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
 
@@ -54,7 +54,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const env = process.env;
   const token = env.AWS_SESSION_TOKEN ?? env.S3_SESSION_TOKEN;
   await c.run(
-    `CREATE SECRET store (TYPE s3, KEY_ID ${q(env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? store.token ?? "ccx")}, ` +
+    `CREATE SECRET store (TYPE s3, KEY_ID ${q(s3AccessKeyId(store, env))}, ` +
       `SECRET ${q(env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx")}, ` +
       (token ? `SESSION_TOKEN ${q(token)}, ` : "") +
       `ENDPOINT ${q(endpoint)}, URL_STYLE 'path', USE_SSL ${u.protocol === "https:"}, REGION ${q(store.region ?? "us-east-1")})`,
