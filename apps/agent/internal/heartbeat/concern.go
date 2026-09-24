@@ -109,14 +109,30 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+	c.accept(ctx, ln)
+	return nil
+}
 
+// acceptRetry is the pause after a failed Accept. Giving up would leave the
+// socket in place with nobody accepting, so every session that connects later
+// (a new one, or one reconnecting after a restart) would be silently unserved;
+// errors like EMFILE pass.
+var acceptRetry = time.Second
+
+func (c *Concern) accept(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return
 			}
-			return fmt.Errorf("accept: %w", err)
+			c.log("heartbeat: accept: %v (retrying)", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(acceptRetry):
+			}
+			continue
 		}
 		go c.serve(ctx, conn)
 	}

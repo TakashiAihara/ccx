@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -126,5 +127,42 @@ func TestConcernRefusesATooLongSocketPath(t *testing.T) {
 	c := &Concern{socketPath: "/" + strings.Repeat("x", 120) + ".sock"}
 	if got := runOff(t, c); !strings.Contains(got, "heartbeat off") || !strings.Contains(got, "CCX_CHANNEL_SOCKET") {
 		t.Errorf("logged %q, want the heartbeat off and what to set", got)
+	}
+}
+
+// flaky fails Accept a few times, then blocks until closed.
+type flaky struct {
+	net.Listener
+	fails, calls int
+	closed       chan struct{}
+}
+
+func (f *flaky) Accept() (net.Conn, error) {
+	f.calls++
+	if f.calls <= f.fails {
+		return nil, errors.New("accept: too many open files")
+	}
+	<-f.closed
+	return nil, net.ErrClosed
+}
+
+// A failed Accept (EMFILE and the like) is retried; the concern keeps serving
+// sessions that connect later instead of leaving a socket nobody accepts on.
+func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
+	old := acceptRetry
+	acceptRetry = time.Millisecond
+	defer func() { acceptRetry = old }()
+
+	f := &flaky{fails: 3, closed: make(chan struct{})}
+	c := &Concern{log: t.Logf}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.accept(ctx, f); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(f.closed)
+	<-done
+	if f.calls != 4 {
+		t.Errorf("Accept called %d times, want 3 failures then a 4th that waits", f.calls)
 	}
 }
