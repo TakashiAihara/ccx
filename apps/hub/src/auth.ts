@@ -17,8 +17,10 @@ export const TOKEN_SHAPE = /^[A-Za-z0-9._~-]{16,}$/;
  *
  * S3 の方は access key id を token として読むだけで、署名は検証しない。どちらの形でも
  * token は要求ごとに平文で流れるので、強さは同じ。
- * presigned URL (`?X-Amz-Credential=`) は受けない。署名も期限も見ない以上、URL を渡すことが
- * token を無期限で渡すことになる。repo の中に presigned URL を作る側は無い。
+ * presigned URL (`?X-Amz-Credential=`) は受けない。署名も期限も見ない以上、受けると URL が
+ * 無期限の鍵になる。ただし拒んでも、URL の中の access key id (= token) は読めるので、
+ * presigned URL を作って人に渡すこと自体が token を渡すことになる (README に書いた)。
+ * repo の中に presigned URL を作る側は無い。
  * ponytail: 署名を secret=token で検証すれば S3 の経路では token が線に乗らなくなり、presigned も
  * 期限付きで受けられる。TLS を入れないまま盗聴を気にする段になったらそこまで上げる
  */

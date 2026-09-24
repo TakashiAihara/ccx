@@ -97,7 +97,8 @@ describe("token が設定された center", () => {
   });
 
   test("GET / HEAD /healthz だけが token 無しで通る。PUT /healthz は bucket 作成なので守る", async () => {
-    expect((await fetch(`${base}/healthz`)).status).toBe(200);
+    // 本文まで見る。object API の route が先に当たると bucket 一覧が 200 で返り、status だけでは区別できない
+    expect(await (await fetch(`${base}/healthz`)).text()).toBe("ok\n");
     expect((await fetch(`${base}/healthz`, { method: "HEAD" })).status).toBe(200);
     expect((await fetch(`${base}/healthz`, { method: "PUT" })).status).toBe(401);
     expect((await fetch(`${base}/healthzx`)).status).toBe(401);

@@ -482,7 +482,7 @@ agent
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);
     if (st.hubTokenAccepted === false) {
-      rows.push(["", "refuses this token (401): events stay spooled until CCX_HUB_TOKEN / ~/.config/ccx/hub-token matches the center"]);
+      rows.push(["", "refuses this CLI's token (401): fix CCX_HUB_TOKEN / ~/.config/ccx/hub-token. ccx-agent's own token (read at its start) is not checked here"]);
     }
 
     for (const line of table(rows)) console.log(line);

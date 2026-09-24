@@ -154,7 +154,8 @@ token を要求し、合わなければ 401 を返す。受ける形は 3 つ。
 - S3 の署名の access key id が token — S3 クライアント (`ccx transcript`、DuckDB、aws cli)
 
 S3 の署名そのものは検証しない。access key id は平文で流れるので、強さは Bearer と同じ。
-presigned URL は受けない (署名も期限も見ないので、URL を渡すと token を無期限で渡すことになる)。
+presigned URL は受けない (署名も期限も見ないので、受けると URL が無期限の鍵になる)。受けなくても、
+presigned URL の `X-Amz-Credential` には token がそのまま入るので、作って人に渡さない。
 `GET` / `HEAD /healthz` だけは token 無しで答える。
 
 token は 16 文字以上の `A-Z a-z 0-9 . _ ~ -` に限る (S3 は `Credential=<token>/...` の形で運ぶので、
