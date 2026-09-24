@@ -241,7 +241,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			tag := channelTag(rec.Message.Content)
 			// A local command (/model and its output) is typed by a person but sends
 			// no request, so it is not a turn starting. It still counts as use below.
-			if !isLocalCommand(rec.Message.Content) {
+			// An interrupt (Esc) ends a turn rather than starting one; counting it
+			// would hold a heartbeat for turnStart, past the TTL if it came late.
+			if !isLocalCommand(rec.Message.Content) && !isInterrupt(rec.Message.Content) {
 				s.LastInput = rec.Timestamp
 			}
 			// Only a tool's own result, or an interrupt, ends a running tool: another

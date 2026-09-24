@@ -255,6 +255,7 @@ func TestStepWaitsForARunningTurn(t *testing.T) {
 		{"a /model run a minute before due", base + rec("user", "10:49:05", cmd) + rec("user", "10:49:05", out), 1},
 		{"a tool running while another record lands", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:20:00", crossMsg), 0},
 		{"a tool interrupted by Esc", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:10:00", interrupted), 1},
+		{"a tool interrupted by Esc just before due", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:49:30", interrupted), 1},
 		{"one of two parallel tools returned", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", toolUse2) + rec("user", "10:00:06", toolRes), 0},
 		{"a text record after the tool call", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", reply), 0},
 		{"the second of two parallel tools returned first", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", toolUse2) + rec("user", "10:00:06", toolRes2), 0},
@@ -379,6 +380,9 @@ func TestStepFollowsADeclarationChangedWhileRunning(t *testing.T) {
 	var sent time.Time
 
 	h.step(&sent)
+	if *pushes != 0 {
+		t.Fatalf("default off, nothing declared: pushes=%d, want 0", *pushes)
+	}
 	_ = os.WriteFile(file, []byte("on\n"), 0o644)
 	h.step(&sent)
 	if *pushes != 1 {
@@ -448,7 +452,7 @@ func TestStepSkipsAFiveMinuteCache(t *testing.T) {
 	}{
 		{"5m", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(180000, 0)), 0},
 		{"1h", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(0, 180000)), 1},
-		{"5m, then a request writing nothing", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", usage(180000, 0)) + rec("assistant", "10:00:05", usage(0, 0)), 0},
+		{"5m, then a request writing nothing", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", usage(180000, 0)) + rec("user", "10:00:03", human) + rec("assistant", "10:00:05", usage(0, 0)), 0},
 	} {
 		h, pushes, _ := fixture(t, c.tr, at("10:50:05"))
 		var sent time.Time
