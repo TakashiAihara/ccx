@@ -249,6 +249,9 @@ func TestStepWaitsForARunningTurn(t *testing.T) {
 		{"a tool that finished and was answered", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) + rec("user", "10:00:02", toolRes) + rec("assistant", "10:00:05", reply), 1},
 		{"a /model run and left", base + rec("user", "10:40:00", cmd) + rec("user", "10:40:00", out), 1},
 		{"an interrupt (Esc) 6 minutes ago, never answered", base + rec("user", "10:44:00", interrupted), 1},
+		{"a /model run a minute before due", base + rec("user", "10:49:05", cmd) + rec("user", "10:49:05", out), 1},
+		{"a tool running while another record lands", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:20:00", crossMsg), 0},
+		{"a tool interrupted by Esc", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:10:00", interrupted), 1},
 	} {
 		h, pushes, _ := fixture(t, c.tr, at("10:50:05"))
 		var sent time.Time

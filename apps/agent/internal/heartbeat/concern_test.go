@@ -173,18 +173,18 @@ func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.accept(ctx, f, time.Millisecond); close(done) }()
-	time.Sleep(100 * time.Millisecond)
+
+	// The connection accepted after the failures was served: its session got a
+	// heartbeat. Read before cancelling, or the serve goroutine may stop first.
+	line, err := bufio.NewReader(client).ReadBytes('\n')
 	cancel()
 	close(f.closed)
 	<-done
-	if f.calls != 5 {
-		t.Errorf("Accept called %d times, want 3 failures, a connection, then a 5th that waits", f.calls)
-	}
-	// The connection accepted after the failures was served: its session got a
-	// heartbeat.
-	line, err := bufio.NewReader(client).ReadBytes('\n')
 	var ev Event
 	if err != nil || json.Unmarshal(line, &ev) != nil || ev.Meta["kind"] != "heartbeat" {
 		t.Errorf("the connection after the failures was not served: %q %v", line, err)
+	}
+	if f.calls != 5 {
+		t.Errorf("Accept called %d times, want 3 failures, a connection, then a 5th that waits", f.calls)
 	}
 }

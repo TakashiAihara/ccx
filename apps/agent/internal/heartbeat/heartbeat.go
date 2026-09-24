@@ -238,7 +238,16 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		switch rec.Type {
 		case "user":
 			tag := channelTag(rec.Message.Content)
-			s.LastInput, s.ToolRunning = rec.Timestamp, false
+			// A local command (/model and its output) is typed by a person but sends
+			// no request, so it is not a turn starting. It still counts as use below.
+			if !isLocalCommand(rec.Message.Content) {
+				s.LastInput = rec.Timestamp
+			}
+			// Only the tool's result, or an interrupt, ends a running tool: another
+			// record (a hook's, a channel's) can land while it runs.
+			if isToolResult(rec.Message.Content) || isInterrupt(rec.Message.Content) {
+				s.ToolRunning = false
+			}
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
 			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
@@ -271,6 +280,34 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 	}
 	return s, sc.Err()
+}
+
+// isLocalCommand is a slash command's echo or output, written as a user record
+// with no request after it. `!` lines are not here: their output can start a turn.
+func isLocalCommand(content json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(content, &s) != nil {
+		return false
+	}
+	return strings.HasPrefix(s, "<command-name>") || strings.HasPrefix(s, "<local-command-")
+}
+
+// isInterrupt is the record Esc leaves: "[Request interrupted by user..." as text.
+func isInterrupt(content json.RawMessage) bool {
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		var s string
+		return json.Unmarshal(content, &s) == nil && strings.HasPrefix(s, "[Request interrupted")
+	}
+	for _, p := range parts {
+		if p.Type == "text" && strings.HasPrefix(p.Text, "[Request interrupted") {
+			return true
+		}
+	}
+	return false
 }
 
 type node struct {
