@@ -314,7 +314,7 @@ session
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const client = fleetClient(cfg.hub?.url);
+    const client = fleetClient(cfg.hub);
 
     const res = await client
       .listSessions({
@@ -408,7 +408,7 @@ session
   .option("--json", "print as JSON")
   .action(async (sessionId: string, o) => {
     const cfg = await loadConfig();
-    const client = fleetClient(cfg.hub?.url);
+    const client = fleetClient(cfg.hub);
 
     const res = await client
       .listEvents({

@@ -51,13 +51,24 @@ describe("非 loopback bind", () => {
   });
 
   test("認証も TLS も無いので、非 loopback は既定で拒む", () => {
-    expect(() => loadCenterConfig({ CCX_CENTER_HOST: "0.0.0.0" })).toThrow(/no authentication/);
+    expect(() => loadCenterConfig({ CCX_CENTER_HOST: "0.0.0.0" })).toThrow(/no token set/);
     expect(() => loadCenterConfig({ CCX_CENTER_HOST: "192.168.0.10" })).toThrow(/refusing to bind/);
   });
 
   test("明示の opt-in があれば通す。設定 1 つで越えられる線にはしない", () => {
     const c = loadCenterConfig({ CCX_CENTER_HOST: "0.0.0.0", CCX_CENTER_ALLOW_INSECURE_BIND: "1" });
     expect(c.host).toBe("0.0.0.0");
+  });
+
+  test("token があれば opt-in 無しで非 loopback に出せる", () => {
+    const c = loadCenterConfig({ CCX_CENTER_HOST: "0.0.0.0", CCX_CENTER_TOKEN: "tok-for-test" });
+    expect(c.host).toBe("0.0.0.0");
+    expect(c.token).toBe("tok-for-test");
+  });
+
+  test("空の token は未設定。空の Bearer が全部通る状態にしない", () => {
+    expect(loadCenterConfig({ CCX_CENTER_TOKEN: "  " }).token).toBeUndefined();
+    expect(() => loadCenterConfig({ CCX_CENTER_HOST: "0.0.0.0", CCX_CENTER_TOKEN: "" })).toThrow(/refusing to bind/);
   });
 
   test("loopback なら opt-in は要らない", () => {

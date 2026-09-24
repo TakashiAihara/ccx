@@ -31,11 +31,18 @@ async function client() {
   if (!cfg.transcript) throw new NoTranscriptStore();
   // 保存先が S3 を話すかを 1 往復で見る。object API を持たない古い center (#122 より前) は
   // `HEAD /<bucket>` に 404 を返し、そのまま進むと S3 クライアントの "key does not exist" に化ける
-  const probe = await fetch(`${cfg.transcript.endpoint.replace(/\/$/, "")}/${cfg.transcript.bucket}`, { method: "HEAD" }).catch(
+  const headers: Record<string, string> = cfg.transcript.token ? { Authorization: `Bearer ${cfg.transcript.token}` } : {};
+  const probe = await fetch(`${cfg.transcript.endpoint.replace(/\/$/, "")}/${cfg.transcript.bucket}`, { method: "HEAD", headers }).catch(
     (e: unknown) => {
       throw new Error(`transcript store ${cfg.transcript!.endpoint} did not answer: ${e instanceof Error ? e.message : String(e)}`);
     },
   );
+  if (probe.status === 401) {
+    throw new Error(
+      `${cfg.transcript.endpoint} wants a token (401). Set CCX_HUB_TOKEN, or put it in ~/.config/ccx/hub-token, ` +
+        "with the value of the center's CCX_CENTER_TOKEN.",
+    );
+  }
   if (probe.status === 404) {
     throw new Error(
       `${cfg.transcript.endpoint} answers but has no S3 object API (bucket ${cfg.transcript.bucket} → 404). ` +
@@ -127,7 +134,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
       // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
-      if (r.stateApplied && r.state) await reportState(cfg.hub?.url, cfg.machine, id, r.state);
+      if (r.stateApplied && r.state) await reportState(cfg.hub, cfg.machine, id, r.state);
 
       // 会話だけでは作業できない。session.json の repo から、default branch の最新で
       // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。

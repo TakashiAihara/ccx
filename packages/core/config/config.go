@@ -34,6 +34,11 @@ type Config struct {
 	// side never depends on the center existing (scope.md).
 	HubURL string
 
+	// HubToken is the center's CCX_CENTER_TOKEN, sent as a Bearer on every call
+	// (#158). CCX_HUB_TOKEN, else the file hub-token next to config.toml. Never
+	// git config or config.toml: those get shared along with dotfiles.
+	HubToken string
+
 	// Machine names this host in the (user, machine, session) key (#92). The
 	// default is the hostname, but the default is NOT the single source of
 	// truth: hostnames collide (same-named containers, cloned VMs), so it is
@@ -189,6 +194,7 @@ func load(
 
 	return Config{
 		HubURL:     hub,
+		HubToken:   hubToken(getenv),
 		Machine:    machine,
 		User:       uname,
 		SocketPath: socketPath(getenv),
@@ -272,6 +278,21 @@ func pick(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func hubToken(getenv func(string) string) string {
+	if t := strings.TrimSpace(getenv("CCX_HUB_TOKEN")); t != "" {
+		return t
+	}
+	p := configPath(getenv)
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(p), "hub-token"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // configPath is CCX_CONFIG, else $XDG_CONFIG_HOME/ccx/config.toml, else

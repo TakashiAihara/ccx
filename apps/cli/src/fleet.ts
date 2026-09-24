@@ -1,4 +1,4 @@
-import { createClient, type Client } from "@connectrpc/connect";
+import { createClient, type Client, type Interceptor, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
@@ -26,9 +26,20 @@ export class NoCenterConfigured extends Error {
   }
 }
 
-export function fleetClient(hubUrl: string | undefined): Client<typeof FleetService> {
-  if (!hubUrl) throw new NoCenterConfigured();
-  return createClient(FleetService, createConnectTransport({ baseUrl: hubUrl }));
+export type Hub = { url: string; token?: string };
+
+/** center への Connect の transport。token があれば全要求に Bearer で付ける (#158) */
+export function centerTransport(hub: Hub): Transport {
+  const auth: Interceptor = (next) => (req) => {
+    req.header.set("Authorization", `Bearer ${hub.token}`);
+    return next(req);
+  };
+  return createConnectTransport({ baseUrl: hub.url, interceptors: hub.token ? [auth] : [] });
+}
+
+export function fleetClient(hub: Hub | undefined): Client<typeof FleetService> {
+  if (!hub) throw new NoCenterConfigured();
+  return createClient(FleetService, centerTransport(hub));
 }
 
 /**

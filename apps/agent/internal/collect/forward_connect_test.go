@@ -15,7 +15,7 @@ import (
 func TestConnectForwarder_RealWire(t *testing.T) {
 	c, url := testcenter.Start()
 	defer c.Close()
-	fwd := NewForwarder(url)
+	fwd := NewForwarder(url, "")
 
 	ev := &ccxv1.Event{
 		Origin:   &ccxv1.Origin{Machine: "d1", User: "root"},
@@ -40,7 +40,7 @@ func TestConnectForwarder_UnavailableReturnsError(t *testing.T) {
 	c, url := testcenter.Start()
 	defer c.Close()
 	c.SetUnavailable(true)
-	fwd := NewForwarder(url)
+	fwd := NewForwarder(url, "")
 
 	err := fwd.Forward(context.Background(), &ccxv1.Event{EventId: "x", Payload: []byte("y")})
 	if err == nil {
@@ -52,7 +52,7 @@ func TestConnectForwarder_UnavailableReturnsError(t *testing.T) {
 func TestConnectForwarder_DedupByEventID(t *testing.T) {
 	c, url := testcenter.Start()
 	defer c.Close()
-	fwd := NewForwarder(url)
+	fwd := NewForwarder(url, "")
 	ev := &ccxv1.Event{EventId: "same", Payload: []byte("once")}
 
 	for i := 0; i < 3; i++ {
@@ -62,5 +62,24 @@ func TestConnectForwarder_DedupByEventID(t *testing.T) {
 	}
 	if got := c.Payloads(); len(got) != 1 {
 		t.Errorf("dedup failed: sent 3 with same id, center kept %d", len(got))
+	}
+}
+
+// The configured token reaches the center as a Bearer; without it a center that
+// requires one refuses the event, so it stays spooled (#158).
+func TestConnectForwarder_SendsHubToken(t *testing.T) {
+	c, url := testcenter.Start()
+	defer c.Close()
+	c.RequireToken("tok-for-test")
+	ev := &ccxv1.Event{Origin: &ccxv1.Origin{Machine: "d1", User: "root"}, EventId: "01J-tok", Payload: []byte(`{}`)}
+
+	if err := NewForwarder(url, "").Forward(context.Background(), ev); err == nil {
+		t.Fatal("without a token the center must refuse")
+	}
+	if err := NewForwarder(url, "tok-for-test").Forward(context.Background(), ev); err != nil {
+		t.Fatalf("with the token: %v", err)
+	}
+	if n := len(c.Payloads()); n != 1 {
+		t.Fatalf("center should hold 1 event, has %d", n)
 	}
 }

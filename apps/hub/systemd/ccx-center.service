@@ -8,12 +8,13 @@
 #   loginctl enable-linger "$USER"     # stays up across logout
 #
 # To be reachable from other machines (ccx-agent forwarding, `ccx transcript` from
-# elsewhere) it must bind beyond loopback. The center has no authentication and
-# speaks plain HTTP, so that is refused unless the network is declared trusted:
+# elsewhere) it must bind beyond loopback. That takes a shared token (#158); the
+# clients put the same value in ~/.config/ccx/hub-token:
 #   systemctl --user edit ccx-center   # add under [Service]:
 #   Environment=CCX_CENTER_HOST=0.0.0.0
-#   Environment=CCX_CENTER_ALLOW_INSECURE_BIND=1
-# or keep loopback and put a TLS-terminating, authenticating proxy in front.
+#   EnvironmentFile=%h/.config/ccx/center.env    # CCX_CENTER_TOKEN=..., mode 600
+# It still speaks plain HTTP. For TLS, keep loopback and put a TLS-terminating
+# proxy in front.
 
 [Unit]
 Description=ccx-center (collects what ccx-agent forwards; stores transcripts)

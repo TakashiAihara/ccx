@@ -164,6 +164,9 @@ Then two steps install does not do for you:
    reads the setting at start, so `systemctl --user restart ccx-agent` after. An
    exported `CCX_HUB_URL` does not reach the service; that takes a drop-in with
    `Environment=`.
+   If the center has a token (`CCX_CENTER_TOKEN`, #158), put the same value in
+   `~/.config/ccx/hub-token` (mode 600). Without it the center refuses every event
+   and ccx-agent keeps them spooled.
 2. Wire the hooks (below).
 
 ## Wiring the hooks

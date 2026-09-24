@@ -9,6 +9,8 @@ import (
 
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/hubauth"
 )
 
 // Forwarder sends one enveloped event to the center and returns nil only when
@@ -38,12 +40,12 @@ const defaultForwardTimeout = 30 * time.Second
 // no center is configured. A nil forwarder is not an error: ccx-agent still runs and
 // spools; it simply has nowhere to drain to until a hub is set. The local side
 // never depends on the center (scope.md).
-func NewForwarder(hubURL string) Forwarder {
+func NewForwarder(hubURL, token string) Forwarder {
 	if hubURL == "" {
 		return nil
 	}
 	return &connectForwarder{
-		client:  ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL),
+		client:  ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL, hubauth.Options(token)...),
 		timeout: defaultForwardTimeout,
 	}
 }

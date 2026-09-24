@@ -39,6 +39,8 @@ export type TranscriptStore = {
   /** key の前に付ける。空か、`/` で終わる文字列 */
   prefix: string;
   region?: string;
+  /** center の token (#158)。center の object API は S3 の access key id として受ける */
+  token?: string;
 };
 
 export type Origin = { machine: string; user: string };
@@ -309,8 +311,9 @@ export class NoTranscriptStore extends Error {
 }
 
 /**
- * 資格情報は S3 クライアントの標準の env (AWS_* / S3_*) から。無ければ center 向けの
- * ダミー。center は署名を見ないので値は何でもよい
+ * 資格情報は S3 クライアントの標準の env (AWS_* / S3_*) から。無ければ center 向けで、
+ * access key id に center の token を置く (center は署名を検証せず access key id だけを
+ * 見る)。token も無ければダミー
  */
 function makeS3(store: TranscriptStore): Bun.S3Client {
   const env = process.env;
@@ -319,7 +322,7 @@ function makeS3(store: TranscriptStore): Bun.S3Client {
     bucket: store.bucket,
     region: store.region ?? "us-east-1",
     // 外部の S3 に資格情報無しで行けば、そちらが AccessDenied で名指しする
-    accessKeyId: env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? "ccx",
+    accessKeyId: env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? store.token ?? "ccx",
     secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx",
   });
 }
