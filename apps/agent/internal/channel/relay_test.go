@@ -47,8 +47,10 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 	out := &syncBuf{}
 	s := NewServer("ccx", "0", out)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go Relay(ctx, sock, "sid-1", "/custom/claude", s, t.Logf)
+	done := make(chan struct{})
+	go func() { Relay(ctx, sock, "sid-1", "/custom/claude", s, t.Logf); close(done) }()
+	// Wait for the relay to stop before the test ends: it logs through t.
+	defer func() { cancel(); <-done }()
 
 	select {
 	case line := <-got:
@@ -80,12 +82,12 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 // serve not there yet (not started, or restarted to apply config) is normal:
 // the relay keeps trying and registers once it appears.
 func TestRelayWaitsForServe(t *testing.T) {
-
 	sock := filepath.Join(t.TempDir(), "ch.sock")
 	s := NewServer("ccx", "0", &syncBuf{})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go relay(ctx, sock, "sid-2", "", s, t.Logf, 50*time.Millisecond)
+	done := make(chan struct{})
+	go func() { relay(ctx, sock, "sid-2", "", s, t.Logf, 50*time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
 	time.Sleep(200 * time.Millisecond)
 
 	ln, err := net.Listen("unix", sock)

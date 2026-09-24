@@ -21,11 +21,12 @@ const Marker = ` kind="heartbeat"`
 //
 // The cache lives an hour from the start of the last request that read it, and
 // only a turn in that session reads it. So the clock is the session's own
-// transcript: the last assistant record, plus Interval, is when a turn is due.
+// transcript: the start of the last answered request, plus Interval, is when a
+// turn is due.
 type Heartbeat struct {
 	SessionID  string
 	ClaudeHome string        // ~/.claude, or CLAUDE_CONFIG_DIR
-	Interval   time.Duration // 50m: an hour of TTL, less generation time and slack
+	Interval   time.Duration // 50m: an hour of TTL, less the minutes a heartbeat may wait (a poll, a turn starting) and slack
 	MaxIdle    time.Duration // stop once no one has used the session for this long; 0 is no cap
 	Default    bool          // for a session that has not declared on or off
 	Push       func() error
@@ -42,15 +43,19 @@ type Heartbeat struct {
 // Scan is what one read of a transcript tells.
 type Scan struct {
 	LastAssistant time.Time // the last response record, heartbeat or not
-	// LastRequest is when the last answered request started: the input record the
-	// response followed. The cache is read at the start of a request, so the TTL
-	// counts from here, not from the response (which can come minutes later).
+	// LastRequest is when the last answered request started: the user record up
+	// the response's parentUuid chain. The cache is read at the start of a
+	// request, so the TTL counts from here, not from the response (which can come
+	// minutes later). A synthetic API-error reply is not an answer.
 	LastRequest time.Time
-	// LastInput is the last record that starts a request (a prompt, a tool
-	// result, a channel event). Newer than LastAssistant means a turn is running.
+	// LastInput is the last user record of any kind. Newer than LastAssistant, and
+	// recent, means a turn is starting; some user records never get a response.
 	LastInput time.Time
-	LastReal  time.Time // the last record outside a heartbeat turn
-	LastBeat  time.Time // the last heartbeat that arrived
+	// ToolRunning: the last response asked for a tool and no user record (its
+	// result) has come since.
+	ToolRunning bool
+	LastReal    time.Time // the last record outside a heartbeat turn
+	LastBeat    time.Time // the last heartbeat that arrived
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
@@ -63,6 +68,10 @@ const poll = time.Minute
 // cacheTTL is what Claude Code requests for the main conversation on a
 // subscription. With 5m (API key, usage credits) a heartbeat never lands in time.
 const cacheTTL = time.Hour
+
+// turnStart bounds how long input may wait for its response and still count as
+// a turn starting. Measured on real transcripts (2026-09-24): p99 30s, max 116s.
+const turnStart = 5 * time.Minute
 
 // Run pushes heartbeats until ctx ends.
 func (h *Heartbeat) Run(ctx context.Context) {
@@ -89,10 +98,20 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	if s.ShortTTL {
 		return h.Interval // a 5-minute cache: every heartbeat would be a full rewrite
 	}
-	if s.LastInput.After(s.LastAssistant) {
-		// A turn is running (a person came back, a long tool call): the session is
-		// reading its cache itself, and a heartbeat pushed now would only queue
-		// behind the turn and run as an extra turn after it.
+	now := h.Now()
+	if now.Sub(s.LastRequest) >= cacheTTL {
+		// Already expired (a resume, a suspended host, a request that never
+		// answered): a heartbeat would only rewrite the prefix early, and the next
+		// real turn does that anyway. Checked before the running-turn test, so a
+		// turn that never answered does not keep this looking forever.
+		return h.Interval
+	}
+	if s.ToolRunning || (s.LastInput.After(s.LastAssistant) && now.Sub(s.LastInput) < turnStart) {
+		// A turn is running: a tool has not returned, or input just arrived and
+		// the response has not started. A heartbeat pushed now would queue behind
+		// the turn and run as an extra turn after it. Input with no response for
+		// longer than turnStart is one that never gets one (Esc, a manual
+		// /compact, a stopped task's notice), not a turn.
 		return poll
 	}
 	if !sent.IsZero() {
@@ -106,25 +125,13 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		}
 		*sent = time.Time{}
 	}
-	now := h.Now()
 	if h.MaxIdle > 0 && now.Sub(s.LastReal) > h.MaxIdle {
 		return h.Interval // left alone too long to be worth keeping; real use resumes it
 	}
-	// Counted from the later of the two: a heartbeat whose answer failed must not
-	// make the next one due at once.
-	last := s.LastRequest
-	if s.LastBeat.After(last) {
-		last = s.LastBeat
-	}
-	if due := last.Add(h.Interval); now.Before(due) {
+	// A heartbeat that landed but was never answered leaves its input newer than
+	// the last response, which the running-turn test above already holds back.
+	if due := s.LastRequest.Add(h.Interval); now.Before(due) {
 		return due.Sub(now)
-	}
-	if now.Sub(s.LastRequest) >= cacheTTL {
-		// Already expired (a resume, a suspended host, a heartbeat whose request
-		// failed): a heartbeat would only rewrite the prefix early, and the next
-		// real turn does that anyway. Only a request that answered read the cache,
-		// so this counts from the last one, not from the last heartbeat.
-		return h.Interval
 	}
 	if err := h.Push(); err != nil {
 		h.Log("ccx channel: heartbeat push failed: %v", err)
@@ -192,15 +199,20 @@ func (h *Heartbeat) read() (Scan, bool) {
 func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
+	nodes := map[string]node{}
+	starts := map[string]time.Time{} // assistant uuid -> its request's start
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
 		var rec struct {
-			Type      string    `json:"type"`
-			Timestamp time.Time `json:"timestamp"`
-			IsMeta    bool      `json:"isMeta"`
-			Message   struct {
+			Type       string    `json:"type"`
+			UUID       string    `json:"uuid"`
+			ParentUUID string    `json:"parentUuid"`
+			Timestamp  time.Time `json:"timestamp"`
+			IsMeta     bool      `json:"isMeta"`
+			APIError   bool      `json:"isApiErrorMessage"`
+			Message    struct {
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
 					CacheCreation struct {
@@ -213,14 +225,13 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		if json.Unmarshal(line, &rec) != nil || rec.Timestamp.IsZero() {
 			continue
 		}
+		if rec.UUID != "" {
+			nodes[rec.UUID] = node{typ: rec.Type, ts: rec.Timestamp, parent: rec.ParentUUID}
+		}
 		switch rec.Type {
 		case "user":
 			tag := channelTag(rec.Message.Content)
-			// A local command (/model, a ! bash line) is written as user records
-			// with no request behind it, so it starts no turn.
-			if tag != "" || isToolResult(rec.Message.Content) || (!rec.IsMeta && !isLocalCommand(rec.Message.Content)) {
-				s.LastInput = rec.Timestamp
-			}
+			s.LastInput, s.ToolRunning = rec.Timestamp, false
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
 			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
@@ -229,10 +240,16 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				inBeat = false
 			}
 		case "assistant":
+			if rec.APIError {
+				// A reply Claude Code wrote itself for a request that failed: nothing
+				// read the cache, so it is not an answer.
+				continue
+			}
 			s.LastAssistant = rec.Timestamp
-			s.LastRequest = rec.Timestamp
-			if !s.LastInput.IsZero() && !s.LastInput.After(rec.Timestamp) {
-				s.LastRequest = s.LastInput
+			s.ToolRunning = hasToolUse(rec.Message.Content)
+			s.LastRequest = requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
+			if rec.UUID != "" {
+				starts[rec.UUID] = s.LastRequest
 			}
 			// A request that wrote nothing says nothing about the TTL; keep the last
 			// one that did.
@@ -249,15 +266,49 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	return s, sc.Err()
 }
 
-// isLocalCommand is a record Claude Code writes for a command run locally (a
-// slash command's echo and output, a ! bash line): no request follows it.
-func isLocalCommand(content json.RawMessage) bool {
-	var s string
-	if json.Unmarshal(content, &s) != nil {
+type node struct {
+	typ    string
+	ts     time.Time
+	parent string
+}
+
+// requestStart is when the request a response answers started: the first user
+// record up its parentUuid chain (attachments sit in between). Meeting an earlier
+// response first means this is a later part of the same one. Following the chain
+// rather than guessing from content: cross-session messages and channel events are
+// meta records that start a turn, and a local command's output can too.
+func requestStart(nodes map[string]node, starts map[string]time.Time, parent string, fallback time.Time) time.Time {
+	for i := 0; i < 64 && parent != ""; i++ {
+		n, ok := nodes[parent]
+		if !ok {
+			break
+		}
+		switch n.typ {
+		case "user":
+			if n.ts.After(fallback) {
+				return fallback // out of order (a fork, a compaction summary)
+			}
+			return n.ts
+		case "assistant":
+			if t, ok := starts[parent]; ok {
+				return t
+			}
+			return fallback
+		}
+		parent = n.parent
+	}
+	return fallback
+}
+
+func hasToolUse(content json.RawMessage) bool {
+	var parts []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
 		return false
 	}
-	for _, p := range []string{"<command-name>", "<local-command-", "<bash-"} {
-		if strings.HasPrefix(s, p) {
+	for _, p := range parts {
+		if p.Type == "tool_use" {
 			return true
 		}
 	}

@@ -153,13 +153,23 @@ func (f *flaky) Accept() (net.Conn, error) {
 // A failed Accept (EMFILE and the like) is retried; the concern keeps serving
 // sessions that connect later instead of leaving a socket nobody accepts on.
 func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
+	// A session that is due, so a served connection gets a heartbeat.
+	home := t.TempDir()
+	dir := filepath.Join(home, "projects", "-cwd")
+	_ = os.MkdirAll(dir, 0o755)
+	const id = "00000000-0000-4000-8000-000000000003"
+	ago := time.Now().UTC().Add(-51 * time.Minute).Format(time.RFC3339Nano)
+	_ = os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(
+		`{"type":"user","uuid":"a","timestamp":"`+ago+`","message":{"content":"hi"}}`+"\n"+
+			`{"type":"assistant","uuid":"b","parentUuid":"a","timestamp":"`+ago+`","message":{"content":[]}}`+"\n"), 0o644)
 
 	server, client := net.Pipe()
 	defer client.Close()
 	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	go func() { _, _ = client.Write([]byte("not a registration\n")) }()
+	go func() { _ = json.NewEncoder(client).Encode(Register{Session: id}) }()
 	f := &flaky{fails: 3, closed: make(chan struct{}), conn: server}
-	c := &Concern{log: t.Logf}
+	c := &Concern{claudeHome: home, log: t.Logf,
+		cfg: config.Heartbeat{Default: true, Interval: 50 * time.Minute, MaxIdle: 12 * time.Hour}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.accept(ctx, f, time.Millisecond); close(done) }()
@@ -170,9 +180,11 @@ func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
 	if f.calls != 5 {
 		t.Errorf("Accept called %d times, want 3 failures, a connection, then a 5th that waits", f.calls)
 	}
-	// The connection accepted after the failures was served: serve read its
-	// registration (an unregistered one is closed, which the client sees).
-	if _, err := client.Read(make([]byte, 1)); err == nil || isTimeout(err) {
-		t.Errorf("the connection after the failures was not served: %v", err)
+	// The connection accepted after the failures was served: its session got a
+	// heartbeat.
+	line, err := bufio.NewReader(client).ReadBytes('\n')
+	var ev Event
+	if err != nil || json.Unmarshal(line, &ev) != nil || ev.Meta["kind"] != "heartbeat" {
+		t.Errorf("the connection after the failures was not served: %q %v", line, err)
 	}
 }

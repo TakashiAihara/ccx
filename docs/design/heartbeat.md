@@ -113,7 +113,7 @@ sequenceDiagram
 |---|---|
 | `~/.claude/sessions/<id>/archived` exists | declared folded away; its cache is not wanted |
 | an hour or more since the last request that answered started (resumed, host suspended, a heartbeat whose request failed) | the cache is already gone; a heartbeat would only pay the rewrite early |
-| a turn is running (its input, a prompt or a tool result, is newer than the last response) | the session reads its cache itself; a heartbeat would queue behind the turn and run as an extra turn |
+| a turn is running (below) | a heartbeat would queue behind the turn and run as an extra turn after it |
 | the last request wrote a 5-minute cache | it is always gone 50 minutes later |
 | no real use for `CCX_HEARTBEAT_MAX_IDLE` (12h; `off` = no cap) | a session nobody returns to is not worth waking forever |
 | the last heartbeat is not in the transcript yet, and nothing else happened since | mid-turn, or `/clear` moved the session to a new id; never stack a second. Real use after the push means it was lost, and beating resumes |
@@ -126,9 +126,16 @@ next user prompt or channel event that is not a heartbeat. Only the opening tag 
 event is matched, and the attribute name whole (`event_kind="heartbeat"` is not it), so a person or a
 tool quoting the attribute is not a heartbeat.
 
-The clock is the start of the last answered request: the input record its response followed. The cache
-is read when a request starts, and a response can take minutes. A local command (`/model`, a `!` line)
-writes user records with no request behind them, so it neither starts a turn nor moves the clock.
+The clock is the start of the last answered request: the first user record up the response's
+`parentUuid` chain (attachments sit in between; a response split over several records traces to the
+same one). The cache is read when a request starts, and a response can take minutes. The chain is
+followed rather than the content read: cross-session messages and channel events are meta records that
+start a turn, and a `!` line can too. A synthetic API-error reply (`isApiErrorMessage`) is not an
+answer.
+
+"A turn is running" is a tool that has not returned, or a user record newer than the last response and
+under 5 minutes old. Some user records never get a response (Esc, a manual `/compact`, a stopped task's
+notice); past 5 minutes they are not a turn (measured 2026-09-24: input to response p99 30s, max 116s).
 
 The heartbeat starts only after the client sends `notifications/initialized`: a push before that is
 outside the MCP lifecycle and can be dropped silently.
