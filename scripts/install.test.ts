@@ -134,6 +134,8 @@ test.skipIf(!linux)("a manager whose UnitPath has no user dir stops before anyth
   expect(r.code).toBe(1);
   expect(r.out).toContain("cannot find the user manager's unit directory");
   expect(requests).toBe(0);
+  // cwd は work なので、相対の entry に書いた痕跡は afterEach で消える前にここで見る
+  expect(existsSync(join(work, "relative"))).toBe(false);
 });
 
 test.skipIf(!linux)("an unwritable unit dir stops before anything is downloaded", async () => {
