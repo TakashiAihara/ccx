@@ -41,8 +41,9 @@ case "$arch" in
   *) echo "ccx: unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-# The service decision comes before any download: nothing is replaced when the
-# agent part cannot be done.
+# The service decision comes before any download, so a host that cannot take the
+# agent's service replaces nothing. (A failure after the binaries are in place,
+# in enable or restart, leaves them in place.)
 # none: ccx only. manual: ccx-agent too, supervised by the user. systemd: and a user unit.
 service=none
 if [ "$WITH_AGENT" = 1 ]; then
@@ -60,6 +61,18 @@ if [ "$service" = systemd ]; then
   case "$DEST" in
     *[!A-Za-z0-9/._-]*) echo "ccx: --with-agent needs an install dir of plain characters, got: $DEST" >&2; exit 1 ;;
   esac
+  # The manager's own config dir is the first */systemd/user entry of its
+  # UnitPath. show-environment is what units are given, not what the manager
+  # searches, so an XDG_CONFIG_HOME there (or in this shell) can point elsewhere.
+  # ponytail: UnitPath is space-separated, so a dir with a space in it is not found
+  units=""
+  for p in $(systemctl --user show -p UnitPath --value); do
+    case "$p" in */systemd/user) units=$p; break ;; esac
+  done
+  if [ -z "$units" ]; then
+    echo "ccx: cannot find the user manager's unit directory in its UnitPath" >&2
+    exit 1
+  fi
 fi
 
 # latest moves on every push to main. Resolve it once, so ccx, ccx-agent and the
@@ -125,9 +138,6 @@ if [ "$service" = manual ]; then
 fi
 
 # A user unit, never a system one: it runs as whoever ran this script (#90).
-# The manager searches its own XDG_CONFIG_HOME, which need not match this shell's.
-manager_config=$(systemctl --user show-environment | sed -n 's/^XDG_CONFIG_HOME=//p')
-units="${manager_config:-$HOME/.config}/systemd/user"
 mkdir -p "$units"
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
 sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$units/ccx-agent.service"
