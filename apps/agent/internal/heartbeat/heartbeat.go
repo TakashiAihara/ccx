@@ -51,8 +51,8 @@ type Scan struct {
 	// LastInput is the last user record of any kind. Newer than LastAssistant, and
 	// recent, means a turn is starting; some user records never get a response.
 	LastInput time.Time
-	// ToolRunning: the last response asked for a tool and no user record (its
-	// result) has come since.
+	// ToolRunning: a tool a response asked for has not returned its result, and
+	// no interrupt came since. Several can run at once (parallel calls).
 	ToolRunning bool
 	LastReal    time.Time // the last record outside a heartbeat turn
 	LastBeat    time.Time // the last heartbeat that arrived
@@ -208,6 +208,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	inBeat := false
 	nodes := map[string]node{}
 	starts := map[string]time.Time{} // assistant uuid -> its request's start
+	pending := map[string]bool{}     // tool_use ids with no result yet
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
@@ -243,11 +244,16 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			if !isLocalCommand(rec.Message.Content) {
 				s.LastInput = rec.Timestamp
 			}
-			// Only the tool's result, or an interrupt, ends a running tool: another
-			// record (a hook's, a channel's) can land while it runs.
-			if isToolResult(rec.Message.Content) || isInterrupt(rec.Message.Content) {
-				s.ToolRunning = false
+			// Only a tool's own result, or an interrupt, ends a running tool: another
+			// record (a hook's, a channel's, a sibling tool's result) can land while
+			// it runs.
+			for _, id := range toolIDs(rec.Message.Content, "tool_result", "tool_use_id") {
+				delete(pending, id)
 			}
+			if isInterrupt(rec.Message.Content) {
+				clear(pending)
+			}
+			s.ToolRunning = len(pending) > 0
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
 			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
@@ -262,7 +268,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				continue
 			}
 			s.LastAssistant = rec.Timestamp
-			s.ToolRunning = hasToolUse(rec.Message.Content)
+			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
+				pending[id] = true
+			}
+			s.ToolRunning = len(pending) > 0
 			s.LastRequest = requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
 			if rec.UUID != "" {
 				starts[rec.UUID] = s.LastRequest
@@ -344,19 +353,22 @@ func requestStart(nodes map[string]node, starts map[string]time.Time, parent str
 	return fallback
 }
 
-func hasToolUse(content json.RawMessage) bool {
-	var parts []struct {
-		Type string `json:"type"`
-	}
+// toolIDs is the ids in the content blocks of one type: tool_use blocks carry
+// "id", tool_result blocks "tool_use_id".
+func toolIDs(content json.RawMessage, typ, key string) []string {
+	var parts []map[string]any
 	if json.Unmarshal(content, &parts) != nil {
-		return false
+		return nil
 	}
+	var ids []string
 	for _, p := range parts {
-		if p.Type == "tool_use" {
-			return true
+		if p["type"] == typ {
+			if id, ok := p[key].(string); ok {
+				ids = append(ids, id)
+			}
 		}
 	}
-	return false
+	return ids
 }
 
 // channelTag is the opening <channel ...> tag of a channel event, or "". Only
