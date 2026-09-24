@@ -253,7 +253,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				delete(pending, id)
 			}
 			if isInterrupt(rec.Message.Content) {
+				// Esc ends the turn, answered or not: nothing is running any more.
 				clear(pending)
+				s.LastInput = time.Time{}
 			}
 			s.ToolRunning = len(pending) > 0
 			if rec.IsMeta && strings.Contains(tag, Marker) {
