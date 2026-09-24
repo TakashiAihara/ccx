@@ -21,6 +21,12 @@ believed.
   server, `ccx-agent channel`. Prose says "the ccx channel" for ours.
 - **done** — a repodir word only (`.git/ccx.state`). The user's `~/.claude/sessions/<id>/done`
   marker is not ccx's; ccx's word for a folded-away session is `archived`.
+- **hub** vs **center** — the same thing. *hub* is the older word and survives in `apps/hub`, the
+  config keys (`CCX_HUB_URL` / `ccx.hubUrl` / `hub.url`) and the design docs; prose says "center".
+- **broker** vs **center** — the design docs (`architecture.md`, `transport.md`) draw the *broker* as
+  a separate transport between center and ccx-agent. It does not exist; whether the center takes its
+  place (#155 assumes the center fans a message out) is not decided. Don't write "broker" for the
+  center.
 
 ## Sessions
 
@@ -39,7 +45,9 @@ believed.
 - **task** — one external reference for what the session is on, e.g. `kaneo ccx#1`
   (`~/.claude/sessions/<id>/task`).
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
-- **center** — `ccx-center`, the hub that collects hook events and, by default, serves the store.
+- **center** — `ccx-center` (`apps/hub`), which collects hook events and, by default, serves the store.
+  Formerly called the hub.
+- **broker** — the planned carrier of messages to ccx-agent (`docs/design/transport.md`). Not built.
 - **ccx-agent** — the per-machine resident process (formerly `ccxd`, #131).
 - **channel** — `ccx-agent channel`, the MCP server Claude Code spawns per session. It registers the session
   with `ccx-agent serve` and pushes into the session what serve sends (`apps/agent/internal/channel`).
