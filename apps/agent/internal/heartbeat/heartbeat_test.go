@@ -37,6 +37,8 @@ const (
 	reply       = `,"message":{"role":"assistant","content":[{"type":"text","text":"."}]}`
 	toolUse     = `,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}`
 	toolUse2    = `,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{}}]}`
+	toolRes2    = `,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"x"}]}`
+	toolResX    = `,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"x"}]}`
 	interrupted = `,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}`
 	crossMsg    = `,"isMeta":true,"message":{"role":"user","content":"<cross-session-message from=\"x\">\nhi\n</cross-session-message>"}`
 	apiError    = `,"isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"Prompt is too long"}]}`
@@ -196,10 +198,10 @@ func TestStepNeverStacksAnUndeliveredBeat(t *testing.T) {
 	if *pushes != 1 {
 		t.Fatalf("before the next due: pushes=%d, want still 1", *pushes)
 	}
-	h.Now = func() time.Time { return at("11:40:08") }
+	h.Now = func() time.Time { return at("11:40:06") }
 	h.step(&sent)
 	if *pushes != 2 {
-		t.Fatalf("after delivery: pushes=%d, want 2", *pushes)
+		t.Fatalf("an interval after the heartbeat's request: pushes=%d, want 2", *pushes)
 	}
 }
 
@@ -255,6 +257,9 @@ func TestStepWaitsForARunningTurn(t *testing.T) {
 		{"a tool interrupted by Esc", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:10:00", interrupted), 1},
 		{"one of two parallel tools returned", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", toolUse2) + rec("user", "10:00:06", toolRes), 0},
 		{"a text record after the tool call", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", reply), 0},
+		{"the second of two parallel tools returned first", rec("user", "10:00:00", human) + rec("assistant", "10:00:04", toolUse) + rec("assistant", "10:00:05", toolUse2) + rec("user", "10:00:06", toolRes2), 0},
+		{"a result for a tool nobody called", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) + rec("user", "10:00:06", toolResX), 0},
+		{"both parallel tools returned and were answered", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) + rec("assistant", "10:00:01", toolUse2) + rec("user", "10:00:02", toolRes) + rec("user", "10:00:02", toolRes2) + rec("assistant", "10:00:05", reply), 1},
 	} {
 		h, pushes, _ := fixture(t, c.tr, at("10:50:05"))
 		var sent time.Time
@@ -513,5 +518,18 @@ func TestStepFollowsTheParentNotTheLatestInput(t *testing.T) {
 	h.step(&sent)
 	if *pushes != 1 {
 		t.Errorf("50m after the parent prompt: pushes=%d, want 1", *pushes)
+	}
+}
+
+// A tool call left without a result (a rewind, a crash) does not stop keepalive
+// for good: once a later request is answered, it is dropped.
+func TestStepDropsAnAbandonedToolCall(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", toolUse) +
+		rec("user", "10:20:00", human) + rec("assistant", "10:20:05", reply)
+	h, pushes, _ := fixture(t, tr, at("11:10:00"))
+	var sent time.Time
+	h.step(&sent)
+	if *pushes != 1 {
+		t.Errorf("50m after a later answered prompt: pushes=%d, want 1", *pushes)
 	}
 }

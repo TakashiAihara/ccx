@@ -268,11 +268,18 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				continue
 			}
 			s.LastAssistant = rec.Timestamp
+			start := requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
+			if !start.Equal(s.LastRequest) {
+				// A response to a new request: any tool the earlier one left without a
+				// result was abandoned (a rewind, a crash), or it would not have moved
+				// on. Parallel calls share one request, so they are not dropped here.
+				clear(pending)
+			}
 			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
 				pending[id] = true
 			}
 			s.ToolRunning = len(pending) > 0
-			s.LastRequest = requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
+			s.LastRequest = start
 			if rec.UUID != "" {
 				starts[rec.UUID] = s.LastRequest
 			}
