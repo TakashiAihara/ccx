@@ -3,13 +3,12 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh
 #
-# Add the resident agent (ccx-agent) as a user service with --with-agent:
+# Add the resident agent (ccx-agent) as a systemd user service with --with-agent:
 #
 #   curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
 #
 # Override the destination with CCX_INSTALL_DIR (default: ~/.local/bin).
 # Pin a version with CCX_VERSION (default: latest).
-# CCX_WITH_AGENT=1 is the same as --with-agent.
 
 set -eu
 
@@ -18,7 +17,7 @@ DEST="${CCX_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${CCX_VERSION:-latest}"
 # Where releases are downloaded from. Only the tests point it elsewhere.
 BASE="${CCX_DOWNLOAD_URL:-https://github.com/${REPO}/releases}"
-WITH_AGENT="${CCX_WITH_AGENT:-0}"
+WITH_AGENT=0
 
 for a in "$@"; do
   case "$a" in
@@ -42,29 +41,66 @@ case "$arch" in
   *) echo "ccx: unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-# fetch <asset> <destination>: download one asset of the release to a file.
-fetch() {
-  if [ "$VERSION" = "latest" ]; then
-    url="${BASE}/latest/download/$1"
-  else
-    url="${BASE}/download/${VERSION}/$1"
+# The service decision comes before any download: nothing is replaced when the
+# agent part cannot be done.
+service=none
+if [ "$WITH_AGENT" = 1 ]; then
+  if [ "$os" != linux ]; then
+    # ponytail: no launchd agent yet (#92); nothing runs ccx-agent on macOS today
+    echo "ccx: --with-agent sets up a systemd user service, which macOS does not have (#92)" >&2
+    exit 1
   fi
+  if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+    echo "ccx: --with-agent needs a systemd user manager, and 'systemctl --user' cannot reach one here" >&2
+    echo "ccx: install without --with-agent and keep 'ccx-agent serve' running as your user yourself" >&2
+    exit 1
+  fi
+  mkdir -p "$DEST"
+  DEST=$(cd "$DEST" && pwd)
+  # The path goes into the unit's ExecStart, where spaces split it and systemd
+  # expands % specifiers.
+  case "$DEST" in
+    *[!A-Za-z0-9/._-]*) echo "ccx: --with-agent needs an install dir of plain characters, got: $DEST" >&2; exit 1 ;;
+  esac
+  service=systemd
+fi
+
+# latest moves on every push to main. Resolve it once, so ccx, ccx-agent and the
+# unit all come from one release.
+if [ "$VERSION" = "latest" ]; then
+  tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${BASE}/latest") || {
+    echo "ccx: cannot resolve the latest release at ${BASE}/latest" >&2
+    exit 1
+  }
+  VERSION=${tag##*/}
+fi
+
+mkdir -p "$DEST"
+# Downloads land next to the destination, so the final mv is a rename: replacing
+# a running ccx-agent by copying over it fails with "Text file busy".
+stage="$DEST/.ccx-install.$$"
+mkdir "$stage"
+trap 'rm -rf "$stage"' EXIT INT TERM
+
+fetch() {
+  url="${BASE}/download/${VERSION}/$1"
   echo "ccx: downloading $1 (${VERSION})"
-  # Next to the destination, so the final mv is a rename: replacing a running
-  # ccx-agent by copying over it fails with "Text file busy".
-  tmp="$2.download.$$"
-  if ! curl -fsSL "$url" -o "$tmp"; then
-    rm -f "$tmp"
+  if ! curl -fsSL "$url" -o "$stage/$2"; then
     echo "ccx: no file at $url" >&2
     echo "ccx: check the available releases: https://github.com/${REPO}/releases" >&2
     exit 1
   fi
-  mv "$tmp" "$2"
 }
 
-mkdir -p "$DEST"
-fetch "ccx-${os}-${arch}" "$DEST/ccx"
-chmod +x "$DEST/ccx"
+fetch "ccx-${os}-${arch}" ccx
+chmod +x "$stage/ccx"
+if [ "$service" = systemd ]; then
+  fetch "ccx-agent-${os}-${arch}" ccx-agent
+  fetch ccx-agent.service ccx-agent.service
+  chmod +x "$stage/ccx-agent"
+fi
+
+mv "$stage/ccx" "$DEST/ccx"
 echo "ccx: installed to $DEST/ccx"
 
 case ":$PATH:" in
@@ -74,50 +110,21 @@ esac
 
 "$DEST/ccx" --version
 
-[ "$WITH_AGENT" = 1 ] || exit 0
+[ "$service" = systemd ] || exit 0
 
-# ccx-agent: the binary, then a user service. Never a system unit, never root (#90).
-fetch "ccx-agent-${os}-${arch}" "$DEST/ccx-agent"
-chmod +x "$DEST/ccx-agent"
-echo "ccx: installed to $DEST/ccx-agent ($("$DEST/ccx-agent" --version))"
+mv "$stage/ccx-agent" "$DEST/ccx-agent"
+# An assignment of its own: inside echo's arguments a failing binary would not stop set -e.
+agent_version=$("$DEST/ccx-agent" --version)
+echo "ccx: installed to $DEST/ccx-agent ($agent_version)"
 
-HOOKS="https://github.com/${REPO}/blob/main/apps/agent/README.md#wiring-the-hooks"
-
-supervise_yourself() {
-  echo "ccx: $1, so ccx-agent is installed but not started." >&2
-  echo "ccx: keep '$DEST/ccx-agent serve' running under your own supervisor, as your user." >&2
-  echo "ccx: then wire the hooks: $HOOKS" >&2
-}
-
-if [ "$os" != linux ]; then
-  # ponytail: no launchd agent yet (#92); nothing runs ccx-agent on macOS today
-  supervise_yourself "no launchd setup yet on macOS"
-  exit 0
-fi
-
-if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
-  supervise_yourself "no systemd user manager here"
-  exit 0
-fi
-
+# A user unit, never a system one: it runs as whoever ran this script (#90).
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$units"
-
-# Before #131 the agent was ccxd. An old unit left enabled would run a second agent
-# on the same spool with a different lock file.
-if [ -f "$units/ccxd.service" ]; then
-  systemctl --user disable --now ccxd >/dev/null 2>&1 || true
-  rm -f "$units/ccxd.service"
-  echo "ccx: removed the old ccxd user service"
-fi
-
-fetch ccx-agent.service "$units/ccx-agent.service"
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
-sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$units/ccx-agent.service" > "$units/ccx-agent.service.tmp"
-mv "$units/ccx-agent.service.tmp" "$units/ccx-agent.service"
+sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$units/ccx-agent.service"
 
 systemctl --user daemon-reload
-systemctl --user enable ccx-agent >/dev/null 2>&1
+systemctl --user enable ccx-agent
 # restart, not start: on an upgrade the running agent must pick up the new binary.
 systemctl --user restart ccx-agent
 echo "ccx: ccx-agent is running as a user service (systemctl --user status ccx-agent)"
@@ -126,4 +133,5 @@ if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" !
   echo "ccx: to keep ccx-agent up across logout, run: loginctl enable-linger $(id -un)"
 fi
 
-echo "ccx: next, wire the hooks and point it at a center: $HOOKS"
+echo "ccx: next, point it at a center and wire the hooks:"
+echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install"

@@ -102,6 +102,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # この job は provenance に署名する。他の run が書いた module cache を読むと、
+          # 署名した binary の入力にこの run の外のものが混ざる
+          cache: false
 
       # bun は cross compile でき、DuckDB の asset も scripts/build.ts が target ぶん取る。
       # 4 つを 1 台で作るのは、runner を OS ごとに分けると同じ入力から作った保証が弱まるため

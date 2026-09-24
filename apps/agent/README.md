@@ -141,12 +141,14 @@ From a release, with the CLI:
 curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
 ```
 
-This puts `ccx` and `ccx-agent` (same version) in `~/.local/bin`, writes
-`~/.config/systemd/user/ccx-agent.service` from the same release, and enables it with
-`systemctl --user`. Run it again to upgrade: it restarts the agent on the new binary.
-It removes a leftover `ccxd` unit from before the rename. Without a systemd user
-manager (and on macOS, for now) it installs the binary and tells you to supervise
-`ccx-agent serve` yourself.
+This puts `ccx` and `ccx-agent` from one release in `~/.local/bin`, writes
+`~/.config/systemd/user/ccx-agent.service` from that release, and enables it with
+`systemctl --user` — a user unit, running as whoever ran the script, never a system
+unit. Run it again to upgrade: it restarts the agent on the new binary and rewrites
+the unit, so put local changes in a drop-in (`systemctl --user edit ccx-agent`), not
+in the unit file. Where `systemctl --user` cannot reach a user manager, and on macOS
+for now, `--with-agent` stops before installing anything; install without it and keep
+`ccx-agent serve` running as your user yourself.
 
 From source, with Go: `bun run install:agent` builds `~/.local/bin/ccx-agent`; install
 the unit from `systemd/ccx-agent.service` by hand (its header says how).
@@ -181,6 +183,14 @@ arrives. The smallest set that keeps that list right:
   "SessionEnd":       [ { "hooks": [ { "type": "command", "command": "ccx-agent hook" } ] } ]
 } }
 ```
+
+`ccx-agent` must be on the PATH Claude Code runs hooks with; if it is not, write the
+absolute path (`~/.local/bin/ccx-agent hook`) — a hook that cannot find it drops the
+event.
+
+Each payload is forwarded to the center as is: `UserPromptSubmit` carries the prompt
+text, `Stop` the last assistant message. The center URL is plain HTTP unless you put
+TLS in front of it.
 
 Any other event can be added the same way; `ccx session show` then has more to show.
 `PostToolUse` is the one to think about: its payload is often tens of KB, and it

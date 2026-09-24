@@ -9,7 +9,7 @@
     "postinstall": "bun run scripts/duckdb-assets.ts || echo 'ccx: DuckDB assets not prepared (offline?); everything but `ccx transcript search` still works — rerun `bun run scripts/duckdb-assets.ts` when online'",
     "build": "bun run scripts/build.ts",
     "install:local": "bun run build && mkdir -p \"${CCX_INSTALL_DIR:-$HOME/.local/bin}\" && install -m 755 ccx \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx\" && echo \"installed to ${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx\"",
-    "install:agent": "mkdir -p \"${CCX_INSTALL_DIR:-$HOME/.local/bin}\" && CGO_ENABLED=0 go build -trimpath -o \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx-agent\" ./apps/agent && echo \"installed to ${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx-agent\"",
+    "install:agent": "mkdir -p \"${CCX_INSTALL_DIR:-$HOME/.local/bin}\" && CGO_ENABLED=0 go build -trimpath -o \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/.ccx-agent.new\" ./apps/agent && mv \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/.ccx-agent.new\" \"${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx-agent\" && echo \"installed to ${CCX_INSTALL_DIR:-$HOME/.local/bin}/ccx-agent\"",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
