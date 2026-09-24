@@ -62,6 +62,8 @@ afterEach(() => {
 async function install(args: string[], env: Record<string, string> = {}) {
   const home = join(work, "home");
   const p = Bun.spawn(["sh", join(ROOT, "scripts", "install.sh"), ...args], {
+    // 壊した実装が相対パスへ書いても、repo ではなく一時ディレクトリに落ちるように
+    cwd: work,
     stdout: "pipe",
     stderr: "pipe",
     env: {
