@@ -109,7 +109,7 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
-	c.accept(ctx, ln)
+	c.accept(ctx, ln, acceptRetry)
 	return nil
 }
 
@@ -117,9 +117,9 @@ func (c *Concern) run(ctx context.Context) error {
 // socket in place with nobody accepting, so every session that connects later
 // (a new one, or one reconnecting after a restart) would be silently unserved;
 // errors like EMFILE pass.
-var acceptRetry = time.Second
+const acceptRetry = time.Second
 
-func (c *Concern) accept(ctx context.Context, ln net.Listener) {
+func (c *Concern) accept(ctx context.Context, ln net.Listener, retry time.Duration) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -130,7 +130,7 @@ func (c *Concern) accept(ctx context.Context, ln net.Listener) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(acceptRetry):
+			case <-time.After(retry):
 			}
 			continue
 		}

@@ -93,6 +93,7 @@ func TestScanTranscript(t *testing.T) {
 		`,"message":{"role":"user","content":[{"type":"tool_result","content":"<channel source=\"ccx\" kind=\"heartbeat\">"}]}`,
 		`,"message":{"role":"user","content":"<channel source=\"ccx\" kind=\"heartbeat\"> pasted by a person"}`,
 		`,"isMeta":true,"message":{"role":"user","content":"<channel source=\"akapen\" file=\"a.md\">\nwhy kind=\"heartbeat\"?\n</channel>"}`,
+		`,"isMeta":true,"message":{"role":"user","content":"<channel source=\"other\" event_kind=\"heartbeat\">\nhi\n</channel>"}`,
 	} {
 		s = mustScan(t, rec("user", "10:00:00", human)+rec("user", "10:10:00", quote)+rec("assistant", "10:10:05", reply))
 		if !s.LastBeat.IsZero() || !s.LastReal.Equal(at("10:10:05")) {
@@ -145,7 +146,7 @@ func TestStepPushesOnlyWhenDue(t *testing.T) {
 
 	h, pushes, _ := fixture(t, tr, at("10:30:05"))
 	var sent time.Time
-	if wait := h.step(&sent); *pushes != 0 || wait != 20*time.Minute {
+	if wait := h.step(&sent); *pushes != 0 || wait != 19*time.Minute+55*time.Second {
 		t.Errorf("before due: pushes=%d wait=%v, want 0 and the time left", *pushes, wait)
 	}
 
@@ -184,22 +185,53 @@ func TestStepNeverStacksAnUndeliveredBeat(t *testing.T) {
 	}
 }
 
-// A heartbeat whose answer took five minutes: the next one is due from that last
-// request's record, not from the heartbeat. (The cache is read at the request's
-// start, a little before its record; the 10 minutes of slack in 50m covers it.)
-func TestStepCountsFromTheLastRequest(t *testing.T) {
-	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply) +
-		rec("user", "10:50:06", beat) + rec("assistant", "10:55:00", reply)
-	h, pushes, _ := fixture(t, tr, at("11:42:00"))
+// A request that started at 10:00 and answered at 10:12: the cache was read at
+// 10:00, so the heartbeat is due at 10:50 and the cache is gone at 11:00. Counting
+// from the answer would beat at 11:02, after it expired.
+func TestStepCountsFromTheStartOfTheLastRequest(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:12:00", reply)
+	h, pushes, _ := fixture(t, tr, at("10:49:00"))
 	var sent time.Time
 	h.step(&sent)
 	if *pushes != 0 {
-		t.Errorf("before last request + interval: pushes=%d, want 0", *pushes)
+		t.Errorf("before request start + interval: pushes=%d, want 0", *pushes)
 	}
-	h.Now = func() time.Time { return at("11:45:00") }
+	h.Now = func() time.Time { return at("10:50:00") }
 	h.step(&sent)
 	if *pushes != 1 {
-		t.Errorf("at last request + interval: pushes=%d, want 1", *pushes)
+		t.Errorf("at request start + interval: pushes=%d, want 1", *pushes)
+	}
+
+	h2, pushes2, _ := fixture(t, tr, at("11:01:00"))
+	var sent2 time.Time
+	h2.step(&sent2)
+	if *pushes2 != 0 {
+		t.Errorf("an hour after the request started: pushes=%d, want 0 (expired)", *pushes2)
+	}
+}
+
+// A turn is running when its input is newer than the last response: a person
+// who came back just past the interval, a long tool call. A heartbeat then would
+// only queue behind the turn. A local command (/model) starts no turn.
+func TestStepWaitsForARunningTurn(t *testing.T) {
+	base := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	cmd := `,"message":{"role":"user","content":"<command-name>/model</command-name>"}`
+	out := `,"message":{"role":"user","content":"<local-command-stdout>Set model</local-command-stdout>"}`
+	for _, c := range []struct {
+		name string
+		tr   string
+		want int
+	}{
+		{"a person's prompt with no answer yet", base + rec("user", "10:50:03", human), 0},
+		{"a tool result with no answer yet", base + rec("user", "10:50:03", toolRes), 0},
+		{"a /model run and left", base + rec("user", "10:40:00", cmd) + rec("user", "10:40:00", out), 1},
+	} {
+		h, pushes, _ := fixture(t, c.tr, at("10:50:05"))
+		var sent time.Time
+		h.step(&sent)
+		if *pushes != c.want {
+			t.Errorf("%s: pushes=%d, want %d", c.name, *pushes, c.want)
+		}
 	}
 }
 
@@ -290,6 +322,36 @@ func TestStepFollowsTheSessionsDeclaration(t *testing.T) {
 		} else if c.want == 0 && wait != poll {
 			t.Errorf("default=%v file=%q: wait=%v, want poll so turning it on is seen soon", c.def, c.file, wait)
 		}
+	}
+}
+
+// The same running Heartbeat follows a declaration made while it runs, both ways:
+// nothing about the declaration is cached between steps.
+func TestStepFollowsADeclarationChangedWhileRunning(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	h, pushes, _ := fixture(t, tr, at("10:50:05"))
+	h.Default = false
+	file := filepath.Join(h.ClaudeHome, "sessions", "sid", "heartbeat")
+	_ = os.MkdirAll(filepath.Dir(file), 0o755)
+	var sent time.Time
+
+	h.step(&sent)
+	_ = os.WriteFile(file, []byte("on\n"), 0o644)
+	h.step(&sent)
+	if *pushes != 1 {
+		t.Fatalf("after declaring on: pushes=%d, want 1", *pushes)
+	}
+
+	// Delivered and answered; later, declared off before the next is due.
+	h.Default = true
+	tr += rec("user", "10:50:06", beat) + rec("assistant", "10:50:08", reply)
+	_ = os.WriteFile(filepath.Join(h.ClaudeHome, "projects", "-some-cwd", "sid.jsonl"), []byte(tr), 0o644)
+	h.mtime = time.Time{}
+	_ = os.WriteFile(file, []byte("off\n"), 0o644)
+	h.Now = func() time.Time { return at("11:40:06") }
+	h.step(&sent)
+	if *pushes != 1 {
+		t.Errorf("after declaring off, with the default on: pushes=%d, want still 1", *pushes)
 	}
 }
 

@@ -112,7 +112,8 @@ sequenceDiagram
 | Condition | Why |
 |---|---|
 | `~/.claude/sessions/<id>/archived` exists | declared folded away; its cache is not wanted |
-| an hour or more since the last request that answered (resumed, host suspended, a heartbeat whose request failed) | the cache is already gone; a heartbeat would only pay the rewrite early |
+| an hour or more since the last request that answered started (resumed, host suspended, a heartbeat whose request failed) | the cache is already gone; a heartbeat would only pay the rewrite early |
+| a turn is running (its input, a prompt or a tool result, is newer than the last response) | the session reads its cache itself; a heartbeat would queue behind the turn and run as an extra turn |
 | the last request wrote a 5-minute cache | it is always gone 50 minutes later |
 | no real use for `CCX_HEARTBEAT_MAX_IDLE` (12h; `off` = no cap) | a session nobody returns to is not worth waking forever |
 | the last heartbeat is not in the transcript yet, and nothing else happened since | mid-turn, or `/clear` moved the session to a new id; never stack a second. Real use after the push means it was lost, and beating resumes |
@@ -122,7 +123,12 @@ sequenceDiagram
 
 "Real use" is any record outside a heartbeat turn. A heartbeat turn runs from its user record to the
 next user prompt or channel event that is not a heartbeat. Only the opening tag of an `isMeta` channel
-event is matched, so a person or a tool quoting the attribute is not a heartbeat.
+event is matched, and the attribute name whole (`event_kind="heartbeat"` is not it), so a person or a
+tool quoting the attribute is not a heartbeat.
+
+The clock is the start of the last answered request: the input record its response followed. The cache
+is read when a request starts, and a response can take minutes. A local command (`/model`, a `!` line)
+writes user records with no request behind them, so it neither starts a turn nor moves the clock.
 
 The heartbeat starts only after the client sends `notifications/initialized`: a push before that is
 outside the MCP lifecycle and can be dropped silently.
@@ -132,7 +138,7 @@ outside the MCP lifecycle and can be dropped silently.
 A heartbeat is a user record with `isMeta: true` whose content is
 `<channel source="<server name>" kind="heartbeat">`. Anything that counts a session's activity (idle
 reapers, turn metrics, hooks) must skip it, or a heartbeat keeps an abandoned session looking busy. The
-stable part is `kind="heartbeat"`; `source` is whatever name the user registered the server under.
+stable part is the attribute ` kind="heartbeat"` (with its leading space); `source` is whatever name the user registered the server under.
 
 - Stop hooks run on every heartbeat turn (observed: all 6 of the test session's Stop hooks, each time). A
   Stop hook that notifies a person fires every 50 minutes per idle session unless it skips heartbeats.

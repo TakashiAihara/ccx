@@ -135,12 +135,16 @@ type flaky struct {
 	net.Listener
 	fails, calls int
 	closed       chan struct{}
+	conn         net.Conn
 }
 
 func (f *flaky) Accept() (net.Conn, error) {
 	f.calls++
 	if f.calls <= f.fails {
 		return nil, errors.New("accept: too many open files")
+	}
+	if f.calls == f.fails+1 && f.conn != nil {
+		return f.conn, nil
 	}
 	<-f.closed
 	return nil, net.ErrClosed
@@ -149,20 +153,26 @@ func (f *flaky) Accept() (net.Conn, error) {
 // A failed Accept (EMFILE and the like) is retried; the concern keeps serving
 // sessions that connect later instead of leaving a socket nobody accepts on.
 func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
-	old := acceptRetry
-	acceptRetry = time.Millisecond
-	defer func() { acceptRetry = old }()
 
-	f := &flaky{fails: 3, closed: make(chan struct{})}
+	server, client := net.Pipe()
+	defer client.Close()
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	go func() { _, _ = client.Write([]byte("not a registration\n")) }()
+	f := &flaky{fails: 3, closed: make(chan struct{}), conn: server}
 	c := &Concern{log: t.Logf}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { c.accept(ctx, f); close(done) }()
+	go func() { c.accept(ctx, f, time.Millisecond); close(done) }()
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	close(f.closed)
 	<-done
-	if f.calls != 4 {
-		t.Errorf("Accept called %d times, want 3 failures then a 4th that waits", f.calls)
+	if f.calls != 5 {
+		t.Errorf("Accept called %d times, want 3 failures, a connection, then a 5th that waits", f.calls)
+	}
+	// The connection accepted after the failures was served: serve read its
+	// registration (an unregistered one is closed, which the client sees).
+	if _, err := client.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Errorf("the connection after the failures was not served: %v", err)
 	}
 }

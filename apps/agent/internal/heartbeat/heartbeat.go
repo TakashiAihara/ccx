@@ -13,7 +13,9 @@ import (
 // Marker is the attribute that identifies a heartbeat in the opening tag of a
 // channel event (an isMeta user record). Tools that count a session's turns
 // (idle reapers, retro metrics) skip records carrying it.
-const Marker = `kind="heartbeat"`
+// The leading space makes it the whole attribute name: `event_kind="heartbeat"`
+// on another channel's event is not a heartbeat.
+const Marker = ` kind="heartbeat"`
 
 // Heartbeat keeps one session's prompt cache from expiring (docs/design/heartbeat.md).
 //
@@ -39,9 +41,16 @@ type Heartbeat struct {
 
 // Scan is what one read of a transcript tells.
 type Scan struct {
-	LastAssistant time.Time // the last request, heartbeat or not
-	LastReal      time.Time // the last record outside a heartbeat turn
-	LastBeat      time.Time // the last heartbeat that arrived
+	LastAssistant time.Time // the last response record, heartbeat or not
+	// LastRequest is when the last answered request started: the input record the
+	// response followed. The cache is read at the start of a request, so the TTL
+	// counts from here, not from the response (which can come minutes later).
+	LastRequest time.Time
+	// LastInput is the last record that starts a request (a prompt, a tool
+	// result, a channel event). Newer than LastAssistant means a turn is running.
+	LastInput time.Time
+	LastReal  time.Time // the last record outside a heartbeat turn
+	LastBeat  time.Time // the last heartbeat that arrived
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
@@ -80,6 +89,12 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	if s.ShortTTL {
 		return h.Interval // a 5-minute cache: every heartbeat would be a full rewrite
 	}
+	if s.LastInput.After(s.LastAssistant) {
+		// A turn is running (a person came back, a long tool call): the session is
+		// reading its cache itself, and a heartbeat pushed now would only queue
+		// behind the turn and run as an extra turn after it.
+		return poll
+	}
 	if !sent.IsZero() {
 		if s.LastBeat.Before(*sent) && !s.LastReal.After(*sent) {
 			// Pushed but not in the transcript, and nothing else happened since.
@@ -97,14 +112,14 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	}
 	// Counted from the later of the two: a heartbeat whose answer failed must not
 	// make the next one due at once.
-	last := s.LastAssistant
+	last := s.LastRequest
 	if s.LastBeat.After(last) {
 		last = s.LastBeat
 	}
 	if due := last.Add(h.Interval); now.Before(due) {
 		return due.Sub(now)
 	}
-	if now.Sub(s.LastAssistant) >= cacheTTL {
+	if now.Sub(s.LastRequest) >= cacheTTL {
 		// Already expired (a resume, a suspended host, a heartbeat whose request
 		// failed): a heartbeat would only rewrite the prefix early, and the next
 		// real turn does that anyway. Only a request that answered read the cache,
@@ -201,6 +216,11 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		switch rec.Type {
 		case "user":
 			tag := channelTag(rec.Message.Content)
+			// A local command (/model, a ! bash line) is written as user records
+			// with no request behind it, so it starts no turn.
+			if tag != "" || isToolResult(rec.Message.Content) || (!rec.IsMeta && !isLocalCommand(rec.Message.Content)) {
+				s.LastInput = rec.Timestamp
+			}
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
 			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
@@ -210,6 +230,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			}
 		case "assistant":
 			s.LastAssistant = rec.Timestamp
+			s.LastRequest = rec.Timestamp
+			if !s.LastInput.IsZero() && !s.LastInput.After(rec.Timestamp) {
+				s.LastRequest = s.LastInput
+			}
 			// A request that wrote nothing says nothing about the TTL; keep the last
 			// one that did.
 			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
@@ -223,6 +247,21 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 	}
 	return s, sc.Err()
+}
+
+// isLocalCommand is a record Claude Code writes for a command run locally (a
+// slash command's echo and output, a ! bash line): no request follows it.
+func isLocalCommand(content json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(content, &s) != nil {
+		return false
+	}
+	for _, p := range []string{"<command-name>", "<local-command-", "<bash-"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // channelTag is the opening <channel ...> tag of a channel event, or "". Only
