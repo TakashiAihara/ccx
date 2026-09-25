@@ -117,7 +117,8 @@ sequenceDiagram
   identified. A second heartbeat was not measured (the host rebooted before it was due).
 - The claim end to end: two sessions started together (d1, v0.1.1-rc.11, 2026-09-25), the same two
   person turns, one with the heartbeat on and one declared off, then a person turn in both 70 minutes
-  after the last request (past the hour for the one without a heartbeat):
+  after the last person request (past the hour for the one without a heartbeat; 21 minutes after the
+  heartbeat's request for the one with it):
 
 | turn | at (JST) | on: cache read | on: cache write | off: cache read | off: cache write |
 |---|---|---|---|---|---|
@@ -126,9 +127,10 @@ sequenceDiagram
 | 3 person | 16:10:12 (+70m) | 166,241 | 47 | 25,127 | 141,107 |
 
 - The session with the heartbeat read its whole cache 70 minutes on; the one without rewrote it (the
-  25,127 it read is the part shared with every session). Over d1's transcripts since 2026-09-11, a
-  person turn 60 minutes or more after the last request with no heartbeat in between read the cache 0
-  times of 85, and one 40-60 minutes after read it 27 times of 27.
+  25,127 it read is the part shared with every session). Over d1's transcripts since 2026-09-11,
+  counting a turn as reading the whole cache when its cache read is at least its cache write: a person
+  turn 60 minutes or more after the last request with no heartbeat in between did 0 times of 85, and a
+  person turn 40-60 minutes after the last request did 27 times of 27.
 - The channel must be registered in `~/.claude.json` (`claude mcp add`); a server passed with
   `--mcp-config` is refused as `no MCP server configured with that name`.
 
