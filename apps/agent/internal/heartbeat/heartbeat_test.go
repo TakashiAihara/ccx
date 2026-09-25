@@ -544,43 +544,39 @@ func TestStepDropsAnAbandonedToolCall(t *testing.T) {
 
 // inResponse puts an assistant record in one response: Claude Code writes each
 // content block of a response as its own record, all with the response's id.
-func inResponse(extra, id string) string {
-	return strings.Replace(extra, `"role":"assistant",`, `"role":"assistant","id":"`+id+`",`, 1)
+func inResponse(t *testing.T, extra, id string) string {
+	t.Helper()
+	out := strings.Replace(extra, `"role":"assistant",`, `"role":"assistant","id":"`+id+`",`, 1)
+	if out == extra {
+		t.Fatalf("inResponse: no assistant message in %s", extra)
+	}
+	return out
 }
 
 // Tools run while their response still streams, so a tool's result can land
 // between two blocks of the response that called it, and the later block's
-// parent is that result (observed in 660 of 9,580 responses, 2026-09-25). The
-// later block answers the same request: it neither moves the request start nor
-// ends a sibling tool still running.
+// parent is that result (docs/design/heartbeat.md). Here t1 and t2 run in
+// parallel, t1 returns, the same response calls t3, and t3 returns: t2 is still
+// running, so no heartbeat.
 func TestStepKeepsOneResponseAcrossAnInterleavedToolResult(t *testing.T) {
-	text := `,"message":{"role":"assistant","content":[{"type":"text","text":"..."}]}`
-
-	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:04", inResponse(toolUse, "m1")) +
-		rec("user", "10:05:00", toolRes) + rec("assistant", "10:05:01", inResponse(text, "m1"))
-	h, pushes, _ := fixture(t, tr, at("10:50:05"))
+	toolUse3 := `,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{}}]}`
+	toolRes3 := `,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"x"}]}`
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:04", inResponse(t, toolUse, "m1")) +
+		rec("assistant", "10:00:05", inResponse(t, toolUse2, "m1")) + rec("user", "10:00:06", toolRes) +
+		rec("assistant", "10:00:07", inResponse(t, toolUse3, "m1")) + rec("user", "10:00:08", toolRes3)
+	h, pushes, _ := fixture(t, tr, at("10:50:10"))
 	var sent time.Time
 	h.step(&sent)
-	if *pushes != 1 {
-		t.Errorf("50m after the prompt, the response resumed after a result: pushes=%d, want 1", *pushes)
-	}
-
-	tr = rec("user", "10:00:00", human) + rec("assistant", "10:00:04", inResponse(toolUse, "m1")) +
-		rec("assistant", "10:00:05", inResponse(toolUse2, "m1")) + rec("user", "10:03:00", toolRes) +
-		rec("assistant", "10:03:01", inResponse(text, "m1"))
-	h2, pushes2, _ := fixture(t, tr, at("10:53:05"))
-	var sent2 time.Time
-	h2.step(&sent2)
-	if *pushes2 != 0 {
-		t.Errorf("t2 still running after t1's result split the response: pushes=%d, want 0", *pushes2)
+	if *pushes != 0 {
+		t.Errorf("t2 still running after t1's result split the response: pushes=%d, want 0", *pushes)
 	}
 }
 
-// A tool's result is a new request: the heartbeat counts from it, not from the
-// prompt that called the tool.
+// A tool's result starts a new request once a new response answers it: the
+// heartbeat counts from the result, not from the prompt that called the tool.
 func TestStepCountsFromTheToolResultsRequest(t *testing.T) {
-	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) +
-		rec("user", "10:10:00", toolRes) + rec("assistant", "10:10:05", reply)
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", inResponse(t, toolUse, "m1")) +
+		rec("user", "10:10:00", toolRes) + rec("assistant", "10:10:05", inResponse(t, reply, "m2"))
 	for _, c := range []struct {
 		now  string
 		want int

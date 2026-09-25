@@ -126,15 +126,17 @@ next user prompt or channel event that is not a heartbeat. Only the opening tag 
 event is matched, and the attribute name whole (`event_kind="heartbeat"` is not it), so a person or a
 tool quoting the attribute is not a heartbeat.
 
-The clock is the start of the last answered request: the first user record up the response's
-`parentUuid` chain (attachments sit in between; a response split over several records traces to the
-same one). The cache is read when a request starts, and a response can take minutes. The chain is
-followed rather than the content read: cross-session messages and channel events are meta records that
-start a turn, and a `!` line can too. A block of a response already seen (same `message.id`) keeps
-that response's start: tools run while the response streams, so a tool's result can be the parent of a
-later block of the same response (660 of 9,580 responses, 2026-09-25), and following the chain there
-would move the clock and drop a sibling tool still running. A synthetic API-error reply
-(`isApiErrorMessage`) is not an answer.
+The clock is the start of the last answered request: the first user record up the `parentUuid` chain
+of the response's first record (attachments sit in between). The cache is read when a request starts,
+and a response can take minutes. The chain is followed rather than the content read: cross-session
+messages and channel events are meta records that start a turn, and a `!` line can too. Later records
+of the same response (same `message.id`) keep its start rather than follow their own chain: tools run
+while the response streams, so a tool's result can be the parent of a later block of that response.
+Following the chain there moved the clock and cleared a sibling tool still running, and a heartbeat
+could then land in the middle of the turn. Measured on d1 on 2026-09-25 over the transcripts of the
+last 14 days (9,580 responses): 661 blocks had a tool result as parent while their `message.id` was
+already seen, and in 10 of them a sibling tool had not returned yet. A
+synthetic API-error reply (`isApiErrorMessage`) is not an answer.
 
 "A turn is running" is a tool that has not returned, or a user record newer than the last response and
 under 5 minutes old. Some user records never get a response (Esc, a manual `/compact`, a stopped task's
