@@ -44,7 +44,8 @@ type Heartbeat struct {
 type Scan struct {
 	LastAssistant time.Time // the last response record, heartbeat or not
 	// LastRequest is when the last answered request started: the user record up
-	// the response's parentUuid chain. The cache is read at the start of a
+	// the parentUuid chain of the response's first record (later records of the
+	// same message.id keep it). The cache is read at the start of a
 	// request, so the TTL counts from here, not from the response (which can come
 	// minutes later). A synthetic API-error reply is not an answer.
 	LastRequest time.Time
@@ -207,8 +208,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
 	nodes := map[string]node{}
-	starts := map[string]time.Time{} // assistant uuid -> its request's start
-	pending := map[string]bool{}     // tool_use ids with no result yet
+	starts := map[string]time.Time{}    // assistant uuid -> its request's start
+	pending := map[string]bool{}        // tool_use ids with no result yet
+	responses := map[string]time.Time{} // response (message) id -> its request's start
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
@@ -221,6 +223,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			IsMeta     bool      `json:"isMeta"`
 			APIError   bool      `json:"isApiErrorMessage"`
 			Message    struct {
+				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
 					CacheCreation struct {
@@ -272,12 +275,22 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				continue
 			}
 			s.LastAssistant = rec.Timestamp
-			start := requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
-			if !start.Equal(s.LastRequest) {
-				// A response to a new request: any tool the earlier one left without a
-				// result was abandoned (a rewind, a crash), or it would not have moved
-				// on. Parallel calls share one request, so they are not dropped here.
-				clear(pending)
+			// Tools run while their response streams, so one of their results can be
+			// the parent of a later block of that same response. The response id, not
+			// the parent chain, says which request the block answers. This assumes a
+			// response's blocks are never split by another response's.
+			start, seen := responses[rec.Message.ID]
+			if !seen {
+				start = requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
+				if !start.Equal(s.LastRequest) {
+					// A response to a new request: any tool the earlier one left without a
+					// result was abandoned (a rewind, a crash), or it would not have moved
+					// on. Parallel calls share one request, so they are not dropped here.
+					clear(pending)
+				}
+				if rec.Message.ID != "" {
+					responses[rec.Message.ID] = start
+				}
 			}
 			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
 				pending[id] = true
@@ -336,8 +349,9 @@ type node struct {
 	parent string
 }
 
-// requestStart is when the request a response answers started: the first user
-// record up its parentUuid chain (attachments sit in between). Meeting an earlier
+// requestStart is when the request a response's first record answers started: the
+// first user record up its parentUuid chain (attachments sit in between; later
+// records of the same response are keyed by message.id instead). Meeting an earlier
 // response first means this is a later part of the same one. Following the chain
 // rather than guessing from content: cross-session messages and channel events are
 // meta records that start a turn, and a local command's output can too.
