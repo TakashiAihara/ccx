@@ -207,8 +207,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
 	nodes := map[string]node{}
-	starts := map[string]time.Time{} // assistant uuid -> its request's start
-	pending := map[string]bool{}     // tool_use ids with no result yet
+	starts := map[string]time.Time{}    // assistant uuid -> its request's start
+	pending := map[string]bool{}        // tool_use ids with no result yet
+	responses := map[string]time.Time{} // response (message) id -> its request's start
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
@@ -221,6 +222,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			IsMeta     bool      `json:"isMeta"`
 			APIError   bool      `json:"isApiErrorMessage"`
 			Message    struct {
+				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
 					CacheCreation struct {
@@ -272,12 +274,21 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				continue
 			}
 			s.LastAssistant = rec.Timestamp
-			start := requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
-			if !start.Equal(s.LastRequest) {
-				// A response to a new request: any tool the earlier one left without a
-				// result was abandoned (a rewind, a crash), or it would not have moved
-				// on. Parallel calls share one request, so they are not dropped here.
-				clear(pending)
+			// Tools run while their response streams, so one of their results can be
+			// the parent of a later block of that same response. The response id, not
+			// the parent chain, says which request the block answers.
+			start, seen := responses[rec.Message.ID]
+			if !seen {
+				start = requestStart(nodes, starts, rec.ParentUUID, rec.Timestamp)
+				if !start.Equal(s.LastRequest) {
+					// A response to a new request: any tool the earlier one left without a
+					// result was abandoned (a rewind, a crash), or it would not have moved
+					// on.
+					clear(pending)
+				}
+				if rec.Message.ID != "" {
+					responses[rec.Message.ID] = start
+				}
 			}
 			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
 				pending[id] = true

@@ -130,8 +130,11 @@ The clock is the start of the last answered request: the first user record up th
 `parentUuid` chain (attachments sit in between; a response split over several records traces to the
 same one). The cache is read when a request starts, and a response can take minutes. The chain is
 followed rather than the content read: cross-session messages and channel events are meta records that
-start a turn, and a `!` line can too. A synthetic API-error reply (`isApiErrorMessage`) is not an
-answer.
+start a turn, and a `!` line can too. A block of a response already seen (same `message.id`) keeps
+that response's start: tools run while the response streams, so a tool's result can be the parent of a
+later block of the same response (660 of 9,580 responses, 2026-09-25), and following the chain there
+would move the clock and drop a sibling tool still running. A synthetic API-error reply
+(`isApiErrorMessage`) is not an answer.
 
 "A turn is running" is a tool that has not returned, or a user record newer than the last response and
 under 5 minutes old. Some user records never get a response (Esc, a manual `/compact`, a stopped task's
