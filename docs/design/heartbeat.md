@@ -104,6 +104,17 @@ sequenceDiagram
   identified. It is not the TTL (every write was `ephemeral_1h`, and a person's turn in another session read
   364,157 after a 49-minute gap) and not the heartbeat (turn 4 read what turn 3 wrote). The likely cause is
   the MCP connection state changing during the hour, which splits a person's turn the same way.
+- Release build (v0.1.1-rc.10, Claude Code 2.1.282, d1, 2026-09-25, started with `claude-with-channel`):
+
+| turn | at (JST) | cache read | cache write |
+|---|---|---|---|
+| 1 person | 10:23:59 | 25,127 | 189,974 |
+| 2 person | 10:24:20 | 215,101 | 54 |
+| 3 heartbeat | 11:14:20 (+50m) | 215,155 | 34 |
+
+- Turn 3 read the whole prefix on the first heartbeat after the first person turns, so the split seen
+  above (and once more on m1 with rc.8) did not reproduce here. The cause of that split is still not
+  identified. A second heartbeat was not measured (the host rebooted before it was due).
 - The channel must be registered in `~/.claude.json` (`claude mcp add`); a server passed with
   `--mcp-config` is refused as `no MCP server configured with that name`.
 
