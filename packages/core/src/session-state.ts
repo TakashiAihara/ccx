@@ -120,8 +120,10 @@ async function readMetadata(dir: string): Promise<Metadata> {
   let names: string[];
   try {
     names = await readdir(join(dir, META_DIR));
-  } catch {
-    return {};
+  } catch (e) {
+    // 無いのは空。読めない (権限 / meta が通常ファイル) を空にすると、push が全 key を消した state.json を送る
+    if (errCode(e) === "ENOENT") return {};
+    throw e;
   }
   const out: [string, string][] = [];
   // readdir の順は fs 次第。status の表示と state.json の中身を machine 間で揃えるため key 順にする
@@ -129,12 +131,15 @@ async function readMetadata(dir: string): Promise<Metadata> {
     try {
       // 書くときに足した末尾の改行 1 つだけを外す。値は利用者のものなので空白は削らない (保存先との往復で変わらない)
       out.push([k, (await Bun.file(join(dir, META_DIR, k)).text()).replace(/\n$/, "")]);
-    } catch {
-      // ディレクトリ等、読めないものは key として数えない
+    } catch (e) {
+      // ディレクトリは key ではない。readdir の後に消えたものは無い。それ以外は空にせず止める (上と同じ理由)
+      if (errCode(e) !== "EISDIR" && errCode(e) !== "ENOENT") throw e;
     }
   }
   return Object.fromEntries(out);
 }
+
+const errCode = (e: unknown) => (e && typeof e === "object" && "code" in e ? (e as { code: unknown }).code : undefined);
 
 export async function readDeclared(sessionId: string, home = claudeHome()): Promise<DeclaredState> {
   const dir = sessionDir(sessionId, home);
@@ -215,7 +220,14 @@ export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
     return [];
   }
   const out: string[] = [];
-  for (const id of names) if (!isEmptyDeclared(await readDeclared(id, home))) out.push(id);
+  for (const id of names) {
+    try {
+      if (!isEmptyDeclared(await readDeclared(id, home))) out.push(id);
+    } catch (e) {
+      // 1 session の読めない印で、他の session の解決まで止めない
+      console.error(`(${id}: declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
   return out;
 }
 

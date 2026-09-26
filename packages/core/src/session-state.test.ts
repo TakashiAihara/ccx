@@ -108,6 +108,15 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // key の形でもディレクトリは読めない (EISDIR): 数えず、readDeclared も落ちない
     await mkdir(join(dir, "sub"), { recursive: true });
     expect((await readDeclared(SID, home)).metadata).toEqual({});
+    // 読めない meta は空にしない (空で push すると保存先の key を消す)
+    await rm(dir, { recursive: true });
+    await Bun.write(dir, "not a dir");
+    await expect(readDeclared(SID, home)).rejects.toThrow();
+    // 一覧はその session だけ飛ばす
+    const other = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+    await writeDeclared(other, { task: "t" }, home);
+    expect(await markedSessionIds(home)).toEqual([other]);
+    await rm(dir);
   });
 
   test("normalizeDeclared keeps valid string metadata; sameDeclared compares metadata by content, not key order", () => {
