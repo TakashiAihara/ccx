@@ -183,7 +183,9 @@ func cmdChannel() int {
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	sid := fs.String("session", "", "Claude Code session id")
-	fs.Bool("json", true, "print JSON (the only output format)")
+	// Accepted and ignored: JSON is the only output. Callers (statusline) spell
+	// the format they rely on, so a later human-readable default does not break them.
+	fs.Bool("json", false, "print JSON (currently the only output; accepted so callers can say so)")
 	timeout := fs.Duration("timeout", 500*time.Millisecond, "give up after this long")
 	if err := fs.Parse(args); err != nil {
 		return 2

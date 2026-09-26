@@ -26,9 +26,11 @@ type GetSessionStatusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Claude Code の session id (8-4-4-4-12、小文字)。先頭一致は受けない。
 	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// その session の CLAUDE_CONFIG_DIR。空なら agent の既定 (~/.claude)。agent は
-	// systemd の下で別の環境を持つので、session 側が知っている値を渡す。channel が
-	// 登録済みの session なら、登録時の値が優先される。
+	// その session の CLAUDE_CONFIG_DIR。空または相対なら agent の既定 (~/.claude)。
+	// agent は systemd の下で別の環境を持つので、session 側が知っている値を渡す。
+	// channel が登録済みの session なら、登録時の値が優先される (宣言状態も heartbeat も
+	// 同じ home から読む)。unix socket でだけ効く: TCP では無視する (別ホストの呼び手は
+	// このホストの値を知らず、任意のディレクトリを読ませる口になるため)。
 	ClaudeHome    string `protobuf:"bytes,2,opt,name=claude_home,json=claudeHome,proto3" json:"claude_home,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -149,7 +151,8 @@ type HeartbeatStatus struct {
 	Wanted bool `protobuf:"varint,3,opt,name=wanted,proto3" json:"wanted,omitempty"`
 	// channel が agent に繋がっているか。false なら打つ経路が無い。
 	Registered bool `protobuf:"varint,4,opt,name=registered,proto3" json:"registered,omitempty"`
-	// 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / 状態待ち) なら未設定。
+	// 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / turn の実行中 / 打った
+	// 直後で transcript への着地待ち) なら未設定。
 	NextAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=next_at,json=nextAt,proto3" json:"next_at,omitempty"`
 	// この登録 (channel の接続) の間に打った回数と、最後に打った時刻。
 	Sent          uint32                 `protobuf:"varint,6,opt,name=sent,proto3" json:"sent,omitempty"`
@@ -246,11 +249,15 @@ type CollectStatus struct {
 	// spool に残っている (center に届いていない) event の数。
 	Pending uint32 `protobuf:"varint,3,opt,name=pending,proto3" json:"pending,omitempty"`
 	// 最後に center に届いた時刻と、最後に届かなかった時刻・理由。agent の起動後の値。
+	// last_error は後で届いても消えない。今も届いていないかは last_error_at と
+	// last_forwarded_at を比べて読む。
 	LastForwardedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_forwarded_at,json=lastForwardedAt,proto3" json:"last_forwarded_at,omitempty"`
 	LastErrorAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_error_at,json=lastErrorAt,proto3" json:"last_error_at,omitempty"`
 	LastError       string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// spool が読めなかったときの理由。そのとき pending は 0 で、意味を持たない。
+	SpoolError    string `protobuf:"bytes,7,opt,name=spool_error,json=spoolError,proto3" json:"spool_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CollectStatus) Reset() {
@@ -325,6 +332,13 @@ func (x *CollectStatus) GetLastError() string {
 	return ""
 }
 
+func (x *CollectStatus) GetSpoolError() string {
+	if x != nil {
+		return x.SpoolError
+	}
+	return ""
+}
+
 var File_ccx_v1_agent_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_agent_proto_rawDesc = "" +
@@ -349,7 +363,7 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\anext_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06nextAt\x12\x12\n" +
 	"\x04sent\x18\x06 \x01(\rR\x04sent\x12<\n" +
 	"\flast_sent_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastSentAt\"\x97\x02\n" +
+	"lastSentAt\"\xb8\x02\n" +
 	"\rCollectStatus\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12+\n" +
 	"\x11center_configured\x18\x02 \x01(\bR\x10centerConfigured\x12\x18\n" +
@@ -357,7 +371,9 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\x11last_forwarded_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0flastForwardedAt\x12>\n" +
 	"\rlast_error_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vlastErrorAt\x12\x1d\n" +
 	"\n" +
-	"last_error\x18\x06 \x01(\tR\tlastError2e\n" +
+	"last_error\x18\x06 \x01(\tR\tlastError\x12\x1f\n" +
+	"\vspool_error\x18\a \x01(\tR\n" +
+	"spoolError2e\n" +
 	"\fAgentService\x12U\n" +
 	"\x10GetSessionStatus\x12\x1f.ccx.v1.GetSessionStatusRequest\x1a .ccx.v1.GetSessionStatusResponseB\x92\x01\n" +
 	"\n" +

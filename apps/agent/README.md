@@ -59,7 +59,13 @@ handler on two listeners:
   no fallback that reads the files some other way.
 - TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
   every request needs `Authorization: Bearer <hub token>`. Without a hub token
-  serve refuses to open it (the unix side stays up).
+  serve refuses to open it (the unix side stays up). It is plain HTTP and the
+  hub token is its only guard: any holder of that token can read this host's
+  session labels, tasks and metadata. `claudeHome` in a request is ignored here.
+
+Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
+null whenever no heartbeat is scheduled, and `lastError` stays after a later
+success (compare `lastErrorAt` with `lastForwardedAt`).
 
 Connect unary is HTTP POST + JSON, so curl works too:
 

@@ -21,9 +21,11 @@ service AgentService {
 message GetSessionStatusRequest {
   // Claude Code の session id (8-4-4-4-12、小文字)。先頭一致は受けない。
   string session_id = 1;
-  // その session の CLAUDE_CONFIG_DIR。空なら agent の既定 (~/.claude)。agent は
-  // systemd の下で別の環境を持つので、session 側が知っている値を渡す。channel が
-  // 登録済みの session なら、登録時の値が優先される。
+  // その session の CLAUDE_CONFIG_DIR。空または相対なら agent の既定 (~/.claude)。
+  // agent は systemd の下で別の環境を持つので、session 側が知っている値を渡す。
+  // channel が登録済みの session なら、登録時の値が優先される (宣言状態も heartbeat も
+  // 同じ home から読む)。unix socket でだけ効く: TCP では無視する (別ホストの呼び手は
+  // このホストの値を知らず、任意のディレクトリを読ませる口になるため)。
   string claude_home = 2;
 }
 
@@ -43,7 +45,8 @@ message HeartbeatStatus {
   bool wanted = 3;
   // channel が agent に繋がっているか。false なら打つ経路が無い。
   bool registered = 4;
-  // 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / 状態待ち) なら未設定。
+  // 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / turn の実行中 / 打った
+  // 直後で transcript への着地待ち) なら未設定。
   google.protobuf.Timestamp next_at = 5;
   // この登録 (channel の接続) の間に打った回数と、最後に打った時刻。
   uint32 sent = 6;
@@ -58,7 +61,11 @@ message CollectStatus {
   // spool に残っている (center に届いていない) event の数。
   uint32 pending = 3;
   // 最後に center に届いた時刻と、最後に届かなかった時刻・理由。agent の起動後の値。
+  // last_error は後で届いても消えない。今も届いていないかは last_error_at と
+  // last_forwarded_at を比べて読む。
   google.protobuf.Timestamp last_forwarded_at = 4;
   google.protobuf.Timestamp last_error_at = 5;
   string last_error = 6;
+  // spool が読めなかったときの理由。そのとき pending は 0 で、意味を持たない。
+  string spool_error = 7;
 }

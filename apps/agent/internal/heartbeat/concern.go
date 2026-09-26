@@ -56,6 +56,7 @@ type Concern struct {
 type Status struct {
 	Wanted     bool
 	Registered bool
+	Home       string // the ClaudeHome the answer was read from
 	Stats
 }
 
@@ -68,13 +69,13 @@ func (c *Concern) Status(session, home string) Status {
 	h := c.registered[session]
 	c.mu.Unlock()
 	if h != nil {
-		return Status{Wanted: h.wanted(), Registered: true, Stats: h.Stats()}
+		return Status{Wanted: h.wanted(), Registered: true, Home: h.ClaudeHome, Stats: h.Stats()}
 	}
 	if home == "" || !filepath.IsAbs(home) {
 		home = c.claudeHome
 	}
 	probe := &Heartbeat{SessionID: session, ClaudeHome: home, Default: c.cfg.Default}
-	return Status{Wanted: probe.wanted()}
+	return Status{Wanted: probe.wanted(), Home: home}
 }
 
 func New(cfg config.Config, log func(string, ...any)) *Concern {
