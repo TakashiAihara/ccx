@@ -247,6 +247,39 @@ func TestChannelSocket_NextToTheHookSocket(t *testing.T) {
 	}
 }
 
+func TestAPI_SocketAndListen(t *testing.T) {
+	c, _ := load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	if c.APISocketPath != "/run/user/1000/ccx/ccx-api.sock" || c.APIListen != "" {
+		t.Errorf("defaults: socket %q listen %q, want next to the hook socket and off", c.APISocketPath, c.APIListen)
+	}
+	c, _ = load(env(map[string]string{"CCX_SOCKET": "/s/hook.sock", "CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	if c.APISocketPath != "/s/ccx-api.sock" {
+		t.Errorf("with CCX_SOCKET = %q, want next to it", c.APISocketPath)
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	_ = os.WriteFile(cfgPath, []byte("[api]\nlisten = \"0.0.0.0:8792\"\n"), 0o644)
+	git := func(k string) string {
+		if k == "ccx.apiListen" {
+			return "0.0.0.0:1"
+		}
+		return ""
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_API_SOCKET": "/x/a.sock"}), noGit, fixedHost("h"))
+	if c.APIListen != "0.0.0.0:8792" || c.APISocketPath != "/x/a.sock" {
+		t.Errorf("file: listen %q socket %q", c.APIListen, c.APISocketPath)
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath}), git, fixedHost("h"))
+	if c.APIListen != "0.0.0.0:1" {
+		t.Errorf("git should beat file: %q", c.APIListen)
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_API_LISTEN": "127.0.0.1:2"}), git, fixedHost("h"))
+	if c.APIListen != "127.0.0.1:2" {
+		t.Errorf("env should beat git: %q", c.APIListen)
+	}
+}
+
 // The token comes from CCX_HUB_TOKEN, else the hub-token file next to
 // config.toml, and never from git config (git config travels with dotfiles).
 func TestHubToken_EnvThenFile_NeverGit(t *testing.T) {

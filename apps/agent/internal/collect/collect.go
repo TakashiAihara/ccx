@@ -52,6 +52,23 @@ func newCollect(socketPath string, spool *Spool, forwarder Forwarder, log func(s
 	return c
 }
 
+// Status is what collect can tell about itself (kaneo ccx#34).
+type Status struct {
+	CenterConfigured bool
+	Pending          int
+	Reach
+}
+
+// Status is safe to call while Run is running.
+func (s *Collect) Status() (Status, error) {
+	n, err := s.spool.Pending()
+	st := Status{CenterConfigured: s.loop != nil, Pending: n}
+	if s.loop != nil {
+		st.Reach = s.loop.reach()
+	}
+	return st, err
+}
+
 // Name identifies the concern in logs and config (ADR 0002).
 func (s *Collect) Name() string { return "collect" }
 
