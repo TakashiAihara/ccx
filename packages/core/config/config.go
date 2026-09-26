@@ -370,6 +370,12 @@ func channelSocketPath(getenv func(string) string) string {
 	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
 }
 
+// APISocket is where serve answers AgentService, resolved from the environment
+// alone. `ccx-agent status` runs on every statusline render and needs nothing
+// else: the full Load runs git config several times and fails on a bad
+// config.toml the socket path does not depend on.
+func APISocket() string { return apiSocketPath(os.Getenv) }
+
 // apiSocketPath is CCX_API_SOCKET, else ccx-api.sock next to the hook socket
 // (for the same reason as the channel socket).
 func apiSocketPath(getenv func(string) string) string {

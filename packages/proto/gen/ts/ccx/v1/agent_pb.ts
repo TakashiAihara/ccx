@@ -80,7 +80,8 @@ export const GetSessionStatusResponseSchema: GenMessage<GetSessionStatusResponse
  */
 export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
   /**
-   * heartbeat concern が動いているか。false なら以下は宣言の値を除いて空。
+   * heartbeat concern が動いているか (channel socket を受けているか)。設定で on でも、
+   * socket を開けなければ false。false なら以下は宣言の値と wanted を除いて空。
    *
    * @generated from field: bool enabled = 1;
    */

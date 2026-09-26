@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,10 +51,14 @@ type Concern struct {
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
+	listening  atomic.Bool
 }
 
 // Status is one session's heartbeat as the agent sees it (kaneo ccx#34).
 type Status struct {
+	// Listening: the channel socket is up. The concern can be on in config and
+	// still off here (a socket path too long, another serve holding the lock).
+	Listening  bool
 	Wanted     bool
 	Registered bool
 	Home       string // the ClaudeHome the answer was read from
@@ -69,13 +74,13 @@ func (c *Concern) Status(session, home string) Status {
 	h := c.registered[session]
 	c.mu.Unlock()
 	if h != nil {
-		return Status{Wanted: h.wanted(), Registered: true, Home: h.ClaudeHome, Stats: h.Stats()}
+		return Status{Listening: c.listening.Load(), Wanted: h.wanted(), Registered: true, Home: h.ClaudeHome, Stats: h.Stats()}
 	}
 	if home == "" || !filepath.IsAbs(home) {
 		home = c.claudeHome
 	}
 	probe := &Heartbeat{SessionID: session, ClaudeHome: home, Default: c.cfg.Default}
-	return Status{Wanted: probe.wanted(), Home: home}
+	return Status{Listening: c.listening.Load(), Wanted: probe.wanted(), Home: home}
 }
 
 func New(cfg config.Config, log func(string, ...any)) *Concern {
@@ -139,6 +144,8 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+	c.listening.Store(true)
+	defer c.listening.Store(false)
 	c.accept(ctx, ln, acceptRetry)
 	return nil
 }

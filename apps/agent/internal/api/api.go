@@ -82,7 +82,7 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 	}
 	if s.Heartbeat != nil {
 		h := out.Heartbeat
-		h.Enabled, h.Wanted, h.Registered, h.Sent = true, hb.Wanted, hb.Registered, uint32(hb.Sent)
+		h.Enabled, h.Wanted, h.Registered, h.Sent = hb.Listening, hb.Wanted, hb.Registered, uint32(hb.Sent)
 		h.NextAt, h.LastSentAt = ts(hb.Next), ts(hb.LastSent)
 	}
 	if s.Collect != nil {
@@ -248,23 +248,26 @@ func (c *Concern) listenUnix() (net.Listener, error) {
 		lock.Close()
 		return nil, fmt.Errorf("another ccx-agent serve holds %s.lock: %w", c.socketPath, err)
 	}
-	c.lock = lock
 	if err := os.Remove(c.socketPath); err != nil && !os.IsNotExist(err) {
+		lock.Close()
 		return nil, err
 	}
 	ln, err := net.Listen("unix", c.socketPath)
 	if err != nil {
+		lock.Close()
 		return nil, err
 	}
 	if err := os.Chmod(c.socketPath, 0o600); err != nil {
 		ln.Close()
+		lock.Close()
 		return nil, err
 	}
+	c.lock = lock
 	return ln, nil
 }
 
 // RequireBearer refuses a request that does not carry the token. The scheme
-// is case-insensitive (RFC 6750); the token is not.
+// is case-insensitive (RFC 9110 11.1); the token is not.
 func RequireBearer(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
