@@ -260,7 +260,9 @@ func TestAPI_SocketAndListen(t *testing.T) {
 	// every git key answering and a config.toml that names a socket, load must
 	// still agree with the env-only resolution. A key added to load alone fails here.
 	tomlPath := filepath.Join(t.TempDir(), "config.toml")
-	_ = os.WriteFile(tomlPath, []byte("[api]\nsocket = \"/from-file.sock\"\nlisten = \"127.0.0.1:1\"\n"), 0o644)
+	if err := os.WriteFile(tomlPath, []byte("[api]\nsocket = \"/from-file.sock\"\nlisten = \"127.0.0.1:1\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	envOnly := env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/7", "CCX_CONFIG": tomlPath})
 	anyGit := func(string) string { return "/from-git.sock" }
 	if full, err := load(envOnly, anyGit, fixedHost("h")); err != nil || full.APISocketPath != apiSocketPath(envOnly) {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -360,7 +362,13 @@ func TestRunRetriesUntilItOpens(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	second := New(cfg, &Server{ClaudeHome: t.TempDir()}, t.Logf)
+	var mu sync.Mutex
+	var logs []string
+	second := New(cfg, &Server{ClaudeHome: t.TempDir()}, func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+	})
 	second.retryAfter = 20 * time.Millisecond
 	go func() { _ = second.Run(ctx) }()
 	time.Sleep(100 * time.Millisecond) // refused by the lock at least once
@@ -371,11 +379,24 @@ func TestRunRetriesUntilItOpens(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		if _, err = UnixClient(cfg.APISocketPath).GetSessionStatus(context.Background(),
 			connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid})); err == nil {
-			return
+			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Errorf("the second serve never took over: %v", err)
+	if err != nil {
+		t.Fatalf("the second serve never took over: %v", err)
+	}
+	// Several refusals by the lock, one line for them; one line when it is up.
+	mu.Lock()
+	defer mu.Unlock()
+	off, up := 0, 0
+	for _, l := range logs {
+		off += strings.Count(l, "api off")
+		up += strings.Count(l, "up again")
+	}
+	if off != 1 || up != 1 {
+		t.Errorf("logs: %q, want one 'api off' and one 'up again'", logs)
+	}
 }
 
 // The TCP side answers only with the token, and does not open without one.
