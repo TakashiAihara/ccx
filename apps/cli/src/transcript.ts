@@ -239,7 +239,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 生の行 (`lines`) を探す。構造化した `transcripts` を to_json すると無いキーが null で
       // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む。
       // session の宣言状態 (label / その履歴 / metadata) も同じ検索に入れる: 名前で session を探せるように (#169)。
-      // その行は type = 'state'、時刻は最後に label を変えた時刻
+      // その行は type = 'state'、時刻は ccx が最後に label を記録した時刻。state の行は先に出す: 履歴の無い
+      // session は時刻が NULL で末尾に回り、transcript の当たりが多いと LIMIT で消える
       const sql =
         o.sql ??
         `SELECT session_id, machine, "user", type, timestamp,
@@ -247,13 +248,14 @@ export function registerTranscript(program: Command, VERSION: string): void {
          FROM (
            SELECT session_id, machine, "user", json->>'type' AS type, json->>'timestamp' AS timestamp, json::VARCHAR AS body FROM lines
            UNION ALL
-           -- 値だけを並べる: state.json をそのまま文字列にすると "label" / "archived" 等のキー名が全行に当たる
-           SELECT session_id, machine, "user", 'state', label_changed_at,
+           -- 値だけを並べる: state.json をそのまま文字列にすると "label" / "archived" 等のキー名が全行に当たる。
+           -- metadata は key も入れる: 値の無い key (done 等) は key そのものが中身
+           SELECT session_id, machine, "user", 'state', label_recorded_at,
                   concat_ws(' ', label, task, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), ' / '))
            FROM sessions
          )
          WHERE contains(lower(body), lower(${q(text!)}))
-         ORDER BY timestamp DESC
+         ORDER BY type = 'state' DESC, timestamp DESC
          LIMIT ${o.limit ?? 50}`;
       const r = await c.runAndReadAll(sql);
       const cols = r.columnNames();

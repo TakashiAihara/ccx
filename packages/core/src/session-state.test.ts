@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, symlink, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,9 +73,10 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(s.labelHistory).toEqual(h("a", "c"));
     expect(Date.parse(s.labelHistory[0]!.at)).not.toBeNaN();
 
-    // 書きかけで切れた行は飛ばす (履歴全体を失わない)
+    // 書きかけで切れた行は飛ばす (履歴全体を失わない)。次の変更も切れた行に続けて書かず、失わない
     await appendFile(file, '{"at":"2026-');
     expect((await readDeclared(SID, home)).labelHistory).toEqual(h("a", "c"));
+    expect((await writeDeclared(SID, { label: "d" }, home)).labelHistory).toEqual(h("a", "c", "d"));
 
     // pull が渡す履歴は足さずに丸ごと置き、label が変わっても重ねて記録しない
     const pulled = [{ at: "2026-09-01T00:00:00.000Z", label: "x" }];
@@ -86,6 +87,18 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // 保存先の壊れた形は落とす
     expect(normalizeDeclared({ labelHistory: [{ at: "t", label: "ok" }, { at: 1, label: "n" }, null, "s"] }).labelHistory).toEqual([{ at: "t", label: "ok" }]);
     expect(normalizeDeclared({ labelHistory: "nope" }).labelHistory).toEqual([]);
+  });
+
+  test("label history: the name a session had before ccx first recorded one is kept, dated by the label file", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(dir, { recursive: true });
+    await Bun.write(join(dir, "label"), "from-hook\n");
+    await utimes(join(dir, "label"), new Date("2026-09-01T00:00:00Z"), new Date("2026-09-01T00:00:00Z"));
+    const s = await writeDeclared(SID, { label: "by-ccx" }, home);
+    expect(s.labelHistory).toEqual([{ at: "2026-09-01T00:00:00.000Z", label: "from-hook" }, { at: expect.any(String), label: "by-ccx" }]);
+    // 種を置くのは最初の 1 回だけ
+    await Bun.write(join(dir, "label"), "from-hook-again\n");
+    expect((await writeDeclared(SID, { label: "next" }, home)).labelHistory.map((e) => e.label)).toEqual(["from-hook", "by-ccx", "next"]);
   });
 
   test("heartbeat is on / off / unset; anything else in the file or the store reads as unset", async () => {

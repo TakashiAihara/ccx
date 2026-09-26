@@ -85,12 +85,17 @@ with the hook.
 `labelHistory` is ccx's own record of `ccx session label` (#169, 2026-09-26: the user wants every
 name a session had to be searchable across machines). A label write appends a line only when the
 text differs from the current `label` file, so rewriting the same name — or naming what the hook
-already wrote — adds nothing; a write made on disk without ccx (the hook today) is not recorded.
-Append-only, so two `ccx session label` racing each other keep both lines. A torn last line is
-skipped on read; an unreadable file is an error, like `meta/` (an empty history would make `push`
-drop the store's). `pull` installs the store's history whole, without adding a line for the label it
-installs. It is part of the declared state, so a history-only difference (a name changed and changed
-back) makes `push` write `state.json`. The auto-label hook's `label-history.json` /
+already wrote — adds nothing; a write made on disk without ccx (the hook today) is not recorded,
+except that the first line ccx writes is preceded by the name the session already had, dated by the
+`label` file's mtime (the names from before ccx recorded any are the ones searched for first).
+Append-only, so two `ccx session label` racing each other keep both lines — but with no lock, the
+last line can name the loser while the `label` file holds the winner. A torn last line is skipped on
+read, and the next append starts on a new line so it does not join the torn one; an unreadable file
+is an error, like `meta/` (an empty history would make `push` drop the store's). `pull` installs the
+store's history whole, without adding a line for the label it installs. It is part of the declared
+state, so a history-only difference (a name changed and changed back) makes `push` write
+`state.json`. It has no cap and clearing the label keeps it: the point is every name the session
+had (measured by the reviewer: 500 changes → a 60 KB `state.json`). The auto-label hook's `label-history.json` /
 `label-trail.jsonl` are the hook's own files with its own fields (`prompt_id`, `input_excerpt`) and
 are not read; the hook moves onto `ccx session label` in claude-config.
 
@@ -159,9 +164,10 @@ ambiguous, while `mark` / `status` on that session itself fail with the read err
 - deriving `archived` from the store: the earlier draft had `archived` as the observed "only in the
   store" value; the user wanted it as a declaration, so that fact is now `remote` and `archived` is
   a flag
-- the label history at the center: the report carries it in its payload, but `SessionState` in
-  `fleet.proto` has no field for it (nor for `heartbeat`), so `session ls` shows other machines' rows
-  with an empty history. Search reads the store's `state.json`, which has it
+- the label history at the center: the report leaves it out (nothing there reads it, and resending
+  the whole history on every mark grows the center's events with the square of its length — 11.8 MB
+  for one session at 500 changes, measured by the reviewer), so `session ls` shows other machines'
+  rows with an empty history. Search reads the store's `state.json`, which has it
 - removing `~/.claude/sessions/<id>/` when a transcript is pruned or deleted: the marks outlive the
   transcript on purpose (`archived` on a remote session is still a fact about it), and the directory
   also holds the hook's own files

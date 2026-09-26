@@ -17,7 +17,7 @@
  * 保存先には `state.json` 1 つにまとめて置く (transcript.ts が push / pull で運ぶ)。
  */
 
-import { appendFile, mkdir, readdir, rm } from "node:fs/promises";
+import { appendFile, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -218,7 +218,12 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
   // 比べる相手は今のファイル。auto-label hook が ccx を通さず書き換えた後でも、同じ名前を重ねて記録しない
-  const before = patch.label !== undefined && patch.labelHistory === undefined ? (await readDeclared(sessionId, home)).label : undefined;
+  const before = patch.label !== undefined && patch.labelHistory === undefined ? await readDeclared(sessionId, home) : undefined;
+  // 最初の記録の前に、ccx を通さず付いていた名前 (hook が書いた label) を 1 件目として残す。時刻はそのファイルの mtime
+  const seedAt =
+    before && before.label && before.labelHistory.length === 0 && before.label !== patch.label
+      ? (await stat(join(dir, TEXT_FILE.label))).mtime.toISOString()
+      : undefined;
   await Bun.write(join(dir, DECLARED_FILE), "");
   for (const f of FLAGS) {
     if (patch[f] === undefined) continue;
@@ -242,8 +247,11 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
     const h = cleanLabelHistory(patch.labelHistory);
     if (h.length) await Bun.write(historyPath, h.map((e) => `${JSON.stringify(e)}\n`).join(""));
     else await rm(historyPath, { force: true });
-  } else if (before !== undefined && before !== patch.label) {
-    await appendFile(historyPath, `${JSON.stringify({ at: new Date().toISOString(), label: patch.label })}\n`);
+  } else if (before && before.label !== patch.label) {
+    const lines = [...(seedAt ? [{ at: seedAt, label: before.label }] : []), { at: new Date().toISOString(), label: patch.label }];
+    // 書きかけで切れた行 (改行で終わっていない) に続けて書くと、その行ごと読めなくなる。改行を補ってから足す
+    const torn = !(await Bun.file(historyPath).text().catch(() => "")).match(/(^|\n)$/);
+    await appendFile(historyPath, `${torn ? "\n" : ""}${lines.map((e) => `${JSON.stringify(e)}\n`).join("")}`);
   }
   return readDeclared(sessionId, home);
 }

@@ -451,6 +451,11 @@ describe("ccx session with a center: marks are reported as events, and session l
     const revs = sent.map((e) => JSON.parse(new TextDecoder().decode(e.payload!)).rev as number).reverse();
     expect(revs.every((r) => typeof r === "number" && r > 1_700_000_000_000)).toBe(true);
     expect([...revs].sort((x, y) => x - y)).toEqual(revs);
+    // label の履歴は送らない (center は読まない。毎回全件で太る)。label そのものは送る
+    const last = JSON.parse(new TextDecoder().decode(sent[0]!.payload!)).state as Record<string, unknown>;
+    expect(last.label).toBe("again");
+    expect("labelHistory" in last).toBe(false);
+    expect((await readDeclared(SID, homeA)).labelHistory.length).toBeGreaterThan(0);
   });
 
   test("a broken unrelated setting does not stop the local write (only the report is skipped)", async () => {

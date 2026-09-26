@@ -80,20 +80,25 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;
   }
-  // 宣言状態は印を付けた session にしか無い。無ければ空の view (transcript はあるので保存先は空ではない)
+  // 宣言状態は印を付けた session にしか無い。無ければ空の view (transcript はあるので保存先は空ではない)。
+  // read_json_objects ではなく read_text + json_valid: 壊れた state.json が 1 つあると read_json_objects は
+  // クエリ全体を止め、既定の検索 (transcript も含む) が丸ごと落ちる。壊れたものはその 1 件だけ落とす。
+  // read_text は hive_partitioning を取らないので、パスから取り出す
   const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
+  const part = (k: string) => `regexp_extract(filename, '/${k}=([^/]+)/', 1)`;
   try {
     await c.run(
       `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task,
          (json->>'archived')::BOOLEAN AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
-         json->>'$.labelHistory[#-1].at' AS label_changed_at, json
-       FROM read_json_objects(${q(states)}, format='auto', hive_partitioning=true)`,
+         json->>'$.labelHistory[#-1].at' AS label_recorded_at, json
+       FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", content::JSON AS json
+             FROM read_text(${q(states)}) WHERE json_valid(content))`,
     );
   } catch (e) {
     if (!/No files found/i.test(String(e))) throw e;
     await c.run(
       `CREATE VIEW sessions AS SELECT NULL::VARCHAR AS session_id, NULL::VARCHAR AS machine, NULL::VARCHAR AS "user", NULL::VARCHAR AS label, NULL::VARCHAR AS task,
-         NULL::BOOLEAN AS archived, NULL::JSON AS metadata, NULL::JSON AS label_history, NULL::VARCHAR AS label_changed_at, NULL::JSON AS json WHERE false`,
+         NULL::BOOLEAN AS archived, NULL::JSON AS metadata, NULL::JSON AS label_history, NULL::VARCHAR AS label_recorded_at, NULL::JSON AS json WHERE false`,
     );
   }
   if (opts.withHistory) {

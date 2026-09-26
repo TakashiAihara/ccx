@@ -94,11 +94,14 @@ across record types), `lines` (`json` = the raw record — what the text search 
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
 and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
 / `pushed_by_user` from the path — the two differ for a pull), and `sessions` (one row per
-`state.json`: `label` / `task` / `archived` / `metadata` / `label_history` / `label_changed_at`, `json`
-raw; empty when no session has declared state). The text search reads `lines` and, as rows of type
-`state`, the values of `sessions` — label, task, metadata and every past label, not the key names
-(a search for "label" would otherwise hit every session) — so a session is found by any name it
-has had (#169). `-s <id|prefix>` narrows the glob so
+`state.json` copy, so a session pushed from two machines has two rows: `label` / `task` / `archived`
+/ `metadata` / `label_history` / `label_recorded_at` (when ccx last recorded a label, not when the
+hook last changed it), `json` raw; empty when no session has declared state; a `state.json` that is
+not valid JSON is left out rather than failing the search). The text search reads `lines` and, as
+rows of type `state` listed first, the values of `sessions` — label, task, metadata (keys too: a key
+with no value, like `done`, is its own content) and every past label, not `state.json`'s own key
+names (a search for "label" would otherwise hit every session) — so a session is found by any name
+it has had (#169). `-s <id|prefix>` narrows the glob so
 only that session's files are fetched; without it every transcript is read on each invocation
 (measured by the reviewer: 401 objects / 50.9 MB → 0.69 s, 209 MB RSS; one 20 MB line → 4.3 s,
 432 MB), and `history/` is only read for `--sql`.

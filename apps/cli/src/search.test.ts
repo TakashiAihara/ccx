@@ -157,14 +157,14 @@ describe("search: embedded DuckDB over the store", () => {
 
   test("sessions view: label, its history and metadata from state.json, and the default search finds a session by a past name", async () => {
     const c = await openDuckDB(store);
-    const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, archived, metadata, label_history, label_changed_at FROM sessions`)).getRowObjectsJson();
+    const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, archived, metadata, label_history, label_recorded_at FROM sessions`)).getRowObjectsJson();
     expect(rows).toHaveLength(1);
     const r = rows[0] as Record<string, unknown>;
     expect({ id: r.session_id, machine: r.machine, label: r.label, archived: r.archived }).toEqual({ id: SID2, machine: "host-a", label: "renamed-now", archived: false });
     expect(JSON.parse(String(r.metadata))).toEqual({ owner: "zed" });
     const history = JSON.parse(String(r.label_history)) as { at: string; label: string }[];
     expect(history.map((e) => e.label)).toEqual(["ORIGINAL-NAME", "renamed-now"]);
-    expect(r.label_changed_at).toBe(history[1]!.at);
+    expect(r.label_recorded_at).toBe(history[1]!.at);
 
     // 今の名前でも、前の名前 (履歴にしか無い) でも、metadata の値でも当たる。行は type = state
     for (const word of ["renamed-now", "original-name", "zed"]) {
@@ -172,13 +172,34 @@ describe("search: embedded DuckDB over the store", () => {
       expect(hit.code).toBe(0);
       expect((JSON.parse(hit.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([[SID2, "state"]]);
     }
-    // キー名には当たらない (state.json を丸ごと文字列にしていない)
+    // state.json のキー名には当たらない (丸ごと文字列にしていない)。metadata の key は当たる (値の無い key は key が中身)
     for (const key of ["label", "archived", "labelhistory"]) expect((await ccx(key)).err).toContain("no match");
+    expect((JSON.parse((await ccx("owner", "--json")).out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID2]);
 
     // state.json の無い session に絞っても、sessions が空の view になって検索は動く
     const only = await ccx("needle-alpha", "-s", SID.slice(0, 8), "--json");
     expect(only.code).toBe(0);
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
+  });
+
+  test("a state row with no ccx label history still comes before transcript hits; a malformed state.json drops only itself", async () => {
+    const dir = (m: string, id: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${id}`);
+    const SID3 = "2b3c4d5e-6f70-4a81-9c0d-1e2f3a4b5c6d";
+    // metadata だけの state (時刻が NULL になる)。transcript の当たり (NEEDLE-ALPHA の行) と同じ語を持たせる
+    await mkdir(dir("host-z", SID3), { recursive: true });
+    await Bun.write(join(dir("host-z", SID3), "state.json"), JSON.stringify({ archived: false, label: "", task: "", metadata: { topic: "needle-alpha" } }, null, 2));
+    // 壊れた state.json
+    await mkdir(dir("host-y", SID3), { recursive: true });
+    await Bun.write(join(dir("host-y", SID3), "state.json"), '{"label": "needle-alpha');
+
+    const r = await ccx("needle-alpha", "-n", "1", "--json");
+    expect(r.code).toBe(0);
+    expect((JSON.parse(r.out) as { session_id: string; machine: string; type: string }[]).map((x) => [x.session_id, x.machine, x.type])).toEqual([[SID3, "host-z", "state"]]);
+    const all = await ccx("needle-alpha", "--json");
+    expect((JSON.parse(all.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([
+      [SID3, "state"],
+      [SID, "user"],
+    ]);
   });
 
   test("an empty store says so instead of a DuckDB IO error", async () => {
