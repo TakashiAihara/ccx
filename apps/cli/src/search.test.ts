@@ -219,6 +219,23 @@ describe("search: embedded DuckDB over the store", () => {
     ]);
   });
 
+  test("a store past one list page (1000 keys) is read whole, with & in the key at the page boundary", async () => {
+    // center の一覧が 2 ページ目に進めないと glob が終わらない (#173)。token が key の形だと
+    // `&` が `&amp;` のまま送り返され、境界の key (`x&00999`) より後ろが丸ごと落ちる。
+    // ObjectStore はファイルが真実源なので直接置く
+    const dir = join(root, "ccx", "pre", "transcripts", "machine=bulk", "user=u");
+    const n = 1100;
+    await Promise.all(
+      Array.from({ length: n }, (_, i) => {
+        const sid = `x&${String(i).padStart(5, "0")}`;
+        return Bun.write(join(dir, `session_id=${sid}`, "transcript.jsonl"), line({ type: "user", message: { content: `bulk ${i}` } }));
+      }),
+    );
+    const c = await openDuckDB(store);
+    const r = await c.runAndReadAll(`SELECT count(*)::INT AS rows, count(DISTINCT session_id)::INT AS sessions FROM lines WHERE machine = 'bulk'`);
+    expect(r.getRowObjects()[0]).toEqual({ rows: n, sessions: n });
+  }, 20_000);
+
   test("an empty store says so instead of a DuckDB IO error", async () => {
     await rm(join(root, "ccx"), { recursive: true, force: true });
     const r = await ccx("anything");

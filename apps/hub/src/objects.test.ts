@@ -139,6 +139,51 @@ describe("objects: S3 client round trip", () => {
     expect(plain).toContain("<Key>sp ace/k=v.txt</Key>");
   });
 
+  test("a continuation token sent back without URL or XML decoding moves to the next page", async () => {
+    // DuckDB 1.5 の httpfs は NextContinuationToken を URL デコードも XML の実体参照の復元もせずに
+    // 送り返す。token が key の形だと `%3D` が `=` より前に並んで 1 ページ目に戻り (#173)、
+    // `&amp;` は別の位置から再開して重複・欠落になる
+    const keys = ["m=a/1", "m=a/2&x", "m=a/3<y", "m=a/4"];
+    for (const k of keys) await s3.write(k, "x");
+    const page = async (token?: string) => {
+      const t = token === undefined ? "" : `&continuation-token=${encodeURIComponent(token)}`;
+      return (await fetch(`${base}/ccx?list-type=2&encoding-type=url&max-keys=1${t}`)).text();
+    };
+    const seen: string[] = [];
+    const tokens: string[] = [];
+    let token: string | undefined;
+    for (let i = 0; i < keys.length + 2; i++) {
+      const p = await page(token);
+      if (token !== undefined) expect(p).toContain(`<ContinuationToken>${token}</ContinuationToken>`);
+      seen.push(decodeURIComponent(/<Key>([^<]*)</.exec(p)![1]!).replace(/&amp;/g, "&").replace(/&lt;/g, "<"));
+      token = /<NextContinuationToken>([^<]*)</.exec(p)?.[1];
+      if (token === undefined) break;
+      tokens.push(token);
+    }
+    expect(seen).toEqual(keys);
+    for (const t of tokens) expect(t).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  test("start-after is echoed as StartAfter (URL-encoded), and a token that is not ours is 400", async () => {
+    await s3.write("m=a/1", "x");
+    await s3.write("m=a/2", "x");
+    const p = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url&start-after=m%3Da%2F1`)).text();
+    expect(p).toContain("<StartAfter>m%3Da/1</StartAfter>");
+    expect(p).not.toContain("<ContinuationToken>");
+    expect(p).toContain("<Key>m%3Da/2</Key>");
+    expect(p).not.toContain("<Key>m%3Da/1</Key>");
+
+    // 両方来たら両方返し、位置は token が決める (S3 と同じ)
+    const t2 = /<NextContinuationToken>([^<]*)</.exec(await (await fetch(`${base}/ccx?list-type=2&max-keys=1`)).text())![1]!;
+    const both = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url&start-after=zzz&continuation-token=${t2}`)).text();
+    expect(both).toContain(`<ContinuationToken>${t2}</ContinuationToken>`);
+    expect(both).toContain("<StartAfter>zzz</StartAfter>");
+    expect(both).toContain("<Key>m%3Da/2</Key>");
+
+    const bad = await fetch(`${base}/ccx?list-type=2&continuation-token=m%3Da%2F1`);
+    expect(bad.status).toBe(400);
+  });
+
   test("a key that collides with an existing object as its directory is 409, not 500", async () => {
     await s3.write("a", "x");
     const under = await fetch(`${base}/ccx/a/b`, { method: "PUT", body: "y" });
