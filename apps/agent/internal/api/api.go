@@ -157,6 +157,7 @@ type Concern struct {
 	log        func(string, ...any)
 	lock       *os.File
 	retryAfter time.Duration // 0 is a minute; tests shorten it
+	lastErr    string        // the reason last logged; cleared once the API is up
 }
 
 func New(cfg config.Config, srv *Server, log func(string, ...any)) *Concern {
@@ -169,18 +170,20 @@ func (c *Concern) Name() string { return "api" }
 const maxUnixPath = 104
 
 // Run never fails the process: a status API that cannot open must not take
-// collect down with it. It tries again every retry instead of staying dead
-// while serve looks healthy; a reason repeated is logged once.
+// collect down with it. It tries again every retry when it could not open (the
+// lock held by another serve, a path too long) or its listener stopped; a
+// reason repeated is logged once until the API is up again. A socket file
+// unlinked from under it is not noticed (the listener keeps running); the
+// hook and channel sockets share that.
 func (c *Concern) Run(ctx context.Context) error {
-	last := ""
 	for {
 		err := c.run(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		if msg := fmt.Sprint(err); msg != last {
+		if msg := fmt.Sprint(err); msg != c.lastErr {
 			c.log("api off, retrying every %v: %v", c.retry(), err)
-			last = msg
+			c.lastErr = msg
 		}
 		select {
 		case <-ctx.Done():
@@ -217,6 +220,10 @@ func (c *Concern) run(ctx context.Context) error {
 	defer os.Remove(c.socketPath)
 	servers := []*http.Server{server(handler(c.server))}
 	listeners := []net.Listener{ln}
+	if c.lastErr != "" {
+		c.log("api: up again on %s", c.socketPath)
+		c.lastErr = ""
+	}
 
 	if c.listen != "" {
 		if c.token == "" {

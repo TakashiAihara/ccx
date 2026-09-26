@@ -274,14 +274,15 @@ func TestIntegration_StatusClient(t *testing.T) {
 	}
 	// protojson varies its whitespace on purpose; read it as JSON.
 	var got struct {
-		Declared struct{ Label string }
-		Collect  struct {
+		Declared  struct{ Label string }
+		Heartbeat struct{ Enabled, Listening bool }
+		Collect   struct {
 			Enabled bool
 			Pending *int
 		}
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil || got.Declared.Label != "it-label" ||
-		!got.Collect.Enabled || got.Collect.Pending == nil || *got.Collect.Pending != 0 {
+		!got.Heartbeat.Enabled || !got.Collect.Enabled || got.Collect.Pending == nil || *got.Collect.Pending != 0 {
 		t.Errorf("status output: %s (%v)", out, err)
 	}
 }
