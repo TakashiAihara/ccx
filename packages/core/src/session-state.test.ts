@@ -119,11 +119,11 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await rm(dir, { recursive: true });
     await Bun.write(dir, "not a dir");
     await expect(readDeclared(SID, home)).rejects.toThrow(/ENOTDIR/);
-    // 一覧はその session だけ飛ばす (他の印を持っていても: 「空として読んだ」なら残るはず)
-    await Bun.write(join(home, "sessions", SID, "task"), "kept\n");
+    // 解決の候補には残す (外すと曖昧な prefix が一意に見える)。他の session の解決も止めない
     const other = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
     await writeDeclared(other, { task: "t" }, home);
-    expect(await markedSessionIds(home)).toEqual([other]);
+    expect((await markedSessionIds(home)).sort()).toEqual([SID, other].sort());
+    await Bun.write(join(home, "sessions", SID, "task"), "kept\n");
     await rm(dir);
     await rm(join(home, "sessions", SID, "task"));
   });

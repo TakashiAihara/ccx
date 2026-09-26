@@ -93,6 +93,7 @@ export async function select(
         (s) => s.archived,
         (e: unknown) => {
           console.error(`(${t.sessionId}: skipped, declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+          process.exitCode = 1;
           return false;
         },
       );
@@ -176,7 +177,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       if (r.state) {
         const meta = Object.keys(r.state.metadata);
         const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
-        if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
+        if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session, or cannot read them)"}`);
       }
     });
 

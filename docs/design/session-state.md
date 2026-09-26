@@ -136,8 +136,10 @@ coming back from an older copy in the store. The store is read strictly: a missi
 "no state", but a store that does not answer is an error, never an empty store. The local `meta/`
 is read the same way: missing is empty, unreadable is an error (an empty map would make `push`
 drop the keys from `state.json`). The error stays with that session — `tr push` still carries its
-transcript without writing `state.json`, `pull` treats it as holding a declaration, and `session ls`
-/ `--archived` / prefix resolution skip it with a note on stderr.
+transcript without writing `state.json` (exit 1), `pull` treats it as holding a declaration,
+`session ls` shows its row with `state: null`, and `--archived` skips it (exit 1); each with a note
+on stderr. Prefix resolution still counts it as a candidate, so an ambiguous prefix stays
+ambiguous, while `mark` / `status` on that session itself fail with the read error.
 
 ## Not here
 

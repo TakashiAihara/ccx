@@ -132,8 +132,9 @@ async function readMetadata(dir: string): Promise<Metadata> {
       // 書くときに足した末尾の改行 1 つだけを外す。値は利用者のものなので空白は削らない (保存先との往復で変わらない)
       out.push([k, (await Bun.file(join(dir, META_DIR, k)).text()).replace(/\n$/, "")]);
     } catch (e) {
-      // ディレクトリは key ではない。ENOENT (readdir の後に消えた / 先の無い symlink) は無いものとして
-      // 数えない。それ以外 (ELOOP / EACCES 等) は空にせず止める (上と同じ理由)
+      // ディレクトリは key ではない。ENOENT (readdir の後に消えた / 先の無い symlink) は値を持たない
+      // ものとして数えない (先の無い symlink は push で保存先からも消える。そう決めている)。
+      // それ以外 (ELOOP / EACCES 等) は空にせず止める (上と同じ理由)
       if (errCode(e) !== "EISDIR" && errCode(e) !== "ENOENT") throw e;
     }
   }
@@ -211,7 +212,7 @@ export async function holdsDeclared(sessionId: string, home = claudeHome()): Pro
 /**
  * 印が 1 つでも立っている session の id (transcript の有無は問わない)。ディレクトリが
  * あるだけでは数えない: 印を外した後や、Claude Code 自身が置くファイル (label の履歴
- * 等) で空のディレクトリが残るため
+ * 等) で空のディレクトリが残るため。印が読めない session も含める (prefix 解決の候補として)
  */
 export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
   let names: string[];
@@ -225,8 +226,10 @@ export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
     try {
       if (!isEmptyDeclared(await readDeclared(id, home))) out.push(id);
     } catch (e) {
-      // 1 session の読めない印で、他の session の解決まで止めない
-      console.error(`(${id}: declared state could not be read, skipped — fix ${sessionDir(id, home)}: ${e instanceof Error ? e.message : String(e)})`);
+      // 1 session の読めない印で他の解決を止めない。ただし候補からは外さない: 外すと曖昧な prefix が
+      // 一意に見えて、別の session に書く
+      console.error(`(${id}: declared state could not be read — fix ${sessionDir(id, home)}: ${e instanceof Error ? e.message : String(e)})`);
+      out.push(id);
     }
   }
   return out;

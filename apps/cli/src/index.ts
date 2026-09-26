@@ -336,7 +336,7 @@ session
     // 状態の列。このマシンの行は手元のファイルが真実源 (手元に無い remote なものだけ
     // 保存先の state.json)。他のマシンの行は center が持つ写し (`ccx session mark` が送った
     // 最後の event) で、保存先 (S3) には行かない。center が 1 件も受けていなければ null
-    // (「印が無い」とは別) (#127)
+    // (「印が無い」とは別)。このマシンの行でも、手元の印が読めなければ null (stderr に理由) (#127)
     const home = claudeHome();
     // 鍵は (machine, user)。同じマシンの別ユーザーの session は別の ~/.claude を持つので「他」
     const me = localOrigin(cfg.machine);

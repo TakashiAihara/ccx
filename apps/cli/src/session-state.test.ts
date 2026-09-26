@@ -98,15 +98,20 @@ describe("session state travels with the transcript", () => {
 
   test("an unreadable meta/ fails only the state: push still carries the transcript, pull still installs it", async () => {
     const t = await seed(homeA, SID);
+    await writeDeclared(SID, { metadata: { owner: "alice" } }, homeA);
+    await A.push(t, homeA);
+    await rm(join(homeA, "sessions", SID, "meta"), { recursive: true });
     await Bun.write(join(homeA, "sessions", SID, "meta"), "not a dir");
-    const r = await A.push(t, homeA);
+    await Bun.write(t.path, body("more"));
+    const r = await A.push((await localTranscripts(homeA)).find((x) => x.sessionId === SID)!, homeA);
     expect(r.status).toBe("pushed");
     expect(r.state).toBeNull();
     expect(r.stateError).toMatch(/ENOTDIR/);
-    expect(await Bun.file(stateKey()).exists()).toBe(false);
+    // 保存先の key は消えない (空として読んで書き直していない)
+    expect((await Bun.file(stateKey()).json()).metadata).toEqual({ owner: "alice" });
 
     await rm(join(homeA, "sessions", SID, "meta"));
-    await writeDeclared(SID, { archived: true }, homeA);
+    await writeDeclared(SID, { archived: true, metadata: { owner: null } }, homeA);
     await A.push(t, homeA);
     await Bun.write(join(homeB, "sessions", SID, "meta"), "not a dir");
     const p = await B.pull(SID, homeB);
@@ -560,9 +565,20 @@ describe("ccx session with a center: marks are reported as events, and session l
       stderr: "pipe",
     });
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(out).toMatch(new RegExp(`pushed\\s+${SID}`));
     expect(out).not.toMatch(new RegExp(SID2));
     expect(err).toMatch(new RegExp(`${SID2}: skipped, declared state could not be read`));
+
+    // id を名指しした push は transcript を運び、state.json は書かずに exit 1
+    const q = Bun.spawn(["bun", "run", cli, "tr", "push", SID2, "--json"], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [qout, qerr, qcode] = await Promise.all([new Response(q.stdout).text(), new Response(q.stderr).text(), q.exited]);
+    expect(qcode).toBe(1);
+    expect(qerr).toMatch(/state\.json not written/);
+    expect(JSON.parse(qout)[0]).toMatchObject({ sessionId: SID2, status: "pushed", state: null });
   });
 });
