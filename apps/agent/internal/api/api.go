@@ -156,6 +156,7 @@ type Concern struct {
 	token      string
 	log        func(string, ...any)
 	lock       *os.File
+	retryAfter time.Duration // 0 is a minute; tests shorten it
 }
 
 func New(cfg config.Config, srv *Server, log func(string, ...any)) *Concern {
@@ -168,13 +169,32 @@ func (c *Concern) Name() string { return "api" }
 const maxUnixPath = 104
 
 // Run never fails the process: a status API that cannot open must not take
-// collect down with it. The reason is in the log.
+// collect down with it. It tries again every retry instead of staying dead
+// while serve looks healthy; a reason repeated is logged once.
 func (c *Concern) Run(ctx context.Context) error {
-	if err := c.run(ctx); err != nil {
-		c.log("api off: %v", err)
-		<-ctx.Done()
+	last := ""
+	for {
+		err := c.run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if msg := fmt.Sprint(err); msg != last {
+			c.log("api off, retrying every %v: %v", c.retry(), err)
+			last = msg
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(c.retry()):
+		}
 	}
-	return nil
+}
+
+func (c *Concern) retry() time.Duration {
+	if c.retryAfter > 0 {
+		return c.retryAfter
+	}
+	return time.Minute
 }
 
 func (c *Concern) run(ctx context.Context) error {
@@ -214,21 +234,31 @@ func (c *Concern) run(ctx context.Context) error {
 		}
 	}
 
-	// Each listener stands alone: a TCP side that fails must not take the unix
-	// side (statusline) down with it. Serve already retries temporary accept
-	// errors, so an error here is the listener gone; it is logged, not hidden.
+	// A TCP side that fails must not take the unix side (statusline) down with
+	// it: it is logged and left. The unix side stopping ends run, and Run opens
+	// it again. Serve already retries temporary accept errors, so an error here
+	// is the listener gone.
+	unixDone := make(chan error, 1)
 	for i, srv := range servers {
 		go func() {
-			if err := srv.Serve(listeners[i]); !errors.Is(err, http.ErrServerClosed) {
+			err := srv.Serve(listeners[i])
+			if i == 0 {
+				unixDone <- err
+			} else if !errors.Is(err, http.ErrServerClosed) {
 				c.log("api: %s stopped: %v", listeners[i].Addr(), err)
 			}
 		}()
 	}
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+		err = nil
+	case err = <-unixDone:
+		err = fmt.Errorf("unix socket stopped: %w", err)
+	}
 	for _, srv := range servers {
 		_ = srv.Close()
 	}
-	return nil
+	return err
 }
 
 // listenUnix binds the socket under a lock, as the heartbeat concern does: a
@@ -274,8 +304,14 @@ func (c *Concern) listenUnix() (net.Listener, error) {
 func RequireBearer(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An empty token would match an empty Bearer: never an open door.
+		if len(want) == 0 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-		// 1*SP may separate the scheme from the token; the token has no spaces.
+		// Whitespace around the token is dropped (RFC 9110 allows 1*SP after the
+		// scheme); the token itself has none.
 		got = strings.TrimSpace(got)
 		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

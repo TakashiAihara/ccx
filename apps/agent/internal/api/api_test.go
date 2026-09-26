@@ -96,6 +96,19 @@ func TestReadDeclaredUnreadableMeta(t *testing.T) {
 	}
 }
 
+func TestRequireBearerEmptyTokenOpensNothing(t *testing.T) {
+	h := RequireBearer("", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	for _, header := range []string{"", "Bearer", "Bearer "} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/", nil)
+		req.Header.Set("Authorization", header)
+		h.ServeHTTP(rec, req)
+		if rec.Code != 401 {
+			t.Errorf("empty token, Authorization %q: got %d", header, rec.Code)
+		}
+	}
+}
+
 func TestRequireBearer(t *testing.T) {
 	h := RequireBearer("s3cret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	for _, c := range []struct {
@@ -334,6 +347,35 @@ func TestSecondServeRefusedAfterGC(t *testing.T) {
 	if err := New(cfg, &Server{}, t.Logf).run(sctx); err == nil || !strings.Contains(err.Error(), "holds") {
 		t.Errorf("second serve: %v, want refused by the lock", err)
 	}
+}
+
+// An API that could not open tries again, rather than staying dead while
+// serve looks healthy: once the other serve lets go, this one comes up.
+func TestRunRetriesUntilItOpens(t *testing.T) {
+	cfg := config.Config{APISocketPath: filepath.Join(shortDir(t), "a.sock")}
+	first, stopFirst := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = New(cfg, &Server{}, t.Logf).Run(first); close(done) }()
+	waitDial(t, "unix", cfg.APISocketPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	second := New(cfg, &Server{ClaudeHome: t.TempDir()}, t.Logf)
+	second.retryAfter = 20 * time.Millisecond
+	go func() { _ = second.Run(ctx) }()
+	time.Sleep(100 * time.Millisecond) // refused by the lock at least once
+	stopFirst()
+	<-done
+
+	var err error
+	for i := 0; i < 100; i++ {
+		if _, err = UnixClient(cfg.APISocketPath).GetSessionStatus(context.Background(),
+			connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid})); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("the second serve never took over: %v", err)
 }
 
 // The TCP side answers only with the token, and does not open without one.

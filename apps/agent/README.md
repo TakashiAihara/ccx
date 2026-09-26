@@ -47,7 +47,8 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
 ccx-agent status --session <id> [--json]
                    ask the running serve about one session and print JSON:
                    its declared state (archived / label / task / metadata),
-                   its heartbeat (declared / wanted / registered / next / sent),
+                   its heartbeat (enabled / listening / declared / wanted /
+                   registered / next / sent),
                    and collect (spool backlog, last reach of the center).
 ```
 
@@ -58,7 +59,8 @@ handler on two listeners:
   uses. With serve down, `ccx-agent status` prints nothing and exits 1 (a
   malformed session id is 2, checked before dialing) — there is no fallback that
   reads the files some other way. The client finds the socket from the
-  environment only (`CCX_API_SOCKET`, else `CCX_SOCKET`, else `XDG_RUNTIME_DIR`):
+  environment only (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
+  `XDG_RUNTIME_DIR`, else `~/.ccx/run`):
   set these the same way for serve (its systemd unit) and for the shell the
   statusline runs in, or the statusline shows nothing as if serve were down.
 - TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
