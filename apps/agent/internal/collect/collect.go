@@ -59,9 +59,16 @@ type Status struct {
 	Reach
 }
 
-// Status is safe to call while Run is running.
+// Status is safe to call while Run is running. Pending includes what hooks
+// left in incoming/ (the socket was unreachable): that has not reached the
+// center either, it only waits for the next start to be enveloped.
 func (s *Collect) Status() (Status, error) {
 	n, err := s.spool.Pending()
+	if err == nil {
+		var raw []string
+		raw, err = filepath.Glob(filepath.Join(s.spool.IncomingDir(), "*.raw"))
+		n += len(raw)
+	}
 	st := Status{CenterConfigured: s.loop != nil, Pending: n}
 	if s.loop != nil {
 		st.Reach = s.loop.reach()

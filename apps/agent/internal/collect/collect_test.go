@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -170,6 +171,16 @@ func TestStatus_ReachAndPending(t *testing.T) {
 	if err != nil || !st.CenterConfigured || st.Pending != 1 || st.LastErrorAt.IsZero() || !st.LastForwarded.IsZero() {
 		t.Fatalf("center down: %+v %v", st, err)
 	}
+
+	// A hook that fell back to incoming/ has not reached the center either.
+	if err := writeIncoming(srv.spool.IncomingDir(), []byte(`{"fallback":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := srv.Status(); st.Pending != 2 {
+		t.Errorf("with one fallback event: pending=%d, want 2", st.Pending)
+	}
+	_ = os.RemoveAll(srv.spool.IncomingDir())
+	_ = os.MkdirAll(srv.spool.IncomingDir(), 0o700)
 
 	fwd.setDown(false)
 	srv.loop.wake()
