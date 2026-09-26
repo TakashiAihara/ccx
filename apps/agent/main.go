@@ -190,8 +190,10 @@ func cmdStatus(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *sid == "" {
-		fmt.Fprintln(os.Stderr, "ccx-agent status: --session is required")
+	// Checked here, not left to serve: a caller's mistake must read the same
+	// (exit 2) whether or not serve is up.
+	if !api.ValidSessionID(*sid) {
+		fmt.Fprintf(os.Stderr, "ccx-agent status: --session %q is not a Claude Code session id\n", *sid)
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -201,10 +203,6 @@ func cmdStatus(args []string) int {
 	}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent status: %v\n", err)
-		// 2 is the caller's mistake (a malformed id), 1 is the agent not answering.
-		if connect.CodeOf(err) == connect.CodeInvalidArgument {
-			return 2
-		}
 		return 1
 	}
 	b, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(res.Msg)

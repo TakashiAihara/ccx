@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/agent.proto.
  */
 export const file_ccx_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSJCChdHZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhMKC2NsYXVkZV9ob21lGAIgASgJIpYBChhHZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2USJgoIZGVjbGFyZWQYASABKAsyFC5jY3gudjEuU2Vzc2lvblN0YXRlEioKCWhlYXJ0YmVhdBgCIAEoCzIXLmNjeC52MS5IZWFydGJlYXRTdGF0dXMSJgoHY29sbGVjdBgDIAEoCzIVLmNjeC52MS5Db2xsZWN0U3RhdHVzIsUBCg9IZWFydGJlYXRTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIQCghkZWNsYXJlZBgCIAEoCRIOCgZ3YW50ZWQYAyABKAgSEgoKcmVnaXN0ZXJlZBgEIAEoCBIrCgduZXh0X2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRzZW50GAYgASgNEjAKDGxhc3Rfc2VudF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi3wEKDUNvbGxlY3RTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIZChFjZW50ZXJfY29uZmlndXJlZBgCIAEoCBIPCgdwZW5kaW5nGAMgASgNEjUKEWxhc3RfZm9yd2FyZGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X2Vycm9yX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpsYXN0X2Vycm9yGAYgASgJEhMKC3Nwb29sX2Vycm9yGAcgASgJMmUKDEFnZW50U2VydmljZRJVChBHZXRTZXNzaW9uU3RhdHVzEh8uY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXF1ZXN0GiAuY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSJCChdHZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhMKC2NsYXVkZV9ob21lGAIgASgJIpYBChhHZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2USJgoIZGVjbGFyZWQYASABKAsyFC5jY3gudjEuU2Vzc2lvblN0YXRlEioKCWhlYXJ0YmVhdBgCIAEoCzIXLmNjeC52MS5IZWFydGJlYXRTdGF0dXMSJgoHY29sbGVjdBgDIAEoCzIVLmNjeC52MS5Db2xsZWN0U3RhdHVzItgBCg9IZWFydGJlYXRTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIRCglsaXN0ZW5pbmcYCCABKAgSEAoIZGVjbGFyZWQYAiABKAkSDgoGd2FudGVkGAMgASgIEhIKCnJlZ2lzdGVyZWQYBCABKAgSKwoHbmV4dF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEc2VudBgGIAEoDRIwCgxsYXN0X3NlbnRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIt8BCg1Db2xsZWN0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSGQoRY2VudGVyX2NvbmZpZ3VyZWQYAiABKAgSDwoHcGVuZGluZxgDIAEoDRI1ChFsYXN0X2ZvcndhcmRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF9lcnJvcl9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKbGFzdF9lcnJvchgGIAEoCRITCgtzcG9vbF9lcnJvchgHIAEoCTJlCgxBZ2VudFNlcnZpY2USVQoQR2V0U2Vzc2lvblN0YXR1cxIfLmNjeC52MS5HZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBogLmNjeC52MS5HZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2ViBnByb3RvMw", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.GetSessionStatusRequest
@@ -80,12 +80,20 @@ export const GetSessionStatusResponseSchema: GenMessage<GetSessionStatusResponse
  */
 export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
   /**
-   * heartbeat concern が動いているか (channel socket を受けているか)。設定で on でも、
-   * socket を開けなければ false。false なら以下は宣言の値と wanted を除いて空。
+   * heartbeat concern が設定で on か (CollectStatus.enabled と同じ意味)。false なら
+   * 以下は宣言の値を除いて空。
    *
    * @generated from field: bool enabled = 1;
    */
   enabled: boolean;
+
+  /**
+   * channel socket を受けているか。enabled でも socket を開けなければ false で、その
+   * 間は打てない。
+   *
+   * @generated from field: bool listening = 8;
+   */
+  listening: boolean;
 
   /**
    * この session の宣言 ("on" / "off" / 空 = agent の既定に従う)。

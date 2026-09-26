@@ -33,6 +33,9 @@ import (
 // sessionID is the shape Claude Code gives a session. The id becomes a path.
 var sessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// ValidSessionID says whether id has that shape.
+func ValidSessionID(id string) bool { return sessionID.MatchString(id) }
+
 // metaKey is packages/core/src/session-state.ts META_KEY (change both): a file
 // under meta/ with another name is not a key.
 var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
@@ -82,7 +85,7 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 	}
 	if s.Heartbeat != nil {
 		h := out.Heartbeat
-		h.Enabled, h.Wanted, h.Registered, h.Sent = hb.Listening, hb.Wanted, hb.Registered, uint32(hb.Sent)
+		h.Enabled, h.Listening, h.Wanted, h.Registered, h.Sent = true, hb.Listening, hb.Wanted, hb.Registered, uint32(hb.Sent)
 		h.NextAt, h.LastSentAt = ts(hb.Next), ts(hb.LastSent)
 	}
 	if s.Collect != nil {
@@ -272,6 +275,8 @@ func RequireBearer(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+		// 1*SP may separate the scheme from the token; the token has no spaces.
+		got = strings.TrimSpace(got)
 		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

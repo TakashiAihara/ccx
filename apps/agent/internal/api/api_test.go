@@ -101,7 +101,7 @@ func TestRequireBearer(t *testing.T) {
 	for _, c := range []struct {
 		header string
 		want   int
-	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Basic s3cret", 401}, {"Bearer s3cret", 200}, {"bearer s3cret", 200}} {
+	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Basic s3cret", 401}, {"Bearer s3cret", 200}, {"bearer s3cret", 200}, {"Bearer  s3cret", 200}, {"Bearer s3cretx", 401}} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/", nil)
 		if c.header != "" {
@@ -184,8 +184,14 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	}
 
 	// Before the channel connects: declared, wanted, but no way to beat it.
+	// Polled: the socket can accept a dial a moment before the concern marks
+	// itself listening.
 	got := ask()
-	if got.Declared.GetLabel() != "lbl" || got.Heartbeat.GetDeclared() != "on" || !got.Heartbeat.GetEnabled() ||
+	for i := 0; i < 100 && !got.Heartbeat.GetListening(); i++ {
+		time.Sleep(10 * time.Millisecond)
+		got = ask()
+	}
+	if got.Declared.GetLabel() != "lbl" || got.Heartbeat.GetDeclared() != "on" || !got.Heartbeat.GetEnabled() || !got.Heartbeat.GetListening() ||
 		!got.Heartbeat.GetWanted() || got.Heartbeat.GetRegistered() || got.Heartbeat.GetNextAt() != nil {
 		t.Errorf("before register: %v", got)
 	}
@@ -261,15 +267,15 @@ func TestGetSessionStatusConcernsOff(t *testing.T) {
 }
 
 // A heartbeat concern that is configured but not listening (its socket could
-// not open) is not reported as enabled; what the session wants still is.
-func TestHeartbeatNotListeningIsNotEnabled(t *testing.T) {
+// not open) is enabled and not listening; what the session wants still shows.
+func TestHeartbeatNotListening(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, "sessions", sid, "heartbeat"), "on\n")
 	hb := heartbeat.New(config.Config{Heartbeat: config.Heartbeat{Interval: 50 * time.Minute}}, t.Logf)
 	res, err := (&Server{Heartbeat: hb, ClaudeHome: home}).GetSessionStatus(context.Background(),
 		connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: home}))
-	if err != nil || res.Msg.Heartbeat.GetEnabled() || !res.Msg.Heartbeat.GetWanted() {
-		t.Errorf("got %v %v, want enabled=false wanted=true", res, err)
+	if err != nil || !res.Msg.Heartbeat.GetEnabled() || res.Msg.Heartbeat.GetListening() || !res.Msg.Heartbeat.GetWanted() {
+		t.Errorf("got %v %v, want enabled, not listening, wanted", res, err)
 	}
 }
 
