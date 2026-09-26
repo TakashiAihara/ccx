@@ -346,8 +346,8 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await readDeclared(SID, homeA)).metadata).toEqual({ done: "", owner: "alice=b" });
     expect((await run(["status", SID])).out).toMatch(/metadata\s+done,owner="alice=b"/);
     // key= は key だけと同じ (値なし)
-    expect((await run(["meta", "set", "flag=", SID, "--json"])).out).toContain('"flag": ""');
-    expect((await run(["meta", "unset", "flag", SID])).code).toBe(0);
+    expect(JSON.parse((await run(["meta", "set", "flag=", SID, "--json"])).out).metadata.flag).toBe("");
+    expect(JSON.parse((await run(["meta", "unset", "flag", SID, "--json"])).out).metadata).toEqual({ done: "", owner: "alice=b" });
 
     const unset = await run(["meta", "unset", "owner", SID, "--json"]);
     expect(JSON.parse(unset.out).metadata).toEqual({ done: "" });

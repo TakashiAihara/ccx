@@ -57,17 +57,18 @@ file written by hand is read, but it does not leave `.ccx-declared` and is not r
 center until the next write through ccx. `meta set key=value` rather than `meta set key [value]`:
 with both the value and `[id]` optional, `meta set done <id>` would read the id as the value.
 
-A write that changes nothing (unsetting a key that is not there, setting the value already there)
-writes nothing, not even `.ccx-declared` — otherwise a hook that clears a key on every session would
-stop `pull` from ever installing the store's state on that machine.
+`meta unset` is a declaration like `mark --off`, even for a key that is not there locally: it leaves
+`.ccx-declared`, so `pull` no longer installs the store's state for that session on this machine. A
+hook should unset only on the sessions it means to, not on every session "just in case".
 
-The map travels whole: `state.json` and the center's row are the last writer's full state, not a
-merge per key. Two machines each setting a different key on the same session keep their own local
-files, but the store and the center show whichever pushed or reported last.
+The map travels whole, not merged per key: each machine's `state.json` and each machine's center
+row hold that machine's full state, and `pull` takes the copy of the machine that last pushed the
+transcript.
 
 A ccx or center older than #165 does not know `metadata`: a `pull` by an old ccx installs the other
-keys only, a `push` by an old ccx rewrites `state.json` without it, and an old center returns rows
-without it. Update the center and every machine's ccx before relying on metadata across machines.
+keys only, a `push` by an old ccx that changed another key rewrites `state.json` without it, and an
+old center returns rows without it. Update the center and every machine's ccx before relying on
+metadata across machines.
 
 Claude Code itself writes only `~/.claude/sessions/<pid>.json` there (which ccx already reads); the
 `<id>/` directories were created by the user's own scripts and hook, and ccx puts its files beside

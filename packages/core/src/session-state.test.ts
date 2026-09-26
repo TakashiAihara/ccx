@@ -93,10 +93,9 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
       await expect(writeDeclared(fresh, { metadata: { [k]: "" } }, home)).rejects.toThrow(/invalid metadata key/);
     }
     expect(existsSync(join(home, "sessions", fresh))).toBe(false);
-    // 何も変えない patch (無い key の unset、同じ値) は何も書かない。.ccx-declared も置かない (置くと pull が写さなくなる)
-    expect(await writeDeclared(fresh, { metadata: { nope: null }, archived: false, label: "" }, home)).toEqual(EMPTY_DECLARED);
-    expect(existsSync(join(home, "sessions", fresh))).toBe(false);
-    expect(await holdsDeclared(fresh, home)).toBe(false);
+    // 無い key の unset も宣言: 保存先の古い写しに残る key を pull が戻さない
+    expect(await writeDeclared(fresh, { metadata: { nope: null } }, home)).toEqual(EMPTY_DECLARED);
+    expect(await holdsDeclared(fresh, home)).toBe(true);
     // __proto__ は正しい key: prototype の setter に食われず残る。値の空白と改行は往復で変わらない
     // (リテラル `{ __proto__: … }` は key を作らないので JSON から組む)
     const oddMeta = normalizeDeclared(JSON.parse('{"metadata": {"__proto__": "p", "sp": "  two  ", "nl": "a\\n"}}')).metadata;
