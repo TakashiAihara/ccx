@@ -351,7 +351,11 @@ session
         let state: DeclaredState | null;
         if (origin.machine === me.machine && origin.user === me.user) {
           lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
-          state = await declaredFor(id, home, lifecycle, store, origin);
+          // 読めない行は null (「知らない」) にして一覧は出す。1 行の壊れた印で全体を止めない
+          state = await declaredFor(id, home, lifecycle, store, origin).catch((e: unknown) => {
+            console.error(`(${id}: declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+            return null;
+          });
         } else {
           // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
           lifecycle = s.endedAt ? "ended" : "";

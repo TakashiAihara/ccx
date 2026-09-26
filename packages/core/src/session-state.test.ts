@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -108,15 +108,24 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // key の形でもディレクトリは読めない (EISDIR): 数えず、readDeclared も落ちない
     await mkdir(join(dir, "sub"), { recursive: true });
     expect((await readDeclared(SID, home)).metadata).toEqual({});
+    // 読めない key のファイル (自分を指す symlink = ELOOP) は数えずに済ませない
+    await symlink("loop", join(dir, "loop"));
+    await expect(readDeclared(SID, home)).rejects.toThrow(/ELOOP/);
+    // 先の無い symlink (ENOENT) は無い key
+    await rm(join(dir, "loop"));
+    await symlink("nowhere", join(dir, "gone"));
+    expect((await readDeclared(SID, home)).metadata).toEqual({});
     // 読めない meta は空にしない (空で push すると保存先の key を消す)
     await rm(dir, { recursive: true });
     await Bun.write(dir, "not a dir");
-    await expect(readDeclared(SID, home)).rejects.toThrow();
-    // 一覧はその session だけ飛ばす
+    await expect(readDeclared(SID, home)).rejects.toThrow(/ENOTDIR/);
+    // 一覧はその session だけ飛ばす (他の印を持っていても: 「空として読んだ」なら残るはず)
+    await Bun.write(join(home, "sessions", SID, "task"), "kept\n");
     const other = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
     await writeDeclared(other, { task: "t" }, home);
     expect(await markedSessionIds(home)).toEqual([other]);
     await rm(dir);
+    await rm(join(home, "sessions", SID, "task"));
   });
 
   test("normalizeDeclared keeps valid string metadata; sameDeclared compares metadata by content, not key order", () => {

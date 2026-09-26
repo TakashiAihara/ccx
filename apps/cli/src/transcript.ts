@@ -87,7 +87,17 @@ export async function select(
   const picked: LocalTranscript[] = [];
   for (const t of all) {
     if ((sel.ended || opts.excludeRunning) && running.has(t.sessionId)) continue;
-    if (sel.archived && !(await readDeclared(t.sessionId, home)).archived) continue;
+    if (sel.archived) {
+      // 読めない session は選ばない (archived か分からない)。他の session の選択は止めない
+      const archived = await readDeclared(t.sessionId, home).then(
+        (s) => s.archived,
+        (e: unknown) => {
+          console.error(`(${t.sessionId}: skipped, declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+          return false;
+        },
+      );
+      if (!archived) continue;
+    }
     picked.push(t);
   }
   return { picked, running };
@@ -113,7 +123,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
       for (const t of picked) {
         const r = await c.push(t);
         results.push({ sessionId: t.sessionId, ...r });
-        const flags = flagsOf(r.state).join(",");
+        if (r.stateError) {
+          console.error(`(${t.sessionId}: transcript ${r.status}, state.json not written: declared state could not be read: ${r.stateError})`);
+          process.exitCode = 1;
+        }
+        const flags = r.state ? flagsOf(r.state).join(",") : "?";
         if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${human(r.meta.size)}  ${flags ? `[${flags}]  ` : ""}${r.meta.cwd}`);
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));

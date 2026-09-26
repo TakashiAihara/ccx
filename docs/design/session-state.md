@@ -133,7 +133,11 @@ reads. A directory under `~/.claude/sessions/` counts as marked (for prefix reso
 mark file (a metadata file under `meta/` included) is in it. Separately, every `ccx session mark / label / task / meta` leaves `.ccx-declared` there:
 "this machine has declared state for this session", which is what keeps a cleared `archived` from
 coming back from an older copy in the store. The store is read strictly: a missing `state.json` is
-"no state", but a store that does not answer is an error, never an empty store.
+"no state", but a store that does not answer is an error, never an empty store. The local `meta/`
+is read the same way: missing is empty, unreadable is an error (an empty map would make `push`
+drop the keys from `state.json`). The error stays with that session — `tr push` still carries its
+transcript without writing `state.json`, `pull` treats it as holding a declaration, and `session ls`
+/ `--archived` / prefix resolution skip it with a note on stderr.
 
 ## Not here
 

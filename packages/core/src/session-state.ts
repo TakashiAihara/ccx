@@ -132,7 +132,8 @@ async function readMetadata(dir: string): Promise<Metadata> {
       // 書くときに足した末尾の改行 1 つだけを外す。値は利用者のものなので空白は削らない (保存先との往復で変わらない)
       out.push([k, (await Bun.file(join(dir, META_DIR, k)).text()).replace(/\n$/, "")]);
     } catch (e) {
-      // ディレクトリは key ではない。readdir の後に消えたものは無い。それ以外は空にせず止める (上と同じ理由)
+      // ディレクトリは key ではない。ENOENT (readdir の後に消えた / 先の無い symlink) は無いものとして
+      // 数えない。それ以外 (ELOOP / EACCES 等) は空にせず止める (上と同じ理由)
       if (errCode(e) !== "EISDIR" && errCode(e) !== "ENOENT") throw e;
     }
   }
@@ -225,7 +226,7 @@ export async function markedSessionIds(home = claudeHome()): Promise<string[]> {
       if (!isEmptyDeclared(await readDeclared(id, home))) out.push(id);
     } catch (e) {
       // 1 session の読めない印で、他の session の解決まで止めない
-      console.error(`(${id}: declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+      console.error(`(${id}: declared state could not be read, skipped — fix ${sessionDir(id, home)}: ${e instanceof Error ? e.message : String(e)})`);
     }
   }
   return out;
