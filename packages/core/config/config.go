@@ -73,6 +73,15 @@ type Config struct {
 	// with serve. Apart from the hook socket: the hook wire is one frame and an
 	// ack, this one stays open for the life of the session.
 	ChannelSocketPath string
+
+	// APISocketPath is where serve answers AgentService (kaneo ccx#34) for this
+	// host: statusline and the `ccx-agent status` client. Guarded by 0600.
+	APISocketPath string
+
+	// APIListen is a TCP address (host:port) where serve also answers
+	// AgentService, for agents on other hosts. Empty (the default) is off. It
+	// requires HubToken: serve refuses to open it without one.
+	APIListen string
 }
 
 // Heartbeat is the heartbeat concern's settings.
@@ -127,7 +136,10 @@ type fileShape struct {
 	Collect     struct{ Enabled *bool } `toml:"collect"`
 	Carry       struct{ Enabled *bool } `toml:"carry"`
 	Persistence struct{ Enabled *bool } `toml:"persistence"`
-	Heartbeat   struct {
+	API         struct {
+		Listen string `toml:"listen"`
+	} `toml:"api"`
+	Heartbeat struct {
 		Enabled  *bool  `toml:"enabled"`
 		Default  *bool  `toml:"default"`
 		Interval string `toml:"interval"`
@@ -219,6 +231,8 @@ func load(
 			Err:      hbErr,
 		},
 		ChannelSocketPath: channelSocketPath(getenv),
+		APISocketPath:     apiSocketPath(getenv),
+		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
 	}, nil
 }
 
@@ -354,6 +368,15 @@ func channelSocketPath(getenv func(string) string) string {
 	// CCX_SOCKET is how a path over the unix-socket limit is fixed, and the
 	// channel socket needs the same fix.
 	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
+}
+
+// apiSocketPath is CCX_API_SOCKET, else ccx-api.sock next to the hook socket
+// (for the same reason as the channel socket).
+func apiSocketPath(getenv func(string) string) string {
+	if p := getenv("CCX_API_SOCKET"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-api.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike

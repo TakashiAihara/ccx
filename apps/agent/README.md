@@ -41,6 +41,33 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
                    invoke. It never fails a session — it always exits 0.
 ```
 
+## Asking the agent (status API)
+
+```text
+ccx-agent status --session <id> [--json]
+                   ask the running serve about one session and print JSON:
+                   its declared state (archived / label / task / metadata),
+                   its heartbeat (declared / wanted / registered / next / sent),
+                   and collect (spool backlog, last reach of the center).
+```
+
+serve answers `ccx.v1.AgentService` (packages/proto/ccx/v1/agent.proto) with one
+handler on two listeners:
+
+- a unix socket (`ccx-api.sock`, mode 0600), always on. This is what statusline
+  uses. With serve down, `ccx-agent status` prints nothing and exits 1 — there is
+  no fallback that reads the files some other way.
+- TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
+  every request needs `Authorization: Bearer <hub token>`. Without a hub token
+  serve refuses to open it (the unix side stays up).
+
+Connect unary is HTTP POST + JSON, so curl works too:
+
+```bash
+curl -s --unix-socket "$XDG_RUNTIME_DIR/ccx/ccx-api.sock" -H 'Content-Type: application/json' \
+  -d '{"sessionId":"<id>"}' http://ccx-agent/ccx.v1.AgentService/GetSessionStatus
+```
+
 ## The per-session channel
 
 ```text
@@ -123,6 +150,8 @@ it simply has no center to forward to.
 | heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
 | heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
+| status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
+| status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the hub token) |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 

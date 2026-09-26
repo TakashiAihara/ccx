@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -80,6 +81,22 @@ type forwardLoop struct {
 	// idlePoll is a safety net: even if a nudge is missed, the loop re-checks
 	// the spool this often.
 	idlePoll time.Duration
+
+	mu      sync.Mutex
+	reached Reach
+}
+
+// Reach is the last outcome of forwarding to the center, since this agent started.
+type Reach struct {
+	LastForwarded time.Time
+	LastErrorAt   time.Time
+	LastError     string
+}
+
+func (l *forwardLoop) reach() Reach {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.reached
 }
 
 func newForwardLoop(s *Spool, f Forwarder, log func(string, ...any)) *forwardLoop {
@@ -132,6 +149,9 @@ func (l *forwardLoop) run(ctx context.Context) {
 			}
 			// Center unreachable. Keep the event, back off, retry the SAME one.
 			l.log("forward failed (seq %d), retrying: %v", e.Event.GetSeq(), err)
+			l.mu.Lock()
+			l.reached.LastErrorAt, l.reached.LastError = time.Now(), err.Error()
+			l.mu.Unlock()
 			if !l.sleep(ctx, backoff) {
 				return
 			}
@@ -140,6 +160,9 @@ func (l *forwardLoop) run(ctx context.Context) {
 		}
 
 		// Center confirmed. Only now remove it from the spool.
+		l.mu.Lock()
+		l.reached.LastForwarded = time.Now()
+		l.mu.Unlock()
 		if err := l.spool.Ack(e); err != nil {
 			// The center already has it, but the local delete failed (a full or
 			// read-only fs, say). If we looped straight back, Oldest would return
