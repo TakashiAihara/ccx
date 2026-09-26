@@ -84,8 +84,8 @@ with the hook.
 
 `labelHistory` is ccx's own record of `ccx session label` (#169, 2026-09-26: the user wants every
 name a session had to be searchable across machines). A label write (trimmed) appends a line only
-when it differs from the last recorded name (the `label` file when nothing is recorded yet), so
-rewriting the same name adds nothing, while a change the file already has but the history lacks —
+when it differs from the last recorded name (with nothing recorded yet, any non-empty name is
+recorded), so rewriting the same name adds nothing, while a change the file already has but the history lacks —
 the hook wrote it, or ccx died between the two writes — is recorded by the next write of that name;
 a write made on disk without ccx (the hook today) is not recorded by itself,
 except that the first line ccx writes is preceded by the name the session already had, dated by the

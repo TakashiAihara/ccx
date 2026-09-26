@@ -113,9 +113,22 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await utimes(join(dir, "label"), new Date("2026-09-01T00:00:00Z"), new Date("2026-09-01T00:00:00Z"));
     const s = await writeDeclared(SID, { label: "by-ccx" }, home);
     expect(s.labelHistory).toEqual([{ at: "2026-09-01T00:00:00.000Z", label: "from-hook" }, { at: expect.any(String), label: "by-ccx" }]);
+    // hook が付けた名前と同じ名前を ccx で書いても、最初の記録として残る (履歴が空のときにファイルと比べない)
+    await rm(join(dir, "labels.jsonl"));
+    await Bun.write(join(dir, "label"), "same\n");
+    expect((await writeDeclared(SID, { label: "same" }, home)).labelHistory).toEqual(h("same"));
+    // hook が付けた名前を ccx で消すと、その名前 (種) と消したことの 2 件
+    await rm(join(dir, "labels.jsonl"));
+    await Bun.write(join(dir, "label"), "to-clear\n");
+    expect((await writeDeclared(SID, { label: "" }, home)).labelHistory.map((e) => e.label)).toEqual(["to-clear", ""]);
+    // 空を空で消すのは記録しない
+    await rm(join(dir, "labels.jsonl"));
+    await rm(join(dir, "label"), { force: true });
+    expect((await writeDeclared(SID, { label: "" }, home)).labelHistory).toEqual([]);
+    await writeDeclared(SID, { label: "by-ccx" }, home);
     // 種を置くのは最初の 1 回だけ
     await Bun.write(join(dir, "label"), "from-hook-again\n");
-    expect((await writeDeclared(SID, { label: "next" }, home)).labelHistory.map((e) => e.label)).toEqual(["from-hook", "by-ccx", "next"]);
+    expect((await writeDeclared(SID, { label: "next" }, home)).labelHistory.map((e) => e.label)).toEqual(["by-ccx", "next"]);
   });
 
   test("heartbeat is on / off / unset; anything else in the file or the store reads as unset", async () => {
