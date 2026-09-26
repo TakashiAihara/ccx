@@ -51,12 +51,23 @@ are lowercased — on a case-insensitive filesystem (macOS's default) `Done` and
 file. The center drops keys outside this rule too. A value is kept as given (only the one trailing
 newline ccx writes is removed on read); `key` and `key=` both set the key with no value. A file per
 key rather than one JSON keeps a shell reader at `[ -e …/meta/done ]` — the statusline runs on
-every render and would otherwise parse JSON each time. That path is therefore an interface:
-changing it breaks the scripts that read it.
+every render and would otherwise parse JSON each time. That path is therefore an interface for
+readers: changing it breaks the scripts that read it. Writers go through `ccx session meta` — a
+file written by hand is read, but it does not leave `.ccx-declared` and is not reported to the
+center until the next write through ccx. `meta set key=value` rather than `meta set key [value]`:
+with both the value and `[id]` optional, `meta set done <id>` would read the id as the value.
 
-A ccx or center older than #165 does not know `metadata` and drops it: a `pull` by an old ccx
-installs the other keys only, and an old center returns rows without it. Update the center and
-every machine's ccx before relying on metadata across machines.
+A write that changes nothing (unsetting a key that is not there, setting the value already there)
+writes nothing, not even `.ccx-declared` — otherwise a hook that clears a key on every session would
+stop `pull` from ever installing the store's state on that machine.
+
+The map travels whole: `state.json` and the center's row are the last writer's full state, not a
+merge per key. Two machines each setting a different key on the same session keep their own local
+files, but the store and the center show whichever pushed or reported last.
+
+A ccx or center older than #165 does not know `metadata`: a `pull` by an old ccx installs the other
+keys only, a `push` by an old ccx rewrites `state.json` without it, and an old center returns rows
+without it. Update the center and every machine's ccx before relying on metadata across machines.
 
 Claude Code itself writes only `~/.claude/sessions/<pid>.json` there (which ccx already reads); the
 `<id>/` directories were created by the user's own scripts and hook, and ccx puts its files beside

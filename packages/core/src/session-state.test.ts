@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import {
   EMPTY_DECLARED,
   flagsOf,
+  holdsDeclared,
   isEmptyDeclared,
   markedSessionIds,
   normalizeDeclared,
@@ -85,10 +87,16 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(await writeDeclared(SID, { metadata: { done: null }, task: "" }, home)).toEqual(EMPTY_DECLARED);
     expect(await markedSessionIds(home)).toEqual([]);
 
-    // パスになる key は通さない (書く前に止まる)
+    // パスになる key は通さない (書く前に止まる: まだ何も無い session に、ディレクトリも作らない)
+    const fresh = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
     for (const k of ["..", ".hidden", "a/b", "a=b", "", "-x", "Done", "x".repeat(129)]) {
-      await expect(writeDeclared(SID, { metadata: { [k]: "" } }, home)).rejects.toThrow(/invalid metadata key/);
+      await expect(writeDeclared(fresh, { metadata: { [k]: "" } }, home)).rejects.toThrow(/invalid metadata key/);
     }
+    expect(existsSync(join(home, "sessions", fresh))).toBe(false);
+    // 何も変えない patch (無い key の unset、同じ値) は何も書かない。.ccx-declared も置かない (置くと pull が写さなくなる)
+    expect(await writeDeclared(fresh, { metadata: { nope: null }, archived: false, label: "" }, home)).toEqual(EMPTY_DECLARED);
+    expect(existsSync(join(home, "sessions", fresh))).toBe(false);
+    expect(await holdsDeclared(fresh, home)).toBe(false);
     // __proto__ は正しい key: prototype の setter に食われず残る。値の空白と改行は往復で変わらない
     // (リテラル `{ __proto__: … }` は key を作らないので JSON から組む)
     const oddMeta = normalizeDeclared(JSON.parse('{"metadata": {"__proto__": "p", "sp": "  two  ", "nl": "a\\n"}}')).metadata;

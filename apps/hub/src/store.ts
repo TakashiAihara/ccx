@@ -228,7 +228,10 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
   return out;
 }
 
-/** packages/core/src/session-state.ts の META_KEY と同じ (hub は core に依存しない)。形の崩れた key を index に溜めない */
+/**
+ * packages/core/src/session-state.ts の META_KEY と同じ (hub は core に依存しない)。events には
+ * 届いた payload のまま残る。落とすのは読むとき: 形の崩れた key を ListSessions で返さない
+ */
 const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;
 
 function parseState(payload: Uint8Array): SessionState | null {

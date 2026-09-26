@@ -160,7 +160,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
       }
       console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
       if (r.state) {
-        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`].filter(Boolean);
+        const meta = Object.keys(r.state.metadata);
+        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
         if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
       }
     });

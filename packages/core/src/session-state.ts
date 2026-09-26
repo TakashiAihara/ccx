@@ -159,10 +159,22 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
 /**
  * 差分だけ書く。flag は空ファイルの有無、label / task / heartbeat は中身 (空文字なら消す)。
  * metadata は key ごとに、文字列ならその値で置き (空文字は値なし)、null なら消す。
- * 渡さなかった鍵は触らない
+ * 渡さなかった鍵は触らない。何も変わらない patch (無い key の unset 等) は何も書かない —
+ * `.ccx-declared` も置かない。置くとこの machine が宣言を持つことになり、pull が保存先の
+ * 状態を二度と写さなくなる
  */
 export async function writeDeclared(sessionId: string, patch: DeclaredPatch, home = claudeHome()): Promise<DeclaredState> {
   for (const k of Object.keys(patch.metadata ?? {})) if (!isMetaKey(k)) throw new Error(`invalid metadata key ${JSON.stringify(k)}`);
+  const before = await readDeclared(sessionId, home);
+  const { metadata: metaPatch, ...top } = patch;
+  const next = normalizeDeclared({
+    ...before,
+    ...Object.fromEntries(Object.entries(top).filter(([, v]) => v !== undefined)),
+    metadata: Object.fromEntries(
+      [...Object.entries(before.metadata), ...Object.entries(metaPatch ?? {})].filter(([k]) => !(metaPatch && metaPatch[k] === null && Object.hasOwn(metaPatch, k))),
+    ),
+  });
+  if (sameDeclared(before, next)) return before;
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
   await Bun.write(join(dir, DECLARED_FILE), "");

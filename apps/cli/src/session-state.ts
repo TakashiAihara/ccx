@@ -196,7 +196,8 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["label", s.label || "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
-    ["metadata", Object.entries(s.metadata).map(([k, v]) => (v ? `${k}=${v}` : k)).join(",") || "-"],
+    // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
+    ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
   ]);
 
 export function registerSessionState(session: Command): void {
