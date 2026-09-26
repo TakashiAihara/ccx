@@ -123,9 +123,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     const other = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
     await writeDeclared(other, { task: "t" }, home);
     expect((await markedSessionIds(home)).sort()).toEqual([SID, other].sort());
-    await Bun.write(join(home, "sessions", SID, "task"), "kept\n");
     await rm(dir);
-    await rm(join(home, "sessions", SID, "task"));
   });
 
   test("normalizeDeclared keeps valid string metadata; sameDeclared compares metadata by content, not key order", () => {

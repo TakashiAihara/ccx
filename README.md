@@ -157,6 +157,8 @@ target. See `docs/design/transcript-store.md`.
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
+`push` and `prune` also exit `1` when a session's declared state cannot be read (`--archived` skips
+it; `push <id>` still carries the transcript without `state.json`); the reason is on stderr.
 
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own
