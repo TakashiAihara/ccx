@@ -37,7 +37,8 @@ message GetSessionStatusResponse {
 }
 
 message HeartbeatStatus {
-  // heartbeat concern が動いているか。false なら以下は宣言の値を除いて空。
+  // heartbeat concern が動いているか (channel socket を受けているか)。設定で on でも、
+  // socket を開けなければ false。false なら以下は宣言の値と wanted を除いて空。
   bool enabled = 1;
   // この session の宣言 ("on" / "off" / 空 = agent の既定に従う)。
   string declared = 2;

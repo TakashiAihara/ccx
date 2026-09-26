@@ -177,6 +177,25 @@ func TestStepPushesOnlyWhenDue(t *testing.T) {
 	}
 }
 
+// Only a file named archived folds the session away, not a directory.
+func TestWantedArchivedIsAFile(t *testing.T) {
+	home := t.TempDir()
+	const id = "00000000-0000-4000-8000-0000000000cc"
+	dir := filepath.Join(home, "sessions", id)
+	if err := os.MkdirAll(filepath.Join(dir, "archived"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &Heartbeat{SessionID: id, ClaudeHome: home, Default: true}
+	if !h.wanted() {
+		t.Error("a directory named archived stopped the heartbeat")
+	}
+	_ = os.Remove(filepath.Join(dir, "archived"))
+	_ = os.WriteFile(filepath.Join(dir, "archived"), nil, 0o644)
+	if h.wanted() {
+		t.Error("an archived session is wanted")
+	}
+}
+
 // What the status API shows: the due time while waiting for it, then the push.
 func TestStepRecordsStats(t *testing.T) {
 	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)

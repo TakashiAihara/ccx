@@ -143,7 +143,8 @@ func (x *GetSessionStatusResponse) GetCollect() *CollectStatus {
 
 type HeartbeatStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// heartbeat concern が動いているか。false なら以下は宣言の値を除いて空。
+	// heartbeat concern が動いているか (channel socket を受けているか)。設定で on でも、
+	// socket を開けなければ false。false なら以下は宣言の値と wanted を除いて空。
 	Enabled bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	// この session の宣言 ("on" / "off" / 空 = agent の既定に従う)。
 	Declared string `protobuf:"bytes,2,opt,name=declared,proto3" json:"declared,omitempty"`

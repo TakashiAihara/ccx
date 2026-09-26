@@ -184,7 +184,9 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 // on / off (`ccx session heartbeat`), then the machine's default.
 func (h *Heartbeat) wanted() bool {
 	dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
-	if _, err := os.Stat(filepath.Join(dir, "archived")); err == nil {
+	// A directory named archived is not the flag (the TS reader and the status
+	// API agree: Bun.file().exists() is false for it).
+	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		return false
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "heartbeat"))

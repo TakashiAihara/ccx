@@ -194,18 +194,17 @@ func cmdStatus(args []string) int {
 		fmt.Fprintln(os.Stderr, "ccx-agent status: --session is required")
 		return 2
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent status: config: %v\n", err)
-		return 1
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	res, err := api.UnixClient(cfg.APISocketPath).GetSessionStatus(ctx, connect.NewRequest(&ccxv1.GetSessionStatusRequest{
+	res, err := api.UnixClient(config.APISocket()).GetSessionStatus(ctx, connect.NewRequest(&ccxv1.GetSessionStatusRequest{
 		SessionId: *sid, ClaudeHome: os.Getenv("CLAUDE_CONFIG_DIR"),
 	}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent status: %v\n", err)
+		// 2 is the caller's mistake (a malformed id), 1 is the agent not answering.
+		if connect.CodeOf(err) == connect.CodeInvalidArgument {
+			return 2
+		}
 		return 1
 	}
 	b, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(res.Msg)

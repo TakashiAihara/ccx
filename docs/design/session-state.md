@@ -54,10 +54,10 @@ newline ccx writes is removed on read); `key` and `key=` both set the key with n
 key rather than one JSON keeps a shell reader at `[ -e …/meta/done ]` — a hook can test a key
 without parsing JSON. That path is therefore an interface for readers: changing it breaks the
 scripts that read it, and ccx-agent's status API (`ccx.v1.AgentService`, kaneo ccx#34) reads the
-same files (`ReadDeclared` in `apps/agent/internal/api`). The statusline asks that API
-(`ccx-agent status --session <id>`) rather than the files, so what it shows and what the agent
-alone knows (heartbeat, spool, center reach) come from one place; with the agent down it shows
-nothing rather than a value read some other way. Writers go through `ccx session meta` — a
+same files (`ReadDeclared` in `apps/agent/internal/api`). The statusline is meant to ask that API
+(`ccx-agent status --session <id>`) rather than the files (the switch is claude-config#97, outside
+this repo), so what it shows and what the agent alone knows (heartbeat, spool, center reach) come
+from one place; with the agent down it shows nothing rather than a value read some other way. Writers go through `ccx session meta` — a
 file written by hand is read, but it does not leave `.ccx-declared` and is not reported to the
 center until the next write through ccx. `meta set key=value` rather than `meta set key [value]`:
 with both the value and `[id]` optional, `meta set done <id>` would read the id as the value.

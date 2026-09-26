@@ -168,6 +168,7 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		go func() { _ = c.Run(ctx) }()
 	}
 	waitDial(t, "unix", cfg.APISocketPath)
+	waitDial(t, "unix", cfg.ChannelSocketPath) // heartbeat reports enabled once its socket is up
 	if fi, err := os.Stat(cfg.APISocketPath); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("api socket mode: %v %v", fi, err)
 	}
@@ -256,6 +257,19 @@ func TestGetSessionStatusConcernsOff(t *testing.T) {
 	}
 	if res.Msg.Heartbeat.GetEnabled() || res.Msg.Collect.GetEnabled() {
 		t.Errorf("%v", res.Msg)
+	}
+}
+
+// A heartbeat concern that is configured but not listening (its socket could
+// not open) is not reported as enabled; what the session wants still is.
+func TestHeartbeatNotListeningIsNotEnabled(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, "sessions", sid, "heartbeat"), "on\n")
+	hb := heartbeat.New(config.Config{Heartbeat: config.Heartbeat{Interval: 50 * time.Minute}}, t.Logf)
+	res, err := (&Server{Heartbeat: hb, ClaudeHome: home}).GetSessionStatus(context.Background(),
+		connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: home}))
+	if err != nil || res.Msg.Heartbeat.GetEnabled() || !res.Msg.Heartbeat.GetWanted() {
+		t.Errorf("got %v %v, want enabled=false wanted=true", res, err)
 	}
 }
 
@@ -358,6 +372,16 @@ func TestTCPListener(t *testing.T) {
 	res, err := c.GetSessionStatus(context.Background(), connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: filepath.Join(work, "evil")}))
 	if err != nil || res.Msg.Declared.GetLabel() != "" {
 		t.Errorf("claude_home over TCP was honoured: %v %v", res, err)
+	}
+
+	// The TCP address is taken: the unix side still answers.
+	work3 := shortDir(t)
+	cfg3 := config.Config{APISocketPath: filepath.Join(work3, "a.sock"), APIListen: addr, HubToken: "tok"}
+	go func() { _ = New(cfg3, &Server{ClaudeHome: work3}, t.Logf).Run(ctx) }()
+	waitDial(t, "unix", cfg3.APISocketPath)
+	if _, err := UnixClient(cfg3.APISocketPath).GetSessionStatus(context.Background(),
+		connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid})); err != nil {
+		t.Errorf("unix side with the TCP address taken: %v", err)
 	}
 
 	// No token configured: the unix side comes up, the TCP side does not.

@@ -247,6 +247,20 @@ func TestIntegration_StatusClient(t *testing.T) {
 		t.Fatalf("serve down: out=%q err=%v, want empty and an error", out, err)
 	}
 
+	bad := exec.Command(bin, "status", "--session", "not-an-id")
+	bad.Env = env
+	serveForBad := startServe(t, bin, env)
+	for i := 0; i < 150; i++ {
+		if _, err := os.Stat(filepath.Join(work, "a.sock")); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := bad.Run(); err == nil || bad.ProcessState.ExitCode() != 2 {
+		t.Errorf("malformed id: %v, want exit 2", err)
+	}
+	serveForBad.kill()
+
 	serve := startServe(t, bin, env)
 	defer serve.kill()
 	var out string
