@@ -256,6 +256,12 @@ func TestAPI_SocketAndListen(t *testing.T) {
 	if c.APISocketPath != "/s/ccx-api.sock" {
 		t.Errorf("with CCX_SOCKET = %q, want next to it", c.APISocketPath)
 	}
+	// APISocket must land where serve listens. Only env decides it today; a git
+	// or config.toml key added to Load alone would make these differ.
+	t.Setenv("CCX_CONFIG", "/nonexistent")
+	if full, err := Load(); err != nil || APISocket() != full.APISocketPath {
+		t.Errorf("APISocket() = %q, Load() = %q (%v)", APISocket(), full.APISocketPath, err)
+	}
 	t.Setenv("CCX_API_SOCKET", "/e/a.sock")
 	if got := APISocket(); got != "/e/a.sock" {
 		t.Errorf("APISocket() = %q, want the env value", got)

@@ -138,7 +138,7 @@ sequenceDiagram
 
 | Condition | Why |
 |---|---|
-| `~/.claude/sessions/<id>/archived` exists | declared folded away; its cache is not wanted |
+| `~/.claude/sessions/<id>/archived` is a file (a directory does not count) | declared folded away; its cache is not wanted |
 | an hour or more since the last request that answered started (resumed, host suspended, a heartbeat whose request failed) | the cache is already gone; a heartbeat would only pay the rewrite early |
 | a turn is running (below) | a heartbeat would queue behind the turn and run as an extra turn after it |
 | the last request wrote a 5-minute cache | it is always gone 50 minutes later |

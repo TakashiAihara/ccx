@@ -143,9 +143,12 @@ func (x *GetSessionStatusResponse) GetCollect() *CollectStatus {
 
 type HeartbeatStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// heartbeat concern が動いているか (channel socket を受けているか)。設定で on でも、
-	// socket を開けなければ false。false なら以下は宣言の値と wanted を除いて空。
+	// heartbeat concern が設定で on か (CollectStatus.enabled と同じ意味)。false なら
+	// 以下は宣言の値を除いて空。
 	Enabled bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// channel socket を受けているか。enabled でも socket を開けなければ false で、その
+	// 間は打てない。
+	Listening bool `protobuf:"varint,8,opt,name=listening,proto3" json:"listening,omitempty"`
 	// この session の宣言 ("on" / "off" / 空 = agent の既定に従う)。
 	Declared string `protobuf:"bytes,2,opt,name=declared,proto3" json:"declared,omitempty"`
 	// 宣言と agent の既定から決まる「打つべきか」。archived なら false。
@@ -195,6 +198,13 @@ func (*HeartbeatStatus) Descriptor() ([]byte, []int) {
 func (x *HeartbeatStatus) GetEnabled() bool {
 	if x != nil {
 		return x.Enabled
+	}
+	return false
+}
+
+func (x *HeartbeatStatus) GetListening() bool {
+	if x != nil {
+		return x.Listening
 	}
 	return false
 }
@@ -353,9 +363,10 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\x18GetSessionStatusResponse\x120\n" +
 	"\bdeclared\x18\x01 \x01(\v2\x14.ccx.v1.SessionStateR\bdeclared\x125\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x17.ccx.v1.HeartbeatStatusR\theartbeat\x12/\n" +
-	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\x86\x02\n" +
+	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\xa4\x02\n" +
 	"\x0fHeartbeatStatus\x12\x18\n" +
-	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1a\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1c\n" +
+	"\tlistening\x18\b \x01(\bR\tlistening\x12\x1a\n" +
 	"\bdeclared\x18\x02 \x01(\tR\bdeclared\x12\x16\n" +
 	"\x06wanted\x18\x03 \x01(\bR\x06wanted\x12\x1e\n" +
 	"\n" +

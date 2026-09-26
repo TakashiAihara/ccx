@@ -55,8 +55,12 @@ serve answers `ccx.v1.AgentService` (packages/proto/ccx/v1/agent.proto) with one
 handler on two listeners:
 
 - a unix socket (`ccx-api.sock`, mode 0600), always on. This is what statusline
-  uses. With serve down, `ccx-agent status` prints nothing and exits 1 (2 for a
-  malformed session id) — there is no fallback that reads the files some other way.
+  uses. With serve down, `ccx-agent status` prints nothing and exits 1 (a
+  malformed session id is 2, checked before dialing) — there is no fallback that
+  reads the files some other way. The client finds the socket from the
+  environment only (`CCX_API_SOCKET`, else `CCX_SOCKET`, else `XDG_RUNTIME_DIR`):
+  set these the same way for serve (its systemd unit) and for the shell the
+  statusline runs in, or the statusline shows nothing as if serve were down.
 - TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
   every request needs `Authorization: Bearer <hub token>`. Without a hub token
   serve refuses to open it (the unix side stays up). It is plain HTTP and the
