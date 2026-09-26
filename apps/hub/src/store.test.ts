@@ -266,7 +266,7 @@ describe("session state events (producer 2, #127)", () => {
     const rows = listSessions(db, { limit: 10 });
     const s1 = rows.find((r) => r.sessionId === "s1")!;
     const s2 = rows.find((r) => r.sessionId === "s2")!;
-    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1" });
+    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1", metadata: {} });
     // hook の統計に state event は乗らない
     expect(s1.eventCount).toBe(1);
     expect(s1.lastHook).toBe("PostToolUse");
@@ -275,6 +275,13 @@ describe("session state events (producer 2, #127)", () => {
     // rev の無い event どうしは到着順。received_at (ccx-agent の時計) は見ない
     ingest(db, [state("s1", { archived: false, label: "later-but-older-clock", task: "" }, { receivedAtMs: 500, seq: 0 })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
+  });
+
+  test("metadata rides along as given; non-string values are dropped", () => {
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "", task: "", metadata: { done: "", owner: "alice", n: 3 } })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.metadata).toEqual({ done: "", owner: "alice" });
+    ingest(db, [state("s1", { archived: false, metadata: ["x"] })]);
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.metadata).toEqual({});
   });
 
   test("state events leave first_seen / last_seen / ended_at to the hooks", () => {
@@ -315,10 +322,10 @@ describe("session state events (producer 2, #127)", () => {
     const rows = listSessions(db, { limit: 10 });
     expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
     // 型の合わない値は落とす (truthy な文字列は true ではない)
-    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t" });
+    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
     // その session 宛ての読めない state が後から届いても、前の読める state が残る (墓標にならない)
     ingest(db, [ev({ producer: 2, payload: { session_id: "s3", state: "broken" } }), ev({ producer: 2, payload: { session_id: "s3", state: ["archived"] } })]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t" });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
     // 読めない state しか無ければ null
     ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();

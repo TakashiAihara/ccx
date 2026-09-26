@@ -71,7 +71,7 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { archived: true, label: "L", task: "kaneo ccx#1" }, homeA);
     const r1 = await A.push(t, homeA);
     expect(r1.status).toBe("state");
-    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", heartbeat: "" });
+    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
     expect(await Bun.file(stateKey()).json()).toEqual(r1.state);
     expect(await A.readRemoteDeclared(SID)).toEqual(r1.state);
 
@@ -95,6 +95,21 @@ describe("session state travels with the transcript", () => {
     expect(await A.readRemoteDeclared(SID)).toEqual(EMPTY_DECLARED);
   });
 
+  test("metadata goes up in state.json, is re-sent when only metadata changes, and comes down as meta/<key> files", async () => {
+    const t = await seed(homeA, SID);
+    await writeDeclared(SID, { metadata: { done: "", owner: "alice" } }, homeA);
+    expect((await A.push(t, homeA)).status).toBe("pushed");
+    expect((await Bun.file(stateKey()).json()).metadata).toEqual({ done: "", owner: "alice" });
+
+    await writeDeclared(SID, { metadata: { owner: null } }, homeA);
+    expect((await A.push(t, homeA)).status).toBe("state");
+    expect((await A.readRemoteDeclared(SID))?.metadata).toEqual({ done: "" });
+
+    expect((await B.pull(SID, homeB)).stateApplied).toBe(true);
+    expect(await Bun.file(join(homeB, "sessions", SID, "meta", "done")).exists()).toBe(true);
+    expect((await readDeclared(SID, homeB)).metadata).toEqual({ done: "" });
+  });
+
   test("pull installs the store's state as local marks on a fresh machine, but never over marks this machine already holds", async () => {
     const t = await seed(homeA, SID);
     await writeDeclared(SID, { archived: true, label: "L" }, homeA);
@@ -103,7 +118,7 @@ describe("session state travels with the transcript", () => {
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
     expect(r.stateApplied).toBe(true);
-    expect(r.state).toEqual({ archived: true, label: "L", task: "", heartbeat: "" });
+    expect(r.state).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
     expect(await readDeclared(SID, homeB)).toEqual(r.state!);
     expect(await Bun.file(join(homeB, "sessions", SID, "archived")).exists()).toBe(true);
 
@@ -113,7 +128,7 @@ describe("session state travels with the transcript", () => {
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(false);
     expect(again.state?.archived).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", heartbeat: "" });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", heartbeat: "", metadata: {} });
 
     // transcript より先に印だけ付けたマシンに pull しても、その印は残る (保存先の写しは適用しない)
     await rm(join(homeB, "projects"), { recursive: true, force: true });
@@ -167,7 +182,7 @@ describe("session state travels with the transcript", () => {
     const again = await B.pull(SID, homeB);
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", heartbeat: "" });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
   });
 
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
@@ -214,8 +229,8 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { label: "newer" }, homeA);
     expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
     // remote で手元に印が無い → 保存先
-    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", heartbeat: "" });
-    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", heartbeat: "" });
+    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
+    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
     // remote でなければ保存先は見ない。保存先が無ければ手元 (空)
     expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
     expect(await declaredFor(SID, homeB, "remote", null)).toEqual(EMPTY_DECLARED);
@@ -279,7 +294,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect((await run(["label", "scope｜step", SID.slice(0, 8)])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", heartbeat: "" });
+    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
 
     expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
     expect((await run(["label", "", SID])).code).toBe(0);
@@ -309,8 +324,30 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect(st.code).toBe(0);
     expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1" });
     const mark = await run(["mark", "archived", SID, "--json"]);
-    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "heartbeat"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "heartbeat", "metadata"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
+  });
+
+  test("meta set key / key=value / unset write meta/<key>; bad keys stop before writing", async () => {
+    await seed(homeA, SID);
+    expect((await run(["meta", "set", "done", SID])).out).toMatch(/^done set/);
+    expect((await run(["meta", "set", "owner=alice=b", SID.slice(0, 8)])).out).toMatch(/^owner = alice=b/);
+    expect(await Bun.file(join(homeA, "sessions", SID, "meta", "done")).text()).toBe("");
+    expect((await readDeclared(SID, homeA)).metadata).toEqual({ done: "", owner: "alice=b" });
+    expect((await run(["status", SID])).out).toMatch(/metadata\s+done,owner=alice=b/);
+
+    const unset = await run(["meta", "unset", "owner", SID, "--json"]);
+    expect(JSON.parse(unset.out).metadata).toEqual({ done: "" });
+    expect((await run(["meta", "unset", "done"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
+    expect(await readDeclared(SID, homeA)).toEqual(EMPTY_DECLARED);
+    expect((await run(["status", SID])).out).toMatch(/metadata\s+-/);
+
+    for (const k of ["..", "a/b", "=x", ".x"]) {
+      const bad = await run(["meta", "set", k, SID]);
+      expect(bad.code).toBe(1);
+      expect(bad.err).toMatch(/invalid key/);
+    }
+    expect(await Bun.file(join(homeA, "sessions", SID, "meta")).exists()).toBe(false);
   });
 });
 
@@ -336,6 +373,16 @@ describe("ccx session with a center: marks are reported as events, and session l
     payload: enc({ session_id: sid, hook_event_name: "PostToolUse", cwd: "/w" }),
   });
 
+  test("meta set / unset report the whole state, metadata included", async () => {
+    await seed(homeA, SID);
+    ingest(db, [hook("host-a", localOrigin().user, SID, 1)]);
+    const center = () => listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.metadata;
+    expect((await run(["meta", "set", "owner=alice", SID])).code).toBe(0);
+    expect(center()).toEqual({ owner: "alice" });
+    expect((await run(["meta", "unset", "owner", SID])).code).toBe(0);
+    expect(center()).toEqual({});
+  });
+
   test("mark / label / task send one state event each; the center keeps the latest; an unreachable center is a note, not a failure", async () => {
     await seed(homeA, SID);
     expect((await run(["mark", "archived", SID])).code).toBe(0);
@@ -345,7 +392,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     ingest(db, [hook("host-a", localOrigin().user, SID, 1)]);
     const rows = listSessions(db, { limit: 10 });
     const me = rows.find((r) => r.sessionId === SID);
-    expect(me?.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1" });
+    expect(me?.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", metadata: {} });
     // hook の統計は増えない (state event は 3 件届いている)
     expect(me?.eventCount).toBe(1);
 
@@ -356,7 +403,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     // center は古いまま (送れていない)。次の mark が送り直す
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.archived).toBe(true);
     expect((await run(["label", "again", SID])).code).toBe(0);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1" });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1", metadata: {} });
     // 届いたのは 4 回 (mark / label / task / label。--off は center が落ちていて届いていない)
     const sent = listEvents(db, { includePayload: true, limit: 20 }).filter((e) => e.producer === 2);
     expect(sent.length).toBe(4);
@@ -392,7 +439,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(out).toMatch(/^pulled/);
     expect(err).not.toMatch(/did not take/);
     ingest(db, [hook("host-b", localOrigin().user, SID, 9)]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1" });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1", metadata: {} });
     const show = await run(["show", SID, "-m", "host-b"]);
     expect(show.out).toMatch(/ccx\.session\.state/);
     expect(show.out).toMatch(/PostToolUse/);
@@ -457,11 +504,11 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(r.code).toBe(0);
     const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string; user: string }; lifecycle: string | null; state: unknown }[];
     const by = (id: string, u?: string) => rows.find((x) => x.key.sessionId === id && (!u || x.key.user === u))!;
-    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "" });
+    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "", metadata: {} });
     expect(by(SID).lifecycle).toBe("ended");
-    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "" });
-    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "" });
-    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "" });
+    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: {} });
+    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "", metadata: {} });
+    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "", metadata: {} });
     // center に 1 件も届いていない他マシンの session は null
     expect(by(SID4).state).toBeNull();
   });

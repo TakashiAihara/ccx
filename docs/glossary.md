@@ -35,9 +35,12 @@ believed.
 - **lifecycle** — the observed state of a session: `running` / `ended` / `remote` / `unknown`
   (`Lifecycle` in `packages/core/src/session-state.ts`). Derived, never written.
 - **declared state** — what a person or the session recorded about it: the flag `archived`, a
-  `label`, a `task` (`DeclaredState`). Local files under `~/.claude/sessions/<id>/`; `state.json`
-  in the store.
+  `label`, a `task`, a `heartbeat` override and `metadata` (`DeclaredState`). Local files under
+  `~/.claude/sessions/<id>/`; `state.json` in the store.
 - **flag** — a boolean in the declared state. There is one, `archived` (#135).
+- **metadata** — the user's own key/value pairs in the declared state (`meta/<key>`, #165). ccx
+  carries them and gives the keys no meaning; a key with an empty value is still set. Not a flag:
+  flags are the top-level keys ccx itself acts on.
 - **archived** — the flag meaning "folded away; not in the working set". Declared, never derived.
 - **remote** — a session whose transcript is in the store and not on this machine. A lifecycle
   value, not a flag.

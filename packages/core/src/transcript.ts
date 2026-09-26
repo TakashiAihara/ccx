@@ -12,7 +12,7 @@
  *                                                            /subagents/<path>     subagent の transcript と meta (入れ子あり)
  *                                                            /workflows/<path>     Workflow の run (wf_<id>.json) と script (scripts/)
  *                                                            /session.json         cwd / branch / version / size / sha256
- *                                                            /state.json           宣言された状態 (archived / label / task。session-state.ts)
+ *                                                            /state.json           宣言された状態 (archived / label / task / metadata 等。session-state.ts)
  *                                                            /history/<ms>-<op>-<machine>.json  push / pull / prune の履歴
  *
  * transcript.jsonl は変換しない。Claude Code が `--resume` で読むのはこのファイルその

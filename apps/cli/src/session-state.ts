@@ -4,6 +4,7 @@ import {
   claudeHome,
   flagsOf,
   isFlag,
+  isMetaKey,
   FLAGS,
   loadConfig,
   localOrigin,
@@ -33,9 +34,10 @@ import { centerTransport, type Hub } from "./fleet.ts";
 import { table } from "./format.ts";
 
 /**
- * `ccx session mark / label / task / status` — 宣言された状態をローカルに書き、読む (#127)。
+ * `ccx session mark / label / task / heartbeat / meta / status` — 宣言された状態をローカルに
+ * 書き、読む (#127、metadata は #165)。
  *
- * 書く側 (mark / label / task) は center も保存先も要らない (docs/design/scope.md の
+ * 書く側 (mark / label / task / heartbeat / meta) は center も保存先も要らない (docs/design/scope.md の
  * invariant)。読む側 (status) は手元を先に見て、手元に無い session (remote) だけ
  * 保存先の state.json を読む。保存先が無ければ unknown と言う。id を省くと自分の
  * session (`CLAUDE_CODE_SESSION_ID`。Claude Code が hook / Bash に渡す)。
@@ -193,6 +195,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["label", s.label || "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
+    ["metadata", Object.entries(s.metadata).map(([k, v]) => (v ? `${k}=${v}` : k)).join(",") || "-"],
   ]);
 
 export function registerSessionState(session: Command): void {
@@ -244,6 +247,45 @@ export function registerSessionState(session: Command): void {
       const s = await writeDeclared(id, { heartbeat: setting === "default" ? "" : (setting as "on" | "off") }, home);
       if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
       else console.log(`heartbeat ${s.heartbeat || "default"}  ${id}`);
+      await reportAfterWrite(id, s);
+    });
+
+  const meta = session
+    .command("meta")
+    .description("User-defined key/value on a session. ccx gives the keys no meaning; they live in ~/.claude/sessions/<id>/meta/<key>");
+
+  meta
+    .command("set")
+    .description("Set a key, with or without a value (key alone = present with no value)")
+    .argument("<key[=value]>", "e.g. done, or owner=alice")
+    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .option("--json", "print the resulting state as JSON")
+    .action(async (kv: string, idOrPrefix: string | undefined, o) => {
+      const eq = kv.indexOf("=");
+      const key = eq < 0 ? kv : kv.slice(0, eq);
+      const value = eq < 0 ? "" : kv.slice(eq + 1).trim();
+      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: letters, digits, _ . - (not starting with . or -), at most 128`);
+      const home = claudeHome();
+      const id = await target(idOrPrefix, home);
+      const s = await writeDeclared(id, { metadata: { [key]: value } }, home);
+      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
+      else console.log(`${key}${value ? ` = ${value}` : " set"}  ${id}`);
+      await reportAfterWrite(id, s);
+    });
+
+  meta
+    .command("unset")
+    .description("Remove a key")
+    .argument("<key>")
+    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .option("--json", "print the resulting state as JSON")
+    .action(async (key: string, idOrPrefix: string | undefined, o) => {
+      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}`);
+      const home = claudeHome();
+      const id = await target(idOrPrefix, home);
+      const s = await writeDeclared(id, { metadata: { [key]: null } }, home);
+      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
+      else console.log(`${key} unset  ${id}`);
       await reportAfterWrite(id, s);
     });
 

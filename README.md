@@ -97,7 +97,10 @@ ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give a
 ccx session mark archived --off <id>
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
-ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task
+ccx session meta set done     # your own keys; ccx gives them no meaning (~/.claude/sessions/<id>/meta/<key>)
+ccx session meta set owner=alice
+ccx session meta unset done
+ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task, metadata
 ```
 
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript

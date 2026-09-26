@@ -77,6 +77,8 @@ message SessionState {
   bool archived = 1;
   string label = 2;
   string task = 3;
+  // 利用者の key/value。center は意味を持たずに運ぶ (#165)
+  map<string, string> metadata = 4;
 }
 
 // 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が

@@ -50,6 +50,8 @@ export type SessionState = {
   archived: boolean;
   label: string;
   task: string;
+  /** 利用者の key/value。center は意味を持たずに運ぶ (#165)。string でない値だけ落とす */
+  metadata: Record<string, string>;
 };
 
 
@@ -235,6 +237,10 @@ function parseState(payload: Uint8Array): SessionState | null {
       archived: s.archived === true,
       label: typeof s.label === "string" ? s.label : "",
       task: typeof s.task === "string" ? s.task : "",
+      metadata:
+        s.metadata && typeof s.metadata === "object" && !Array.isArray(s.metadata)
+          ? Object.fromEntries(Object.entries(s.metadata).filter(([, v]) => typeof v === "string"))
+          : {},
     };
   } catch {
     return null;
