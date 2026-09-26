@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, symlink, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,8 @@ import {
 } from "./session-state.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+/** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
+const h = (...labels: string[]) => labels.map((label) => ({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), label }));
 let home: string;
 
 beforeEach(async () => {
@@ -41,20 +43,92 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {} });
+    // hook が ccx を通さず書いた label は履歴に残らない (ccx が見ていない)
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {} });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
-    expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
+  });
+
+  test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {
+    const file = join(home, "sessions", SID, "labels.jsonl");
+    await writeDeclared(SID, { label: "a" }, home);
+    // 同じ名前の書き直し (前後の空白だけ違うものも) と、label を含まない patch は記録しない
+    await writeDeclared(SID, { label: "a" }, home);
+    await writeDeclared(SID, { label: " a " }, home);
+    expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("a\n");
+    await writeDeclared(SID, { task: "t" }, home);
+    // 比べる相手は履歴の最後: label ファイルだけ先に変わっていても (hook が書いた / 履歴に足す前に落ちた) 記録する
+    await Bun.write(join(home, "sessions", SID, "label"), "b\n");
+    await writeDeclared(SID, { label: "b" }, home);
+    const s = await writeDeclared(SID, { label: "c" }, home);
+    expect(s.labelHistory).toEqual(h("a", "b", "c"));
+
+    // 書きかけで切れた行は飛ばす (履歴全体を失わない)。次の変更も切れた行に続けて書かず、失わない
+    await appendFile(file, '{"at":"2026-');
+    expect((await readDeclared(SID, home)).labelHistory).toEqual(h("a", "b", "c"));
+    expect((await writeDeclared(SID, { label: "d" }, home)).labelHistory).toEqual(h("a", "b", "c", "d"));
+
+    // pull が渡す履歴は足さずに丸ごと置き、label が変わっても重ねて記録しない
+    const pulled = [{ at: "2026-09-01T00:00:00.000Z", label: "x" }];
+    expect((await writeDeclared(SID, { label: "x", labelHistory: pulled }, home)).labelHistory).toEqual(pulled);
+    expect(await writeDeclared(SID, { labelHistory: [] }, home)).toMatchObject({ label: "x", labelHistory: [] });
+    expect(await Bun.file(file).exists()).toBe(false);
+
+    // 保存先の壊れた形は落とす
+    expect(normalizeDeclared({ labelHistory: [{ at: "t", label: "ok" }, { at: 1, label: "n" }, null, "s"] }).labelHistory).toEqual([{ at: "t", label: "ok" }]);
+    expect(normalizeDeclared({ labelHistory: "nope" }).labelHistory).toEqual([]);
+  });
+
+  test("a broken meta/ or labels.jsonl does not stop the label itself from being written", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(join(dir, "labels.jsonl"), { recursive: true });
+    await Bun.write(join(dir, "meta"), "not a directory");
+    await expect(writeDeclared(SID, { label: "second" }, home)).rejects.toThrow();
+    expect(await Bun.file(join(dir, "label")).text()).toBe("second\n");
+  });
+
+  test("history terms: a history alone is not empty; same length with a different entry is not the same", () => {
+    const one = { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "a" }] };
+    expect(isEmptyDeclared(one)).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "b" }] })).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t2", label: "a" }] })).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "a" }] })).toBe(true);
+  });
+
+  test("label history: the name a session had before ccx first recorded one is kept, dated by the label file", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(dir, { recursive: true });
+    await Bun.write(join(dir, "label"), "from-hook\n");
+    await utimes(join(dir, "label"), new Date("2026-09-01T00:00:00Z"), new Date("2026-09-01T00:00:00Z"));
+    const s = await writeDeclared(SID, { label: "by-ccx" }, home);
+    expect(s.labelHistory).toEqual([{ at: "2026-09-01T00:00:00.000Z", label: "from-hook" }, { at: expect.any(String), label: "by-ccx" }]);
+    // hook が付けた名前と同じ名前を ccx で書いても、最初の記録として残る (履歴が空のときにファイルと比べない)
+    await rm(join(dir, "labels.jsonl"));
+    await Bun.write(join(dir, "label"), "same\n");
+    expect((await writeDeclared(SID, { label: "same" }, home)).labelHistory).toEqual(h("same"));
+    // hook が付けた名前を ccx で消すと、その名前 (種) と消したことの 2 件
+    await rm(join(dir, "labels.jsonl"));
+    await Bun.write(join(dir, "label"), "to-clear\n");
+    expect((await writeDeclared(SID, { label: "" }, home)).labelHistory.map((e) => e.label)).toEqual(["to-clear", ""]);
+    // 空を空で消すのは記録しない
+    await rm(join(dir, "labels.jsonl"));
+    await rm(join(dir, "label"), { force: true });
+    expect((await writeDeclared(SID, { label: "" }, home)).labelHistory).toEqual([]);
+    await writeDeclared(SID, { label: "by-ccx" }, home);
+    // 種を置くのは最初の 1 回だけ
+    await Bun.write(join(dir, "label"), "from-hook-again\n");
+    expect((await writeDeclared(SID, { label: "next" }, home)).labelHistory.map((e) => e.label)).toEqual(["by-ccx", "next"]);
   });
 
   test("heartbeat is on / off / unset; anything else in the file or the store reads as unset", async () => {

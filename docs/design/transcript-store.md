@@ -36,7 +36,7 @@ so the center's events and the store name a machine the same way and a DuckDB jo
                                                          /subagents/<path>     subagent transcripts and their meta (nested: workflows/wf_<id>/…)
                                                          /workflows/<path>     Workflow runs (wf_<id>.json) and their scripts (scripts/)
                                                          /session.json         cwd, gitBranch, version, size, sha256, pushedAt
-                                                         /state.json           declared state: archived, label, task (#127)
+                                                         /state.json           declared state: archived, label, task, metadata, label history (#127 / #165 / #169)
                                                          /history/<ms>-<op>-<machine>.json   one object per push / pull / prune
 ```
 
@@ -56,7 +56,7 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | `pull <id \| prefix>` | tool-results, subagents and workflows first (each downloaded next to its place and verified before it is renamed in; a name that leaves the session dir is refused; a local file with the same name and different content stops the pull like the transcript does, and `--force` keeps it as `.replaced-<time>`), then the transcript by rename into `~/.claude/projects/<encoded original cwd>/`; the store's `state.json` becomes the local marks only when this machine holds none for the session (a mark set here — before the transcript, or after an earlier pull — is never overwritten by the store's copy); record `pull`; then, when `session.json` names a repo, a **fresh repodir on the default branch** (mirror refreshed) and the `cd … && claude --resume <id>` line to run (`--no-repodir` skips it) | a local file with the same id has different content (`--force` replaces it and keeps the old file as `.replaced-<time>`); a download does not match `session.json`; an ambiguous prefix |
 | `ls [-m machine]` | every `session.json`, newest push first, with its flags and label and who last pulled it | — |
 | `prune [id...] \| --ended \| --archived` | delete the local transcript, tool-results, subagents and workflows (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript, tool-results, subagents and workflows (a copy pushed before subagents or workflows were carried has no list for them, so push again); the matching copy, **read back and hashed**, differs from the local files |
-| `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl`; `transcripts` and `history` views | — |
+| `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl` and `state.json`; `transcripts`, `history` and `sessions` views | — |
 
 Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
 takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
@@ -89,11 +89,22 @@ WHERE type = 'assistant';
 
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
-does exactly this and exposes three views for `--sql`: `transcripts` (structured, `union_by_name`
+does exactly this and exposes four views for `--sql`: `transcripts` (structured, `union_by_name`
 across record types), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
 and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
-/ `pushed_by_user` from the path — the two differ for a pull). `-s <id|prefix>` narrows the glob so
+/ `pushed_by_user` from the path — the two differ for a pull), and `sessions` (one row per
+`state.json` copy, so a session pushed from two machines has two rows: `label` / `task` / `archived`
+/ `metadata` / `label_history` / `label_recorded_at` (when ccx last recorded a label, not when the
+hook last changed it), `json` raw; empty when no session has declared state; a `state.json` that is
+not valid JSON is left out rather than failing the search; `archived` is true only for a JSON
+`true`, as `pull` reads it, while `label` / `task` are the raw values). The
+text search reads `lines` and, as rows of type `ccx.state` listed first (one per session copy; a
+search for a name should show the sessions, and with a state that has no recorded label the time is
+NULL, which would sort it behind every transcript hit), the values of `sessions` — label, task, metadata (keys too: a key
+with no value, like `done`, is its own content) and every past label, not `state.json`'s own key
+names (a search for "label" would otherwise hit every session) — so a session is found by any name
+it has had (#169). `-s <id|prefix>` narrows the glob so
 only that session's files are fetched; without it every transcript is read on each invocation
 (measured by the reviewer: 401 objects / 50.9 MB → 0.69 s, 209 MB RSS; one 20 MB line → 4.3 s,
 432 MB), and `history/` is only read for `--sql`.

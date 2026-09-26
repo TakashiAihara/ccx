@@ -9,7 +9,8 @@ import { normalizePrefix, s3AccessKeyId, type TranscriptStore } from "@ccx/core"
 import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
 
 /**
- * 同梱した DuckDB を開き、保存先の transcript を `transcripts` / `history` view として見せる。
+ * 同梱した DuckDB を開き、保存先の transcript を `transcripts` / `history` view として、
+ * session の宣言状態 (state.json。label / label の履歴 / metadata) を `sessions` view として見せる。
  *
  * `@duckdb/node-bindings` の duckdb.node は薄い shim で、隣にあるはずの libduckdb を
  * SONAME で dlopen する。単一バイナリの中には「隣」が無いので、先に同梱の実体を
@@ -79,6 +80,21 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;
   }
+  // 宣言状態は印を付けた session にしか無い。read_text は glob に何も当たらなければ 0 行を返す (エラーにならない)。
+  // read_json_objects ではなく read_text + json_valid: 壊れた state.json が 1 つあると read_json_objects は
+  // クエリ全体を止め、既定の検索 (transcript も含む) が丸ごと落ちる。壊れたものはその 1 件だけ落とす。
+  // archived は JSON の true だけを真にする (normalizeDeclared と同じ。"true" / 1 は偽)。キャストで全体を止めない。
+  // read_text は hive_partitioning を取らないので、パスから取り出す。最初の一致を取るのは DuckDB の hive_partitioning
+  // と同じ (prefix に `user=` 等があると両方とも誤る。他の view と食い違わせない)
+  const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
+  const part = (k: string) => `regexp_extract(filename, '/${k}=([^/]+)/', 1)`;
+  await c.run(
+    `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task,
+       coalesce((json->'archived')::VARCHAR = 'true', false) AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
+       json->>'$.labelHistory[#-1].at' AS label_recorded_at, json
+     FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", content::JSON AS json
+           FROM read_text(${q(states)}) WHERE json_valid(content))`,
+  );
   if (opts.withHistory) {
     // hive の machine / user (push した側) がファイルの machine / user (操作した側) を隠すので、
     // 生 JSON から取り直す。history は「誰が pull したか」を答えるもので、押した側ではない

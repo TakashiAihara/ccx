@@ -101,6 +101,8 @@ async function reportAfterWrite(sessionId: string, state: DeclaredState): Promis
  */
 const REPORT_TIMEOUT_MS = 3000;
 
+const withoutHistory = ({ labelHistory: _, ...rest }: DeclaredState) => rest;
+
 export async function reportState(hub: Hub | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
   if (!hub) return;
   const origin = localOrigin(machine);
@@ -118,7 +120,9 @@ export async function reportState(hub: Hub | undefined, machine: string | undefi
             producer: Producer.CCX_SESSION_STATE,
             // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
             // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
-            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state, rev: Date.now() })),
+            // label の履歴は送らない: center は読まず (fleet.proto に欄が無い)、毎回全件を送ると 1 session で
+            // 履歴の長さの 2 乗で events が太る。検索は保存先の state.json を読む (#169)
+            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state: withoutHistory(state), rev: Date.now() })),
           },
         ],
       },
@@ -194,6 +198,8 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["lifecycle", lifecycle],
     ["flags", flagsOf(s).join(",") || "-"],
     ["label", s.label || "-"],
+    // 中身 (いつ何に変えたか) は --json と `ccx tr search`
+    ["label history", s.labelHistory.length ? `${s.labelHistory.length} entries` : "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
     // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない

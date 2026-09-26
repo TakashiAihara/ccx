@@ -12,7 +12,7 @@ import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
 
-import { encodeCwd, localTranscripts, TranscriptClient, type TranscriptStore } from "@ccx/core";
+import { encodeCwd, localTranscripts, TranscriptClient, writeDeclared, type TranscriptStore } from "@ccx/core";
 
 import { openDuckDB } from "./duckdb.ts";
 
@@ -51,8 +51,11 @@ beforeEach(async () => {
     join(projectDir, `${SID2}.jsonl`),
     line({ type: "user", cwd: "/w", timestamp: "2026-09-19T00:00:03Z", message: { role: "user", content: "nothing here" } }),
   );
+  // SID2 だけに宣言状態 (state.json) を置く。SID には無い: 無い session の検索が止まらないことも見る
+  await writeDeclared(SID2, { label: "ORIGINAL-NAME" }, home);
+  await writeDeclared(SID2, { label: "renamed-now", metadata: { owner: "zed" } }, home);
   const client = new TranscriptClient(store, { machine: "host-a", user: "alice" });
-  for (const t of await localTranscripts(home)) await client.push(t);
+  for (const t of await localTranscripts(home)) await client.push(t, home);
 });
 
 /** 本物のコマンドを、この store を向けて走らせる */
@@ -149,6 +152,70 @@ describe("search: embedded DuckDB over the store", () => {
     expect(JSON.parse(hist.out)).toEqual([
       { op: "push", machine: "host-a" },
       { op: "push", machine: "host-a" },
+    ]);
+  });
+
+  test("sessions view: label, its history and metadata from state.json, and the default search finds a session by a past name", async () => {
+    const c = await openDuckDB(store);
+    const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, archived, metadata, label_history, label_recorded_at FROM sessions`)).getRowObjectsJson();
+    expect(rows).toHaveLength(1);
+    const r = rows[0] as Record<string, unknown>;
+    expect({ id: r.session_id, machine: r.machine, label: r.label, archived: r.archived }).toEqual({ id: SID2, machine: "host-a", label: "renamed-now", archived: false });
+    expect(JSON.parse(String(r.metadata))).toEqual({ owner: "zed" });
+    const history = JSON.parse(String(r.label_history)) as { at: string; label: string }[];
+    expect(history.map((e) => e.label)).toEqual(["ORIGINAL-NAME", "renamed-now"]);
+    expect(r.label_recorded_at).toBe(history[1]!.at);
+
+    // 今の名前でも、前の名前 (履歴にしか無い) でも、metadata の値でも当たる。行は type = ccx.state
+    for (const word of ["renamed-now", "original-name", "zed"]) {
+      const hit = await ccx(word, "--json");
+      expect(hit.code).toBe(0);
+      expect((JSON.parse(hit.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([[SID2, "ccx.state"]]);
+    }
+    // state.json のキー名には当たらない (丸ごと文字列にしていない)。metadata の key は当たる (値の無い key は key が中身)
+    for (const key of ["label", "archived", "labelhistory"]) expect((await ccx(key)).err).toContain("no match");
+    // 過去の label どうしは改行で区切る: 2 つにまたがる語は当たらない
+    expect((await ccx("original-name renamed-now")).err).toContain("no match");
+    expect((JSON.parse((await ccx("owner", "--json")).out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID2]);
+
+    // state.json の無い session に絞っても (sessions は 0 行)、検索は動く
+    const only = await ccx("needle-alpha", "-s", SID.slice(0, 8), "--json");
+    expect(only.code).toBe(0);
+    expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
+  });
+
+  test("a state row with no ccx label history still comes before transcript hits; a malformed state.json drops only itself", async () => {
+    const dir = (m: string, id: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${id}`);
+    const SID3 = "2b3c4d5e-6f70-4a81-9c0d-1e2f3a4b5c6d";
+    // metadata だけの state (時刻が NULL になる)。transcript の当たり (NEEDLE-ALPHA の行) と同じ語を持たせる
+    await mkdir(dir("host-z", SID3), { recursive: true });
+    await Bun.write(join(dir("host-z", SID3), "state.json"), JSON.stringify({ archived: false, label: "", task: "", metadata: { topic: "needle-alpha" } }, null, 2));
+    // 壊れた state.json
+    await mkdir(dir("host-y", SID3), { recursive: true });
+    await Bun.write(join(dir("host-y", SID3), "state.json"), '{"label": "needle-alpha');
+    // JSON としては正しいが型が違う (host-w) / 正しい型 (host-v) / 鍵が無い (host-u)
+    await mkdir(dir("host-w", SID3), { recursive: true });
+    await Bun.write(join(dir("host-w", SID3), "state.json"), JSON.stringify({ archived: "true", label: "odd-one" }));
+    await mkdir(dir("host-v", SID3), { recursive: true });
+    await Bun.write(join(dir("host-v", SID3), "state.json"), JSON.stringify({ archived: true, label: "odd-one" }));
+    await mkdir(dir("host-u", SID3), { recursive: true });
+    await Bun.write(join(dir("host-u", SID3), "state.json"), JSON.stringify({ label: "odd-one" }));
+    // JSON の true だけが真 (core の normalizeDeclared と同じ読み)
+    const odd = await ccx("--sql", "SELECT machine, archived FROM sessions WHERE label = 'odd-one' ORDER BY machine", "--json");
+    expect(odd.code).toBe(0);
+    expect(JSON.parse(odd.out)).toEqual([
+      { machine: "host-u", archived: false },
+      { machine: "host-v", archived: true },
+      { machine: "host-w", archived: false },
+    ]);
+
+    const r = await ccx("needle-alpha", "-n", "1", "--json");
+    expect(r.code).toBe(0);
+    expect((JSON.parse(r.out) as { session_id: string; machine: string; type: string }[]).map((x) => [x.session_id, x.machine, x.type])).toEqual([[SID3, "host-z", "ccx.state"]]);
+    const all = await ccx("needle-alpha", "--json");
+    expect((JSON.parse(all.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([
+      [SID3, "ccx.state"],
+      [SID, "user"],
     ]);
   });
 

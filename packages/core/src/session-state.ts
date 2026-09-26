@@ -17,7 +17,8 @@
  * 保存先には `state.json` 1 つにまとめて置く (transcript.ts が push / pull で運ぶ)。
  */
 
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -36,9 +37,13 @@ export type DeclaredState = {
   heartbeat: Heartbeat;
   /** 利用者の key/value。ccx は意味を持たない。値が空文字でも key があれば「立っている」 */
   metadata: Metadata;
+  /** `ccx session label` が label を変えた記録 (#169)。古い順。消した (空文字にした) ことも 1 件 */
+  labelHistory: LabelChange[];
 };
 
 export type Metadata = Record<string, string>;
+/** at は ISO 8601 (UTC) */
+export type LabelChange = { at: string; label: string };
 
 /**
  * ファイル名になるので、区切り・`.` 始まり (`..` を含む)・`=` (CLI の `key=value`) を通さない。
@@ -64,6 +69,19 @@ function cleanMetadata(raw: unknown): Metadata {
 /** writeDeclared に渡す差分。metadata は key ごとで、null はその key を消す */
 export type DeclaredPatch = Partial<Omit<DeclaredState, "metadata">> & { metadata?: Record<string, string | null> };
 
+/**
+ * 1 行 1 変更の JSONL。追記だけなので、並んで走った 2 つの `session label` が互いの行を消さない。
+ * auto-label hook の `label-history.json` / `label-trail.jsonl` とは別物 (あちらは hook 固有の形)
+ */
+const LABEL_HISTORY_FILE = "labels.jsonl";
+
+function cleanLabelHistory(raw: unknown): LabelChange[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e): e is LabelChange => !!e && typeof e === "object" && typeof e.at === "string" && typeof e.label === "string")
+    .map(({ at, label }) => ({ at, label }));
+}
+
 export const HEARTBEATS = ["on", "off"] as const;
 export type Heartbeat = (typeof HEARTBEATS)[number] | "";
 const asHeartbeat = (v: unknown): Heartbeat => (HEARTBEATS as readonly unknown[]).includes(v) ? (v as Heartbeat) : "";
@@ -80,14 +98,14 @@ const TEXT_FILE = { label: "label", task: "task", heartbeat: "heartbeat" } as co
  */
 const DECLARED_FILE = ".ccx-declared";
 
-export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", heartbeat: "", metadata: {} };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", heartbeat: "", metadata: {}, labelHistory: [] };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
 export const isFlag = (s: string): s is Flag => (FLAGS as readonly string[]).includes(s);
 
 export const isEmptyDeclared = (s: DeclaredState) =>
-  flagsOf(s).length === 0 && !s.label && !s.task && !s.heartbeat && Object.keys(s.metadata).length === 0;
+  flagsOf(s).length === 0 && !s.label && !s.task && !s.heartbeat && Object.keys(s.metadata).length === 0 && s.labelHistory.length === 0;
 
 /** 立っている flag の名前。`ls` の列と JSON の両方で使う */
 export const flagsOf = (s: DeclaredState): Flag[] => FLAGS.filter((f) => s[f]);
@@ -101,6 +119,7 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
     task: typeof r.task === "string" ? r.task : "",
     heartbeat: asHeartbeat(r.heartbeat),
     metadata: cleanMetadata(r.metadata),
+    labelHistory: cleanLabelHistory(r.labelHistory),
   };
 }
 
@@ -114,7 +133,29 @@ export const sameDeclared = (a: DeclaredState, b: DeclaredState) =>
   a.label === b.label &&
   a.task === b.task &&
   a.heartbeat === b.heartbeat &&
-  sameMetadata(a.metadata, b.metadata);
+  sameMetadata(a.metadata, b.metadata) &&
+  a.labelHistory.length === b.labelHistory.length &&
+  a.labelHistory.every((e, i) => e.at === b.labelHistory[i]!.at && e.label === b.labelHistory[i]!.label);
+
+async function readLabelHistory(dir: string): Promise<LabelChange[]> {
+  let text: string;
+  try {
+    text = await Bun.file(join(dir, LABEL_HISTORY_FILE)).text();
+  } catch (e) {
+    // meta/ と同じ: 無いのは空、読めないのは止める (空にすると push が保存先の履歴を消す)
+    if (errCode(e) === "ENOENT") return [];
+    throw e;
+  }
+  const parsed = text.split("\n").flatMap((l) => {
+    try {
+      return l ? [JSON.parse(l)] : [];
+    } catch {
+      // 書きかけで切れた行 1 つで履歴全体を失わない
+      return [];
+    }
+  });
+  return cleanLabelHistory(parsed);
+}
 
 async function readMetadata(dir: string): Promise<Metadata> {
   let names: string[];
@@ -153,28 +194,50 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, label, task, heartbeat, metadata] = await Promise.all([
+  const [archived, label, task, heartbeat, metadata, labelHistory] = await Promise.all([
     flag("archived"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
     text(TEXT_FILE.heartbeat),
     readMetadata(dir),
+    readLabelHistory(dir),
   ]);
-  return { archived, label, task, heartbeat: asHeartbeat(heartbeat), metadata };
+  return { archived, label, task, heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
 }
 
 /**
  * 差分だけ書く。flag は空ファイルの有無、label / task / heartbeat は中身 (空文字なら消す)。
  * metadata は key ごとに、文字列ならその値で置き (空文字は値なし)、null なら消す。
+ * label が今と変われば labels.jsonl に 1 行足す。labelHistory を渡したら (pull) 足さずに丸ごと置く。
  * 渡さなかった鍵は触らない。手元で何も変わらない patch (無い key の unset 等) でも
  * `.ccx-declared` は置く: 手元に無い印を保存先の古い写しが持っていることがあり、ここでの
  * クリアはそれを戻さないという宣言だから
  */
 export async function writeDeclared(sessionId: string, patch: DeclaredPatch, home = claudeHome()): Promise<DeclaredState> {
   for (const k of Object.keys(patch.metadata ?? {})) if (!isMetaKey(k)) throw new Error(`invalid metadata key ${JSON.stringify(k)}`);
+  // 読み手 (readDeclared) は trim した値を返す。ファイルにも履歴にも同じ値を書く: " a " を重ねて記録しない
+  if (patch.label !== undefined) patch = { ...patch, label: patch.label.trim() };
 
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
+  // 比べる相手は履歴の最後の 1 件で、ファイルではない。ファイルと比べると、label を書いた後・履歴に足す前に
+  // 落ちた変更を次の同じ書き込みが「変わっていない」と読み、二度と記録しない。hook が ccx を通さず書いた名前を
+  // ccx で書き直したときも記録される。履歴が空なら、空でない名前は記録する (空を空で消すのだけは記録しない)。
+  // label と履歴だけを読む: 他 (meta/ 等) が壊れていても label の書き込みは止めない。履歴が読めなければ
+  // 履歴には足さない (読めない履歴に続けて書かない。push は同じ読みで止まる)
+  const before =
+    patch.label !== undefined && patch.labelHistory === undefined
+      ? {
+          label: (await Bun.file(join(dir, TEXT_FILE.label)).text().catch(() => "")).trim(),
+          labelHistory: await readLabelHistory(dir).catch(() => null),
+        }
+      : undefined;
+  // 最初の記録の前に、ccx を通さず付いていた名前 (hook が書いた label) を 1 件目として残す。時刻はそのファイルの mtime
+  const seedAt =
+    before?.labelHistory && before.label && before.labelHistory.length === 0 && before.label !== patch.label
+      ? // 読んだ後に消えていれば (hook と競った) 種は置かない。時刻の無い名前は残さない
+        await stat(join(dir, TEXT_FILE.label)).then((s) => s.mtime.toISOString(), () => undefined)
+      : undefined;
   await Bun.write(join(dir, DECLARED_FILE), "");
   for (const f of FLAGS) {
     if (patch[f] === undefined) continue;
@@ -192,6 +255,28 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
     const p = join(dir, META_DIR, k);
     if (v === null) await rm(p, { force: true });
     else await Bun.write(p, v ? `${v}\n` : "");
+  }
+  const historyPath = join(dir, LABEL_HISTORY_FILE);
+  if (patch.labelHistory !== undefined) {
+    const h = cleanLabelHistory(patch.labelHistory);
+    if (h.length) {
+      // 隣に書いてから rename: 置き換えの途中を読んだ push が、短い履歴を保存先に書かない
+      const tmp = `${historyPath}.${randomUUID()}.tmp`;
+      try {
+        await Bun.write(tmp, h.map((e) => `${JSON.stringify(e)}\n`).join(""));
+        await rename(tmp, historyPath);
+      } finally {
+        await rm(tmp, { force: true });
+      }
+    } else await rm(historyPath, { force: true });
+  } else if (
+    before?.labelHistory &&
+    (before.labelHistory.length ? before.labelHistory.at(-1)!.label !== patch.label : patch.label !== "" || before.label !== "")
+  ) {
+    const lines = [...(seedAt ? [{ at: seedAt, label: before.label }] : []), { at: new Date().toISOString(), label: patch.label! }];
+    // 書きかけで切れた行 (改行で終わっていない) に続けて書くと、その行ごと読めなくなる。改行を補ってから足す
+    const torn = !(await Bun.file(historyPath).text().catch(() => "")).match(/(^|\n)$/);
+    await appendFile(historyPath, `${torn ? "\n" : ""}${lines.map((e) => `${JSON.stringify(e)}\n`).join("")}`);
   }
   return readDeclared(sessionId, home);
 }
