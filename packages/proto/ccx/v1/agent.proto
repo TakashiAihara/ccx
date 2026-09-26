@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+import "ccx/v1/fleet.proto";
+import "google/protobuf/timestamp.proto";
+
+// ccx-agent に状態を問い合わせる口 (kaneo ccx#34)。
+//
+// 同じ handler を 2 つの listener に載せる。unix socket (同じホストの statusline 用、
+// パーミッション 0600 で守る) と TCP (別ホストの ccx-agent 用、既定 off、hub token を
+// 要求)。プロトコルを 1 つにするのは、項目を足すたびに 2 か所を変えないため。
+//
+// 読むだけの口。ここから agent の状態を変える RPC は置かない。
+service AgentService {
+  // 1 session の、表示に要る状態。agent しか持たないもの (heartbeat の登録・次回・回数、
+  // spool の滞留、center への到達) と、そのマシンのファイルにある宣言状態を 1 回で返す。
+  rpc GetSessionStatus(GetSessionStatusRequest) returns (GetSessionStatusResponse);
+}
+
+message GetSessionStatusRequest {
+  // Claude Code の session id (8-4-4-4-12、小文字)。先頭一致は受けない。
+  string session_id = 1;
+  // その session の CLAUDE_CONFIG_DIR。空または相対なら agent の既定 (~/.claude)。
+  // agent は systemd の下で別の環境を持つので、session 側が知っている値を渡す。
+  // channel が登録済みの session なら、登録時の値が優先される (宣言状態も heartbeat も
+  // 同じ home から読む)。unix socket でだけ効く: TCP では無視する (別ホストの呼び手は
+  // このホストの値を知らず、任意のディレクトリを読ませる口になるため)。
+  string claude_home = 2;
+}
+
+message GetSessionStatusResponse {
+  // そのマシンのファイルにある宣言状態 (docs/design/session-state.md)。
+  SessionState declared = 1;
+  HeartbeatStatus heartbeat = 2;
+  CollectStatus collect = 3;
+}
+
+message HeartbeatStatus {
+  // heartbeat concern が設定で on か (CollectStatus.enabled と同じ意味)。false なら
+  // 以下は宣言の値を除いて空。
+  bool enabled = 1;
+  // channel socket を受けているか。enabled でも socket を開けなければ false で、その
+  // 間は打てない。
+  bool listening = 8;
+  // この session の宣言 ("on" / "off" / 空 = agent の既定に従う)。
+  string declared = 2;
+  // 宣言と agent の既定から決まる「打つべきか」。archived なら false。
+  bool wanted = 3;
+  // channel が agent に繋がっているか。false なら打つ経路が無い。
+  bool registered = 4;
+  // 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / turn の実行中 / 打った
+  // 直後で transcript への着地待ち) なら未設定。
+  google.protobuf.Timestamp next_at = 5;
+  // この登録 (channel の接続) の間に打った回数と、最後に打った時刻。
+  uint32 sent = 6;
+  google.protobuf.Timestamp last_sent_at = 7;
+}
+
+message CollectStatus {
+  // collect concern が設定で on か。false なら以下は空。
+  bool enabled = 1;
+  // center の URL が設定されているか。false なら spool に溜めるだけで送らない。
+  bool center_configured = 2;
+  // spool に残っている (center に届いていない) event の数。
+  uint32 pending = 3;
+  // 最後に center に届いた時刻と、最後に届かなかった時刻・理由。agent の起動後の値。
+  // last_error は後で届いても消えない。今も届いていないかは last_error_at と
+  // last_forwarded_at を比べて読む。
+  google.protobuf.Timestamp last_forwarded_at = 4;
+  google.protobuf.Timestamp last_error_at = 5;
+  string last_error = 6;
+  // spool が読めなかったときの理由。そのとき pending は 0 で、意味を持たない。
+  string spool_error = 7;
+}

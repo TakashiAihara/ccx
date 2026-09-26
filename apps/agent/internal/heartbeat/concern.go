@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +48,39 @@ type Concern struct {
 	claudeHome string
 	cfg        config.Heartbeat
 	log        func(string, ...any)
+
+	mu         sync.Mutex
+	registered map[string]*Heartbeat // session id -> its running heartbeat
+	listening  atomic.Bool
+}
+
+// Status is one session's heartbeat as the agent sees it (kaneo ccx#34).
+type Status struct {
+	// Listening: the channel socket is up. The concern can be on in config and
+	// still off here (a socket path too long, another serve holding the lock).
+	Listening  bool
+	Wanted     bool
+	Registered bool
+	Home       string // the ClaudeHome the answer was read from
+	Stats
+}
+
+// Status answers for a session whether or not its channel is connected: an
+// unconnected one still has a declaration, it just has no way to be beaten.
+// home is the session's CLAUDE_CONFIG_DIR as the asker knows it; a connected
+// session's own registration wins, as it does for the beats themselves.
+func (c *Concern) Status(session, home string) Status {
+	c.mu.Lock()
+	h := c.registered[session]
+	c.mu.Unlock()
+	if h != nil {
+		return Status{Listening: c.listening.Load(), Wanted: h.wanted(), Registered: true, Home: h.ClaudeHome, Stats: h.Stats()}
+	}
+	if home == "" || !filepath.IsAbs(home) {
+		home = c.claudeHome
+	}
+	probe := &Heartbeat{SessionID: session, ClaudeHome: home, Default: c.cfg.Default}
+	return Status{Listening: c.listening.Load(), Wanted: probe.wanted(), Home: home}
 }
 
 func New(cfg config.Config, log func(string, ...any)) *Concern {
@@ -109,6 +144,8 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+	c.listening.Store(true)
+	defer c.listening.Store(false)
 	c.accept(ctx, ln, acceptRetry)
 	return nil
 }
@@ -177,5 +214,20 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 			}
 		},
 	}
+	c.mu.Lock()
+	if c.registered == nil {
+		c.registered = map[string]*Heartbeat{}
+	}
+	c.registered[reg.Session] = h
+	c.mu.Unlock()
+	defer func() {
+		// A reconnect can register the same session before this one winds down;
+		// only remove the entry that is still ours.
+		c.mu.Lock()
+		if c.registered[reg.Session] == h {
+			delete(c.registered, reg.Session)
+		}
+		c.mu.Unlock()
+	}()
 	h.Run(ctx)
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -207,4 +209,80 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 		}
 	}
 	serve.kill()
+}
+
+// `ccx-agent status` against the real serve, and with serve down: nothing on
+// stdout and a non-zero exit, so statusline shows nothing rather than a guess.
+func TestIntegration_StatusClient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and runs the real ccx-agent binary")
+	}
+	bin := buildAgent(t)
+	work, err := os.MkdirTemp("", "ccx-agent-st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(work) })
+	home := filepath.Join(work, "claude")
+	const sid = "00000000-0000-4000-8000-0000000000aa"
+	if err := os.MkdirAll(filepath.Join(home, "sessions", sid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(home, "sessions", sid, "label"), []byte("it-label\n"), 0o644)
+	env := append(os.Environ(),
+		"CCX_HUB_URL=", "CCX_SOCKET="+filepath.Join(work, "s.sock"), "CCX_SPOOL="+filepath.Join(work, "spool"),
+		"CLAUDE_CONFIG_DIR="+home,
+		// Nothing from the developer's setup may point this serve at the real
+		// agent's sockets or a port.
+		"CCX_API_SOCKET="+filepath.Join(work, "a.sock"), "CCX_CHANNEL_SOCKET="+filepath.Join(work, "c.sock"),
+		"CCX_API_LISTEN=", "CCX_CONFIG=/nonexistent", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+	)
+	status := func() (string, error) {
+		cmd := exec.Command(bin, "status", "--session", sid, "--json")
+		cmd.Env = env
+		out, err := cmd.Output()
+		return string(out), err
+	}
+
+	// A malformed id is the caller's mistake (2), told apart from serve down (1).
+	bad := exec.Command(bin, "status", "--session", "not-an-id")
+	bad.Env = env
+	if err := bad.Run(); err == nil || bad.ProcessState.ExitCode() != 2 {
+		t.Errorf("malformed id: %v, want exit 2", err)
+	}
+	var exitErr *exec.ExitError
+	if out, err := status(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || out != "" {
+		t.Fatalf("serve down: out=%q err=%v, want empty and exit 1", out, err)
+	}
+
+	serve := startServe(t, bin, env)
+	defer serve.kill()
+	var out string
+	for i := 0; i < 150; i++ {
+		if out, err = status(); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	bad = exec.Command(bin, "status", "--session", "not-an-id")
+	bad.Env = env
+	if err := bad.Run(); err == nil || bad.ProcessState.ExitCode() != 2 {
+		t.Errorf("malformed id with serve up: %v, want exit 2", err)
+	}
+	// protojson varies its whitespace on purpose; read it as JSON.
+	var got struct {
+		Declared  struct{ Label string }
+		Heartbeat struct{ Enabled, Listening bool }
+		Collect   struct {
+			Enabled bool
+			Pending *int
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.Declared.Label != "it-label" ||
+		!got.Heartbeat.Enabled || !got.Collect.Enabled || got.Collect.Pending == nil || *got.Collect.Pending != 0 {
+		t.Errorf("status output: %s (%v)", out, err)
+	}
 }

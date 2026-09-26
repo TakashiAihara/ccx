@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,23 @@ type Heartbeat struct {
 	mtime time.Time
 	size  int64
 	last  Scan
+
+	mu    sync.Mutex
+	stats Stats
+}
+
+// Stats is what a heartbeat has done, for the agent's status API (kaneo ccx#34).
+type Stats struct {
+	Next     time.Time // when the next heartbeat is due; zero when none is scheduled
+	Sent     int
+	LastSent time.Time
+}
+
+// Stats is safe to call while Run is running.
+func (h *Heartbeat) Stats() Stats {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stats
 }
 
 // Scan is what one read of a transcript tells.
@@ -87,6 +105,14 @@ func (h *Heartbeat) Run(ctx context.Context) {
 
 // step decides one thing and returns how long to wait before the next.
 func (h *Heartbeat) step(sent *time.Time) time.Duration {
+	// Only the branch that waits for a due time schedules one; every other branch
+	// is waiting on something else (a declaration, a turn, a landing).
+	var next time.Time
+	defer func() {
+		h.mu.Lock()
+		h.stats.Next = next
+		h.mu.Unlock()
+	}()
 	if !h.wanted() {
 		// Declared off, or folded away. Looked at again each poll, so turning it
 		// back on takes effect within a minute.
@@ -139,6 +165,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		last = s.LastBeat
 	}
 	if due := last.Add(h.Interval); now.Before(due) {
+		next = due
 		return due.Sub(now)
 	}
 	if err := h.Push(); err != nil {
@@ -146,6 +173,10 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		return poll
 	}
 	*sent = now
+	h.mu.Lock()
+	h.stats.Sent++
+	h.stats.LastSent = now
+	h.mu.Unlock()
 	return poll
 }
 
@@ -153,7 +184,9 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 // on / off (`ccx session heartbeat`), then the machine's default.
 func (h *Heartbeat) wanted() bool {
 	dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
-	if _, err := os.Stat(filepath.Join(dir, "archived")); err == nil {
+	// A directory named archived is not the flag (the TS reader and the status
+	// API agree: Bun.file().exists() is false for it).
+	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		return false
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "heartbeat"))

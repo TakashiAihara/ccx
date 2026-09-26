@@ -41,6 +41,47 @@ ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
                    invoke. It never fails a session — it always exits 0.
 ```
 
+## Asking the agent (status API)
+
+```text
+ccx-agent status --session <id> [--json]
+                   ask the running serve about one session and print JSON:
+                   its declared state (archived / label / task / metadata),
+                   its heartbeat (enabled / listening / declared / wanted /
+                   registered / next / sent),
+                   and collect (spool backlog, last reach of the center).
+```
+
+serve answers `ccx.v1.AgentService` (packages/proto/ccx/v1/agent.proto) with one
+handler on two listeners:
+
+- a unix socket (`ccx-api.sock`, mode 0600), always on. This is what statusline
+  uses. With serve down, `ccx-agent status` prints nothing and exits 1 (a
+  malformed session id is 2, checked before dialing) — there is no fallback that
+  reads the files some other way. The client finds the socket from the
+  environment only (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
+  `XDG_RUNTIME_DIR`, else `~/.ccx/run`):
+  set these the same way for serve (its systemd unit) and for the shell the
+  statusline runs in, or the statusline shows nothing as if serve were down.
+- TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
+  every request needs `Authorization: Bearer <hub token>`. Without a hub token
+  serve refuses to open it (the unix side stays up). It is plain HTTP and the
+  hub token is its only guard, and it crosses the network in the clear: anyone
+  who reads it can also write to the center, and any holder can read this
+  host's session labels, tasks and metadata. `claudeHome` in a request is
+  ignored here.
+
+Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
+null whenever no heartbeat is scheduled, and `lastError` stays after a later
+success (compare `lastErrorAt` with `lastForwardedAt`).
+
+Connect unary is HTTP POST + JSON, so curl works too:
+
+```bash
+curl -s --unix-socket "$XDG_RUNTIME_DIR/ccx/ccx-api.sock" -H 'Content-Type: application/json' \
+  -d '{"sessionId":"<id>"}' http://ccx-agent/ccx.v1.AgentService/GetSessionStatus
+```
+
 ## The per-session channel
 
 ```text
@@ -123,6 +164,8 @@ it simply has no center to forward to.
 | heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
 | heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
+| status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
+| status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the hub token) |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 
