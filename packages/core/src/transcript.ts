@@ -353,6 +353,8 @@ export type PullResult = {
   state: DeclaredState | null;
   /** state を手元の印に写したか。手元に印が既にあれば写さない */
   stateApplied: boolean;
+  /** 手元の宣言が読めず写さなかったときの理由 (読めない手元は「持っている」側に倒す) */
+  stateError?: string;
   path: string;
   /** --force で押し退けた元のファイルの退避先 */
   replaced?: string;
@@ -634,7 +636,7 @@ export class TranscriptClient {
         const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
         if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
           // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
-          return { status: "already-here", meta, state, stateApplied: await this.applyState(sessionId, state, home), path };
+          return { status: "already-here", meta, state, ...(await this.applyState(sessionId, state, home)), path };
         }
       } else if (!force) {
         throw new Error(
@@ -688,17 +690,21 @@ export class TranscriptClient {
     } finally {
       await rm(tmp, { force: true });
     }
-    const stateApplied = await this.applyState(sessionId, state, home);
+    const applied = await this.applyState(sessionId, state, home);
     await this.record(prefix, "pull");
-    return { status: "pulled", meta, state, stateApplied, path, replaced };
+    return { status: "pulled", meta, state, ...applied, path, replaced };
   }
 
-  private async applyState(sessionId: string, state: DeclaredState | null, home: string): Promise<boolean> {
-    if (!state) return false;
-    // 手元の宣言が読めないなら「持っている」側に倒す: 上書きしない。transcript の取り込みは止めない
-    if (await holdsDeclared(sessionId, home).catch(() => true)) return false;
+  private async applyState(sessionId: string, state: DeclaredState | null, home: string): Promise<{ stateApplied: boolean; stateError?: string }> {
+    if (!state) return { stateApplied: false };
+    try {
+      if (await holdsDeclared(sessionId, home)) return { stateApplied: false };
+    } catch (e) {
+      // 手元の宣言が読めないなら「持っている」側に倒す: 上書きしない。transcript の取り込みは止めない
+      return { stateApplied: false, stateError: e instanceof Error ? e.message : String(e) };
+    }
     await writeDeclared(sessionId, state, home);
-    return true;
+    return { stateApplied: true };
   }
 
   /**

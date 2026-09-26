@@ -116,8 +116,9 @@ describe("session state travels with the transcript", () => {
     await Bun.write(join(homeB, "sessions", SID, "meta"), "not a dir");
     const p = await B.pull(SID, homeB);
     expect(p.status).toBe("pulled");
-    // 読めない手元は「持っている」側: 上書きしない
+    // 読めない手元は「持っている」側: 上書きしない。理由は stateError に
     expect(p.stateApplied).toBe(false);
+    expect(p.stateError).toMatch(/ENOTDIR/);
     expect(await Bun.file(join(homeB, "sessions", SID, "archived")).exists()).toBe(false);
   });
 
