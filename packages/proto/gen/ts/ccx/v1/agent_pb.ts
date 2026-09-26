@@ -149,7 +149,7 @@ export const HeartbeatStatusSchema: GenMessage<HeartbeatStatus> = /*@__PURE__*/
  */
 export type CollectStatus = Message<"ccx.v1.CollectStatus"> & {
   /**
-   * collect concern が動いているか。false なら以下は空。
+   * collect concern が設定で on か。false なら以下は空。
    *
    * @generated from field: bool enabled = 1;
    */

@@ -253,7 +253,7 @@ func (x *HeartbeatStatus) GetLastSentAt() *timestamppb.Timestamp {
 
 type CollectStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// collect concern が動いているか。false なら以下は空。
+	// collect concern が設定で on か。false なら以下は空。
 	Enabled bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	// center の URL が設定されているか。false なら spool に溜めるだけで送らない。
 	CenterConfigured bool `protobuf:"varint,2,opt,name=center_configured,json=centerConfigured,proto3" json:"center_configured,omitempty"`

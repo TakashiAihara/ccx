@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -243,20 +244,15 @@ func TestIntegration_StatusClient(t *testing.T) {
 		return string(out), err
 	}
 
-	if out, err := status(); err == nil || out != "" {
-		t.Fatalf("serve down: out=%q err=%v, want empty and an error", out, err)
-	}
-
 	// A malformed id is the caller's mistake (2), told apart from serve down (1).
 	bad := exec.Command(bin, "status", "--session", "not-an-id")
 	bad.Env = env
 	if err := bad.Run(); err == nil || bad.ProcessState.ExitCode() != 2 {
 		t.Errorf("malformed id: %v, want exit 2", err)
 	}
-	if out, err := status(); err == nil || out != "" {
-		t.Fatalf("serve down: out=%q err=%v, want empty and an error", out, err)
-	} else if code := err.(*exec.ExitError).ExitCode(); code != 1 {
-		t.Errorf("serve down: exit %d, want 1", code)
+	var exitErr *exec.ExitError
+	if out, err := status(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || out != "" {
+		t.Fatalf("serve down: out=%q err=%v, want empty and exit 1", out, err)
 	}
 
 	serve := startServe(t, bin, env)
@@ -270,6 +266,11 @@ func TestIntegration_StatusClient(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("status: %v", err)
+	}
+	bad = exec.Command(bin, "status", "--session", "not-an-id")
+	bad.Env = env
+	if err := bad.Run(); err == nil || bad.ProcessState.ExitCode() != 2 {
+		t.Errorf("malformed id with serve up: %v, want exit 2", err)
 	}
 	// protojson varies its whitespace on purpose; read it as JSON.
 	var got struct {

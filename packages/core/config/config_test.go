@@ -256,11 +256,15 @@ func TestAPI_SocketAndListen(t *testing.T) {
 	if c.APISocketPath != "/s/ccx-api.sock" {
 		t.Errorf("with CCX_SOCKET = %q, want next to it", c.APISocketPath)
 	}
-	// APISocket must land where serve listens. Only env decides it today; a git
-	// or config.toml key added to Load alone would make these differ.
-	t.Setenv("CCX_CONFIG", "/nonexistent")
-	if full, err := Load(); err != nil || APISocket() != full.APISocketPath {
-		t.Errorf("APISocket() = %q, Load() = %q (%v)", APISocket(), full.APISocketPath, err)
+	// APISocket must land where serve listens. Only env decides it today: with
+	// every git key answering and a config.toml that names a socket, load must
+	// still agree with the env-only resolution. A key added to load alone fails here.
+	tomlPath := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(tomlPath, []byte("[api]\nsocket = \"/from-file.sock\"\nlisten = \"127.0.0.1:1\"\n"), 0o644)
+	envOnly := env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/7", "CCX_CONFIG": tomlPath})
+	anyGit := func(string) string { return "/from-git.sock" }
+	if full, err := load(envOnly, anyGit, fixedHost("h")); err != nil || full.APISocketPath != apiSocketPath(envOnly) {
+		t.Errorf("load = %q, env-only = %q (%v)", full.APISocketPath, apiSocketPath(envOnly), err)
 	}
 	t.Setenv("CCX_API_SOCKET", "/e/a.sock")
 	if got := APISocket(); got != "/e/a.sock" {

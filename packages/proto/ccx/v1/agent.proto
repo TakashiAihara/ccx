@@ -58,7 +58,7 @@ message HeartbeatStatus {
 }
 
 message CollectStatus {
-  // collect concern が動いているか。false なら以下は空。
+  // collect concern が設定で on か。false なら以下は空。
   bool enabled = 1;
   // center の URL が設定されているか。false なら spool に溜めるだけで送らない。
   bool center_configured = 2;
