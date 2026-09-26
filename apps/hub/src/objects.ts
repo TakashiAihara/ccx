@@ -280,9 +280,18 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
     const maxKeys = Number.isInteger(maxKeysRaw) && maxKeysRaw >= 0 ? Math.min(maxKeysRaw, MAX_KEYS_DEFAULT) : MAX_KEYS_DEFAULT;
     // encoding-type=url を頼まれたら key と prefix を URL エンコードして返す (aws cli と DuckDB が頼む)
     const enc = q["encoding-type"] === "url" ? (s: string) => encodeURIComponent(s).replace(/%2F/g, "/") : (s: string) => s;
-    // continuation-token は「前のページの最後の要素 (key か common prefix)」を
-    // そのまま使う。不透明であればよい
-    const after = q["continuation-token"] ?? q["start-after"] ?? "";
+    // continuation-token は「前のページの最後の要素 (key か common prefix)」の base64url。
+    // 生の key を返すと、encoding-type で URL エンコードしても XML の実体参照にしても、
+    // それを戻さずに送り返すクライアント (DuckDB 1.5 の httpfs) で別の位置から再開し、
+    // ループ (#173) や重複・欠落になる。base64url は URL でも XML でも手を加えられない
+    const token = q["continuation-token"];
+    let after = q["start-after"] ?? "";
+    if (token !== undefined) {
+      after = Buffer.from(token, "base64url").toString();
+      if (Buffer.from(after).toString("base64url") !== token) {
+        return xmlError(400, "InvalidArgument", "The continuation token provided is incorrect");
+      }
+    }
 
     // Contents と CommonPrefixes を 1 本の辞書順に並べてからページを切る。
     // 別々に数えると、delimiter 付きの一覧が max-keys を超えても truncated にならない
@@ -316,12 +325,12 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       `<Name>${xmlEscape(bucket)}</Name><Prefix>${xmlEscape(enc(prefix))}</Prefix>`,
       delimiter ? `<Delimiter>${xmlEscape(enc(delimiter))}</Delimiter>` : "",
       q["encoding-type"] === "url" ? "<EncodingType>url</EncodingType>" : "",
-      // token は不透明値で encoding-type の対象ではない (S3 も同じ)。エンコードして返すと、
-      // そのまま送り返すクライアント (DuckDB) の `%3D` が `=` より前に並び、1 ページ目に戻る (#173)
-      after ? `<ContinuationToken>${xmlEscape(after)}</ContinuationToken>` : "",
+      // token は encoding-type の対象外で、StartAfter は対象 (S3 と同じ)。受け取ったものだけを返す
+      token !== undefined ? `<ContinuationToken>${token}</ContinuationToken>` : "",
+      token === undefined && after ? `<StartAfter>${xmlEscape(enc(after))}</StartAfter>` : "",
       `<KeyCount>${page.length}</KeyCount><MaxKeys>${maxKeys}</MaxKeys>`,
       `<IsTruncated>${truncated}</IsTruncated>`,
-      truncated ? `<NextContinuationToken>${xmlEscape(last)}</NextContinuationToken>` : "",
+      truncated ? `<NextContinuationToken>${Buffer.from(last).toString("base64url")}</NextContinuationToken>` : "",
       ...page.map((e) =>
         "commonPrefix" in e
           ? `<CommonPrefixes><Prefix>${xmlEscape(enc(e.commonPrefix))}</Prefix></CommonPrefixes>`
