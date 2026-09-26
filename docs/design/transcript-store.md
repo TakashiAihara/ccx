@@ -97,8 +97,8 @@ and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself;
 `state.json` copy, so a session pushed from two machines has two rows: `label` / `task` / `archived`
 / `metadata` / `label_history` / `label_recorded_at` (when ccx last recorded a label, not when the
 hook last changed it), `json` raw; empty when no session has declared state; a `state.json` that is
-not valid JSON is left out rather than failing the search, and `archived` is true only for a JSON
-`true`, as `pull` reads it). The
+not valid JSON is left out rather than failing the search; `archived` is true only for a JSON
+`true`, as `pull` reads it, while `label` / `task` are the raw values). The
 text search reads `lines` and, as rows of type `ccx.state` listed first (one per session copy; a
 search for a name should show the sessions, and with a state that has no recorded label the time is
 NULL, which would sort it behind every transcript hit), the values of `sessions` — label, task, metadata (keys too: a key

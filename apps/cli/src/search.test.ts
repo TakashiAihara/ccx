@@ -174,7 +174,7 @@ describe("search: embedded DuckDB over the store", () => {
     }
     // state.json のキー名には当たらない (丸ごと文字列にしていない)。metadata の key は当たる (値の無い key は key が中身)
     for (const key of ["label", "archived", "labelhistory"]) expect((await ccx(key)).err).toContain("no match");
-    // 値どうしは改行で区切る: 2 つの値にまたがる語は当たらない
+    // 過去の label どうしは改行で区切る: 2 つにまたがる語は当たらない
     expect((await ccx("original-name renamed-now")).err).toContain("no match");
     expect((JSON.parse((await ccx("owner", "--json")).out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID2]);
 
@@ -193,15 +193,21 @@ describe("search: embedded DuckDB over the store", () => {
     // 壊れた state.json
     await mkdir(dir("host-y", SID3), { recursive: true });
     await Bun.write(join(dir("host-y", SID3), "state.json"), '{"label": "needle-alpha');
-    // JSON としては正しいが型が違う
+    // JSON としては正しいが型が違う (host-w) / 正しい型 (host-v) / 鍵が無い (host-u)
     await mkdir(dir("host-w", SID3), { recursive: true });
     await Bun.write(join(dir("host-w", SID3), "state.json"), JSON.stringify({ archived: "true", label: "odd-one" }));
     await mkdir(dir("host-v", SID3), { recursive: true });
     await Bun.write(join(dir("host-v", SID3), "state.json"), JSON.stringify({ archived: true, label: "odd-one" }));
+    await mkdir(dir("host-u", SID3), { recursive: true });
+    await Bun.write(join(dir("host-u", SID3), "state.json"), JSON.stringify({ label: "odd-one" }));
     // JSON の true だけが真 (core の normalizeDeclared と同じ読み)
     const odd = await ccx("--sql", "SELECT machine, archived FROM sessions WHERE label = 'odd-one' ORDER BY machine", "--json");
     expect(odd.code).toBe(0);
-    expect(JSON.parse(odd.out)).toEqual([{ machine: "host-v", archived: true }, { machine: "host-w", archived: false }]);
+    expect(JSON.parse(odd.out)).toEqual([
+      { machine: "host-u", archived: false },
+      { machine: "host-v", archived: true },
+      { machine: "host-w", archived: false },
+    ]);
 
     const r = await ccx("needle-alpha", "-n", "1", "--json");
     expect(r.code).toBe(0);

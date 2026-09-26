@@ -21,7 +21,7 @@ import { select } from "./transcript.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 /** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
-const h = (...labels: string[]) => labels.map((label) => ({ at: expect.any(String), label }));
+const h = (...labels: string[]) => labels.map((label) => ({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), label }));
 const SID2 = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID3 = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID4 = "3f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";

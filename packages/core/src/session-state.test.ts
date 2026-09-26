@@ -19,7 +19,7 @@ import {
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 /** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
-const h = (...labels: string[]) => labels.map((label) => ({ at: expect.any(String), label }));
+const h = (...labels: string[]) => labels.map((label) => ({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), label }));
 let home: string;
 
 beforeEach(async () => {
@@ -66,18 +66,18 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // 同じ名前の書き直し (前後の空白だけ違うものも) と、label を含まない patch は記録しない
     await writeDeclared(SID, { label: "a" }, home);
     await writeDeclared(SID, { label: " a " }, home);
+    expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("a\n");
     await writeDeclared(SID, { task: "t" }, home);
-    // hook が ccx を通さず書き換えた後: 今のファイルと同じなら足さず、違えば足す
+    // 比べる相手は履歴の最後: label ファイルだけ先に変わっていても (hook が書いた / 履歴に足す前に落ちた) 記録する
     await Bun.write(join(home, "sessions", SID, "label"), "b\n");
     await writeDeclared(SID, { label: "b" }, home);
     const s = await writeDeclared(SID, { label: "c" }, home);
-    expect(s.labelHistory).toEqual(h("a", "c"));
-    expect(Date.parse(s.labelHistory[0]!.at)).not.toBeNaN();
+    expect(s.labelHistory).toEqual(h("a", "b", "c"));
 
     // 書きかけで切れた行は飛ばす (履歴全体を失わない)。次の変更も切れた行に続けて書かず、失わない
     await appendFile(file, '{"at":"2026-');
-    expect((await readDeclared(SID, home)).labelHistory).toEqual(h("a", "c"));
-    expect((await writeDeclared(SID, { label: "d" }, home)).labelHistory).toEqual(h("a", "c", "d"));
+    expect((await readDeclared(SID, home)).labelHistory).toEqual(h("a", "b", "c"));
+    expect((await writeDeclared(SID, { label: "d" }, home)).labelHistory).toEqual(h("a", "b", "c", "d"));
 
     // pull が渡す履歴は足さずに丸ごと置き、label が変わっても重ねて記録しない
     const pulled = [{ at: "2026-09-01T00:00:00.000Z", label: "x" }];

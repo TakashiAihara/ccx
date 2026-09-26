@@ -220,7 +220,9 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
 
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
-  // 比べる相手は今のファイル。auto-label hook が ccx を通さず書き換えた後でも、同じ名前を重ねて記録しない。
+  // 比べる相手は履歴の最後の 1 件 (無ければ今のファイル)。ファイルと比べると、label を書いた後・履歴に足す前に
+  // 落ちた変更を次の同じ書き込みが「変わっていない」と読み、二度と記録しない。hook が ccx を通さず書いた名前を
+  // ccx で書き直したときも記録される。
   // label と履歴だけを読む: 他 (meta/ 等) が壊れていても label の書き込みは止めない。履歴が読めなければ
   // 履歴には足さない (読めない履歴に続けて書かない。push は同じ読みで止まる)
   const before =
@@ -267,7 +269,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
         await rm(tmp, { force: true });
       }
     } else await rm(historyPath, { force: true });
-  } else if (before?.labelHistory && before.label !== patch.label) {
+  } else if (before?.labelHistory && (before.labelHistory.at(-1)?.label ?? before.label) !== patch.label) {
     const lines = [...(seedAt ? [{ at: seedAt, label: before.label }] : []), { at: new Date().toISOString(), label: patch.label! }];
     // 書きかけで切れた行 (改行で終わっていない) に続けて書くと、その行ごと読めなくなる。改行を補ってから足す
     const torn = !(await Bun.file(historyPath).text().catch(() => "")).match(/(^|\n)$/);
