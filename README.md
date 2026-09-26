@@ -97,7 +97,10 @@ ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give a
 ccx session mark archived --off <id>
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
-ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task
+ccx session meta set done     # your own keys; ccx gives them no meaning (~/.claude/sessions/<id>/meta/<key>)
+ccx session meta set owner=alice
+ccx session meta unset done
+ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task, metadata
 ```
 
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
@@ -154,6 +157,9 @@ target. See `docs/design/transcript-store.md`.
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
+`push --archived` and `prune --archived` skip a session whose declared state cannot be read and exit
+`1`; `push` of such a session by id or `--ended` still carries the transcript without `state.json`
+and exits `1`. The reason is on stderr.
 
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
 hand to `cd`. The picker is [fzf](https://github.com/junegunn/fzf) when it is installed — your own

@@ -216,10 +216,12 @@ func (x *Session) GetState() *SessionState {
 
 // 宣言された状態。名前と意味は docs/design/session-state.md。
 type SessionState struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Archived      bool                   `protobuf:"varint,1,opt,name=archived,proto3" json:"archived,omitempty"`
-	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
-	Task          string                 `protobuf:"bytes,3,opt,name=task,proto3" json:"task,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Archived bool                   `protobuf:"varint,1,opt,name=archived,proto3" json:"archived,omitempty"`
+	Label    string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	Task     string                 `protobuf:"bytes,3,opt,name=task,proto3" json:"task,omitempty"`
+	// 利用者の key/value。center は意味を持たずに運ぶ (#165)
+	Metadata      map[string]string `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -273,6 +275,13 @@ func (x *SessionState) GetTask() string {
 		return x.Task
 	}
 	return ""
+}
+
+func (x *SessionState) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
 }
 
 // 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
@@ -699,11 +708,15 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\vevent_count\x18\a \x01(\x04R\n" +
 	"eventCount\x12\x1b\n" +
 	"\tlast_hook\x18\b \x01(\tR\blastHook\x12*\n" +
-	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"T\n" +
+	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"\xd1\x01\n" +
 	"\fSessionState\x12\x1a\n" +
 	"\barchived\x18\x01 \x01(\bR\barchived\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
-	"\x04task\x18\x03 \x01(\tR\x04task\"\xde\x02\n" +
+	"\x04task\x18\x03 \x01(\tR\x04task\x12>\n" +
+	"\bmetadata\x18\x04 \x03(\v2\".ccx.v1.SessionState.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x02\n" +
 	"\vEventRecord\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x18\n" +
 	"\amachine\x18\x02 \x01(\tR\amachine\x12\x12\n" +
@@ -759,7 +772,7 @@ func file_ccx_v1_fleet_proto_rawDescGZIP() []byte {
 	return file_ccx_v1_fleet_proto_rawDescData
 }
 
-var file_ccx_v1_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_ccx_v1_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_ccx_v1_fleet_proto_goTypes = []any{
 	(*SessionKey)(nil),            // 0: ccx.v1.SessionKey
 	(*Session)(nil),               // 1: ccx.v1.Session
@@ -769,30 +782,32 @@ var file_ccx_v1_fleet_proto_goTypes = []any{
 	(*ListSessionsResponse)(nil),  // 5: ccx.v1.ListSessionsResponse
 	(*ListEventsRequest)(nil),     // 6: ccx.v1.ListEventsRequest
 	(*ListEventsResponse)(nil),    // 7: ccx.v1.ListEventsResponse
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
-	(Producer)(0),                 // 9: ccx.v1.Producer
+	nil,                           // 8: ccx.v1.SessionState.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(Producer)(0),                 // 10: ccx.v1.Producer
 }
 var file_ccx_v1_fleet_proto_depIdxs = []int32{
 	0,  // 0: ccx.v1.Session.key:type_name -> ccx.v1.SessionKey
-	8,  // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
-	8,  // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
-	8,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
+	9,  // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
+	9,  // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
+	9,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
 	2,  // 4: ccx.v1.Session.state:type_name -> ccx.v1.SessionState
-	8,  // 5: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
-	9,  // 6: ccx.v1.EventRecord.producer:type_name -> ccx.v1.Producer
-	1,  // 7: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
-	8,  // 8: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	8,  // 9: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
-	3,  // 10: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
-	4,  // 11: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
-	6,  // 12: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
-	5,  // 13: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
-	7,  // 14: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
-	13, // [13:15] is the sub-list for method output_type
-	11, // [11:13] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 5: ccx.v1.SessionState.metadata:type_name -> ccx.v1.SessionState.MetadataEntry
+	9,  // 6: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
+	10, // 7: ccx.v1.EventRecord.producer:type_name -> ccx.v1.Producer
+	1,  // 8: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
+	9,  // 9: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	9,  // 10: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
+	3,  // 11: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
+	4,  // 12: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
+	6,  // 13: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
+	5,  // 14: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
+	7,  // 15: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
+	14, // [14:16] is the sub-list for method output_type
+	12, // [12:14] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_fleet_proto_init() }
@@ -807,7 +822,7 @@ func file_ccx_v1_fleet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_fleet_proto_rawDesc), len(file_ccx_v1_fleet_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

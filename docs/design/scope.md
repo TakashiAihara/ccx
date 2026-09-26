@@ -40,7 +40,7 @@ Two kinds of state, kept apart:
 | Kind | Examples | Who writes it |
 |---|---|---|
 | **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `remote` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
-| **Declared** — an intent someone recorded | `archived` (folded away; the one flag, in the Desktop app's word — `done` / `pinned` / `delete-on-end` stay the user's own markers, #135), a `label`, a `task` reference | a person or the session itself, through `ccx` |
+| **Declared** — an intent someone recorded | `archived` (folded away; the one flag, in the Desktop app's word), a `label`, a `task` reference, and `metadata` — the user's own keys (`done`, `pinned`, …) that ccx carries without giving them meaning (#165) | a person or the session itself, through `ccx` |
 
 ccx defines these states and carries them with the transcript. What a person *does* with them —
 which sessions get reclaimed, whether an `archived` session is closed by hand or by a daemon — stays on

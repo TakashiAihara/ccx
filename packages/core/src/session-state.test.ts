@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   EMPTY_DECLARED,
   flagsOf,
+  holdsDeclared,
   isEmptyDeclared,
   markedSessionIds,
   normalizeDeclared,
@@ -39,17 +41,17 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "" });
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {} });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "" });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {} });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "" });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
     expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
@@ -69,6 +71,68 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(normalizeDeclared({ heartbeat: "yes" }).heartbeat).toBe("");
     expect(normalizeDeclared({ heartbeat: "off" }).heartbeat).toBe("off");
     expect(sameDeclared({ ...EMPTY_DECLARED, heartbeat: "on" }, EMPTY_DECLARED)).toBe(false);
+  });
+
+  test("metadata: one file per key under meta/, empty file = key with no value, null removes it", async () => {
+    const dir = join(home, "sessions", SID, "meta");
+    expect((await writeDeclared(SID, { metadata: { done: "", owner: "alice" } }, home)).metadata).toEqual({ done: "", owner: "alice" });
+    expect(await Bun.file(join(dir, "done")).text()).toBe("");
+    expect(await Bun.file(join(dir, "owner")).text()).toBe("alice\n");
+    expect(isEmptyDeclared(await readDeclared(SID, home))).toBe(false);
+    expect(await markedSessionIds(home)).toEqual([SID]);
+
+    // 他の鍵は触らない
+    expect((await writeDeclared(SID, { metadata: { owner: null }, task: "t" }, home)).metadata).toEqual({ done: "" });
+    expect(await Bun.file(join(dir, "owner")).exists()).toBe(false);
+    expect(await writeDeclared(SID, { metadata: { done: null }, task: "" }, home)).toEqual(EMPTY_DECLARED);
+    expect(await markedSessionIds(home)).toEqual([]);
+
+    // パスになる key は通さない (書く前に止まる: まだ何も無い session に、ディレクトリも作らない)
+    const fresh = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+    for (const k of ["..", ".hidden", "a/b", "a=b", "", "-x", "Done", "x".repeat(129)]) {
+      await expect(writeDeclared(fresh, { metadata: { [k]: "" } }, home)).rejects.toThrow(/invalid metadata key/);
+    }
+    expect(existsSync(join(home, "sessions", fresh))).toBe(false);
+    // 無い key の unset も宣言: 保存先の古い写しに残る key を pull が戻さない
+    expect(await writeDeclared(fresh, { metadata: { nope: null } }, home)).toEqual(EMPTY_DECLARED);
+    expect(await holdsDeclared(fresh, home)).toBe(true);
+    // __proto__ は正しい key: prototype の setter に食われず残る。値の空白と改行は往復で変わらない
+    // (リテラル `{ __proto__: … }` は key を作らないので JSON から組む)
+    const oddMeta = normalizeDeclared(JSON.parse('{"metadata": {"__proto__": "p", "sp": "  two  ", "nl": "a\\n"}}')).metadata;
+    expect(Object.keys(oddMeta)).toEqual(["__proto__", "nl", "sp"]);
+    const back = (await writeDeclared(SID, { metadata: oddMeta }, home)).metadata;
+    expect(Object.entries(back)).toEqual([["__proto__", "p"], ["nl", "a\n"], ["sp", "  two  "]]);
+    await writeDeclared(SID, { metadata: Object.fromEntries(Object.keys(oddMeta).map((k) => [k, null])) }, home);
+    // 手で置かれた不正な名前のファイルは読まない
+    await Bun.write(join(dir, ".swp"), "");
+    // key の形でもディレクトリは読めない (EISDIR): 数えず、readDeclared も落ちない
+    await mkdir(join(dir, "sub"), { recursive: true });
+    expect((await readDeclared(SID, home)).metadata).toEqual({});
+    // 読めない key のファイル (自分を指す symlink = ELOOP) は数えずに済ませない
+    await symlink("loop", join(dir, "loop"));
+    await expect(readDeclared(SID, home)).rejects.toThrow(/ELOOP/);
+    // 先の無い symlink (ENOENT) は無い key
+    await rm(join(dir, "loop"));
+    await symlink("nowhere", join(dir, "gone"));
+    expect((await readDeclared(SID, home)).metadata).toEqual({});
+    // 読めない meta は空にしない (空で push すると保存先の key を消す)
+    await rm(dir, { recursive: true });
+    await Bun.write(dir, "not a dir");
+    await expect(readDeclared(SID, home)).rejects.toThrow(/ENOTDIR/);
+    // 解決の候補には残す (外すと曖昧な prefix が一意に見える)。他の session の解決も止めない
+    const other = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+    await writeDeclared(other, { task: "t" }, home);
+    expect((await markedSessionIds(home)).sort()).toEqual([SID, other].sort());
+    await rm(dir);
+  });
+
+  test("normalizeDeclared keeps valid string metadata; sameDeclared compares metadata by content, not key order", () => {
+    expect(normalizeDeclared({ metadata: { b: "2", a: "", "../x": "", n: 1 } }).metadata).toEqual({ a: "", b: "2" });
+    expect(normalizeDeclared({ metadata: ["a"] }).metadata).toEqual({});
+    expect(sameDeclared({ ...EMPTY_DECLARED, metadata: { a: "1", b: "" } }, { ...EMPTY_DECLARED, metadata: { b: "", a: "1" } })).toBe(true);
+    expect(sameDeclared({ ...EMPTY_DECLARED, metadata: { a: "1" } }, { ...EMPTY_DECLARED, metadata: { a: "" } })).toBe(false);
+    expect(sameDeclared({ ...EMPTY_DECLARED, metadata: { a: "" } }, EMPTY_DECLARED)).toBe(false);
+    expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, metadata: { a: "" } })).toBe(false);
   });
 
   test("normalizeDeclared fills missing keys and drops wrong types; sameDeclared compares every field", () => {

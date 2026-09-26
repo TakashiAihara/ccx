@@ -87,7 +87,18 @@ export async function select(
   const picked: LocalTranscript[] = [];
   for (const t of all) {
     if ((sel.ended || opts.excludeRunning) && running.has(t.sessionId)) continue;
-    if (sel.archived && !(await readDeclared(t.sessionId, home)).archived) continue;
+    if (sel.archived) {
+      // 読めない session は選ばない (archived か分からない)。他の session の選択は止めない
+      const archived = await readDeclared(t.sessionId, home).then(
+        (s) => s.archived,
+        (e: unknown) => {
+          console.error(`(${t.sessionId}: skipped, declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+          process.exitCode = 1;
+          return false;
+        },
+      );
+      if (!archived) continue;
+    }
     picked.push(t);
   }
   return { picked, running };
@@ -113,7 +124,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
       for (const t of picked) {
         const r = await c.push(t);
         results.push({ sessionId: t.sessionId, ...r });
-        const flags = flagsOf(r.state).join(",");
+        if (r.stateError) {
+          console.error(`(${t.sessionId}: transcript ${r.status}, state.json not written: declared state could not be read: ${r.stateError})`);
+          process.exitCode = 1;
+        }
+        const flags = r.state ? flagsOf(r.state).join(",") : "?";
         if (!o.json) console.log(`${r.status.padEnd(9)} ${t.sessionId}  ${human(r.meta.size)}  ${flags ? `[${flags}]  ` : ""}${r.meta.cwd}`);
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));
@@ -135,6 +150,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
       // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
       if (r.stateApplied && r.state) await reportState(cfg.hub, cfg.machine, id, r.state);
+      if (r.stateError) console.error(`(${id}: the store's state was not applied: this machine's declared state could not be read: ${r.stateError})`);
 
       // 会話だけでは作業できない。session.json の repo から、default branch の最新で
       // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。
@@ -160,7 +176,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
       }
       console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
       if (r.state) {
-        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`].filter(Boolean);
+        const meta = Object.keys(r.state.metadata);
+        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
         if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
       }
     });

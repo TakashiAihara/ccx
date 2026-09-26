@@ -336,7 +336,7 @@ session
     // 状態の列。このマシンの行は手元のファイルが真実源 (手元に無い remote なものだけ
     // 保存先の state.json)。他のマシンの行は center が持つ写し (`ccx session mark` が送った
     // 最後の event) で、保存先 (S3) には行かない。center が 1 件も受けていなければ null
-    // (「印が無い」とは別) (#127)
+    // (「印が無い」とは別)。このマシンの行でも、手元の印が読めなければ null (stderr に理由) (#127)
     const home = claudeHome();
     // 鍵は (machine, user)。同じマシンの別ユーザーの session は別の ~/.claude を持つので「他」
     const me = localOrigin(cfg.machine);
@@ -351,7 +351,11 @@ session
         let state: DeclaredState | null;
         if (origin.machine === me.machine && origin.user === me.user) {
           lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
-          state = await declaredFor(id, home, lifecycle, store, origin);
+          // 読めない行は null (「知らない」) にして一覧は出す。1 行の壊れた印で全体を止めない
+          state = await declaredFor(id, home, lifecycle, store, origin).catch((e: unknown) => {
+            console.error(`(${id}: declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
+            return null;
+          });
         } else {
           // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
           lifecycle = s.endedAt ? "ended" : "";
