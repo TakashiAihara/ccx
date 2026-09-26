@@ -215,6 +215,8 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
  */
 export async function writeDeclared(sessionId: string, patch: DeclaredPatch, home = claudeHome()): Promise<DeclaredState> {
   for (const k of Object.keys(patch.metadata ?? {})) if (!isMetaKey(k)) throw new Error(`invalid metadata key ${JSON.stringify(k)}`);
+  // 読み手 (readDeclared) は trim した値を返す。ファイルにも履歴にも同じ値を書く: " a " を重ねて記録しない
+  if (patch.label !== undefined) patch = { ...patch, label: patch.label.trim() };
 
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });
@@ -230,7 +232,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
       : undefined;
   // 最初の記録の前に、ccx を通さず付いていた名前 (hook が書いた label) を 1 件目として残す。時刻はそのファイルの mtime
   const seedAt =
-    before?.labelHistory && before.label && before.labelHistory.length === 0 && before.label !== patch.label!.trim()
+    before?.labelHistory && before.label && before.labelHistory.length === 0 && before.label !== patch.label
       ? // 読んだ後に消えていれば (hook と競った) 種は置かない。時刻の無い名前は残さない
         await stat(join(dir, TEXT_FILE.label)).then((s) => s.mtime.toISOString(), () => undefined)
       : undefined;
@@ -265,9 +267,8 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
         await rm(tmp, { force: true });
       }
     } else await rm(historyPath, { force: true });
-  } else if (before?.labelHistory && before.label !== patch.label!.trim()) {
-    // 読み手 (readDeclared) は trim した値を返す。比べるのも記録するのも同じ値にする: " a " を重ねて記録しない
-    const lines = [...(seedAt ? [{ at: seedAt, label: before.label }] : []), { at: new Date().toISOString(), label: patch.label!.trim() }];
+  } else if (before?.labelHistory && before.label !== patch.label) {
+    const lines = [...(seedAt ? [{ at: seedAt, label: before.label }] : []), { at: new Date().toISOString(), label: patch.label! }];
     // 書きかけで切れた行 (改行で終わっていない) に続けて書くと、その行ごと読めなくなる。改行を補ってから足す
     const torn = !(await Bun.file(historyPath).text().catch(() => "")).match(/(^|\n)$/);
     await appendFile(historyPath, `${torn ? "\n" : ""}${lines.map((e) => `${JSON.stringify(e)}\n`).join("")}`);

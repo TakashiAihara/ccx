@@ -83,16 +83,16 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // 宣言状態は印を付けた session にしか無い。read_text は glob に何も当たらなければ 0 行を返す (エラーにならない)。
   // read_json_objects ではなく read_text + json_valid: 壊れた state.json が 1 つあると read_json_objects は
   // クエリ全体を止め、既定の検索 (transcript も含む) が丸ごと落ちる。壊れたものはその 1 件だけ落とす。
-  // 同じ理由で型の変換は TRY_CAST (JSON としては正しいが archived が真偽値でない、で全体を止めない)。
+  // archived は JSON の true だけを真にする (normalizeDeclared と同じ。"true" / 1 は偽)。キャストで全体を止めない。
   // read_text は hive_partitioning を取らないので、パスから取り出す。最初の一致を取るのは DuckDB の hive_partitioning
   // と同じ (prefix に `user=` 等があると両方とも誤る。他の view と食い違わせない)
   const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
   const part = (k: string) => `regexp_extract(filename, '/${k}=([^/]+)/', 1)`;
   await c.run(
     `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task,
-       TRY_CAST(json->>'archived' AS BOOLEAN) AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
+       coalesce((json->'archived')::VARCHAR = 'true', false) AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
        json->>'$.labelHistory[#-1].at' AS label_recorded_at, json
-     FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", TRY_CAST(content AS JSON) AS json
+     FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", content::JSON AS json
            FROM read_text(${q(states)}) WHERE json_valid(content))`,
   );
   if (opts.withHistory) {
