@@ -9,7 +9,8 @@ import { normalizePrefix, s3AccessKeyId, type TranscriptStore } from "@ccx/core"
 import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
 
 /**
- * 同梱した DuckDB を開き、保存先の transcript を `transcripts` / `history` view として見せる。
+ * 同梱した DuckDB を開き、保存先の transcript を `transcripts` / `history` view として、
+ * session の宣言状態 (state.json。label / label の履歴 / metadata) を `sessions` view として見せる。
  *
  * `@duckdb/node-bindings` の duckdb.node は薄い shim で、隣にあるはずの libduckdb を
  * SONAME で dlopen する。単一バイナリの中には「隣」が無いので、先に同梱の実体を
@@ -78,6 +79,22 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;
+  }
+  // 宣言状態は印を付けた session にしか無い。無ければ空の view (transcript はあるので保存先は空ではない)
+  const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
+  try {
+    await c.run(
+      `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task,
+         (json->>'archived')::BOOLEAN AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
+         json->>'$.labelHistory[#-1].at' AS label_changed_at, json
+       FROM read_json_objects(${q(states)}, format='auto', hive_partitioning=true)`,
+    );
+  } catch (e) {
+    if (!/No files found/i.test(String(e))) throw e;
+    await c.run(
+      `CREATE VIEW sessions AS SELECT NULL::VARCHAR AS session_id, NULL::VARCHAR AS machine, NULL::VARCHAR AS "user", NULL::VARCHAR AS label, NULL::VARCHAR AS task,
+         NULL::BOOLEAN AS archived, NULL::JSON AS metadata, NULL::JSON AS label_history, NULL::VARCHAR AS label_changed_at, NULL::JSON AS json WHERE false`,
+    );
   }
   if (opts.withHistory) {
     // hive の machine / user (push した側) がファイルの machine / user (操作した側) を隠すので、

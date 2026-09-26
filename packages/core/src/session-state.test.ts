@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,8 @@ import {
 } from "./session-state.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+/** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
+const h = (...labels: string[]) => labels.map((label) => ({ at: expect.any(String), label }));
 let home: string;
 
 beforeEach(async () => {
@@ -41,20 +43,49 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {} });
+    // hook が ccx を通さず書いた label は履歴に残らない (ccx が見ていない)
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {} });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
-    expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
+  });
+
+  test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {
+    const file = join(home, "sessions", SID, "labels.jsonl");
+    await writeDeclared(SID, { label: "a" }, home);
+    // 同じ名前の書き直しと、label を含まない patch は記録しない
+    await writeDeclared(SID, { label: "a" }, home);
+    await writeDeclared(SID, { task: "t" }, home);
+    // hook が ccx を通さず書き換えた後: 今のファイルと同じなら足さず、違えば足す
+    await Bun.write(join(home, "sessions", SID, "label"), "b\n");
+    await writeDeclared(SID, { label: "b" }, home);
+    const s = await writeDeclared(SID, { label: "c" }, home);
+    expect(s.labelHistory).toEqual(h("a", "c"));
+    expect(Date.parse(s.labelHistory[0]!.at)).not.toBeNaN();
+
+    // 書きかけで切れた行は飛ばす (履歴全体を失わない)
+    await appendFile(file, '{"at":"2026-');
+    expect((await readDeclared(SID, home)).labelHistory).toEqual(h("a", "c"));
+
+    // pull が渡す履歴は足さずに丸ごと置き、label が変わっても重ねて記録しない
+    const pulled = [{ at: "2026-09-01T00:00:00.000Z", label: "x" }];
+    expect((await writeDeclared(SID, { label: "x", labelHistory: pulled }, home)).labelHistory).toEqual(pulled);
+    expect(await writeDeclared(SID, { labelHistory: [] }, home)).toMatchObject({ label: "x", labelHistory: [] });
+    expect(await Bun.file(file).exists()).toBe(false);
+
+    // 保存先の壊れた形は落とす
+    expect(normalizeDeclared({ labelHistory: [{ at: "t", label: "ok" }, { at: 1, label: "n" }, null, "s"] }).labelHistory).toEqual([{ at: "t", label: "ok" }]);
+    expect(normalizeDeclared({ labelHistory: "nope" }).labelHistory).toEqual([]);
   });
 
   test("heartbeat is on / off / unset; anything else in the file or the store reads as unset", async () => {

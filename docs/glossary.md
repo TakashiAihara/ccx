@@ -45,6 +45,9 @@ believed.
 - **remote** — a session whose transcript is in the store and not on this machine. A lifecycle
   value, not a flag.
 - **label** — a free-text name for a session (`~/.claude/sessions/<id>/label`).
+- **label history** — every label `ccx session label` gave a session, with when
+  (`~/.claude/sessions/<id>/labels.jsonl`; `labelHistory` in `state.json`). Not the auto-label hook's
+  `label-history.json`, which is the hook's own file.
 - **task** — one external reference for what the session is on, e.g. `kaneo ccx#1`
   (`~/.claude/sessions/<id>/task`).
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).

@@ -223,7 +223,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("search")
     .description("Search every transcript in the store with DuckDB (embedded)")
     .argument("[text]", "case-insensitive substring of any message")
-    .option("--sql <query>", "run this SQL instead; the views are `transcripts` and `history`")
+    .option("--sql <query>", "run this SQL instead; the views are `transcripts`, `history` and `sessions` (label, label_history, metadata)")
     .option("-s, --session <id>", "only this session (full id or prefix)")
     .option("-n, --limit <count>", "at most this many rows (default 50)", parseLimit)
     .option("--json", "print rows as JSON")
@@ -237,13 +237,22 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const c = await openDuckDB(cfg.transcript, { session: o.session, withHistory: Boolean(o.sql) });
       const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
       // 生の行 (`lines`) を探す。構造化した `transcripts` を to_json すると無いキーが null で
-      // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む
+      // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む。
+      // session の宣言状態 (label / その履歴 / metadata) も同じ検索に入れる: 名前で session を探せるように (#169)。
+      // その行は type = 'state'、時刻は最後に label を変えた時刻
       const sql =
         o.sql ??
-        `SELECT session_id, machine, "user", json->>'type' AS type, json->>'timestamp' AS timestamp,
-                substr(json::VARCHAR, greatest(1, position(lower(${q(text!)}) IN lower(json::VARCHAR)) - 60), 200) AS snippet
-         FROM lines
-         WHERE contains(lower(json::VARCHAR), lower(${q(text!)}))
+        `SELECT session_id, machine, "user", type, timestamp,
+                substr(body, greatest(1, position(lower(${q(text!)}) IN lower(body)) - 60), 200) AS snippet
+         FROM (
+           SELECT session_id, machine, "user", json->>'type' AS type, json->>'timestamp' AS timestamp, json::VARCHAR AS body FROM lines
+           UNION ALL
+           -- 値だけを並べる: state.json をそのまま文字列にすると "label" / "archived" 等のキー名が全行に当たる
+           SELECT session_id, machine, "user", 'state', label_changed_at,
+                  concat_ws(' ', label, task, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), ' / '))
+           FROM sessions
+         )
+         WHERE contains(lower(body), lower(${q(text!)}))
          ORDER BY timestamp DESC
          LIMIT ${o.limit ?? 50}`;
       const r = await c.runAndReadAll(sql);

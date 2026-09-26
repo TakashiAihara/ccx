@@ -20,6 +20,8 @@ import { declaredFor, lifecycleOf } from "./session-state.ts";
 import { select } from "./transcript.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+/** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
+const h = (...labels: string[]) => labels.map((label) => ({ at: expect.any(String), label }));
 const SID2 = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID3 = "2f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID4 = "3f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
@@ -72,11 +74,17 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { archived: true, label: "L", task: "kaneo ccx#1" }, homeA);
     const r1 = await A.push(t, homeA);
     expect(r1.status).toBe("state");
-    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
+    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("L") });
     expect(await Bun.file(stateKey()).json()).toEqual(r1.state);
     expect(await A.readRemoteDeclared(SID)).toEqual(r1.state);
 
     expect((await A.push(t, homeA)).status).toBe("unchanged");
+
+    // 名前を変えて戻すと label は同じでも履歴が違う: 運ぶ
+    await writeDeclared(SID, { label: "M" }, homeA);
+    await writeDeclared(SID, { label: "L" }, homeA);
+    expect((await A.push(t, homeA)).status).toBe("state");
+    expect((await A.readRemoteDeclared(SID))?.labelHistory).toEqual(h("L", "M", "L"));
 
     await writeDeclared(SID, { task: "kaneo ccx#2" }, homeA);
     const storedTranscript = join(root, "ccx", `p/transcripts/machine=host-a/user=alice/session_id=${SID}/transcript.jsonl`);
@@ -88,12 +96,12 @@ describe("session state travels with the transcript", () => {
     expect(r2.status).toBe("state");
     expect((await Bun.file(stateKey()).json()).task).toBe("kaneo ccx#2");
     // transcript は置き直していないが、印が変わったことは履歴に残る
-    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state"]);
+    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state", "state"]);
 
     // 印を外しても運ぶ (「無い」ではなく「false」を置く)
     await writeDeclared(SID, { archived: false, label: "", task: "" }, homeA);
     expect((await A.push(t, homeA)).status).toBe("state");
-    expect(await A.readRemoteDeclared(SID)).toEqual(EMPTY_DECLARED);
+    expect(await A.readRemoteDeclared(SID)).toEqual({ ...EMPTY_DECLARED, labelHistory: h("L", "M", "L", "") });
   });
 
   test("an unreadable meta/ fails only the state: push still carries the transcript, pull still installs it", async () => {
@@ -146,7 +154,7 @@ describe("session state travels with the transcript", () => {
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
     expect(r.stateApplied).toBe(true);
-    expect(r.state).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
+    expect(r.state).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
     expect(await readDeclared(SID, homeB)).toEqual(r.state!);
     expect(await Bun.file(join(homeB, "sessions", SID, "archived")).exists()).toBe(true);
 
@@ -156,7 +164,7 @@ describe("session state travels with the transcript", () => {
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(false);
     expect(again.state?.archived).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", heartbeat: "", metadata: {} });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", heartbeat: "", metadata: {}, labelHistory: h("L") });
 
     // transcript より先に印だけ付けたマシンに pull しても、その印は残る (保存先の写しは適用しない)
     await rm(join(homeB, "projects"), { recursive: true, force: true });
@@ -164,7 +172,7 @@ describe("session state travels with the transcript", () => {
     const pre = await B.pull(SID, homeB);
     expect(pre.status).toBe("pulled");
     expect(pre.stateApplied).toBe(false);
-    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, task: "mine" });
+    expect(await readDeclared(SID, homeB)).toEqual({ ...EMPTY_DECLARED, task: "mine", labelHistory: h("L", "") });
   });
 
   test("clearing the last mark is a declaration: the store's old archived does not come back through status or pull", async () => {
@@ -210,7 +218,7 @@ describe("session state travels with the transcript", () => {
     const again = await B.pull(SID, homeB);
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: [] });
   });
 
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
@@ -257,8 +265,8 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { label: "newer" }, homeA);
     expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
     // remote で手元に印が無い → 保存先
-    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
-    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {} });
+    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
     // remote でなければ保存先は見ない。保存先が無ければ手元 (空)
     expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
     expect(await declaredFor(SID, homeB, "remote", null)).toEqual(EMPTY_DECLARED);
@@ -322,11 +330,11 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect((await run(["label", "scope｜step", SID.slice(0, 8)])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", heartbeat: "", metadata: {} });
+    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("scope｜step") });
 
     expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
     expect((await run(["label", "", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+    expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", "") });
 
     // heartbeat: on / off は上書き、default は外す。ccx-agent は同じファイルを読む
     expect((await run(["heartbeat", "off", SID])).out).toMatch(/heartbeat off/);
@@ -350,9 +358,9 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     // status: 保存先が無いので lifecycle は手元から (transcript あり = ended)。--json の形は mark と同じ鍵 + lifecycle
     const st = await run(["status", SID.slice(0, 8), "--json"]);
     expect(st.code).toBe(0);
-    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1" });
+    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", "") });
     const mark = await run(["mark", "archived", SID, "--json"]);
-    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "heartbeat", "metadata"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "heartbeat", "metadata", "labelHistory"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
   });
 
@@ -536,11 +544,12 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(r.code).toBe(0);
     const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string; user: string }; lifecycle: string | null; state: unknown }[];
     const by = (id: string, u?: string) => rows.find((x) => x.key.sessionId === id && (!u || x.key.user === u))!;
-    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "", metadata: {} });
+    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "", metadata: {}, labelHistory: h("local") });
     expect(by(SID).lifecycle).toBe("ended");
-    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: { owner: "x" } });
-    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "", metadata: {} });
-    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "", metadata: {} });
+    // center の SessionState (fleet.proto) は heartbeat と同じく label の履歴を持たない: 空で出る
+    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: { owner: "x" }, labelHistory: [] });
+    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
     // center に 1 件も届いていない他マシンの session は null
     expect(by(SID4).state).toBeNull();
 

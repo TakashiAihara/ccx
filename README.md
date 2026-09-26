@@ -145,12 +145,13 @@ every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
-file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.json` (the declared flags, label and task) and an
+file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.json` (the declared flags, label, its history, task and metadata) and an
 append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
 `~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that
-reason). `--sql` gets two views, `transcripts` and `history`, with `machine` / `user` / `session_id`
-as columns. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
+reason). `--sql` gets three views, `transcripts`, `history` and `sessions` (label, label history and
+metadata per session), with `machine` / `user` / `session_id` as columns. The text search also hits
+a session's current and past labels and its metadata values. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
 target. See `docs/design/transcript-store.md`.
 
 `--ended` is what ccx observes (not running); `--archived` is what someone declared (`ccx session
