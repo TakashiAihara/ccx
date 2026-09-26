@@ -21,8 +21,9 @@ session may still be on this machine, and a `remote` one need not be archived. W
 with it — fold it in a list, push and prune it, close it — stays on the methodology side;
 `ccx-agent` (#129) acts on it only as a flag it did not originate.
 
-There is no other flag on purpose: the top-level keys are the ones ccx itself gives meaning to
-(`archived` is read by `ccx-agent` and the `--archived` selectors, `heartbeat` by `ccx-agent`).
+There is no other flag on purpose. The top-level keys are the ones ccx defines — it acts on them
+(`archived`: `ccx-agent` and the `--archived` selectors; `heartbeat`: `ccx-agent`) or gives them a
+fixed shape and a column (`label`, `task`).
 Everything else a workflow wants to hang on a session goes in `metadata` (#165, 2026-09-26,
 replacing #135's "the user's markers stay their own files"). ccx is a public tool, so which markers
 exist is the user's vocabulary, not ccx's: one person's `done` / `pinned` / `delete-on-end` are
@@ -43,10 +44,19 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `heartbeat` | `…/heartbeat` | `on` / `off`; absent = `ccx-agent`'s default |
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 
-A metadata key is a file name, so it is limited to letters, digits, `_`, `.` and `-`, does not
-start with `.` or `-`, and is at most 128 characters; `=` is excluded so `meta set key=value` has
-one reading. A file per key rather than one JSON keeps a shell reader at `[ -e …/meta/done ]` —
-the statusline runs on every render and would otherwise parse JSON each time.
+A metadata key is a file name, so it is limited to lowercase letters, digits, `_`, `.` and `-`,
+does not start with `.` or `-`, and is at most 128 characters; `=` is excluded so
+`meta set key=value` has one reading, and upper case is excluded for the same reason session ids
+are lowercased — on a case-insensitive filesystem (macOS's default) `Done` and `done` would be one
+file. The center drops keys outside this rule too. A value is kept as given (only the one trailing
+newline ccx writes is removed on read); `key` and `key=` both set the key with no value. A file per
+key rather than one JSON keeps a shell reader at `[ -e …/meta/done ]` — the statusline runs on
+every render and would otherwise parse JSON each time. That path is therefore an interface:
+changing it breaks the scripts that read it.
+
+A ccx or center older than #165 does not know `metadata` and drops it: a `pull` by an old ccx
+installs the other keys only, and an old center returns rows without it. Update the center and
+every machine's ccx before relying on metadata across machines.
 
 Claude Code itself writes only `~/.claude/sessions/<pid>.json` there (which ccx already reads); the
 `<id>/` directories were created by the user's own scripts and hook, and ccx puts its files beside
@@ -108,7 +118,7 @@ prefix is accepted when it is unique among local transcripts and marked sessions
 accepted even when nothing local knows it (a mark may precede the transcript). Ids are lowercased:
 Claude Code's are, and on Linux `0F9A…/archived` would be a different directory that `push` never
 reads. A directory under `~/.claude/sessions/` counts as marked (for prefix resolution) only while a
-mark file is in it. Separately, every `ccx session mark / label / task / meta` leaves `.ccx-declared` there:
+mark file (a metadata file under `meta/` included) is in it. Separately, every `ccx session mark / label / task / meta` leaves `.ccx-declared` there:
 "this machine has declared state for this session", which is what keeps a cleared `archived` from
 coming back from an older copy in the store. The store is read strictly: a missing `state.json` is
 "no state", but a store that does not answer is an error, never an empty store.

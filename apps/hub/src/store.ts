@@ -50,7 +50,7 @@ export type SessionState = {
   archived: boolean;
   label: string;
   task: string;
-  /** 利用者の key/value。center は意味を持たずに運ぶ (#165)。string でない値だけ落とす */
+  /** 利用者の key/value。center は意味を持たずに運ぶ (#165)。core の META_KEY に合わない key と string でない値は落とす */
   metadata: Record<string, string>;
 };
 
@@ -228,6 +228,9 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
   return out;
 }
 
+/** packages/core/src/session-state.ts の META_KEY と同じ (hub は core に依存しない)。形の崩れた key を index に溜めない */
+const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;
+
 function parseState(payload: Uint8Array): SessionState | null {
   try {
     const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload)) as { state?: Record<string, unknown> };
@@ -239,7 +242,7 @@ function parseState(payload: Uint8Array): SessionState | null {
       task: typeof s.task === "string" ? s.task : "",
       metadata:
         s.metadata && typeof s.metadata === "object" && !Array.isArray(s.metadata)
-          ? Object.fromEntries(Object.entries(s.metadata).filter(([, v]) => typeof v === "string"))
+          ? Object.fromEntries(Object.entries(s.metadata).filter(([k, v]) => META_KEY.test(k) && typeof v === "string"))
           : {},
     };
   } catch {

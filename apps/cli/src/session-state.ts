@@ -5,6 +5,7 @@ import {
   flagsOf,
   isFlag,
   isMetaKey,
+  META_KEY_RULE,
   FLAGS,
   loadConfig,
   localOrigin,
@@ -263,8 +264,8 @@ export function registerSessionState(session: Command): void {
     .action(async (kv: string, idOrPrefix: string | undefined, o) => {
       const eq = kv.indexOf("=");
       const key = eq < 0 ? kv : kv.slice(0, eq);
-      const value = eq < 0 ? "" : kv.slice(eq + 1).trim();
-      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: letters, digits, _ . - (not starting with . or -), at most 128`);
+      const value = eq < 0 ? "" : kv.slice(eq + 1);
+      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
       const home = claudeHome();
       const id = await target(idOrPrefix, home);
       const s = await writeDeclared(id, { metadata: { [key]: value } }, home);
@@ -280,7 +281,7 @@ export function registerSessionState(session: Command): void {
     .argument("[session-id]", "full id or unique prefix (default: this session)")
     .option("--json", "print the resulting state as JSON")
     .action(async (key: string, idOrPrefix: string | undefined, o) => {
-      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}`);
+      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
       const home = claudeHome();
       const id = await target(idOrPrefix, home);
       const s = await writeDeclared(id, { metadata: { [key]: null } }, home);

@@ -39,8 +39,8 @@ believed.
   `~/.claude/sessions/<id>/`; `state.json` in the store.
 - **flag** — a boolean in the declared state. There is one, `archived` (#135).
 - **metadata** — the user's own key/value pairs in the declared state (`meta/<key>`, #165). ccx
-  carries them and gives the keys no meaning; a key with an empty value is still set. Not a flag:
-  flags are the top-level keys ccx itself acts on.
+  carries them and gives the keys no meaning; a key with an empty value is still set. A
+  metadata key with no value is not a flag: flags are defined by ccx, metadata keys by the user.
 - **archived** — the flag meaning "folded away; not in the working set". Declared, never derived.
 - **remote** — a session whose transcript is in the store and not on this machine. A lifecycle
   value, not a flag.

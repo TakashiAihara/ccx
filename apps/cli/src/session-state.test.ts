@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,13 +102,14 @@ describe("session state travels with the transcript", () => {
     expect((await A.push(t, homeA)).status).toBe("pushed");
     expect((await Bun.file(stateKey()).json()).metadata).toEqual({ done: "", owner: "alice" });
 
-    await writeDeclared(SID, { metadata: { owner: null } }, homeA);
+    await writeDeclared(SID, { metadata: { owner: null, note: " two words " } }, homeA);
     expect((await A.push(t, homeA)).status).toBe("state");
-    expect((await A.readRemoteDeclared(SID))?.metadata).toEqual({ done: "" });
+    expect((await A.readRemoteDeclared(SID))?.metadata).toEqual({ done: "", note: " two words " });
 
     expect((await B.pull(SID, homeB)).stateApplied).toBe(true);
     expect(await Bun.file(join(homeB, "sessions", SID, "meta", "done")).exists()).toBe(true);
-    expect((await readDeclared(SID, homeB)).metadata).toEqual({ done: "" });
+    expect(await Bun.file(join(homeB, "sessions", SID, "meta", "note")).text()).toBe(" two words \n");
+    expect((await readDeclared(SID, homeB)).metadata).toEqual({ done: "", note: " two words " });
   });
 
   test("pull installs the store's state as local marks on a fresh machine, but never over marks this machine already holds", async () => {
@@ -330,6 +332,14 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
 
   test("meta set key / key=value / unset write meta/<key>; bad keys stop before writing", async () => {
     await seed(homeA, SID);
+    for (const k of ["..", "a/b", "=x", ".x", "Done"]) {
+      const bad = await run(["meta", "set", k, SID]);
+      expect(bad.code).toBe(1);
+      expect(bad.err).toMatch(/invalid key/);
+    }
+    // Bun.file().exists() はディレクトリに false を返すので、existsSync で見る
+    expect(existsSync(join(homeA, "sessions", SID))).toBe(false);
+
     expect((await run(["meta", "set", "done", SID])).out).toMatch(/^done set/);
     expect((await run(["meta", "set", "owner=alice=b", SID.slice(0, 8)])).out).toMatch(/^owner = alice=b/);
     expect(await Bun.file(join(homeA, "sessions", SID, "meta", "done")).text()).toBe("");
@@ -341,13 +351,6 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["meta", "unset", "done"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect(await readDeclared(SID, homeA)).toEqual(EMPTY_DECLARED);
     expect((await run(["status", SID])).out).toMatch(/metadata\s+-/);
-
-    for (const k of ["..", "a/b", "=x", ".x"]) {
-      const bad = await run(["meta", "set", k, SID]);
-      expect(bad.code).toBe(1);
-      expect(bad.err).toMatch(/invalid key/);
-    }
-    expect(await Bun.file(join(homeA, "sessions", SID, "meta")).exists()).toBe(false);
   });
 });
 
@@ -491,7 +494,7 @@ describe("ccx session with a center: marks are reported as events, and session l
       // center は古い写しを持っている: このマシンの行では手元が勝つ
       { eventId: "st-a", machine: "host-a", user, seq: 0, receivedAtMs: 1001, producer: 2, payload: enc({ session_id: SID, state: { archived: false, label: "stale-center", task: "" } }) },
       hook("host-x", "u", SID2, 2),
-      { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "" } }) },
+      { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "", metadata: { owner: "x", "Bad/key": "y" } } }) },
       hook("host-x", "u", SID3, 4),
       // 同じ session id を別の origin も持ち、別の state を持つ (session id だけで束ねると取り違える)
       { eventId: "st-x3", machine: "host-x", user: "u", seq: 5, receivedAtMs: 1007, producer: 2, payload: enc({ session_id: SID3, state: { archived: false, label: "x3", task: "" } }) },
@@ -506,7 +509,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     const by = (id: string, u?: string) => rows.find((x) => x.key.sessionId === id && (!u || x.key.user === u))!;
     expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "", metadata: {} });
     expect(by(SID).lifecycle).toBe("ended");
-    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: {} });
+    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: { owner: "x" } });
     expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "", metadata: {} });
     expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "", metadata: {} });
     // center に 1 件も届いていない他マシンの session は null

@@ -86,11 +86,20 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(await markedSessionIds(home)).toEqual([]);
 
     // パスになる key は通さない (書く前に止まる)
-    for (const k of ["..", ".hidden", "a/b", "a=b", "", "-x"]) {
+    for (const k of ["..", ".hidden", "a/b", "a=b", "", "-x", "Done", "x".repeat(129)]) {
       await expect(writeDeclared(SID, { metadata: { [k]: "" } }, home)).rejects.toThrow(/invalid metadata key/);
     }
+    // __proto__ は正しい key: prototype の setter に食われず残る。値の空白と改行は往復で変わらない
+    // (リテラル `{ __proto__: … }` は key を作らないので JSON から組む)
+    const oddMeta = normalizeDeclared(JSON.parse('{"metadata": {"__proto__": "p", "sp": "  two  ", "nl": "a\\n"}}')).metadata;
+    expect(Object.keys(oddMeta)).toEqual(["__proto__", "nl", "sp"]);
+    const back = (await writeDeclared(SID, { metadata: oddMeta }, home)).metadata;
+    expect(Object.entries(back)).toEqual([["__proto__", "p"], ["nl", "a\n"], ["sp", "  two  "]]);
+    await writeDeclared(SID, { metadata: Object.fromEntries(Object.keys(oddMeta).map((k) => [k, null])) }, home);
     // 手で置かれた不正な名前のファイルは読まない
     await Bun.write(join(dir, ".swp"), "");
+    // key の形でもディレクトリは読めない (EISDIR): 数えず、readDeclared も落ちない
+    await mkdir(join(dir, "sub"), { recursive: true });
     expect((await readDeclared(SID, home)).metadata).toEqual({});
   });
 

@@ -277,8 +277,8 @@ describe("session state events (producer 2, #127)", () => {
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
   });
 
-  test("metadata rides along as given; non-string values are dropped", () => {
-    ingest(db, [hook("s1"), state("s1", { archived: false, label: "", task: "", metadata: { done: "", owner: "alice", n: 3 } })]);
+  test("metadata rides along as given; non-string values and keys core would refuse are dropped", () => {
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "", task: "", metadata: { done: "", owner: "alice", n: 3, "../x": "", Done: "" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.metadata).toEqual({ done: "", owner: "alice" });
     ingest(db, [state("s1", { archived: false, metadata: ["x"] })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.metadata).toEqual({});

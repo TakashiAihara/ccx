@@ -5,7 +5,7 @@
  * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
  * 宣言 (archived / label / task / heartbeat / metadata) は人か session が書く。archived は
  * Desktop App と同じ語で「一覧から畳む」宣言。「保存先にだけあり手元に無い」観測は remote
- * と呼び、語を分ける。ccx が意味を持つのは top level の鍵だけ。metadata は利用者の語彙
+ * と呼び、語を分ける。top level は ccx が定義する鍵 (作用する / 形と列を決める)。metadata は利用者の語彙
  * (done / pinned 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
  * 持たない」を置き換えた): ccx は OSS なので、どの marker を持つかを ccx が決めない。
  *
@@ -40,19 +40,25 @@ export type DeclaredState = {
 
 export type Metadata = Record<string, string>;
 
-/** ファイル名になるので、区切り・`.` 始まり (`..` を含む)・`=` (CLI の `key=value`) を通さない */
-export const META_KEY = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+/**
+ * ファイル名になるので、区切り・`.` 始まり (`..` を含む)・`=` (CLI の `key=value`) を通さない。
+ * 小文字だけなのは session id と同じ理由: 大文字小文字を区別しない fs (macOS の既定) では
+ * `Done` と `done` が 1 ファイルになり、pull で片方が消える
+ */
+export const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;
+export const META_KEY_RULE = "lowercase letters, digits, _ . - (not starting with . or -), at most 128";
 export const isMetaKey = (k: string) => META_KEY.test(k);
 const META_DIR = "meta";
 
 /** 渡したものの key が正しい string 値だけを、key 順に並べて返す */
 function cleanMetadata(raw: unknown): Metadata {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Metadata = {};
-  for (const [k, v] of Object.entries(raw).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    if (isMetaKey(k) && typeof v === "string") out[k] = v;
-  }
-  return out;
+  // fromEntries で組む: `out[k] = v` だと `__proto__` (正しい key) が prototype の setter に食われて消える
+  return Object.fromEntries(
+    Object.entries(raw)
+      .filter(([k, v]) => isMetaKey(k) && typeof v === "string")
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
 }
 
 /** writeDeclared に渡す差分。metadata は key ごとで、null はその key を消す */
@@ -100,7 +106,7 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
 
 const sameMetadata = (a: Metadata, b: Metadata) => {
   const ka = Object.keys(a);
-  return ka.length === Object.keys(b).length && ka.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 };
 
 export const sameDeclared = (a: DeclaredState, b: DeclaredState) =>
@@ -117,15 +123,17 @@ async function readMetadata(dir: string): Promise<Metadata> {
   } catch {
     return {};
   }
-  const out: Metadata = {};
+  const out: [string, string][] = [];
+  // readdir の順は fs 次第。status の表示と state.json の中身を machine 間で揃えるため key 順にする
   for (const k of names.filter(isMetaKey).sort()) {
     try {
-      out[k] = (await Bun.file(join(dir, META_DIR, k)).text()).trim();
+      // 書くときに足した末尾の改行 1 つだけを外す。値は利用者のものなので空白は削らない (保存先との往復で変わらない)
+      out.push([k, (await Bun.file(join(dir, META_DIR, k)).text()).replace(/\n$/, "")]);
     } catch {
       // ディレクトリ等、読めないものは key として数えない
     }
   }
-  return out;
+  return Object.fromEntries(out);
 }
 
 export async function readDeclared(sessionId: string, home = claudeHome()): Promise<DeclaredState> {
