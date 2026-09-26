@@ -111,7 +111,8 @@ GET    /                                     ListBuckets
 PUT    /<bucket>                             CreateBucket (既にあっても 200)
 HEAD   /<bucket>                             200
 GET    /<bucket>?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=&start-after=&encoding-type=url
-                                             continuation-token は不透明 (返した NextContinuationToken をそのまま送る)
+                                             continuation-token は不透明 (返した NextContinuationToken をそのまま送る)。
+                                             base64url として読めないものは 400。start-after と両方来たら token の位置から
 PUT    /<bucket>/<key>                       置く (staging に書いてから rename。stream で、本文をメモリに持たない)
 GET    /<bucket>/<key>                       読む。Range は Bun.serve が切る (206)
 HEAD   /<bucket>/<key>                       size / ETag (md5) / Last-Modified

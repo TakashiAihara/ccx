@@ -150,6 +150,7 @@ describe("objects: S3 client round trip", () => {
       return (await fetch(`${base}/ccx?list-type=2&encoding-type=url&max-keys=1${t}`)).text();
     };
     const seen: string[] = [];
+    const tokens: string[] = [];
     let token: string | undefined;
     for (let i = 0; i < keys.length + 2; i++) {
       const p = await page(token);
@@ -157,9 +158,10 @@ describe("objects: S3 client round trip", () => {
       seen.push(decodeURIComponent(/<Key>([^<]*)</.exec(p)![1]!).replace(/&amp;/g, "&").replace(/&lt;/g, "<"));
       token = /<NextContinuationToken>([^<]*)</.exec(p)?.[1];
       if (token === undefined) break;
-      expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+      tokens.push(token);
     }
     expect(seen).toEqual(keys);
+    for (const t of tokens) expect(t).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   test("start-after is echoed as StartAfter (URL-encoded), and a token that is not ours is 400", async () => {
@@ -170,6 +172,13 @@ describe("objects: S3 client round trip", () => {
     expect(p).not.toContain("<ContinuationToken>");
     expect(p).toContain("<Key>m%3Da/2</Key>");
     expect(p).not.toContain("<Key>m%3Da/1</Key>");
+
+    // 両方来たら両方返し、位置は token が決める (S3 と同じ)
+    const t2 = /<NextContinuationToken>([^<]*)</.exec(await (await fetch(`${base}/ccx?list-type=2&max-keys=1`)).text())![1]!;
+    const both = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url&start-after=zzz&continuation-token=${t2}`)).text();
+    expect(both).toContain(`<ContinuationToken>${t2}</ContinuationToken>`);
+    expect(both).toContain("<StartAfter>zzz</StartAfter>");
+    expect(both).toContain("<Key>m%3Da/2</Key>");
 
     const bad = await fetch(`${base}/ccx?list-type=2&continuation-token=m%3Da%2F1`);
     expect(bad.status).toBe(400);

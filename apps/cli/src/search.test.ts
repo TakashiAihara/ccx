@@ -234,7 +234,7 @@ describe("search: embedded DuckDB over the store", () => {
     const c = await openDuckDB(store);
     const r = await c.runAndReadAll(`SELECT count(*)::INT AS rows, count(DISTINCT session_id)::INT AS sessions FROM lines WHERE machine = 'bulk'`);
     expect(r.getRowObjects()[0]).toEqual({ rows: n, sessions: n });
-  }, 60_000);
+  }, 20_000);
 
   test("an empty store says so instead of a DuckDB IO error", async () => {
     await rm(join(root, "ccx"), { recursive: true, force: true });
