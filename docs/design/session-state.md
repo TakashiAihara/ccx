@@ -87,7 +87,11 @@ name a session had to be searchable across machines). A label write appends a li
 text differs from the current `label` file, so rewriting the same name — or naming what the hook
 already wrote — adds nothing; a write made on disk without ccx (the hook today) is not recorded,
 except that the first line ccx writes is preceded by the name the session already had, dated by the
-`label` file's mtime (the names from before ccx recorded any are the ones searched for first).
+`label` file's mtime (the names from before ccx recorded any are the ones searched for first). That
+mtime is the file's last write — the hook's last rename, or a pull — so the first entry's `at` is
+"had this name by then", not "renamed at". A label write reads only `label` and `labels.jsonl`
+beforehand, so a broken `meta/` does not stop the label from being written; an unreadable history
+adds no line (the next `push` stops on the same read).
 Append-only, so two `ccx session label` racing each other keep both lines — but with no lock, the
 last line can name the loser while the `label` file holds the winner. A torn last line is skipped on
 read, and the next append starts on a new line so it does not join the torn one; an unreadable file

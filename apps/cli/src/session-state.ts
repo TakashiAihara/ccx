@@ -199,7 +199,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["flags", flagsOf(s).join(",") || "-"],
     ["label", s.label || "-"],
     // 中身 (いつ何に変えたか) は --json と `ccx tr search`
-    ["label history", s.labelHistory.length ? `${s.labelHistory.length} change(s)` : "-"],
+    ["label history", s.labelHistory.length ? `${s.labelHistory.length} entries` : "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
     // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない

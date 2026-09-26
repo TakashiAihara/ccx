@@ -223,7 +223,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("search")
     .description("Search every transcript in the store with DuckDB (embedded)")
     .argument("[text]", "case-insensitive substring of any message")
-    .option("--sql <query>", "run this SQL instead; the views are `transcripts`, `history` and `sessions` (label, label_history, metadata)")
+    .option("--sql <query>", "run this SQL instead; the views are `transcripts`, `lines` (raw records), `history` and `sessions` (label, label_history, metadata)")
     .option("-s, --session <id>", "only this session (full id or prefix)")
     .option("-n, --limit <count>", "at most this many rows (default 50)", parseLimit)
     .option("--json", "print rows as JSON")
@@ -239,8 +239,9 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 生の行 (`lines`) を探す。構造化した `transcripts` を to_json すると無いキーが null で
       // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む。
       // session の宣言状態 (label / その履歴 / metadata) も同じ検索に入れる: 名前で session を探せるように (#169)。
-      // その行は type = 'state'、時刻は ccx が最後に label を記録した時刻。state の行は先に出す: 履歴の無い
-      // session は時刻が NULL で末尾に回り、transcript の当たりが多いと LIMIT で消える
+      // その行は type = 'ccx.state' (Claude Code の record type と混ざらない名前)、時刻は ccx が最後に label を記録した
+      // 時刻。state の行は先に出す: 履歴の無い session は時刻が NULL で末尾に回り、transcript の当たりが多いと LIMIT で
+      // 消える。state は 1 session の 1 写しに 1 行で、名前で session を探すのがこの検索の目的なので、先頭を譲る
       const sql =
         o.sql ??
         `SELECT session_id, machine, "user", type, timestamp,
@@ -250,12 +251,12 @@ export function registerTranscript(program: Command, VERSION: string): void {
            UNION ALL
            -- 値だけを並べる: state.json をそのまま文字列にすると "label" / "archived" 等のキー名が全行に当たる。
            -- metadata は key も入れる: 値の無い key (done 等) は key そのものが中身
-           SELECT session_id, machine, "user", 'state', label_recorded_at,
-                  concat_ws(' ', label, task, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), ' / '))
+           SELECT session_id, machine, "user", 'ccx.state', label_recorded_at,
+                  concat_ws(chr(10), label, task, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), chr(10)))
            FROM sessions
          )
          WHERE contains(lower(body), lower(${q(text!)}))
-         ORDER BY type = 'state' DESC, timestamp DESC
+         ORDER BY type = 'ccx.state' DESC, timestamp DESC
          LIMIT ${o.limit ?? 50}`;
       const r = await c.runAndReadAll(sql);
       const cols = r.columnNames();

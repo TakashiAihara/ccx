@@ -63,8 +63,9 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
   test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {
     const file = join(home, "sessions", SID, "labels.jsonl");
     await writeDeclared(SID, { label: "a" }, home);
-    // 同じ名前の書き直しと、label を含まない patch は記録しない
+    // 同じ名前の書き直し (前後の空白だけ違うものも) と、label を含まない patch は記録しない
     await writeDeclared(SID, { label: "a" }, home);
+    await writeDeclared(SID, { label: " a " }, home);
     await writeDeclared(SID, { task: "t" }, home);
     // hook が ccx を通さず書き換えた後: 今のファイルと同じなら足さず、違えば足す
     await Bun.write(join(home, "sessions", SID, "label"), "b\n");
@@ -87,6 +88,22 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // 保存先の壊れた形は落とす
     expect(normalizeDeclared({ labelHistory: [{ at: "t", label: "ok" }, { at: 1, label: "n" }, null, "s"] }).labelHistory).toEqual([{ at: "t", label: "ok" }]);
     expect(normalizeDeclared({ labelHistory: "nope" }).labelHistory).toEqual([]);
+  });
+
+  test("a broken meta/ or labels.jsonl does not stop the label itself from being written", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(join(dir, "labels.jsonl"), { recursive: true });
+    await Bun.write(join(dir, "meta"), "not a directory");
+    await expect(writeDeclared(SID, { label: "second" }, home)).rejects.toThrow();
+    expect(await Bun.file(join(dir, "label")).text()).toBe("second\n");
+  });
+
+  test("history terms: a history alone is not empty; same length with a different entry is not the same", () => {
+    const one = { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "a" }] };
+    expect(isEmptyDeclared(one)).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "b" }] })).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t2", label: "a" }] })).toBe(false);
+    expect(sameDeclared(one, { ...EMPTY_DECLARED, labelHistory: [{ at: "t1", label: "a" }] })).toBe(true);
   });
 
   test("label history: the name a session had before ccx first recorded one is kept, dated by the label file", async () => {

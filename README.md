@@ -149,8 +149,8 @@ file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.j
 append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
 `~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that
-reason). `--sql` gets three views, `transcripts`, `history` and `sessions` (label, label history and
-metadata per session), with `machine` / `user` / `session_id` as columns. The text search also hits
+reason). `--sql` gets four views, `transcripts`, `lines` (one raw JSON record per row), `history` and
+`sessions` (label, label history and metadata per session), with `machine` / `user` / `session_id` as columns. The text search also hits
 a session's current and past labels and its metadata values. Linux is measured; macOS `search` is not yet expected to work (#125); Windows is not a
 target. See `docs/design/transcript-store.md`.
 

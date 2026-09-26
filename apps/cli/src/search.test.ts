@@ -166,17 +166,17 @@ describe("search: embedded DuckDB over the store", () => {
     expect(history.map((e) => e.label)).toEqual(["ORIGINAL-NAME", "renamed-now"]);
     expect(r.label_recorded_at).toBe(history[1]!.at);
 
-    // 今の名前でも、前の名前 (履歴にしか無い) でも、metadata の値でも当たる。行は type = state
+    // 今の名前でも、前の名前 (履歴にしか無い) でも、metadata の値でも当たる。行は type = ccx.state
     for (const word of ["renamed-now", "original-name", "zed"]) {
       const hit = await ccx(word, "--json");
       expect(hit.code).toBe(0);
-      expect((JSON.parse(hit.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([[SID2, "state"]]);
+      expect((JSON.parse(hit.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([[SID2, "ccx.state"]]);
     }
     // state.json のキー名には当たらない (丸ごと文字列にしていない)。metadata の key は当たる (値の無い key は key が中身)
     for (const key of ["label", "archived", "labelhistory"]) expect((await ccx(key)).err).toContain("no match");
     expect((JSON.parse((await ccx("owner", "--json")).out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID2]);
 
-    // state.json の無い session に絞っても、sessions が空の view になって検索は動く
+    // state.json の無い session に絞っても (sessions は 0 行)、検索は動く
     const only = await ccx("needle-alpha", "-s", SID.slice(0, 8), "--json");
     expect(only.code).toBe(0);
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
@@ -191,13 +191,19 @@ describe("search: embedded DuckDB over the store", () => {
     // 壊れた state.json
     await mkdir(dir("host-y", SID3), { recursive: true });
     await Bun.write(join(dir("host-y", SID3), "state.json"), '{"label": "needle-alpha');
+    // JSON としては正しいが型が違う
+    await mkdir(dir("host-w", SID3), { recursive: true });
+    await Bun.write(join(dir("host-w", SID3), "state.json"), JSON.stringify({ archived: "nope", label: "odd-one" }));
+    const odd = await ccx("--sql", "SELECT machine, archived FROM sessions WHERE label = 'odd-one'", "--json");
+    expect(odd.code).toBe(0);
+    expect(JSON.parse(odd.out)).toEqual([{ machine: "host-w", archived: null }]);
 
     const r = await ccx("needle-alpha", "-n", "1", "--json");
     expect(r.code).toBe(0);
-    expect((JSON.parse(r.out) as { session_id: string; machine: string; type: string }[]).map((x) => [x.session_id, x.machine, x.type])).toEqual([[SID3, "host-z", "state"]]);
+    expect((JSON.parse(r.out) as { session_id: string; machine: string; type: string }[]).map((x) => [x.session_id, x.machine, x.type])).toEqual([[SID3, "host-z", "ccx.state"]]);
     const all = await ccx("needle-alpha", "--json");
     expect((JSON.parse(all.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([
-      [SID3, "state"],
+      [SID3, "ccx.state"],
       [SID, "user"],
     ]);
   });
