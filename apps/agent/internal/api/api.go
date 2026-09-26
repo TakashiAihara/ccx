@@ -33,8 +33,8 @@ import (
 // sessionID is the shape Claude Code gives a session. The id becomes a path.
 var sessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// metaKey is packages/core/src/session-state.ts META_KEY: a file under meta/
-// with another name is not a key.
+// metaKey is packages/core/src/session-state.ts META_KEY (change both): a file
+// under meta/ with another name is not a key.
 var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
 
 // Server is the AgentService handler. Heartbeat and Collect are nil when their
@@ -43,6 +43,10 @@ type Server struct {
 	Heartbeat  *heartbeat.Concern
 	Collect    *collect.Collect
 	ClaudeHome string // the agent's own ~/.claude, for a request that names none
+	// Remote ignores the request's claude_home. A caller on another host cannot
+	// know this host's CLAUDE_CONFIG_DIR, and honouring it would let any token
+	// holder point the agent's reads at any directory.
+	Remote bool
 }
 
 func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.GetSessionStatusRequest]) (*connect.Response[ccxv1.GetSessionStatusResponse], error) {
@@ -50,9 +54,21 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 	if !sessionID.MatchString(sid) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id %q is not a Claude Code session id", sid))
 	}
-	home := req.Msg.GetClaudeHome()
-	if home == "" || !filepath.IsAbs(home) {
+	asked := req.Msg.GetClaudeHome()
+	if s.Remote || !filepath.IsAbs(asked) {
+		asked = ""
+	}
+	home := asked
+	if home == "" {
 		home = s.ClaudeHome
+	}
+	var hb heartbeat.Status
+	if s.Heartbeat != nil {
+		hb = s.Heartbeat.Status(sid, asked)
+		if hb.Registered {
+			// The channel knows its session's home; the asker may not (curl).
+			home = hb.Home
+		}
 	}
 
 	declared, hbDeclared, err := ReadDeclared(filepath.Join(home, "sessions", sid))
@@ -65,17 +81,18 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 		Collect:   &ccxv1.CollectStatus{},
 	}
 	if s.Heartbeat != nil {
-		st := s.Heartbeat.Status(sid, req.Msg.GetClaudeHome())
 		h := out.Heartbeat
-		h.Enabled, h.Wanted, h.Registered, h.Sent = true, st.Wanted, st.Registered, uint32(st.Sent)
-		h.NextAt, h.LastSentAt = ts(st.Next), ts(st.LastSent)
+		h.Enabled, h.Wanted, h.Registered, h.Sent = true, hb.Wanted, hb.Registered, uint32(hb.Sent)
+		h.NextAt, h.LastSentAt = ts(hb.Next), ts(hb.LastSent)
 	}
 	if s.Collect != nil {
 		st, err := s.Collect.Status()
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("spool: %w", err))
-		}
 		c := out.Collect
+		if err != nil {
+			// A spool problem is collect's, not the session's: say so here and keep
+			// the rest of the answer.
+			c.SpoolError = err.Error()
+		}
 		c.Enabled, c.CenterConfigured, c.Pending = true, st.CenterConfigured, uint32(st.Pending)
 		c.LastForwardedAt, c.LastErrorAt, c.LastError = ts(st.LastForwarded), ts(st.LastErrorAt), st.LastError
 	}
@@ -99,7 +116,8 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 		return strings.TrimSpace(string(b))
 	}
 	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Metadata: map[string]string{}}
-	if _, err := os.Stat(filepath.Join(dir, "archived")); err == nil {
+	// Bun.file().exists(), which the TS reader uses, is false for a directory.
+	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		st.Archived = true
 	}
 	hb := text("heartbeat")
@@ -112,7 +130,7 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 		return nil, "", err
 	}
 	for _, e := range ents {
-		if !metaKey.MatchString(e.Name()) {
+		if e.IsDir() || !metaKey.MatchString(e.Name()) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, "meta", e.Name()))
@@ -134,6 +152,7 @@ type Concern struct {
 	listen     string
 	token      string
 	log        func(string, ...any)
+	lock       *os.File
 }
 
 func New(cfg config.Config, srv *Server, log func(string, ...any)) *Concern {
@@ -156,16 +175,24 @@ func (c *Concern) Run(ctx context.Context) error {
 }
 
 func (c *Concern) run(ctx context.Context) error {
-	path, handler := ccxv1connect.NewAgentServiceHandler(c.server)
-	mux := http.NewServeMux()
-	mux.Handle(path, handler)
+	// The request is two short strings.
+	handler := func(s *Server) http.Handler {
+		path, h := ccxv1connect.NewAgentServiceHandler(s, connect.WithReadMaxBytes(64<<10))
+		mux := http.NewServeMux()
+		mux.Handle(path, h)
+		return mux
+	}
+	server := func(h http.Handler) *http.Server {
+		return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
+	}
 
 	ln, err := c.listenUnix()
 	if err != nil {
 		return err
 	}
+	defer c.lock.Close()
 	defer os.Remove(c.socketPath)
-	servers := []*http.Server{{Handler: mux, ReadHeaderTimeout: 5 * time.Second}}
+	servers := []*http.Server{server(handler(c.server))}
 	listeners := []net.Listener{ln}
 
 	if c.listen != "" {
@@ -176,27 +203,29 @@ func (c *Concern) run(ctx context.Context) error {
 		} else if tln, err := net.Listen("tcp", c.listen); err != nil {
 			c.log("api: not listening on %s: %v", c.listen, err)
 		} else {
-			servers = append(servers, &http.Server{Handler: RequireBearer(c.token, mux), ReadHeaderTimeout: 5 * time.Second})
+			remote := *c.server
+			remote.Remote = true
+			servers = append(servers, server(RequireBearer(c.token, handler(&remote))))
 			listeners = append(listeners, tln)
 			c.log("api: listening on %s (bearer required)", tln.Addr())
 		}
 	}
 
-	errs := make(chan error, len(servers))
+	// Each listener stands alone: a TCP side that fails must not take the unix
+	// side (statusline) down with it. Serve already retries temporary accept
+	// errors, so an error here is the listener gone; it is logged, not hidden.
 	for i, srv := range servers {
-		go func() { errs <- srv.Serve(listeners[i]) }()
+		go func() {
+			if err := srv.Serve(listeners[i]); !errors.Is(err, http.ErrServerClosed) {
+				c.log("api: %s stopped: %v", listeners[i].Addr(), err)
+			}
+		}()
 	}
-	select {
-	case <-ctx.Done():
-	case err = <-errs:
-	}
+	<-ctx.Done()
 	for _, srv := range servers {
 		_ = srv.Close()
 	}
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 // listenUnix binds the socket under a lock, as the heartbeat concern does: a
@@ -213,12 +242,13 @@ func (c *Concern) listenUnix() (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Held for the life of the process: the fd is never closed, so the lock is
-	// released when serve exits.
+	// Kept on c and closed when run returns: an *os.File nobody references is
+	// closed by its finalizer, which would drop the lock while serve runs.
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lock.Close()
 		return nil, fmt.Errorf("another ccx-agent serve holds %s.lock: %w", c.socketPath, err)
 	}
+	c.lock = lock
 	if err := os.Remove(c.socketPath); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -233,11 +263,13 @@ func (c *Concern) listenUnix() (net.Listener, error) {
 	return ln, nil
 }
 
-// RequireBearer refuses a request that does not carry the token.
+// RequireBearer refuses a request that does not carry the token. The scheme
+// is case-insensitive (RFC 6750); the token is not.
 func RequireBearer(token string, next http.Handler) http.Handler {
-	want := []byte("Bearer " + token)
+	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

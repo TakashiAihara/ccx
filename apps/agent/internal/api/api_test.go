@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,14 @@ func TestReadDeclared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A directory named archived is not the flag (Bun.file().exists() is false for it).
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "archived"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if o, _, _ := ReadDeclared(other); o.Archived {
+		t.Error("a directory named archived read as archived")
+	}
 	if !st.Archived || st.Label != "fix ci" || st.Task != "ccx#34" || hb != "on" {
 		t.Errorf("got archived=%v label=%q task=%q heartbeat=%q", st.Archived, st.Label, st.Task, hb)
 	}
@@ -92,7 +101,7 @@ func TestRequireBearer(t *testing.T) {
 	for _, c := range []struct {
 		header string
 		want   int
-	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Bearer s3cret", 200}} {
+	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Basic s3cret", 401}, {"Bearer s3cret", 200}, {"bearer s3cret", 200}} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/", nil)
 		if c.header != "" {
@@ -208,6 +217,12 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	if !ask().Heartbeat.GetRegistered() {
 		t.Error("registered = false after the channel connected")
 	}
+	// Asked without a home (curl), a registered session is read from the home
+	// its channel registered, not the agent's own.
+	res, err := client.GetSessionStatus(context.Background(), connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid}))
+	if err != nil || res.Msg.Declared.GetLabel() != "lbl" || res.Msg.Heartbeat.GetDeclared() != "on" {
+		t.Errorf("no home given: %v %v", res, err)
+	}
 
 	// The spool's backlog: a hook event with no center stays.
 	if code := collect.Hook(cfg.SocketPath, cfg.SpoolDir, strings.NewReader(`{"x":1}`)); code != 0 {
@@ -241,6 +256,63 @@ func TestGetSessionStatusConcernsOff(t *testing.T) {
 	}
 	if res.Msg.Heartbeat.GetEnabled() || res.Msg.Collect.GetEnabled() {
 		t.Errorf("%v", res.Msg)
+	}
+}
+
+// Which home is read: the asked one on the unix side, the agent's own for a
+// relative one, and always the agent's own for a remote caller.
+func TestClaudeHomeChoice(t *testing.T) {
+	own, asked := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(own, "sessions", sid, "label"), "own")
+	write(t, filepath.Join(asked, "sessions", sid, "label"), "asked")
+	for _, c := range []struct {
+		remote bool
+		home   string
+		want   string
+	}{{false, asked, "asked"}, {false, "relative/dir", "own"}, {false, "", "own"}, {true, asked, "own"}} {
+		res, err := (&Server{ClaudeHome: own, Remote: c.remote}).GetSessionStatus(context.Background(),
+			connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: c.home}))
+		if err != nil || res.Msg.Declared.GetLabel() != c.want {
+			t.Errorf("remote=%v home=%q: label %q (%v), want %q", c.remote, c.home, res.Msg.GetDeclared().GetLabel(), err, c.want)
+		}
+	}
+}
+
+// A spool that cannot be read is reported in collect, not as a failed call.
+func TestSpoolErrorKeepsTheAnswer(t *testing.T) {
+	work := shortDir(t)
+	cfg := config.Config{SpoolDir: filepath.Join(work, "spool")}
+	col, err := collect.New(cfg, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	write(t, filepath.Join(home, "sessions", sid, "label"), "kept")
+	if err := os.RemoveAll(cfg.SpoolDir); err != nil {
+		t.Fatal(err)
+	}
+	res, err := (&Server{Collect: col, ClaudeHome: home}).GetSessionStatus(context.Background(),
+		connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid}))
+	if err != nil || res.Msg.Declared.GetLabel() != "kept" || res.Msg.Collect.GetSpoolError() == "" {
+		t.Errorf("got %v %v, want the label and a spool_error", res, err)
+	}
+}
+
+// The lock outlives garbage collection: a second serve must not take the
+// socket from under the running one.
+func TestSecondServeRefusedAfterGC(t *testing.T) {
+	cfg := config.Config{APISocketPath: filepath.Join(shortDir(t), "a.sock")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = New(cfg, &Server{}, t.Logf).Run(ctx) }()
+	waitDial(t, "unix", cfg.APISocketPath)
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	sctx, scancel := context.WithTimeout(context.Background(), time.Second)
+	defer scancel()
+	if err := New(cfg, &Server{}, t.Logf).run(sctx); err == nil || !strings.Contains(err.Error(), "holds") {
+		t.Errorf("second serve: %v, want refused by the lock", err)
 	}
 }
 
@@ -279,6 +351,13 @@ func TestTCPListener(t *testing.T) {
 	}))
 	if err := req(withToken); err != nil {
 		t.Errorf("with token: %v", err)
+	}
+	// The TCP side ignores claude_home (TestClaudeHomeChoice covers the reads).
+	write(t, filepath.Join(work, "evil", "sessions", sid, "label"), "evil")
+	c := ccxv1connect.NewAgentServiceClient(http.DefaultClient, "http://"+addr, withToken)
+	res, err := c.GetSessionStatus(context.Background(), connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: filepath.Join(work, "evil")}))
+	if err != nil || res.Msg.Declared.GetLabel() != "" {
+		t.Errorf("claude_home over TCP was honoured: %v %v", res, err)
 	}
 
 	// No token configured: the unix side comes up, the TCP side does not.

@@ -231,6 +231,10 @@ func TestIntegration_StatusClient(t *testing.T) {
 	env := append(os.Environ(),
 		"CCX_HUB_URL=", "CCX_SOCKET="+filepath.Join(work, "s.sock"), "CCX_SPOOL="+filepath.Join(work, "spool"),
 		"CLAUDE_CONFIG_DIR="+home,
+		// Nothing from the developer's setup may point this serve at the real
+		// agent's sockets or a port.
+		"CCX_API_SOCKET="+filepath.Join(work, "a.sock"), "CCX_CHANNEL_SOCKET="+filepath.Join(work, "c.sock"),
+		"CCX_API_LISTEN=", "CCX_CONFIG=/nonexistent", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
 	)
 	status := func() (string, error) {
 		cmd := exec.Command(bin, "status", "--session", sid, "--json")

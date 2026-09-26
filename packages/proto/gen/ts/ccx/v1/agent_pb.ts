@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/agent.proto.
  */
 export const file_ccx_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSJCChdHZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhMKC2NsYXVkZV9ob21lGAIgASgJIpYBChhHZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2USJgoIZGVjbGFyZWQYASABKAsyFC5jY3gudjEuU2Vzc2lvblN0YXRlEioKCWhlYXJ0YmVhdBgCIAEoCzIXLmNjeC52MS5IZWFydGJlYXRTdGF0dXMSJgoHY29sbGVjdBgDIAEoCzIVLmNjeC52MS5Db2xsZWN0U3RhdHVzIsUBCg9IZWFydGJlYXRTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIQCghkZWNsYXJlZBgCIAEoCRIOCgZ3YW50ZWQYAyABKAgSEgoKcmVnaXN0ZXJlZBgEIAEoCBIrCgduZXh0X2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRzZW50GAYgASgNEjAKDGxhc3Rfc2VudF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiygEKDUNvbGxlY3RTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIZChFjZW50ZXJfY29uZmlndXJlZBgCIAEoCBIPCgdwZW5kaW5nGAMgASgNEjUKEWxhc3RfZm9yd2FyZGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X2Vycm9yX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpsYXN0X2Vycm9yGAYgASgJMmUKDEFnZW50U2VydmljZRJVChBHZXRTZXNzaW9uU3RhdHVzEh8uY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXF1ZXN0GiAuY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSJCChdHZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhMKC2NsYXVkZV9ob21lGAIgASgJIpYBChhHZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2USJgoIZGVjbGFyZWQYASABKAsyFC5jY3gudjEuU2Vzc2lvblN0YXRlEioKCWhlYXJ0YmVhdBgCIAEoCzIXLmNjeC52MS5IZWFydGJlYXRTdGF0dXMSJgoHY29sbGVjdBgDIAEoCzIVLmNjeC52MS5Db2xsZWN0U3RhdHVzIsUBCg9IZWFydGJlYXRTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIQCghkZWNsYXJlZBgCIAEoCRIOCgZ3YW50ZWQYAyABKAgSEgoKcmVnaXN0ZXJlZBgEIAEoCBIrCgduZXh0X2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRzZW50GAYgASgNEjAKDGxhc3Rfc2VudF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAi3wEKDUNvbGxlY3RTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIZChFjZW50ZXJfY29uZmlndXJlZBgCIAEoCBIPCgdwZW5kaW5nGAMgASgNEjUKEWxhc3RfZm9yd2FyZGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIxCg1sYXN0X2Vycm9yX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBISCgpsYXN0X2Vycm9yGAYgASgJEhMKC3Nwb29sX2Vycm9yGAcgASgJMmUKDEFnZW50U2VydmljZRJVChBHZXRTZXNzaW9uU3RhdHVzEh8uY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXF1ZXN0GiAuY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.GetSessionStatusRequest
@@ -28,9 +28,11 @@ export type GetSessionStatusRequest = Message<"ccx.v1.GetSessionStatusRequest"> 
   sessionId: string;
 
   /**
-   * その session の CLAUDE_CONFIG_DIR。空なら agent の既定 (~/.claude)。agent は
-   * systemd の下で別の環境を持つので、session 側が知っている値を渡す。channel が
-   * 登録済みの session なら、登録時の値が優先される。
+   * その session の CLAUDE_CONFIG_DIR。空または相対なら agent の既定 (~/.claude)。
+   * agent は systemd の下で別の環境を持つので、session 側が知っている値を渡す。
+   * channel が登録済みの session なら、登録時の値が優先される (宣言状態も heartbeat も
+   * 同じ home から読む)。unix socket でだけ効く: TCP では無視する (別ホストの呼び手は
+   * このホストの値を知らず、任意のディレクトリを読ませる口になるため)。
    *
    * @generated from field: string claude_home = 2;
    */
@@ -106,7 +108,8 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
   registered: boolean;
 
   /**
-   * 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / 状態待ち) なら未設定。
+   * 次に打つ予定の時刻。予定が無い (打たない / 既に期限切れ / turn の実行中 / 打った
+   * 直後で transcript への着地待ち) なら未設定。
    *
    * @generated from field: google.protobuf.Timestamp next_at = 5;
    */
@@ -159,6 +162,8 @@ export type CollectStatus = Message<"ccx.v1.CollectStatus"> & {
 
   /**
    * 最後に center に届いた時刻と、最後に届かなかった時刻・理由。agent の起動後の値。
+   * last_error は後で届いても消えない。今も届いていないかは last_error_at と
+   * last_forwarded_at を比べて読む。
    *
    * @generated from field: google.protobuf.Timestamp last_forwarded_at = 4;
    */
@@ -173,6 +178,13 @@ export type CollectStatus = Message<"ccx.v1.CollectStatus"> & {
    * @generated from field: string last_error = 6;
    */
   lastError: string;
+
+  /**
+   * spool が読めなかったときの理由。そのとき pending は 0 で、意味を持たない。
+   *
+   * @generated from field: string spool_error = 7;
+   */
+  spoolError: string;
 };
 
 /**

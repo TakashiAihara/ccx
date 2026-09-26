@@ -50,6 +50,7 @@ export type LabelChange = { at: string; label: string };
  * 小文字だけなのは session id と同じ理由: 大文字小文字を区別しない fs (macOS の既定) では
  * `Done` と `done` が 1 ファイルになり、pull で片方が消える
  */
+// apps/agent/internal/api/api.go の metaKey が同じ規則を写している。変えるなら両方
 export const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;
 export const META_KEY_RULE = "lowercase letters, digits, _ . - (not starting with . or -), at most 128";
 export const isMetaKey = (k: string) => META_KEY.test(k);
