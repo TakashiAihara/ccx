@@ -316,10 +316,12 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       `<Name>${xmlEscape(bucket)}</Name><Prefix>${xmlEscape(enc(prefix))}</Prefix>`,
       delimiter ? `<Delimiter>${xmlEscape(enc(delimiter))}</Delimiter>` : "",
       q["encoding-type"] === "url" ? "<EncodingType>url</EncodingType>" : "",
-      after ? `<ContinuationToken>${xmlEscape(enc(after))}</ContinuationToken>` : "",
+      // token は不透明値で encoding-type の対象ではない (S3 も同じ)。エンコードして返すと、
+      // そのまま送り返すクライアント (DuckDB) の `%3D` が `=` より前に並び、1 ページ目に戻る (#173)
+      after ? `<ContinuationToken>${xmlEscape(after)}</ContinuationToken>` : "",
       `<KeyCount>${page.length}</KeyCount><MaxKeys>${maxKeys}</MaxKeys>`,
       `<IsTruncated>${truncated}</IsTruncated>`,
-      truncated ? `<NextContinuationToken>${xmlEscape(enc(last))}</NextContinuationToken>` : "",
+      truncated ? `<NextContinuationToken>${xmlEscape(last)}</NextContinuationToken>` : "",
       ...page.map((e) =>
         "commonPrefix" in e
           ? `<CommonPrefixes><Prefix>${xmlEscape(enc(e.commonPrefix))}</Prefix></CommonPrefixes>`

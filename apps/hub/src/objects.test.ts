@@ -139,6 +139,24 @@ describe("objects: S3 client round trip", () => {
     expect(plain).toContain("<Key>sp ace/k=v.txt</Key>");
   });
 
+  test("encoding-type=url leaves the continuation token as is, so sending it back moves to the next page", async () => {
+    // DuckDB はこの形で一覧を歩く。token まで URL エンコードすると `%3D` が `=` より前に並び、
+    // 1 ページ目を返し続けて glob が終わらない (#173)
+    await s3.write("m=a/1", "x");
+    await s3.write("m=a/2", "x");
+    const page = async (token?: string) => {
+      const t = token === undefined ? "" : `&continuation-token=${encodeURIComponent(token)}`;
+      return (await fetch(`${base}/ccx?list-type=2&encoding-type=url&max-keys=1${t}`)).text();
+    };
+    const p1 = await page();
+    expect(p1).toContain("<Key>m%3Da/1</Key>");
+    const token = /<NextContinuationToken>([^<]*)</.exec(p1)?.[1];
+    expect(token).toBe("m=a/1");
+    const p2 = await page(token);
+    expect(p2).toContain("<Key>m%3Da/2</Key>");
+    expect(p2).toContain("<IsTruncated>false</IsTruncated>");
+  });
+
   test("a key that collides with an existing object as its directory is 409, not 500", async () => {
     await s3.write("a", "x");
     const under = await fetch(`${base}/ccx/a/b`, { method: "PUT", body: "y" });
