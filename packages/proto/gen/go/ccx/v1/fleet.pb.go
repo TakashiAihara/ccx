@@ -222,7 +222,7 @@ type SessionState struct {
 	Task     string                 `protobuf:"bytes,3,opt,name=task,proto3" json:"task,omitempty"`
 	// 利用者の key/value。center は意味を持たずに運ぶ (#165)
 	Metadata map[string]string `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない (kaneo ccx#47)
+	// 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない (docs/design/session-state.md の Role)
 	Role          string `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

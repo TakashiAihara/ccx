@@ -231,7 +231,8 @@ export function registerSessionState(session: Command): void {
     task: ["Point a session at the task it is on, e.g. kaneo ccx#1 or owner/repo#123 (an empty string clears it)", "one external reference"],
     role: ["Say what a session is, e.g. worker or pm (free text; ccx gives it no meaning; an empty string clears it)", "one role"],
   } as const;
-  for (const [key, [description, argument]] of Object.entries(TEXT_VERBS) as [keyof typeof TEXT_VERBS, readonly [string, string]][]) {
+  for (const key of ["label", "task", "role"] as const) {
+    const [description, argument] = TEXT_VERBS[key];
     session
       .command(key)
       .description(description)
@@ -239,6 +240,8 @@ export function registerSessionState(session: Command): void {
       .argument("[session-id]", "full id or unique prefix (default: this session)")
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {
+        // role は宛先を指す値なので 1 行に限る。label / task は今まで通り (#47 の範囲外)
+        if (key === "role" && /[\r\n]/.test(value.trim())) throw new Error("a role is one line");
         const home = claudeHome();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);

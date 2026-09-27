@@ -174,15 +174,18 @@ ambiguous, while `mark` / `status` on that session itself fail with the read err
 ## Role
 
 `role` says what a session *is* — `worker`, `pm`, whatever the user's methodology names (kaneo
-ccx#47, 2026-09-27). It is top level, not `metadata`, because ccx itself uses it: `scope.md` counts
-"attach a role to a session" and "address a session by role" as ccx's job, and ccx never reads a
-metadata key. What it is not:
+ccx#47, 2026-09-27). It is top level, not `metadata`, because ccx is to act on it: `scope.md` counts
+"attach a role to a session" and "address a session by role" as ccx's job, the launcher of #82
+picks a skill from it, and ccx never reads a metadata key. Nothing in ccx reads it yet — it is
+carried and shown (`session status` / `ls`, `ccx-agent status`) until addressing and #82 are built;
+a key that ccx will act on starts at the top level rather than moving there later. What it is not:
 
 - a vocabulary: ccx gives no value a meaning and checks none. Which roles exist, and what a
   `worker` may not do, is the methodology's (`scope.md`)
 - required: most sessions have none, and an unset role changes nothing
-- a set: one value per session. A session that is two things gets a value naming both; a list is
-  added when addressing needs one, not before
+- a set: one value per session, and addressing is to match the whole value exactly, never a part
+  of it. A session that is two things gets a value of its own; if addressing turns out to need
+  several roles per session, that is a new field with its own shape, not a separator inside this one
 - history: a later write replaces it, unlike `label` (whose history is kept because names are
   searched for)
 - a name: `label` is what a session is called and what it is doing now, and the auto-label hook
@@ -191,8 +194,16 @@ metadata key. What it is not:
 The repodir's `.git/ccx.json` `role` of GitHub ccx#82 (not built) is a launch default, not a second
 source: the launcher writes it into the session with `ccx session role`, and from then on the
 session's declared state is what everything reads — the center, `ccx-agent status`, a hook deciding
-how to treat a worker. One place is written; changing a running session's role does not touch the
-repodir.
+how to treat a worker. This changes #82's "one source, read by the hook and by the launcher": the
+hook reads the session, because a repodir can hold several sessions over its life and a role is
+about one of them. The launcher copies the default once and does not keep the two in step, so a
+later change to `ccx.json` reaches only sessions started after it. `claude --resume` keeps the
+session id, so a resumed session keeps its role; `--fork-session` makes a new id with no role
+until the launcher (or someone) writes one.
+
+A ccx or center older than this change does not know `role`, the same way as `metadata` above: an
+old `push` rewrites `state.json` without it, and an old center returns rows without it. Update the
+center and every machine's ccx before relying on it across machines.
 
 ## Not here
 

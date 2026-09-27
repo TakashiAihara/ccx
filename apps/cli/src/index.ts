@@ -388,6 +388,7 @@ session
         humanSince(last),
         s.lastHook,
         s.cwd,
+        state?.role ?? "",
         state?.label ?? "",
       ];
     });

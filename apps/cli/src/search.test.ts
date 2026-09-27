@@ -53,7 +53,7 @@ beforeEach(async () => {
   );
   // SID2 だけに宣言状態 (state.json) を置く。SID には無い: 無い session の検索が止まらないことも見る
   await writeDeclared(SID2, { label: "ORIGINAL-NAME" }, home);
-  await writeDeclared(SID2, { label: "renamed-now", metadata: { owner: "zed" } }, home);
+  await writeDeclared(SID2, { label: "renamed-now", role: "night-shift", metadata: { owner: "zed" } }, home);
   const client = new TranscriptClient(store, { machine: "host-a", user: "alice" });
   for (const t of await localTranscripts(home)) await client.push(t, home);
 });
@@ -157,17 +157,17 @@ describe("search: embedded DuckDB over the store", () => {
 
   test("sessions view: label, its history and metadata from state.json, and the default search finds a session by a past name", async () => {
     const c = await openDuckDB(store);
-    const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, archived, metadata, label_history, label_recorded_at FROM sessions`)).getRowObjectsJson();
+    const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, role, archived, metadata, label_history, label_recorded_at FROM sessions`)).getRowObjectsJson();
     expect(rows).toHaveLength(1);
     const r = rows[0] as Record<string, unknown>;
-    expect({ id: r.session_id, machine: r.machine, label: r.label, archived: r.archived }).toEqual({ id: SID2, machine: "host-a", label: "renamed-now", archived: false });
+    expect({ id: r.session_id, machine: r.machine, label: r.label, role: r.role, archived: r.archived }).toEqual({ id: SID2, machine: "host-a", label: "renamed-now", role: "night-shift", archived: false });
     expect(JSON.parse(String(r.metadata))).toEqual({ owner: "zed" });
     const history = JSON.parse(String(r.label_history)) as { at: string; label: string }[];
     expect(history.map((e) => e.label)).toEqual(["ORIGINAL-NAME", "renamed-now"]);
     expect(r.label_recorded_at).toBe(history[1]!.at);
 
     // 今の名前でも、前の名前 (履歴にしか無い) でも、metadata の値でも当たる。行は type = ccx.state
-    for (const word of ["renamed-now", "original-name", "zed"]) {
+    for (const word of ["renamed-now", "original-name", "zed", "night-shift"]) {
       const hit = await ccx(word, "--json");
       expect(hit.code).toBe(0);
       expect((JSON.parse(hit.out) as { session_id: string; type: string }[]).map((x) => [x.session_id, x.type])).toEqual([[SID2, "ccx.state"]]);
@@ -182,7 +182,8 @@ describe("search: embedded DuckDB over the store", () => {
     const only = await ccx("needle-alpha", "-s", SID.slice(0, 8), "--json");
     expect(only.code).toBe(0);
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
-  });
+    // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
+  }, 20_000);
 
   test("a state row with no ccx label history still comes before transcript hits; a malformed state.json drops only itself", async () => {
     const dir = (m: string, id: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${id}`);

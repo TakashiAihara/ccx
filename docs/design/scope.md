@@ -14,7 +14,7 @@ So:
 
 | ccx provides (mechanism) | You decide (methodology) |
 |---|---|
-| Attach a role to a session, via a skill | What roles exist |
+| Attach a role to a session (`ccx session role`), and start it with a skill for that role (#82) | What roles exist |
 | Address a session by role or group | Whether a "PM" reviews a "worker" |
 | Surface a signal that contradicts the evidence | Whether that contradiction should stop a merge |
 | Let a session ask, keep working, and receive the answer later | Whether irreversible actions need human sign-off |

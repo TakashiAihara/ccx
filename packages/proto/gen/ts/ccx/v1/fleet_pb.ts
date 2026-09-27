@@ -160,7 +160,7 @@ export type SessionState = Message<"ccx.v1.SessionState"> & {
   metadata: { [key: string]: string };
 
   /**
-   * 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない (kaneo ccx#47)
+   * 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない (docs/design/session-state.md の Role)
    *
    * @generated from field: string role = 5;
    */

@@ -33,7 +33,7 @@ export type DeclaredState = {
   archived: boolean;
   label: string;
   task: string;
-  /** 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない。宛先の指定に使う (docs/design/scope.md) */
+  /** 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない。宛先の指定に使う予定で、まだ ccx の中に読み手は無い (docs/design/session-state.md の Role) */
   role: string;
   /** この session の heartbeat の上書き。空なら ccx-agent の既定に従う (docs/design/heartbeat.md) */
   heartbeat: Heartbeat;
