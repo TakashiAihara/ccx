@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 	"syscall"
 	"time"
 
@@ -41,9 +43,26 @@ func ValidSessionID(id string) bool { return sessionID.MatchString(id) }
 // under meta/ with another name is not a key.
 var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
 
-// role mirrors ROLE in packages/core/src/session-state.ts: one line. A file
-// that does not match reads as no role, as the TS reader does.
+// role mirrors ROLE in packages/core/src/session-state.ts (and ROLE in
+// apps/hub/src/store.ts): one line. A file that does not match, or is not
+// UTF-8, reads as no role, as the TS reader does.
 var role = regexp.MustCompile(`^[^\p{Cc}\x{2028}\x{2029}]*$`)
+
+// jsSpace is what JavaScript's String.prototype.trim removes, which the TS
+// reader applies: Go's unicode.IsSpace also counts U+0085 and misses U+FEFF.
+func jsSpace(r rune) bool { return r == '\uFEFF' || (r != '\u0085' && unicode.IsSpace(r)) }
+
+func readRole(path string) string {
+	b, _ := os.ReadFile(path)
+	if !utf8.Valid(b) {
+		return ""
+	}
+	r := strings.TrimFunc(string(b), jsSpace)
+	if !role.MatchString(r) {
+		return ""
+	}
+	return r
+}
 
 // Server is the AgentService handler. Heartbeat and Collect are nil when their
 // concern is off; the answer then says so instead of failing.
@@ -128,9 +147,7 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		st.Archived = true
 	}
-	if r := text("role"); role.MatchString(r) {
-		st.Role = r
-	}
+	st.Role = readRole(filepath.Join(dir, "role"))
 	hb := text("heartbeat")
 	if hb != "on" && hb != "off" {
 		hb = ""

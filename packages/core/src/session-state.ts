@@ -208,16 +208,24 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, label, task, role, heartbeat, metadata, labelHistory] = await Promise.all([
+  // role は UTF-8 として読めなければ「無い」(置換文字にしない)。ccx-agent (Go) の読みと揃える
+  const role = async () => {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(await Bun.file(join(dir, TEXT_FILE.role)).bytes()).trim();
+    } catch {
+      return "";
+    }
+  };
+  const [archived, label, task, roleText, heartbeat, metadata, labelHistory] = await Promise.all([
     flag("archived"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
-    text(TEXT_FILE.role),
+    role(),
     text(TEXT_FILE.heartbeat),
     readMetadata(dir),
     readLabelHistory(dir),
   ]);
-  return { archived, label, task, role: asRole(role), heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
+  return { archived, label, task, role: asRole(roleText), heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
 }
 
 /**
@@ -233,6 +241,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
   if (patch.role !== undefined && !ROLE.test(patch.role)) throw new Error(`invalid role ${JSON.stringify(patch.role)}: ${ROLE_RULE}`);
   // 読み手 (readDeclared) は trim した値を返す。ファイルにも履歴にも同じ値を書く: " a " を重ねて記録しない
   if (patch.label !== undefined) patch = { ...patch, label: patch.label.trim() };
+  if (patch.role !== undefined) patch = { ...patch, role: patch.role.trim() };
 
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });

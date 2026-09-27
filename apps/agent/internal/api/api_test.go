@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,10 +65,43 @@ func TestReadDeclared(t *testing.T) {
 	if o, _, _ := ReadDeclared(other); o.Archived {
 		t.Error("a directory named archived read as archived")
 	}
-	// A role that is not one line reads as none, as the TS reader does.
-	write(t, filepath.Join(other, "role"), "a\nb\n")
-	if o, _, _ := ReadDeclared(other); o.Role != "" {
-		t.Errorf("a two-line role read as %q", o.Role)
+	// The role rule and its reading, from the table the TS tests read too.
+	var cases struct {
+		Rule []struct {
+			Value string `json:"value"`
+			Valid bool   `json:"valid"`
+		} `json:"rule"`
+		Read []struct {
+			File *string `json:"file"`
+			Hex  string  `json:"hex"`
+			Role string  `json:"role"`
+		} `json:"read"`
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "core", "testdata", "role-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases.Rule {
+		if role.MatchString(c.Value) != c.Valid {
+			t.Errorf("role rule on %q: want valid=%v", c.Value, c.Valid)
+		}
+	}
+	for _, c := range cases.Read {
+		content := []byte(c.Hex)
+		if c.File != nil {
+			content = []byte(*c.File)
+		} else if content, err = hex.DecodeString(c.Hex); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(other, "role"), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if o, _, _ := ReadDeclared(other); o.Role != c.Role {
+			t.Errorf("role file %q read as %q, want %q", content, o.Role, c.Role)
+		}
 	}
 	if !st.Archived || st.Label != "fix ci" || st.Task != "ccx#34" || st.Role != "worker" || hb != "on" {
 		t.Errorf("got archived=%v label=%q task=%q role=%q heartbeat=%q", st.Archived, st.Label, st.Task, st.Role, hb)
@@ -169,6 +203,7 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		`{"type":"user","timestamp":"`+now.Add(-2*time.Minute).Format(time.RFC3339Nano)+`","message":{"content":"hi"}}`+"\n"+
 			`{"type":"assistant","timestamp":"`+now.Add(-time.Minute).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n")
 	write(t, filepath.Join(home, "sessions", sid, "label"), "lbl\n")
+	write(t, filepath.Join(home, "sessions", sid, "role"), "worker\n")
 	write(t, filepath.Join(home, "sessions", sid, "heartbeat"), "on\n")
 
 	cfg := config.Config{
@@ -213,7 +248,7 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		got = ask()
 	}
-	if got.Declared.GetLabel() != "lbl" || got.Heartbeat.GetDeclared() != "on" || !got.Heartbeat.GetEnabled() || !got.Heartbeat.GetListening() ||
+	if got.Declared.GetLabel() != "lbl" || got.Declared.GetRole() != "worker" || got.Heartbeat.GetDeclared() != "on" || !got.Heartbeat.GetEnabled() || !got.Heartbeat.GetListening() ||
 		!got.Heartbeat.GetWanted() || got.Heartbeat.GetRegistered() || got.Heartbeat.GetNextAt() != nil {
 		t.Errorf("before register: %v", got)
 	}

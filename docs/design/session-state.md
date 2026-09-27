@@ -41,7 +41,7 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `archived` | `~/.claude/sessions/<id>/archived` | empty file present = true |
 | `label` | `…/label` | one line of text |
 | `task` | `…/task` | one line of text, e.g. `kaneo ccx#1`, `owner/repo#123` |
-| `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one reads as no role) |
+| `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one — or a file that is not UTF-8 — reads as no role; the rule and its test cases are shared by core, the center and `ccx-agent`: `packages/core/testdata/role-cases.json`) |
 | `heartbeat` | `…/heartbeat` | `on` / `off`; absent = `ccx-agent`'s default |
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 | `labelHistory` | `…/labels.jsonl` | one `{"at": <ISO 8601 UTC>, "label": <text>}` line per change, oldest first; a clear is a line with `""` |
@@ -60,7 +60,9 @@ same files (`ReadDeclared` in `apps/agent/internal/api`). The statusline is mean
 this repo), so what it shows and what the agent alone knows (heartbeat, spool, center reach) come
 from one place; with the agent down it shows nothing rather than a value read some other way. Writers go through `ccx session meta` — a
 file written by hand is read, but it does not leave `.ccx-declared` and is not reported to the
-center until the next write through ccx. `meta set key=value` rather than `meta set key [value]`:
+center until the next write through ccx. A hand-written `role` that breaks the one-line rule is
+less than that: it reads as no role, so a session holding only it counts as unmarked, and `pull`
+installs the store's state over it (removing the file when the store has no role). `meta set key=value` rather than `meta set key [value]`:
 with both the value and `[id]` optional, `meta set done <id>` would read the id as the value.
 
 `meta unset` is a declaration like `mark --off`, even for a key that is not there locally: it leaves
@@ -178,7 +180,8 @@ ccx#47, 2026-09-27). It is top level, not `metadata`, because ccx is to act on i
 "attach a role to a session" and "address a session by role" as ccx's job, the launcher of #82
 picks a skill from it, and ccx never reads a metadata key. Nothing in ccx acts on it yet — it is
 carried, shown (`session status` / `ls`, `tr ls`, `tr pull`, `ccx-agent status`) and found by
-`tr search` (a substring match, like every other value there; addressing is not search) until
+`tr search` (a substring match over the store copies as they are, so it also finds a role the
+readers take as none; addressing is not search) until
 addressing and #82 are built;
 a key that ccx will act on starts at the top level rather than moving there later. What it is not:
 

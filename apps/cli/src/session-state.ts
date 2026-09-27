@@ -240,7 +240,6 @@ export function registerSessionState(session: Command): void {
       .argument("[session-id]", "full id or unique prefix (default: this session)")
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {
-
         const home = claudeHome();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);

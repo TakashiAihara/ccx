@@ -18,6 +18,10 @@ import {
 } from "./session-state.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const roleCases = (await Bun.file(join(import.meta.dir, "../testdata/role-cases.json")).json()) as {
+  rule: { value: string; valid: boolean }[];
+  read: { file?: string; hex?: string; role: string }[];
+};
 /** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
 const h = (...labels: string[]) => labels.map((label) => ({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), label }));
 let home: string;
@@ -69,14 +73,19 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(isEmptyDeclared({ ...EMPTY_DECLARED, role: "pm" })).toBe(false);
 
     // role は 1 行。書くときは拒み (何も書かない)、保存先やファイルから来た合わない値は「無い」と読む
-    await writeDeclared(SID, { role: "worker" }, home);
-    for (const bad of ["a\nb", "a\rb", "a\tb", "a\u2028b"]) {
-      await expect(writeDeclared(SID, { role: bad }, home)).rejects.toThrow(/invalid role/);
-      expect(normalizeDeclared({ role: bad }).role).toBe("");
+    // 読み手と同じく trim して書く: ファイルと読んだ値を食い違わせない
+    await writeDeclared(SID, { role: " worker " }, home);
+    expect(await Bun.file(join(home, "sessions", SID, "role")).text()).toBe("worker\n");
+    for (const { value, valid } of roleCases.rule) {
+      if (valid) continue;
+      await expect(writeDeclared(SID, { role: value }, home)).rejects.toThrow(/invalid role/);
     }
     expect((await readDeclared(SID, home)).role).toBe("worker");
-    await Bun.write(join(home, "sessions", SID, "role"), "a\nb\n");
-    expect((await readDeclared(SID, home)).role).toBe("");
+    for (const { value, valid } of roleCases.rule) expect([value, normalizeDeclared({ role: value }).role]).toEqual([value, valid ? value : ""]);
+    for (const c of roleCases.read) {
+      await Bun.write(join(home, "sessions", SID, "role"), c.hex ? Buffer.from(c.hex, "hex") : c.file!);
+      expect([c.file ?? c.hex, (await readDeclared(SID, home)).role]).toEqual([c.file ?? c.hex, c.role]);
+    }
     await writeDeclared(SID, { role: "" }, home);
   });
 

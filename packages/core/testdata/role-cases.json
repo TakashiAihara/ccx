@@ -1,0 +1,26 @@
+{
+  "comment": "The one-line rule for a session's role, read by the tests of packages/core (session-state.ts ROLE), apps/hub (store.ts ROLE) and apps/agent (api.go role / ReadDeclared). One table so the three copies cannot drift.",
+  "rule": [
+    { "value": "worker", "valid": true },
+    { "value": "a b", "valid": true },
+    { "value": "作業者", "valid": true },
+    { "value": "😀", "valid": true },
+    { "value": "", "valid": true },
+    { "value": "a\nb", "valid": false },
+    { "value": "a\rb", "valid": false },
+    { "value": "a\tb", "valid": false },
+    { "value": "a\u0000b", "valid": false },
+    { "value": "a\u007fb", "valid": false },
+    { "value": "a\u0085b", "valid": false },
+    { "value": "a\u2028b", "valid": false },
+    { "value": "a\u2029b", "valid": false }
+  ],
+  "read": [
+    { "file": "worker\n", "role": "worker" },
+    { "file": " worker \n", "role": "worker" },
+    { "file": "\ufeffworker\n", "role": "worker" },
+    { "file": "worker\u0085\n", "role": "" },
+    { "file": "a\nb\n", "role": "" },
+    { "hex": "77ff72", "role": "" }
+  ]
+}
