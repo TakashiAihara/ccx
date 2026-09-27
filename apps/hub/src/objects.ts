@@ -326,9 +326,9 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       delimiter ? `<Delimiter>${xmlEscape(enc(delimiter))}</Delimiter>` : "",
       q["encoding-type"] === "url" ? "<EncodingType>url</EncodingType>" : "",
       // token は encoding-type の対象外で、StartAfter は対象 (S3 と同じ)。受け取ったものだけを返す。
-      // 両方来たら両方返す (位置は token が決める)
+      // 送られたら (空でも) 返す (AWS)。両方来たときの位置は token が決める (こちらの決め)
       token !== undefined ? `<ContinuationToken>${token}</ContinuationToken>` : "",
-      q["start-after"] ? `<StartAfter>${xmlEscape(enc(q["start-after"]))}</StartAfter>` : "",
+      q["start-after"] !== undefined ? `<StartAfter>${xmlEscape(enc(q["start-after"]))}</StartAfter>` : "",
       `<KeyCount>${page.length}</KeyCount><MaxKeys>${maxKeys}</MaxKeys>`,
       `<IsTruncated>${truncated}</IsTruncated>`,
       truncated ? `<NextContinuationToken>${Buffer.from(last).toString("base64url")}</NextContinuationToken>` : "",
