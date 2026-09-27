@@ -14,7 +14,7 @@ So:
 
 | ccx provides (mechanism) | You decide (methodology) |
 |---|---|
-| Attach a role to a session, via a skill | What roles exist |
+| Attach a role to a session (`ccx session role`), and start it with a skill for that role (#82) | What roles exist |
 | Address a session by role or group | Whether a "PM" reviews a "worker" |
 | Surface a signal that contradicts the evidence | Whether that contradiction should stop a merge |
 | Let a session ask, keep working, and receive the answer later | Whether irreversible actions need human sign-off |
@@ -32,7 +32,7 @@ Thinking through a specific way of working is still useful — but its output is
 no state about sessions. ccx is the integrated management of parallel sessions, and a session's
 state is the substance of that: whether it is running or ended, whether its transcript is only in the store
 off the host, whether someone archived it, what it is
-called, what task it is on. That is not methodology; it is the thing being managed. (User decision,
+called, what task it is on, what role it was given. That is not methodology; it is the thing being managed. (User decision,
 2026-09-21, #127.)
 
 Two kinds of state, kept apart:
@@ -40,14 +40,14 @@ Two kinds of state, kept apart:
 | Kind | Examples | Who writes it |
 |---|---|---|
 | **Observed** — derived from facts, never typed by hand | `running` / `ended` (process, SessionEnd), `remote` (transcript in the store, local copy gone) | ccx, from hooks, pids and the store |
-| **Declared** — an intent someone recorded | `archived` (folded away; the one flag, in the Desktop app's word), a `label`, a `task` reference, and `metadata` — the user's own keys (`done`, `pinned`, …) that ccx carries without giving them meaning (#165) | a person or the session itself, through `ccx` |
+| **Declared** — an intent someone recorded | `archived` (folded away; the one flag, in the Desktop app's word), a `label`, a `task` reference, a `role`, and `metadata` — the user's own keys (`done`, `pinned`, …) that ccx carries without giving them meaning (#165) | a person or the session itself, through `ccx` |
 
 ccx defines these states and carries them with the transcript. What a person *does* with them —
 which sessions get reclaimed, whether an `archived` session is closed by hand or by a daemon — stays on
 the methodology side, and `ccx-agent` only ever acts on a declared flag it did not originate (see
 below). The declared flags live as files under `~/.claude/sessions/<id>/` — the same files the
 user's own scripts had been writing, now ccx's format, written by `ccx session mark` / `label` /
-`task` and carried as `state.json` by `ccx transcript` (`session-state.md`, #127).
+`task` / `role` and carried as `state.json` by `ccx transcript` (`session-state.md`, #127).
 
 ## ccx-agent's verbs
 

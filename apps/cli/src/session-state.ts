@@ -35,10 +35,10 @@ import { centerTransport, type Hub } from "./fleet.ts";
 import { table } from "./format.ts";
 
 /**
- * `ccx session mark / label / task / heartbeat / meta / status` — 宣言された状態をローカルに
+ * `ccx session mark / label / task / role / heartbeat / meta / status` — 宣言された状態をローカルに
  * 書き、読む (#127、metadata は #165)。
  *
- * 書く側 (mark / label / task / heartbeat / meta) は center も保存先も要らない (docs/design/scope.md の
+ * 書く側 (mark / label / task / role / heartbeat / meta) は center も保存先も要らない (docs/design/scope.md の
  * invariant)。読む側 (status) は手元を先に見て、手元に無い session (remote) だけ
  * 保存先の state.json を読む。保存先が無ければ unknown と言う。id を省くと自分の
  * session (`CLAUDE_CODE_SESSION_ID`。Claude Code が hook / Bash に渡す)。
@@ -201,6 +201,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     // 中身 (いつ何に変えたか) は --json と `ccx tr search`
     ["label history", s.labelHistory.length ? `${s.labelHistory.length} entries` : "-"],
     ["task", s.task || "-"],
+    ["role", s.role || "-"],
     ["heartbeat", s.heartbeat || "default"],
     // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
     ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
@@ -225,11 +226,17 @@ export function registerSessionState(session: Command): void {
       await reportAfterWrite(id, s);
     });
 
-  for (const key of ["label", "task"] as const) {
+  const TEXT_VERBS = {
+    label: ["Name a session (free text; an empty string clears it)", "the label"],
+    task: ["Point a session at the task it is on, e.g. kaneo ccx#1 or owner/repo#123 (an empty string clears it)", "one external reference"],
+    role: ["Say what a session is, e.g. worker or pm (free text; ccx gives it no meaning; an empty string clears it)", "one role"],
+  } as const;
+  for (const key of ["label", "task", "role"] as const) {
+    const [description, argument] = TEXT_VERBS[key];
     session
       .command(key)
-      .description(key === "label" ? "Name a session (free text; an empty string clears it)" : "Point a session at the task it is on, e.g. kaneo ccx#1 or owner/repo#123 (an empty string clears it)")
-      .argument(`<${key}>`, key === "label" ? "the label" : "one external reference")
+      .description(description)
+      .argument(`<${key}>`, argument)
       .argument("[session-id]", "full id or unique prefix (default: this session)")
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {

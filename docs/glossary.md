@@ -35,7 +35,7 @@ believed.
 - **lifecycle** — the observed state of a session: `running` / `ended` / `remote` / `unknown`
   (`Lifecycle` in `packages/core/src/session-state.ts`). Derived, never written.
 - **declared state** — what a person or the session recorded about it: the flag `archived`, a
-  `label`, a `task`, a `heartbeat` override and `metadata` (`DeclaredState`). Local files under
+  `label`, a `task`, a `role`, a `heartbeat` override and `metadata` (`DeclaredState`). Local files under
   `~/.claude/sessions/<id>/`; `state.json` in the store.
 - **flag** — a boolean in the declared state. There is one, `archived` (#135).
 - **metadata** — the user's own key/value pairs in the declared state (`meta/<key>`, #165). ccx
@@ -50,6 +50,8 @@ believed.
   `label-history.json`, which is the hook's own file.
 - **task** — one external reference for what the session is on, e.g. `kaneo ccx#1`
   (`~/.claude/sessions/<id>/task`).
+- **role** — what a session is, e.g. `worker` or `pm` (`~/.claude/sessions/<id>/role`). One free-text
+  value; ccx gives no value a meaning. Not the `label` (its name) (`docs/design/session-state.md`, "Role").
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
 - **center** — `ccx-center` (`apps/hub`), which collects hook events and, by default, serves the store.
   Formerly called the hub.

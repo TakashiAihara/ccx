@@ -71,10 +71,10 @@ describe("session state travels with the transcript", () => {
     expect(await Bun.file(stateKey()).exists()).toBe(false);
     expect(await A.readRemoteDeclared(SID)).toBeNull();
 
-    await writeDeclared(SID, { archived: true, label: "L", task: "kaneo ccx#1" }, homeA);
+    await writeDeclared(SID, { archived: true, label: "L", task: "kaneo ccx#1", role: "worker" }, homeA);
     const r1 = await A.push(t, homeA);
     expect(r1.status).toBe("state");
-    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(r1.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", role: "worker", heartbeat: "", metadata: {}, labelHistory: h("L") });
     expect(await Bun.file(stateKey()).json()).toEqual(r1.state);
     expect(await A.readRemoteDeclared(SID)).toEqual(r1.state);
 
@@ -86,6 +86,11 @@ describe("session state travels with the transcript", () => {
     expect((await A.push(t, homeA)).status).toBe("state");
     expect((await A.readRemoteDeclared(SID))?.labelHistory).toEqual(h("L", "M", "L"));
 
+    // role だけの変更でも運ぶ
+    await writeDeclared(SID, { role: "pm" }, homeA);
+    expect((await A.push(t, homeA)).status).toBe("state");
+    expect((await A.readRemoteDeclared(SID))?.role).toBe("pm");
+
     await writeDeclared(SID, { task: "kaneo ccx#2" }, homeA);
     const storedTranscript = join(root, "ccx", `p/transcripts/machine=host-a/user=alice/session_id=${SID}/transcript.jsonl`);
     const before = (await stat(storedTranscript)).mtimeMs;
@@ -96,10 +101,10 @@ describe("session state travels with the transcript", () => {
     expect(r2.status).toBe("state");
     expect((await Bun.file(stateKey()).json()).task).toBe("kaneo ccx#2");
     // transcript は置き直していないが、印が変わったことは履歴に残る
-    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state", "state"]);
+    expect((await A.history(r2.meta)).map((e) => e.op)).toEqual(["push", "state", "state", "state", "state"]);
 
     // 印を外しても運ぶ (「無い」ではなく「false」を置く)
-    await writeDeclared(SID, { archived: false, label: "", task: "" }, homeA);
+    await writeDeclared(SID, { archived: false, label: "", task: "", role: "" }, homeA);
     expect((await A.push(t, homeA)).status).toBe("state");
     expect(await A.readRemoteDeclared(SID)).toEqual({ ...EMPTY_DECLARED, labelHistory: h("L", "M", "L", "") });
   });
@@ -148,15 +153,16 @@ describe("session state travels with the transcript", () => {
 
   test("pull installs the store's state as local marks on a fresh machine, but never over marks this machine already holds", async () => {
     const t = await seed(homeA, SID);
-    await writeDeclared(SID, { archived: true, label: "L" }, homeA);
+    await writeDeclared(SID, { archived: true, label: "L", role: "worker" }, homeA);
     await A.push(t, homeA);
 
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
     expect(r.stateApplied).toBe(true);
-    expect(r.state).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(r.state).toEqual({ archived: true, label: "L", task: "", role: "worker", heartbeat: "", metadata: {}, labelHistory: h("L") });
     expect(await readDeclared(SID, homeB)).toEqual(r.state!);
     expect(await Bun.file(join(homeB, "sessions", SID, "archived")).exists()).toBe(true);
+    expect(await Bun.file(join(homeB, "sessions", SID, "role")).text()).toBe("worker\n");
 
     // B で印を変えてから再度 pull (already-here) しても、B の印は保存先の古い写しで消えない
     await writeDeclared(SID, { archived: false, task: "kaneo ccx#9" }, homeB);
@@ -164,11 +170,11 @@ describe("session state travels with the transcript", () => {
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(false);
     expect(again.state?.archived).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: false, label: "L", task: "kaneo ccx#9", role: "worker", heartbeat: "", metadata: {}, labelHistory: h("L") });
 
     // transcript より先に印だけ付けたマシンに pull しても、その印は残る (保存先の写しは適用しない)
     await rm(join(homeB, "projects"), { recursive: true, force: true });
-    await writeDeclared(SID, { archived: false, label: "", task: "mine" }, homeB);
+    await writeDeclared(SID, { archived: false, label: "", task: "mine", role: "" }, homeB);
     const pre = await B.pull(SID, homeB);
     expect(pre.status).toBe("pulled");
     expect(pre.stateApplied).toBe(false);
@@ -218,7 +224,7 @@ describe("session state travels with the transcript", () => {
     const again = await B.pull(SID, homeB);
     expect(again.status).toBe("already-here");
     expect(again.stateApplied).toBe(true);
-    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(await readDeclared(SID, homeB)).toEqual({ archived: true, label: "", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
   });
 
   test("a session pushed before state.json existed pulls with state null and leaves local marks alone", async () => {
@@ -265,8 +271,8 @@ describe("session state travels with the transcript", () => {
     await writeDeclared(SID, { label: "newer" }, homeA);
     expect((await declaredFor(SID, homeA, "ended", A)).label).toBe("newer");
     // remote で手元に印が無い → 保存先
-    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
-    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(await declaredFor(SID, homeB, "remote", B)).toEqual({ archived: true, label: "L", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
+    expect(await declaredFor(SID, homeB, "remote", B, { machine: "host-a", user: "alice" })).toEqual({ archived: true, label: "L", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("L") });
     // remote でなければ保存先は見ない。保存先が無ければ手元 (空)
     expect(await declaredFor(SID, homeB, "unknown", B)).toEqual(EMPTY_DECLARED);
     expect(await declaredFor(SID, homeB, "remote", null)).toEqual(EMPTY_DECLARED);
@@ -330,11 +336,21 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["mark", "archived"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect((await run(["label", "scope｜step", SID.slice(0, 8)])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
-    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("scope｜step") });
+    expect(await readDeclared(SID, homeA)).toEqual({ archived: true, label: "scope｜step", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: h("scope｜step") });
 
     expect((await run(["mark", "archived", "--off", SID])).code).toBe(0);
     expect((await run(["label", "", SID])).code).toBe(0);
     expect(await readDeclared(SID, homeA)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", "") });
+
+    // role: task と同じく 1 行。status に出て、空文字で消える
+    expect((await run(["role", "worker", SID])).out).toMatch(/role = worker/);
+    expect((await run(["status", SID])).out).toMatch(/role\s+worker/);
+    const multi = await run(["role", "a\nb", SID]);
+    expect(multi.code).not.toBe(0);
+    expect(multi.err).toMatch(/invalid role/);
+    expect((await readDeclared(SID, homeA)).role).toBe("worker");
+    expect((await run(["role", "", SID])).out).toMatch(/role cleared/);
+    expect((await readDeclared(SID, homeA)).role).toBe("");
 
     // heartbeat: on / off は上書き、default は外す。ccx-agent は同じファイルを読む
     expect((await run(["heartbeat", "off", SID])).out).toMatch(/heartbeat off/);
@@ -360,7 +376,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect(st.code).toBe(0);
     expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", "") });
     const mark = await run(["mark", "archived", SID, "--json"]);
-    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "heartbeat", "metadata", "labelHistory"]);
+    expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "role", "heartbeat", "metadata", "labelHistory"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
   });
 
@@ -428,12 +444,13 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect((await run(["mark", "archived", SID])).code).toBe(0);
     expect((await run(["label", "L", SID])).code).toBe(0);
     expect((await run(["task", "kaneo ccx#1", SID])).code).toBe(0);
+    expect((await run(["role", "pm", SID])).code).toBe(0);
     // hook が 1 件も無い session は center の一覧に出ないが、event 自体は届いている
     ingest(db, [hook("host-a", localOrigin().user, SID, 1)]);
     const rows = listSessions(db, { limit: 10 });
     const me = rows.find((r) => r.sessionId === SID);
-    expect(me?.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", metadata: {} });
-    // hook の統計は増えない (state event は 3 件届いている)
+    expect(me?.state).toEqual({ archived: true, label: "L", task: "kaneo ccx#1", role: "pm", metadata: {} });
+    // hook の統計は増えない (state event は 4 件届いている)
     expect(me?.eventCount).toBe(1);
 
     const down = await run(["mark", "archived", "--off", SID], { CCX_HUB_URL: "http://127.0.0.1:1" });
@@ -443,10 +460,10 @@ describe("ccx session with a center: marks are reported as events, and session l
     // center は古いまま (送れていない)。次の mark が送り直す
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state?.archived).toBe(true);
     expect((await run(["label", "again", SID])).code).toBe(0);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1", metadata: {} });
-    // 届いたのは 4 回 (mark / label / task / label。--off は center が落ちていて届いていない)
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === SID)?.state).toEqual({ archived: false, label: "again", task: "kaneo ccx#1", role: "pm", metadata: {} });
+    // 届いたのは 5 回 (mark / label / task / role / label。--off は center が落ちていて届いていない)
     const sent = listEvents(db, { includePayload: true, limit: 20 }).filter((e) => e.producer === 2);
-    expect(sent.length).toBe(4);
+    expect(sent.length).toBe(5);
     // どの報告も送り手の rev (送る直前の時刻) を持ち、送った順に増える (center はこれで最新を決める)
     const revs = sent.map((e) => JSON.parse(new TextDecoder().decode(e.payload!)).rev as number).reverse();
     expect(revs.every((r) => typeof r === "number" && r > 1_700_000_000_000)).toBe(true);
@@ -472,7 +489,7 @@ describe("ccx session with a center: marks are reported as events, and session l
 
   test("tr pull reports the state it installed; session show names the state events", async () => {
     const t = await seed(homeA, SID);
-    await writeDeclared(SID, { archived: true, task: "kaneo ccx#1" }, homeA);
+    await writeDeclared(SID, { archived: true, task: "kaneo ccx#1", role: "worker" }, homeA);
     await A.push(t, homeA);
     const p = Bun.spawn(["bun", "run", cli, "tr", "pull", SID, "--no-repodir"], {
       env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
@@ -482,9 +499,18 @@ describe("ccx session with a center: marks are reported as events, and session l
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     expect(`${code} ${err}`).toBe("0 ");
     expect(out).toMatch(/^pulled/);
+    expect(out).toMatch(/^state .*task: kaneo ccx#1  role: worker/m);
+    const ls = Bun.spawn(["bun", "run", cli, "tr", "ls"], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [lsOut, , lsCode] = await Promise.all([new Response(ls.stdout).text(), new Response(ls.stderr).text(), ls.exited]);
+    expect(lsCode).toBe(0);
+    expect(lsOut.split("\n").find((l) => l.startsWith(SID.slice(0, 8)))).toMatch(/ role:worker( |$)/);
     expect(err).not.toMatch(/did not take/);
     ingest(db, [hook("host-b", localOrigin().user, SID, 9)]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1", metadata: {} });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1", role: "worker", metadata: {} });
     const show = await run(["show", SID, "-m", "host-b"]);
     expect(show.out).toMatch(/ccx\.session\.state/);
     expect(show.out).toMatch(/PostToolUse/);
@@ -536,7 +562,7 @@ describe("ccx session with a center: marks are reported as events, and session l
       // center は古い写しを持っている: このマシンの行では手元が勝つ
       { eventId: "st-a", machine: "host-a", user, seq: 0, receivedAtMs: 1001, producer: 2, payload: enc({ session_id: SID, state: { archived: false, label: "stale-center", task: "" } }) },
       hook("host-x", "u", SID2, 2),
-      { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "", metadata: { owner: "x", "Bad/key": "y" } } }) },
+      { eventId: "st-x", machine: "host-x", user: "u", seq: 3, receivedAtMs: 1003, producer: 2, payload: enc({ session_id: SID2, state: { archived: true, label: "from-x", task: "", role: "worker", metadata: { owner: "x", "Bad/key": "y" } } }) },
       hook("host-x", "u", SID3, 4),
       // 同じ session id を別の origin も持ち、別の state を持つ (session id だけで束ねると取り違える)
       { eventId: "st-x3", machine: "host-x", user: "u", seq: 5, receivedAtMs: 1007, producer: 2, payload: enc({ session_id: SID3, state: { archived: false, label: "x3", task: "" } }) },
@@ -549,14 +575,16 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(r.code).toBe(0);
     const rows = JSON.parse(r.out) as { key: { sessionId: string; machine: string; user: string }; lifecycle: string | null; state: unknown }[];
     const by = (id: string, u?: string) => rows.find((x) => x.key.sessionId === id && (!u || x.key.user === u))!;
-    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", heartbeat: "", metadata: {}, labelHistory: h("local") });
+    expect(by(SID).state).toEqual({ archived: true, label: "local", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("local") });
     expect(by(SID).lifecycle).toBe("ended");
     // center の SessionState (fleet.proto) は heartbeat と同じく label の履歴を持たない: 空で出る
-    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", heartbeat: "", metadata: { owner: "x" }, labelHistory: [] });
-    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
-    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(by(SID2).state).toEqual({ archived: true, label: "from-x", task: "", role: "worker", heartbeat: "", metadata: { owner: "x" }, labelHistory: [] });
+    expect(by(SID3, "u").state).toEqual({ archived: false, label: "x3", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(by(SID3, "someone-else").state).toEqual({ archived: true, label: "other-user", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
     // center に 1 件も届いていない他マシンの session は null
     expect(by(SID4).state).toBeNull();
+    // 表でも role が列に出る (宛先を選ぶ読み手が見る面)
+    expect((await run(["ls"])).out.split("\n").find((l) => l.startsWith(SID2.slice(0, 8)))).toMatch(/ role:worker( |$)/);
 
     // このマシンの 1 行の印が読めなくても一覧は出る。その行は null
     await Bun.write(join(homeA, "sessions", SID, "meta"), "not a dir");

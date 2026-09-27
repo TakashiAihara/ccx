@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import { openDb, type Db } from "./db/open.ts";
 import { ingest, listEvents, listEventsQuery, listSessions, type IncomingEvent } from "./store.ts";
@@ -262,11 +263,11 @@ describe("session state events (producer 2, #127)", () => {
     ev({ producer: 2, payload: { session_id: sid, state: s }, ...over });
 
   test("the latest state per session rides on the row; state events do not count as hooks", () => {
-    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1" }), hook("s2")]);
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1", role: "worker" }), hook("s2")]);
     const rows = listSessions(db, { limit: 10 });
     const s1 = rows.find((r) => r.sessionId === "s1")!;
     const s2 = rows.find((r) => r.sessionId === "s2")!;
-    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1", metadata: {} });
+    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1", role: "worker", metadata: {} });
     // hook の統計に state event は乗らない
     expect(s1.eventCount).toBe(1);
     expect(s1.lastHook).toBe("PostToolUse");
@@ -275,6 +276,14 @@ describe("session state events (producer 2, #127)", () => {
     // rev の無い event どうしは到着順。received_at (ccx-agent の時計) は見ない
     ingest(db, [state("s1", { archived: false, label: "later-but-older-clock", task: "" }, { receivedAtMs: 500, seq: 0 })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.label).toBe("later-but-older-clock");
+  });
+
+  test("a role that is not one line is held as none, as core reads it (packages/core/testdata/role-cases.json)", async () => {
+    const { rule } = (await Bun.file(join(import.meta.dir, "../../../packages/core/testdata/role-cases.json")).json()) as { rule: { value: string; valid: boolean }[] };
+    for (const { value, valid } of rule) {
+      ingest(db, [hook("s1"), state("s1", { archived: false, label: "", task: "", role: value })]);
+      expect([value, listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s1")!.state?.role]).toEqual([value, valid ? value : ""]);
+    }
   });
 
   test("metadata rides along as given; non-string values and keys core would refuse are dropped", () => {
@@ -322,10 +331,10 @@ describe("session state events (producer 2, #127)", () => {
     const rows = listSessions(db, { limit: 10 });
     expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
     // 型の合わない値は落とす (truthy な文字列は true ではない)
-    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
+    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t", role: "", metadata: {} });
     // その session 宛ての読めない state が後から届いても、前の読める state が残る (墓標にならない)
     ingest(db, [ev({ producer: 2, payload: { session_id: "s3", state: "broken" } }), ev({ producer: 2, payload: { session_id: "s3", state: ["archived"] } })]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t", role: "", metadata: {} });
     // 読めない state しか無ければ null
     ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();

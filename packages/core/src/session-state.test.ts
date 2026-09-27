@@ -18,6 +18,10 @@ import {
 } from "./session-state.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const roleCases = (await Bun.file(join(import.meta.dir, "../testdata/role-cases.json")).json()) as {
+  rule: { value: string; valid: boolean }[];
+  read: { file?: string; hex?: string; role: string }[];
+};
 /** label の履歴。時刻は書いた瞬間のものなので形だけ見る */
 const h = (...labels: string[]) => labels.map((label) => ({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), label }));
 let home: string;
@@ -44,20 +48,47 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
     // hook が ccx を通さず書いた label は履歴に残らない (ccx が見ていない)
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
+
+    // role も同じ形: 1 行のファイル、空文字で消える、他の鍵は触らない
+    expect((await writeDeclared(SID, { role: "worker" }, home)).role).toBe("worker");
+    expect(await Bun.file(join(home, "sessions", SID, "role")).text()).toBe("worker\n");
+    expect(await writeDeclared(SID, { role: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
+    expect(await Bun.file(join(home, "sessions", SID, "role")).exists()).toBe(false);
+    expect(normalizeDeclared({ role: "pm" }).role).toBe("pm");
+    expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, role: "pm" })).toBe(false);
+    expect(isEmptyDeclared({ ...EMPTY_DECLARED, role: "pm" })).toBe(false);
+
+    // role は 1 行。書くときは拒み (何も書かない)、保存先やファイルから来た合わない値は「無い」と読む
+    // 読み手と同じく trim して書く: ファイルと読んだ値を食い違わせない
+    await writeDeclared(SID, { role: " worker " }, home);
+    expect(await Bun.file(join(home, "sessions", SID, "role")).text()).toBe("worker\n");
+    // 判定は trim の後: 読み手が "worker" と読む値を、書くときだけ拒まない
+    expect((await writeDeclared(SID, { role: "worker\n" }, home)).role).toBe("worker");
+    for (const { value, valid } of roleCases.rule) {
+      if (valid) continue;
+      await expect(writeDeclared(SID, { role: value }, home)).rejects.toThrow(/invalid role/);
+    }
+    expect((await readDeclared(SID, home)).role).toBe("worker");
+    for (const { value, valid } of roleCases.rule) expect([value, normalizeDeclared({ role: value }).role]).toEqual([value, valid ? value : ""]);
+    for (const c of roleCases.read) {
+      await Bun.write(join(home, "sessions", SID, "role"), c.hex ? Buffer.from(c.hex, "hex") : c.file!);
+      expect([c.file ?? c.hex, (await readDeclared(SID, home)).role]).toEqual([c.file ?? c.hex, c.role]);
+    }
+    await writeDeclared(SID, { role: "" }, home);
   });
 
   test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {
