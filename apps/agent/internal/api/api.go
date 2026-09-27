@@ -111,7 +111,7 @@ func ts(t time.Time) *timestamppb.Timestamp {
 }
 
 // ReadDeclared reads a session's declared state the way session-state.ts
-// readDeclared does: archived is an empty file, label / task / heartbeat are
+// readDeclared does: archived is an empty file, label / task / role / heartbeat are
 // trimmed text, metadata is meta/<key> with one trailing newline removed.
 // A meta/ that is there but unreadable is an error, not an empty set.
 func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
@@ -119,7 +119,7 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 		b, _ := os.ReadFile(filepath.Join(dir, name))
 		return strings.TrimSpace(string(b))
 	}
-	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Metadata: map[string]string{}}
+	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Role: text("role"), Metadata: map[string]string{}}
 	// Bun.file().exists(), which the TS reader uses, is false for a directory.
 	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		st.Archived = true

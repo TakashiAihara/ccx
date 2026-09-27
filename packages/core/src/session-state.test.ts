@@ -44,20 +44,29 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
     // hook が ccx を通さず書いた label は履歴に残らない (ccx が見ていない)
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
+
+    // role も同じ形: 1 行のファイル、空文字で消える、他の鍵は触らない
+    expect((await writeDeclared(SID, { role: "worker" }, home)).role).toBe("worker");
+    expect(await Bun.file(join(home, "sessions", SID, "role")).text()).toBe("worker\n");
+    expect(await writeDeclared(SID, { role: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
+    expect(await Bun.file(join(home, "sessions", SID, "role")).exists()).toBe(false);
+    expect(normalizeDeclared({ role: "pm" }).role).toBe("pm");
+    expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, role: "pm" })).toBe(false);
+    expect(isEmptyDeclared({ ...EMPTY_DECLARED, role: "pm" })).toBe(false);
   });
 
   test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {

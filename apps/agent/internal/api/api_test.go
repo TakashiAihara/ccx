@@ -43,6 +43,7 @@ func TestReadDeclared(t *testing.T) {
 	write(t, filepath.Join(dir, "archived"), "")
 	write(t, filepath.Join(dir, "label"), " fix ci \n")
 	write(t, filepath.Join(dir, "task"), "ccx#34\n")
+	write(t, filepath.Join(dir, "role"), "worker\n")
 	write(t, filepath.Join(dir, "heartbeat"), "on\n")
 	write(t, filepath.Join(dir, "meta", "done"), "")
 	write(t, filepath.Join(dir, "meta", "note"), " two lines\nkept \n")
@@ -63,8 +64,8 @@ func TestReadDeclared(t *testing.T) {
 	if o, _, _ := ReadDeclared(other); o.Archived {
 		t.Error("a directory named archived read as archived")
 	}
-	if !st.Archived || st.Label != "fix ci" || st.Task != "ccx#34" || hb != "on" {
-		t.Errorf("got archived=%v label=%q task=%q heartbeat=%q", st.Archived, st.Label, st.Task, hb)
+	if !st.Archived || st.Label != "fix ci" || st.Task != "ccx#34" || st.Role != "worker" || hb != "on" {
+		t.Errorf("got archived=%v label=%q task=%q role=%q heartbeat=%q", st.Archived, st.Label, st.Task, st.Role, hb)
 	}
 	want := map[string]string{"done": "", "note": " two lines\nkept "}
 	if len(st.Metadata) != len(want) {

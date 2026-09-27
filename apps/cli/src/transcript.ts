@@ -177,7 +177,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
       if (r.state) {
         const meta = Object.keys(r.state.metadata);
-        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
+        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, r.state.role && `role: ${r.state.role}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
         if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
       }
     });
@@ -252,7 +252,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
            -- 値だけを並べる: state.json をそのまま文字列にすると "label" / "archived" 等のキー名が全行に当たる。
            -- metadata は key も入れる: 値の無い key (done 等) は key そのものが中身
            SELECT session_id, machine, "user", 'ccx.state', label_recorded_at,
-                  concat_ws(chr(10), label, task, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), chr(10)))
+                  concat_ws(chr(10), label, task, role, metadata::VARCHAR, array_to_string(json_extract_string(json, '$.labelHistory[*].label'), chr(10)))
            FROM sessions
          )
          WHERE contains(lower(body), lower(${q(text!)}))

@@ -97,19 +97,20 @@ ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give a
 ccx session mark archived --off <id>
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
+ccx session role worker       # what the session is; free text, ccx gives it no meaning
 ccx session meta set done     # your own keys; ccx gives them no meaning (~/.claude/sessions/<id>/meta/<key>)
 ccx session meta set owner=alice
 ccx session meta unset done
-ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task, metadata
+ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task, role, metadata
 ```
 
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
 here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared:
 `archived` (folded away — the word the Claude Desktop app uses; the only flag, on purpose), a
-free-text `label` and one external `task` reference. `ccx session ls` and `ccx tr ls` show them;
+free-text `label`, one external `task` reference and a free-text `role`. `ccx session ls` and `ccx tr ls` show them;
 `ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
 machine that holds none yet (marks already set there are never overwritten). With a center
-configured, every `mark` / `label` / `task` also reports the state there, so `ccx session ls` shows
+configured, every `mark` / `label` / `task` / `role` also reports the state there, so `ccx session ls` shows
 other machines' and users' flags from the center's own database (this machine's rows come from its
 own files, plus one store GET to tell `remote` from `unknown`). What you *do* with
 `archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
@@ -145,7 +146,7 @@ every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest
 (`transcripts/machine=<m>/user=<u>/session_id=<id>/transcript.jsonl`, byte-identical to the local
-file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.json` (the declared flags, label, its history, task and metadata) and an
+file, plus `tool-results/`, `subagents/`, `workflows/`, `session.json`, `state.json` (the declared flags, label, its history, task, role and metadata) and an
 append-only `history/` of every push and pull).
 `search` needs nothing installed: `ccx` carries DuckDB and its `httpfs` extension and writes them to
 `~/.cache/ccx/duckdb/<version>-<platform>-<arch>/` on first use (the binary is ~175 MB for that

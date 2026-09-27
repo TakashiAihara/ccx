@@ -262,11 +262,11 @@ describe("session state events (producer 2, #127)", () => {
     ev({ producer: 2, payload: { session_id: sid, state: s }, ...over });
 
   test("the latest state per session rides on the row; state events do not count as hooks", () => {
-    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1" }), hook("s2")]);
+    ingest(db, [hook("s1"), state("s1", { archived: false, label: "first", task: "" }), state("s1", { archived: true, label: "second", task: "kaneo ccx#1", role: "worker" }), hook("s2")]);
     const rows = listSessions(db, { limit: 10 });
     const s1 = rows.find((r) => r.sessionId === "s1")!;
     const s2 = rows.find((r) => r.sessionId === "s2")!;
-    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1", metadata: {} });
+    expect(s1.state).toEqual({ archived: true, label: "second", task: "kaneo ccx#1", role: "worker", metadata: {} });
     // hook の統計に state event は乗らない
     expect(s1.eventCount).toBe(1);
     expect(s1.lastHook).toBe("PostToolUse");
@@ -322,10 +322,10 @@ describe("session state events (producer 2, #127)", () => {
     const rows = listSessions(db, { limit: 10 });
     expect(rows.map((r) => r.sessionId)).toEqual(["s3"]);
     // 型の合わない値は落とす (truthy な文字列は true ではない)
-    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
+    expect(rows[0]!.state).toEqual({ archived: false, label: "", task: "t", role: "", metadata: {} });
     // その session 宛ての読めない state が後から届いても、前の読める state が残る (墓標にならない)
     ingest(db, [ev({ producer: 2, payload: { session_id: "s3", state: "broken" } }), ev({ producer: 2, payload: { session_id: "s3", state: ["archived"] } })]);
-    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t", metadata: {} });
+    expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s3")!.state).toEqual({ archived: false, label: "", task: "t", role: "", metadata: {} });
     // 読めない state しか無ければ null
     ingest(db, [hook("s4"), ev({ producer: 2, payload: { session_id: "s4", state: "broken" } })]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.sessionId === "s4")!.state).toBeNull();

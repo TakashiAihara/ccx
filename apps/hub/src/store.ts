@@ -50,6 +50,7 @@ export type SessionState = {
   archived: boolean;
   label: string;
   task: string;
+  role: string;
   /** 利用者の key/value。center は意味を持たずに運ぶ (#165)。core の META_KEY に合わない key と string でない値は落とす */
   metadata: Record<string, string>;
 };
@@ -243,6 +244,7 @@ function parseState(payload: Uint8Array): SessionState | null {
       archived: s.archived === true,
       label: typeof s.label === "string" ? s.label : "",
       task: typeof s.task === "string" ? s.task : "",
+      role: typeof s.role === "string" ? s.role : "",
       metadata:
         s.metadata && typeof s.metadata === "object" && !Array.isArray(s.metadata)
           ? Object.fromEntries(Object.entries(s.metadata).filter(([k, v]) => META_KEY.test(k) && typeof v === "string"))

@@ -89,7 +89,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
   const part = (k: string) => `regexp_extract(filename, '/${k}=([^/]+)/', 1)`;
   await c.run(
-    `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task,
+    `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task, json->>'role' AS role,
        coalesce((json->'archived')::VARCHAR = 'true', false) AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
        json->>'$.labelHistory[#-1].at' AS label_recorded_at, json
      FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", content::JSON AS json

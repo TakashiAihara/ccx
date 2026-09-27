@@ -3,7 +3,7 @@
  * 「Session state is ccx's to hold」)。
  *
  * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
- * 宣言 (archived / label / task / heartbeat / metadata) は人か session が書く。archived は
+ * 宣言 (archived / label / task / role / heartbeat / metadata) は人か session が書く。archived は
  * Desktop App と同じ語で「一覧から畳む」宣言。「保存先にだけあり手元に無い」観測は remote
  * と呼び、語を分ける。top level は ccx が定義する鍵 (作用する / 形と列を決める)。metadata は利用者の語彙
  * (done / pinned 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
@@ -33,6 +33,8 @@ export type DeclaredState = {
   archived: boolean;
   label: string;
   task: string;
+  /** 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない。宛先の指定に使う (docs/design/scope.md) */
+  role: string;
   /** この session の heartbeat の上書き。空なら ccx-agent の既定に従う (docs/design/heartbeat.md) */
   heartbeat: Heartbeat;
   /** 利用者の key/value。ccx は意味を持たない。値が空文字でも key があれば「立っている」 */
@@ -90,7 +92,7 @@ const asHeartbeat = (v: unknown): Heartbeat => (HEARTBEATS as readonly unknown[]
 export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 
 const FLAG_FILE: Record<Flag, string> = { archived: "archived" };
-const TEXT_FILE = { label: "label", task: "task", heartbeat: "heartbeat" } as const;
+const TEXT_FILE = { label: "label", task: "task", role: "role", heartbeat: "heartbeat" } as const;
 
 /**
  * ccx を通して宣言したことがある、の印。空の状態 (全部外した) と「一度も宣言していない」を
@@ -99,14 +101,14 @@ const TEXT_FILE = { label: "label", task: "task", heartbeat: "heartbeat" } as co
  */
 const DECLARED_FILE = ".ccx-declared";
 
-export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", heartbeat: "", metadata: {}, labelHistory: [] };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
 export const isFlag = (s: string): s is Flag => (FLAGS as readonly string[]).includes(s);
 
 export const isEmptyDeclared = (s: DeclaredState) =>
-  flagsOf(s).length === 0 && !s.label && !s.task && !s.heartbeat && Object.keys(s.metadata).length === 0 && s.labelHistory.length === 0;
+  flagsOf(s).length === 0 && !s.label && !s.task && !s.role && !s.heartbeat && Object.keys(s.metadata).length === 0 && s.labelHistory.length === 0;
 
 /** 立っている flag の名前。`ls` の列と JSON の両方で使う */
 export const flagsOf = (s: DeclaredState): Flag[] => FLAGS.filter((f) => s[f]);
@@ -118,6 +120,7 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
     archived: r.archived === true,
     label: typeof r.label === "string" ? r.label : "",
     task: typeof r.task === "string" ? r.task : "",
+    role: typeof r.role === "string" ? r.role : "",
     heartbeat: asHeartbeat(r.heartbeat),
     metadata: cleanMetadata(r.metadata),
     labelHistory: cleanLabelHistory(r.labelHistory),
@@ -133,6 +136,7 @@ export const sameDeclared = (a: DeclaredState, b: DeclaredState) =>
   FLAGS.every((f) => a[f] === b[f]) &&
   a.label === b.label &&
   a.task === b.task &&
+  a.role === b.role &&
   a.heartbeat === b.heartbeat &&
   sameMetadata(a.metadata, b.metadata) &&
   a.labelHistory.length === b.labelHistory.length &&
@@ -195,19 +199,20 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, label, task, heartbeat, metadata, labelHistory] = await Promise.all([
+  const [archived, label, task, role, heartbeat, metadata, labelHistory] = await Promise.all([
     flag("archived"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
+    text(TEXT_FILE.role),
     text(TEXT_FILE.heartbeat),
     readMetadata(dir),
     readLabelHistory(dir),
   ]);
-  return { archived, label, task, heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
+  return { archived, label, task, role, heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
 }
 
 /**
- * 差分だけ書く。flag は空ファイルの有無、label / task / heartbeat は中身 (空文字なら消す)。
+ * 差分だけ書く。flag は空ファイルの有無、label / task / role / heartbeat は中身 (空文字なら消す)。
  * metadata は key ごとに、文字列ならその値で置き (空文字は値なし)、null なら消す。
  * label が今と変われば labels.jsonl に 1 行足す。labelHistory を渡したら (pull) 足さずに丸ごと置く。
  * 渡さなかった鍵は触らない。手元で何も変わらない patch (無い key の unset 等) でも
@@ -246,7 +251,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
     if (patch[f]) await Bun.write(p, "");
     else await rm(p, { force: true });
   }
-  for (const k of ["label", "task", "heartbeat"] as const) {
+  for (const k of ["label", "task", "role", "heartbeat"] as const) {
     if (patch[k] === undefined) continue;
     const p = join(dir, TEXT_FILE[k]);
     if (patch[k]) await Bun.write(p, `${patch[k]}\n`);

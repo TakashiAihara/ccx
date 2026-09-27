@@ -9,7 +9,7 @@ it lives, and how it travels. (#127)
 | Kind | Values | Who writes it | Where it comes from |
 |---|---|---|---|
 | Observed | `running` / `ended` / `remote` / `unknown` | nobody — derived | a live pid (`~/.claude/sessions/<pid>.json`), a local transcript, a copy in the store |
-| Declared | `archived` (flag), `label` (free text), `task` (one external reference), `heartbeat` (on / off override), `metadata` (the user's own key/value) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
+| Declared | `archived` (flag), `label` (free text), `task` (one external reference), `role` (free text), `heartbeat` (on / off override), `metadata` (the user's own key/value) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
 
 `remote` means "no transcript on this machine, a copy in the store": it is what `push` + `prune`
 leave behind, and it is never typed by hand. `unknown` is what ccx says when it cannot tell — no
@@ -23,7 +23,7 @@ with it — fold it in a list, push and prune it, close it — stays on the meth
 
 There is no other flag on purpose. The top-level keys are the ones ccx defines — it acts on them
 (`archived`: `ccx-agent` and the `--archived` selectors; `heartbeat`: `ccx-agent`) or gives them a
-fixed shape and a column (`label`, `task`).
+fixed shape and a column (`label`, `task`, `role`).
 Everything else a workflow wants to hang on a session goes in `metadata` (#165, 2026-09-26,
 replacing #135's "the user's markers stay their own files"). ccx is a public tool, so which markers
 exist is the user's vocabulary, not ccx's: one person's `done` / `pinned` / `delete-on-end` are
@@ -41,6 +41,7 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `archived` | `~/.claude/sessions/<id>/archived` | empty file present = true |
 | `label` | `…/label` | one line of text |
 | `task` | `…/task` | one line of text, e.g. `kaneo ccx#1`, `owner/repo#123` |
+| `role` | `…/role` | one line of text, e.g. `worker`, `pm` |
 | `heartbeat` | `…/heartbeat` | `on` / `off`; absent = `ccx-agent`'s default |
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 | `labelHistory` | `…/labels.jsonl` | one `{"at": <ISO 8601 UTC>, "label": <text>}` line per change, oldest first; a clear is a line with `""` |
@@ -114,7 +115,7 @@ Two copies leave the machine, for two readers:
 - `state.json` in the store, next to `session.json` (`transcript-store.md`): what `pull` installs on
   another machine. Written by `ccx tr push`.
 - an event at the center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
-  shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` / `meta` right after the local
+  shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` / `role` / `meta` right after the local
   write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
   and the next mark sends the whole state again; a center that accepts and never answers is cut off
   after a short deadline (and reported as "not confirmed", since it may have been recorded); a config
@@ -144,6 +145,7 @@ missing (`null`) is "the center / the store has not heard", not "no mark".
 | `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to the center if one is configured |
 | `ccx session label <text> [id]` | set the label; an empty string clears it; report as above |
 | `ccx session task <ref> [id]` | set the task reference; an empty string clears it; report as above |
+| `ccx session role <role> [id]` | set the role; an empty string clears it; report as above |
 | `ccx session meta set <key>[=<value>] [id]` | set a metadata key, with or without a value; report as above |
 | `ccx session meta unset <key> [id]` | remove a metadata key; report as above |
 | `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
@@ -158,7 +160,7 @@ prefix is accepted when it is unique among local transcripts and marked sessions
 accepted even when nothing local knows it (a mark may precede the transcript). Ids are lowercased:
 Claude Code's are, and on Linux `0F9A…/archived` would be a different directory that `push` never
 reads. A directory under `~/.claude/sessions/` counts as marked (for prefix resolution) only while a
-mark file (a metadata file under `meta/` included) is in it. Separately, every `ccx session mark / label / task / meta` leaves `.ccx-declared` there:
+mark file (a metadata file under `meta/` included) is in it. Separately, every `ccx session mark / label / task / role / meta` leaves `.ccx-declared` there:
 "this machine has declared state for this session", which is what keeps a cleared `archived` from
 coming back from an older copy in the store. The store is read strictly: a missing `state.json` is
 "no state", but a store that does not answer is an error, never an empty store. The local `meta/`
@@ -168,6 +170,29 @@ transcript without writing `state.json` (exit 1), `pull` treats it as holding a 
 `session ls` shows its row with `state: null`, and `--archived` skips it (exit 1); each with a note
 on stderr. Prefix resolution still counts it as a candidate, so an ambiguous prefix stays
 ambiguous, while `mark` / `status` on that session itself fail with the read error.
+
+## Role
+
+`role` says what a session *is* — `worker`, `pm`, whatever the user's methodology names (kaneo
+ccx#47, 2026-09-27). It is top level, not `metadata`, because ccx itself uses it: `scope.md` counts
+"attach a role to a session" and "address a session by role" as ccx's job, and ccx never reads a
+metadata key. What it is not:
+
+- a vocabulary: ccx gives no value a meaning and checks none. Which roles exist, and what a
+  `worker` may not do, is the methodology's (`scope.md`)
+- required: most sessions have none, and an unset role changes nothing
+- a set: one value per session. A session that is two things gets a value naming both; a list is
+  added when addressing needs one, not before
+- history: a later write replaces it, unlike `label` (whose history is kept because names are
+  searched for)
+- a name: `label` is what a session is called and what it is doing now, and the auto-label hook
+  rewrites it every prompt; `role` is set on purpose and stays until someone changes it
+
+The repodir's `.git/ccx.json` `role` of GitHub ccx#82 (not built) is a launch default, not a second
+source: the launcher writes it into the session with `ccx session role`, and from then on the
+session's declared state is what everything reads — the center, `ccx-agent status`, a hook deciding
+how to treat a worker. One place is written; changing a running session's role does not touch the
+repodir.
 
 ## Not here
 

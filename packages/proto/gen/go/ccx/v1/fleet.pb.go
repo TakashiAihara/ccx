@@ -221,7 +221,9 @@ type SessionState struct {
 	Label    string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
 	Task     string                 `protobuf:"bytes,3,opt,name=task,proto3" json:"task,omitempty"`
 	// 利用者の key/value。center は意味を持たずに運ぶ (#165)
-	Metadata      map[string]string `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Metadata map[string]string `protobuf:"bytes,4,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない (kaneo ccx#47)
+	Role          string `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -282,6 +284,13 @@ func (x *SessionState) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *SessionState) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
 }
 
 // 1 件の event。origin と seq は ccx-agent が付けた値、それ以外の派生値は center が
@@ -708,12 +717,13 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\vevent_count\x18\a \x01(\x04R\n" +
 	"eventCount\x12\x1b\n" +
 	"\tlast_hook\x18\b \x01(\tR\blastHook\x12*\n" +
-	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"\xd1\x01\n" +
+	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"\xe5\x01\n" +
 	"\fSessionState\x12\x1a\n" +
 	"\barchived\x18\x01 \x01(\bR\barchived\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
 	"\x04task\x18\x03 \x01(\tR\x04task\x12>\n" +
-	"\bmetadata\x18\x04 \x03(\v2\".ccx.v1.SessionState.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\x04 \x03(\v2\".ccx.v1.SessionState.MetadataEntryR\bmetadata\x12\x12\n" +
+	"\x04role\x18\x05 \x01(\tR\x04role\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x02\n" +
