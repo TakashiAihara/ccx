@@ -558,6 +558,16 @@ describe("ccx session with a center: marks are reported as events, and session l
     // center に 1 件も届いていない他マシンの session は null
     expect(by(SID4).state).toBeNull();
 
+    // 表: metadata は右端の列。値に区切りがあれば JSON の文字列 (status と同じ形)
+    await writeDeclared(SID, { metadata: { done: "", owner: "a b" } }, homeA);
+    const t = await run(["ls"]);
+    expect(t.code).toBe(0);
+    const line = (id: string) => t.out.split("\n").find((l) => l.startsWith(id.slice(0, 8)))!;
+    expect(line(SID)).toMatch(/\blocal\s+done,owner="a b"$/);
+    expect(line(SID2)).toMatch(/\bfrom-x\s+owner=x$/);
+    expect(line(SID3)).not.toMatch(/=/);
+    await rm(join(homeA, "sessions", SID, "meta"), { recursive: true });
+
     // このマシンの 1 行の印が読めなくても一覧は出る。その行は null
     await Bun.write(join(homeA, "sessions", SID, "meta"), "not a dir");
     const broken = await run(["ls", "--json"]);

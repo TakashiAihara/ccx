@@ -192,6 +192,16 @@ export async function declaredFor(
   return remote ?? local;
 }
 
+/**
+ * metadata を 1 セルにする (`status` の表と `session ls` の右端の列)。値に区切り (, =) や
+ * 空白・引用符があれば JSON の文字列で出す。1 行 1 項目の表を崩さない。切り詰めない:
+ * `ls` では右端の列なので長くても他の列はずれず、全体は --json にある。
+ */
+export const metadataText = (m: DeclaredState["metadata"]): string =>
+  Object.entries(m)
+    .map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`))
+    .join(",");
+
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
   table([
     ["session", id],
@@ -202,8 +212,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["label history", s.labelHistory.length ? `${s.labelHistory.length} entries` : "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
-    // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
-    ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
+    ["metadata", metadataText(s.metadata) || "-"],
   ]);
 
 export function registerSessionState(session: Command): void {

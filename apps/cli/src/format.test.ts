@@ -21,6 +21,10 @@ describe("table", () => {
     expect(table([["a", "xx"], ["bbb", "y"]])).toEqual(["a    xx", "bbb  y"]);
   });
 
+  test("全角のセルも端末の桁で揃える (右の列がずれない)", () => {
+    expect(table([["調査｜読む", "k=v"], ["ab", "x"]])).toEqual(["調査｜読む  k=v", "ab          x"]);
+  });
+
   test("空の表で落ちない", () => {
     // Math.max(...[]) は -Infinity になる。padEnd(-Infinity) は例外を投げる
     expect(table([])).toEqual([]);
