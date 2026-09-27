@@ -76,6 +76,8 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     // 読み手と同じく trim して書く: ファイルと読んだ値を食い違わせない
     await writeDeclared(SID, { role: " worker " }, home);
     expect(await Bun.file(join(home, "sessions", SID, "role")).text()).toBe("worker\n");
+    // 判定は trim の後: 読み手が "worker" と読む値を、書くときだけ拒まない
+    expect((await writeDeclared(SID, { role: "worker\n" }, home)).role).toBe("worker");
     for (const { value, valid } of roleCases.rule) {
       if (valid) continue;
       await expect(writeDeclared(SID, { role: value }, home)).rejects.toThrow(/invalid role/);

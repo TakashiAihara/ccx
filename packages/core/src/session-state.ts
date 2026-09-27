@@ -238,10 +238,12 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
  */
 export async function writeDeclared(sessionId: string, patch: DeclaredPatch, home = claudeHome()): Promise<DeclaredState> {
   for (const k of Object.keys(patch.metadata ?? {})) if (!isMetaKey(k)) throw new Error(`invalid metadata key ${JSON.stringify(k)}`);
-  if (patch.role !== undefined && !ROLE.test(patch.role)) throw new Error(`invalid role ${JSON.stringify(patch.role)}: ${ROLE_RULE}`);
+
   // 読み手 (readDeclared) は trim した値を返す。ファイルにも履歴にも同じ値を書く: " a " を重ねて記録しない
   if (patch.label !== undefined) patch = { ...patch, label: patch.label.trim() };
   if (patch.role !== undefined) patch = { ...patch, role: patch.role.trim() };
+  // trim の後に判定する: 読み手は trim した値を見るので、末尾の改行だけの "worker\n" は "worker" として通す
+  if (patch.role !== undefined && !ROLE.test(patch.role)) throw new Error(`invalid role ${JSON.stringify(patch.role)}: ${ROLE_RULE}`);
 
   const dir = sessionDir(sessionId, home);
   await mkdir(dir, { recursive: true });

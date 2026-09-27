@@ -90,11 +90,16 @@ func TestReadDeclared(t *testing.T) {
 		}
 	}
 	for _, c := range cases.Read {
-		content := []byte(c.Hex)
-		if c.File != nil {
+		var content []byte
+		switch {
+		case c.File != nil:
 			content = []byte(*c.File)
-		} else if content, err = hex.DecodeString(c.Hex); err != nil {
-			t.Fatal(err)
+		case c.Hex != "":
+			if content, err = hex.DecodeString(c.Hex); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("a read case with neither file nor hex: %+v", c)
 		}
 		if err := os.WriteFile(filepath.Join(other, "role"), content, 0o644); err != nil {
 			t.Fatal(err)
