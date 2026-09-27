@@ -13,14 +13,15 @@ export function humanSince(ms: number, now = Date.now()): string {
 
 /**
  * 列を揃えて 1 行にする。空の表を渡されたら空配列を返す (Math.max(...[]) が
- * -Infinity になるのを踏まない)。
+ * -Infinity になるのを踏まない)。幅は端末上の桁 (Bun.stringWidth) で測る。`.length` では
+ * 全角 (label や検索の抜粋に普通に出る) の後ろの列がずれる。
  */
 export function table(rows: string[][]): string[] {
   if (rows.length === 0) return [];
-  const width = rows[0]!.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? "").length)));
+  const width = rows[0]!.map((_, i) => Math.max(...rows.map((r) => Bun.stringWidth(r[i] ?? ""))));
   return rows.map((r) =>
     r
-      .map((c, i) => (i === r.length - 1 ? c : c.padEnd(width[i]!)))
+      .map((c, i) => (i === r.length - 1 ? c : c + " ".repeat(width[i]! - Bun.stringWidth(c))))
       .join("  ")
       .trimEnd(),
   );

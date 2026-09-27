@@ -36,7 +36,7 @@ import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
-import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
+import { declaredFor, lifecycleOf, metadataText, registerSessionState } from "./session-state.ts";
 import { registerTranscript } from "./transcript.ts";
 
 // release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
@@ -389,9 +389,13 @@ session
         s.lastHook,
         s.cwd,
         state?.label ?? "",
+        // 行ごとに長さが変わるので右端に置く。全体は --json
+        state ? metadataText(state.metadata) : "",
       ];
     });
-    for (const line of table(rows)) console.log(line);
+    // 見出しが無いと、値の無い metadata (`done`) と label の `done` を見分けられない
+    const header = ["session", "machine", "user", "lifecycle", "flags", "events", "age", "hook", "cwd", "label", "metadata"];
+    for (const line of table([header, ...rows])) console.log(line);
 
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する

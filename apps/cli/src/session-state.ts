@@ -192,6 +192,19 @@ export async function declaredFor(
   return remote ?? local;
 }
 
+/**
+ * metadata を 1 セルにする (`status` の表と `session ls` の右端の列)。値に区切り (, =)・
+ * 空白・引用符・制御文字があれば JSON の文字列で出す。1 行 1 項目の表を崩さず、他の
+ * マシンが center に送った値が端末を操作する (ESC で画面を消す等) のも防ぐ。key は並べ直す:
+ * Object.entries は数字だけの key を先に出し、core の辞書順と食い違う。切り詰めない:
+ * 右端なので他の列はずれない。端末の幅を超えた分は折り返す (全体は --json)。
+ */
+export const metadataText = (m: DeclaredState["metadata"]): string =>
+  Object.entries(m)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => (!v ? k : /[,=\s"\p{Cc}\p{Cf}]/u.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`))
+    .join(",");
+
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
   table([
     ["session", id],
@@ -202,8 +215,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["label history", s.labelHistory.length ? `${s.labelHistory.length} entries` : "-"],
     ["task", s.task || "-"],
     ["heartbeat", s.heartbeat || "default"],
-    // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
-    ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
+    ["metadata", metadataText(s.metadata) || "-"],
   ]);
 
 export function registerSessionState(session: Command): void {

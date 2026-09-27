@@ -106,7 +106,8 @@ ccx session status [id]       # lifecycle (running / ended / remote) + flags, la
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
 here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared:
 `archived` (folded away — the word the Claude Desktop app uses; the only flag, on purpose), a
-free-text `label` and one external `task` reference. `ccx session ls` and `ccx tr ls` show them;
+free-text `label` and one external `task` reference. `ccx session ls` and `ccx tr ls` show them
+(`session ls` also shows free-form metadata as its rightmost column);
 `ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
 machine that holds none yet (marks already set there are never overwritten). With a center
 configured, every `mark` / `label` / `task` also reports the state there, so `ccx session ls` shows
