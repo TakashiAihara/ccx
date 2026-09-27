@@ -379,6 +379,10 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect(await Bun.file(join(homeA, "sessions", SID, "meta", "done")).text()).toBe("");
     expect((await readDeclared(SID, homeA)).metadata).toEqual({ done: "", owner: "alice=b" });
     expect((await run(["status", SID])).out).toMatch(/metadata\s+done,owner="alice=b"/);
+    // 制御文字は JSON の escape で出す (他のマシンの値が端末を操作しない)。数字の key も辞書順
+    await writeDeclared(SID, { metadata: { "10": "a", "2": "\u001b[2J" } }, homeA);
+    expect((await run(["status", SID])).out).toMatch(/metadata\s+10=a,2="\\u001b\[2J",done,owner="alice=b"/);
+    await writeDeclared(SID, { metadata: { "10": null, "2": null } }, homeA);
     // key= は key だけと同じ (値なし)
     expect(JSON.parse((await run(["meta", "set", "flag=", SID, "--json"])).out).metadata.flag).toBe("");
     expect(JSON.parse((await run(["meta", "unset", "flag", SID, "--json"])).out).metadata).toEqual({ done: "", owner: "alice=b" });
@@ -563,9 +567,18 @@ describe("ccx session with a center: marks are reported as events, and session l
     const t = await run(["ls"]);
     expect(t.code).toBe(0);
     const line = (id: string) => t.out.split("\n").find((l) => l.startsWith(id.slice(0, 8)))!;
+    const lines = t.out.split("\n");
+    expect(lines[0]).toMatch(/^session\s.*\slabel\s+metadata$/);
     expect(line(SID)).toMatch(/\blocal\s+done,owner="a b"$/);
     expect(line(SID2)).toMatch(/\bfrom-x\s+owner=x$/);
-    expect(line(SID3)).not.toMatch(/=/);
+    // metadata の列は行をまたいで揃う (label の幅が違っても)
+    expect(line(SID).indexOf("done")).toBe(line(SID2).indexOf("owner"));
+    expect(line(SID2).indexOf("owner")).toBe(lines[0]!.indexOf("metadata"));
+    // metadata の無い行は label で終わる。state が null の行は cwd で終わる
+    const sid3 = lines.filter((l) => l.startsWith(SID3.slice(0, 8)));
+    expect(sid3).toHaveLength(2);
+    expect(sid3.some((l) => /\sx3$/.test(l)) && sid3.some((l) => /\sother-user$/.test(l))).toBe(true);
+    expect(line(SID4)).toMatch(/\sPostToolUse\s+\/w$/);
     await rm(join(homeA, "sessions", SID, "meta"), { recursive: true });
 
     // このマシンの 1 行の印が読めなくても一覧は出る。その行は null

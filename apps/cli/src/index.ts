@@ -393,7 +393,9 @@ session
         state ? metadataText(state.metadata) : "",
       ];
     });
-    for (const line of table(rows)) console.log(line);
+    // 見出しが無いと、値の無い metadata (`done`) と label の `done` を見分けられない
+    const header = ["session", "machine", "user", "lifecycle", "flags", "events", "age", "hook", "cwd", "label", "metadata"];
+    for (const line of table([header, ...rows])) console.log(line);
 
     // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
     // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する

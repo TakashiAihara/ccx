@@ -13,8 +13,8 @@ export function humanSince(ms: number, now = Date.now()): string {
 
 /**
  * 列を揃えて 1 行にする。空の表を渡されたら空配列を返す (Math.max(...[]) が
- * -Infinity になるのを踏まない)。幅は端末上の桁 (Bun.stringWidth) で測る。label は
- * 全角が普通で、`.length` で揃えると右の列 (metadata) がずれる。
+ * -Infinity になるのを踏まない)。幅は端末上の桁 (Bun.stringWidth) で測る。`.length` では
+ * 全角 (label や検索の抜粋に普通に出る) の後ろの列がずれる。
  */
 export function table(rows: string[][]): string[] {
   if (rows.length === 0) return [];
