@@ -335,3 +335,32 @@ func TestHubToken_RefusesOtherReadableFile(t *testing.T) {
 		t.Fatal("a 0644 hub-token must fail the load")
 	}
 }
+
+// The agent API's token has its own env and file, apart from the hub token,
+// and a file other users can read is refused like hub-token.
+func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("hub\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h"))
+	if err != nil || c.APIToken != "" {
+		t.Fatalf("only a hub-token: api token %q (%v), want empty", c.APIToken, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api-token"), []byte(" api \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h")); c.APIToken != "api" {
+		t.Errorf("file: %q, want trimmed api", c.APIToken)
+	}
+	if c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_API_TOKEN": "env"}), noGit, fixedHost("h")); c.APIToken != "env" {
+		t.Errorf("env should beat file: %q", c.APIToken)
+	}
+	if err := os.Chmod(filepath.Join(dir, "api-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h")); err == nil {
+		t.Error("a 0644 api-token must fail the load")
+	}
+}

@@ -64,11 +64,13 @@ handler on two listeners:
   set these the same way for serve (its systemd unit) and for the shell the
   statusline runs in, or the statusline shows nothing as if serve were down.
 - TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
-  every request needs `Authorization: Bearer <hub token>`. Without a hub token
-  serve refuses to open it (the unix side stays up). It is plain HTTP and the
-  hub token is its only guard, and it crosses the network in the clear: anyone
-  who reads it can also write to the center, and any holder can read this
-  host's session labels, tasks and metadata. `claudeHome` in a request is
+  every request needs `Authorization: Bearer <API token>` (`CCX_API_TOKEN`, else
+  the file `api-token` next to config.toml, mode 0600). Without one serve
+  refuses to open it (the unix side stays up). The API token is apart from the
+  hub token on purpose: reading an agent must not need the center's write
+  credential. One API token is shared by every host. It is plain HTTP, so the
+  token crosses the network in the clear, and any holder can read every host's
+  session labels, tasks and metadata; TLS is #180. `claudeHome` in a request is
   ignored here.
 
 Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
@@ -165,7 +167,8 @@ it simply has no center to forward to.
 | heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
 | status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
-| status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the hub token) |
+| status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the API token) |
+| status API token (TCP) | `CCX_API_TOKEN` | — | — (file `api-token` next to config.toml, 0600) | none |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 

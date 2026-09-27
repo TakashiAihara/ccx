@@ -412,7 +412,7 @@ func TestTCPListener(t *testing.T) {
 
 	work := shortDir(t)
 	addr := free()
-	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: addr, HubToken: "tok"}
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: addr, APIToken: "tok"}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = New(cfg, &Server{ClaudeHome: work}, t.Logf).Run(ctx) }()
@@ -445,7 +445,7 @@ func TestTCPListener(t *testing.T) {
 
 	// The TCP address is taken: the unix side still answers.
 	work3 := shortDir(t)
-	cfg3 := config.Config{APISocketPath: filepath.Join(work3, "a.sock"), APIListen: addr, HubToken: "tok"}
+	cfg3 := config.Config{APISocketPath: filepath.Join(work3, "a.sock"), APIListen: addr, APIToken: "tok"}
 	go func() { _ = New(cfg3, &Server{ClaudeHome: work3}, t.Logf).Run(ctx) }()
 	waitDial(t, "unix", cfg3.APISocketPath)
 	if _, err := UnixClient(cfg3.APISocketPath).GetSessionStatus(context.Background(),
@@ -453,10 +453,12 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("unix side with the TCP address taken: %v", err)
 	}
 
-	// No token configured: the unix side comes up, the TCP side does not.
+	// No API token configured: the unix side comes up, the TCP side does not.
+	// The hub token alone does not open it (it is the center's write credential).
 	work2 := shortDir(t)
 	addr2 := free()
 	cfg2 := config.Config{APISocketPath: filepath.Join(work2, "a.sock"), APIListen: addr2}
+	cfg2.HubToken = "hub-only"
 	go func() { _ = New(cfg2, &Server{ClaudeHome: work2}, t.Logf).Run(ctx) }()
 	waitDial(t, "unix", cfg2.APISocketPath)
 	if c, err := net.Dial("tcp", addr2); err == nil {

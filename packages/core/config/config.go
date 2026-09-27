@@ -80,8 +80,15 @@ type Config struct {
 
 	// APIListen is a TCP address (host:port) where serve also answers
 	// AgentService, for agents on other hosts. Empty (the default) is off. It
-	// requires HubToken: serve refuses to open it without one.
+	// requires APIToken: serve refuses to open it without one.
 	APIListen string
+
+	// APIToken is the Bearer the TCP listener requires (#180). Apart from
+	// HubToken on purpose: a caller that only reads an agent must not hold the
+	// center's write credential, and the TCP side is plain HTTP. One token is
+	// shared by every host (user decision 2026-09-27). CCX_API_TOKEN, else the
+	// file api-token next to config.toml, never git config or config.toml.
+	APIToken string
 }
 
 // Heartbeat is the heartbeat concern's settings.
@@ -183,6 +190,10 @@ func load(
 	if err != nil {
 		return Config{}, err
 	}
+	apiToken, err := tokenFrom(getenv, "CCX_API_TOKEN", "api-token", "the agent API's token")
+	if err != nil {
+		return Config{}, err
+	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
 	if machine == "" {
@@ -233,6 +244,7 @@ func load(
 		ChannelSocketPath: channelSocketPath(getenv),
 		APISocketPath:     apiSocketPath(getenv),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
+		APIToken:          apiToken,
 	}, nil
 }
 
@@ -302,14 +314,21 @@ func pick(vals ...string) string {
 // hubToken fails rather than ignoring a token file it cannot use: a silently
 // empty token turns into "every event refused" with nothing pointing at why.
 func hubToken(getenv func(string) string) (string, error) {
-	if t := strings.TrimSpace(getenv("CCX_HUB_TOKEN")); t != "" {
+	return tokenFrom(getenv, "CCX_HUB_TOKEN", "hub-token", "the center's token")
+}
+
+// tokenFrom is envKey, else the file name next to config.toml, which must not
+// be readable by others. Never git config or config.toml: those get shared
+// along with dotfiles.
+func tokenFrom(getenv func(string) string, envKey, name, holds string) (string, error) {
+	if t := strings.TrimSpace(getenv(envKey)); t != "" {
 		return t, nil
 	}
 	p := configPath(getenv)
 	if p == "" {
 		return "", nil
 	}
-	path := filepath.Join(filepath.Dir(p), "hub-token")
+	path := filepath.Join(filepath.Dir(p), name)
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -318,7 +337,7 @@ func hubToken(getenv func(string) string) (string, error) {
 		return "", err
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds the center's token)", path)
+		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds %s)", path, holds)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {

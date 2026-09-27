@@ -3,7 +3,8 @@
 //
 // One handler, two listeners. The unix socket is always on and guarded by its
 // 0600 mode; the TCP listener is off unless an address is configured, and then
-// demands the hub token. One protocol for both, so a field added is added once.
+// demands the API token (not the hub token: reading an agent must not need the
+// center's write credential). One protocol for both, so a field added is added once.
 package api
 
 import (
@@ -161,7 +162,7 @@ type Concern struct {
 }
 
 func New(cfg config.Config, srv *Server, log func(string, ...any)) *Concern {
-	return &Concern{server: srv, socketPath: cfg.APISocketPath, listen: cfg.APIListen, token: cfg.HubToken, log: log}
+	return &Concern{server: srv, socketPath: cfg.APISocketPath, listen: cfg.APIListen, token: cfg.APIToken, log: log}
 }
 
 func (c *Concern) Name() string { return "api" }
@@ -229,7 +230,7 @@ func (c *Concern) run(ctx context.Context) error {
 		if c.token == "" {
 			// The TCP side is for other hosts; without a token it would answer anyone
 			// on the network. The unix side stays up.
-			c.log("api: not listening on %s: no hub token (CCX_HUB_TOKEN or hub-token) to require", c.listen)
+			c.log("api: not listening on %s: no API token (CCX_API_TOKEN or api-token) to require", c.listen)
 		} else if tln, err := net.Listen("tcp", c.listen); err != nil {
 			c.log("api: not listening on %s: %v", c.listen, err)
 		} else {
