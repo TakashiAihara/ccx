@@ -164,24 +164,37 @@ describe("objects: S3 client round trip", () => {
     for (const t of tokens) expect(t).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
-  test("start-after is echoed as StartAfter (URL-encoded), and a token that is not ours is 400", async () => {
+  test("start-after is echoed as StartAfter (URL-encoded) whenever sent; with a token too, the token sets the position", async () => {
     await s3.write("m=a/1", "x");
     await s3.write("m=a/2", "x");
-    const p = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url&start-after=m%3Da%2F1`)).text();
+    const list = async (params: Record<string, string>) =>
+      (await fetch(`${base}/ccx?${new URLSearchParams({ "list-type": "2", "encoding-type": "url", ...params })}`)).text();
+
+    const p = await list({ "start-after": "m=a/1" });
     expect(p).toContain("<StartAfter>m%3Da/1</StartAfter>");
     expect(p).not.toContain("<ContinuationToken>");
     expect(p).toContain("<Key>m%3Da/2</Key>");
     expect(p).not.toContain("<Key>m%3Da/1</Key>");
 
-    // 両方来たら両方返し、位置は token が決める (S3 と同じ)
-    const t2 = /<NextContinuationToken>([^<]*)</.exec(await (await fetch(`${base}/ccx?list-type=2&max-keys=1`)).text())![1]!;
-    const both = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url&start-after=zzz&continuation-token=${t2}`)).text();
-    expect(both).toContain(`<ContinuationToken>${t2}</ContinuationToken>`);
-    expect(both).toContain("<StartAfter>zzz</StartAfter>");
-    expect(both).toContain("<Key>m%3Da/2</Key>");
+    // 空でも送られたら返す (AWS: "If StartAfter was sent with the request, it is included in the response")
+    expect(await list({ "start-after": "" })).toContain("<StartAfter></StartAfter>");
 
-    const bad = await fetch(`${base}/ccx?list-type=2&continuation-token=m%3Da%2F1`);
-    expect(bad.status).toBe(400);
+    // 両方来たら両方返す (AWS)。位置を token に決めさせるのはこちらの決めで、start-after は無視する
+    const first = /<NextContinuationToken>([^<]*)</.exec(await list({ "max-keys": "1" }))![1]!;
+    const both = await list({ "start-after": "m=a/2", "continuation-token": first });
+    expect(both).toContain(`<ContinuationToken>${first}</ContinuationToken>`);
+    expect(both).toContain("<StartAfter>m%3Da/2</StartAfter>");
+    expect(both).toContain("<Key>m%3Da/2</Key>");
+    expect(both).not.toContain("<Key>m%3Da/1</Key>");
+  });
+
+  test("a continuation token that is not canonical base64url is 400", async () => {
+    await s3.write("m=a/1", "x");
+    // `A` は 1 文字で byte にならない、`AB` は読めるが再エンコードで `AA` になる、`m=a/1` は base64url の字種外
+    for (const bad of ["A", "AB", "m=a/1"]) {
+      const r = await fetch(`${base}/ccx?${new URLSearchParams({ "list-type": "2", "continuation-token": bad })}`);
+      expect(r.status).toBe(400);
+    }
   });
 
   test("a key that collides with an existing object as its directory is 409, not 500", async () => {
