@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -179,7 +180,28 @@ func TestStatus_ReachAndPending(t *testing.T) {
 	if st, _ := srv.Status(); st.Pending != 2 {
 		t.Errorf("with one fallback event: pending=%d, want 2", st.Pending)
 	}
-	_ = os.RemoveAll(srv.spool.IncomingDir())
+	// A temp file still being written is not an event (drain skips it too).
+	if err := os.WriteFile(filepath.Join(srv.spool.IncomingDir(), ".tmp-x"), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := srv.Status(); err != nil || st.Pending != 2 {
+		t.Errorf("with a temp file: pending=%d err=%v, want 2", st.Pending, err)
+	}
+	// No incoming/ at all is nothing pending there, not an error.
+	if err := os.RemoveAll(srv.spool.IncomingDir()); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := srv.Status(); err != nil || st.Pending != 1 {
+		t.Errorf("without incoming/: pending=%d err=%v, want 1 and no error", st.Pending, err)
+	}
+	// An incoming/ that cannot be read is an error, not 0.
+	if err := os.WriteFile(srv.spool.IncomingDir(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Status(); err == nil {
+		t.Error("an unreadable incoming/ read as nothing pending")
+	}
+	_ = os.Remove(srv.spool.IncomingDir())
 	_ = os.MkdirAll(srv.spool.IncomingDir(), 0o700)
 
 	fwd.setDown(false)

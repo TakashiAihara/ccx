@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -455,16 +456,24 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("unix side with the TCP address taken: %v", err)
 	}
 
-	// No API token configured: the unix side comes up, the TCP side does not.
-	// The hub token alone does not open it (it is the center's write credential).
+	// A token config refused (a bad api-token file, a copy of the hub token):
+	// the unix side comes up, the TCP side does not, and the log says why.
 	work2 := shortDir(t)
 	addr2 := free()
-	cfg2 := config.Config{APISocketPath: filepath.Join(work2, "a.sock"), APIListen: addr2}
-	cfg2.HubToken = "hub-only"
-	go func() { _ = New(cfg2, &Server{ClaudeHome: work2}, t.Logf).Run(ctx) }()
+	// A token with a refusal beside it must not open TCP either.
+	cfg2 := config.Config{APISocketPath: filepath.Join(work2, "a.sock"), APIListen: addr2, APIToken: "tok2", APITokenErr: errors.New("api-token is readable by other users")}
+	var mu sync.Mutex
+	var logs []string
+	logf := func(f string, a ...any) { mu.Lock(); defer mu.Unlock(); logs = append(logs, fmt.Sprintf(f, a...)) }
+	go func() { _ = New(cfg2, &Server{ClaudeHome: work2}, logf).Run(ctx) }()
 	waitDial(t, "unix", cfg2.APISocketPath)
 	if c, err := net.Dial("tcp", addr2); err == nil {
 		c.Close()
-		t.Error("TCP listener opened with only the hub token")
+		t.Error("TCP listener opened with the token refused")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(strings.Join(logs, "\n"), "readable by other users") {
+		t.Errorf("logs %q do not say why TCP is closed", logs)
 	}
 }

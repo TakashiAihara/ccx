@@ -228,7 +228,7 @@ func (c *Concern) run(ctx context.Context) error {
 	}
 
 	if c.listen != "" {
-		if c.token == "" {
+		if c.token == "" || c.tokenErr != nil {
 			// The TCP side is for other hosts; without a token it would answer anyone
 			// on the network. The unix side stays up.
 			why := error(errors.New("no API token (CCX_API_TOKEN or api-token) to require"))

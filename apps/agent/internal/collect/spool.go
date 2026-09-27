@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,9 +191,14 @@ func isIncoming(e os.DirEntry) bool {
 	return !e.IsDir() && !strings.HasPrefix(e.Name(), ".tmp-")
 }
 
-// PendingIncoming counts what hooks left in incoming/ and the next start will drain.
+// PendingIncoming counts what hooks left in incoming/ and the next start will
+// drain. A missing incoming/ holds nothing (the hook recreates it when it
+// falls back); any other read error is returned.
 func (s *Spool) PendingIncoming() (int, error) {
 	ents, err := os.ReadDir(s.incoming)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
 	n := 0
 	for _, e := range ents {
 		if isIncoming(e) {
