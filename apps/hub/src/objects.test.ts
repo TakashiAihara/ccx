@@ -176,7 +176,8 @@ describe("objects: S3 client round trip", () => {
     expect(p).toContain("<Key>m%3Da/2</Key>");
     expect(p).not.toContain("<Key>m%3Da/1</Key>");
 
-    // 空でも送られたら返す (AWS: "If StartAfter was sent with the request, it is included in the response")
+    // 空でも送られたら返す。根拠は AWS のリファレンスの文言 ("If StartAfter was sent with the request, it is
+    // included in the response") だけで、実 S3 が空の StartAfter を返すかは確かめていない
     expect(await list({ "start-after": "" })).toContain("<StartAfter></StartAfter>");
 
     // 両方来たら両方返す (AWS)。位置を token に決めさせるのはこちらの決めで、start-after は無視する
@@ -190,10 +191,11 @@ describe("objects: S3 client round trip", () => {
 
   test("a continuation token that is not canonical base64url is 400", async () => {
     await s3.write("m=a/1", "x");
-    // `A` は 1 文字で byte にならない、`AB` は読めるが再エンコードで `AA` になる、`m=a/1` は base64url の字種外
-    for (const bad of ["A", "AB", "m=a/1"]) {
+    // `A` は 1 文字で byte にならない、`AB` は読めるが再エンコードで `AA` になる、`ICA/` は `ICA_` と同じ key に
+    // デコードされるが再エンコードで一致しない。どれも「再エンコードで一致するか」の判定でしか弾けない
+    for (const bad of ["A", "AB", "ICA/"]) {
       const r = await fetch(`${base}/ccx?${new URLSearchParams({ "list-type": "2", "continuation-token": bad })}`);
-      expect(r.status).toBe(400);
+      expect({ bad, status: r.status, code: /<Code>([^<]*)</.exec(await r.text())?.[1] }).toEqual({ bad, status: 400, code: "InvalidArgument" });
     }
   });
 
