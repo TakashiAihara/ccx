@@ -18,10 +18,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
