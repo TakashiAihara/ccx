@@ -324,7 +324,15 @@ func TestSpoolErrorKeepsTheAnswer(t *testing.T) {
 	}
 	home := t.TempDir()
 	write(t, filepath.Join(home, "sessions", sid, "label"), "kept")
-	if err := os.RemoveAll(cfg.SpoolDir); err != nil {
+	// A partial count: the queue reads (one event), then incoming/ does not.
+	// Pending must not carry the half it managed.
+	if err := os.WriteFile(filepath.Join(cfg.SpoolDir, "00000000000000000001.pb"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(cfg.SpoolDir, "incoming")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.SpoolDir, "incoming"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	res, err := (&Server{Collect: col, ClaudeHome: home}).GetSessionStatus(context.Background(),
@@ -509,15 +517,31 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("logs %q do not say why TCP is closed", logs)
 	}
 
-	// No API token at all, only the hub token (the center's write credential,
-	// which the agent never uses here): TCP stays closed.
+	// The hub token set and no API token: New never reads the hub token, so
+	// TCP stays closed (config's own test covers that the hub token is not
+	// picked up as the API token).
 	work4 := shortDir(t)
 	addr4 := free()
 	cfg4 := config.Config{APISocketPath: filepath.Join(work4, "a.sock"), APIListen: addr4}
 	cfg4.HubToken = "hub-only"
-	go func() { _ = New(cfg4, &Server{ClaudeHome: work4}, t.Logf).Run(ctx) }()
+	var mu4 sync.Mutex
+	var logs4 []string
+	go func() {
+		_ = New(cfg4, &Server{ClaudeHome: work4}, func(f string, a ...any) {
+			mu4.Lock()
+			defer mu4.Unlock()
+			logs4 = append(logs4, fmt.Sprintf(f, a...))
+		}).Run(ctx)
+	}()
 	waitDial(t, "unix", cfg4.APISocketPath)
-	time.Sleep(50 * time.Millisecond) // past where TCP would have opened
+	// The decision is logged; once it is, TCP would already be open if it were going to be.
+	said4 := func() bool { mu4.Lock(); defer mu4.Unlock(); return strings.Contains(strings.Join(logs4, "\n"), "no API token") }
+	for i := 0; i < 100 && !said4(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !said4() {
+		t.Errorf("no log says why TCP is closed: %q", logs4)
+	}
 	if c, err := net.Dial("tcp", addr4); err == nil {
 		c.Close()
 		t.Error("TCP listener opened with no API token")

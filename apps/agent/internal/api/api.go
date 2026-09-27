@@ -263,14 +263,14 @@ func (c *Concern) run(ctx context.Context) error {
 
 // serveTCP keeps the TCP side up until ctx ends: a bind that fails (the port
 // still held after a restart, an interface not up yet at boot) or a listener
-// that stops is tried again every retry. A reason repeated is logged once.
+// that stops is tried again every retry. A failure reason repeated is logged
+// once; each successful bind logs its own line.
 func (c *Concern) serveTCP(ctx context.Context, srv *http.Server) {
 	last := ""
 	for ctx.Err() == nil {
 		ln, err := net.Listen("tcp", c.listen)
 		if err == nil {
 			c.log("api: listening on %s (bearer required)", ln.Addr())
-			last = ""
 			served := srv
 			stop := make(chan struct{})
 			go func() {
@@ -285,8 +285,7 @@ func (c *Concern) serveTCP(ctx context.Context, srv *http.Server) {
 			if ctx.Err() != nil {
 				return
 			}
-			// A closed http.Server does not serve again; make a fresh one.
-			srv = &http.Server{Handler: srv.Handler, ReadHeaderTimeout: srv.ReadHeaderTimeout, IdleTimeout: srv.IdleTimeout}
+			// srv was not closed (only ctx closes it), so it can serve again.
 		}
 		if msg := fmt.Sprint(err); msg != last {
 			c.log("api: not listening on %s, retrying every %v: %v", c.listen, c.retry(), err)
