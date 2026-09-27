@@ -257,9 +257,11 @@ func TestIntegration_StatusClient(t *testing.T) {
 
 	serve := startServe(t, bin, env)
 	defer serve.kill()
+	// Until the heartbeat's socket is up too: the concerns start together, and
+	// the API can answer a moment before the channel socket listens.
 	var out string
 	for i := 0; i < 150; i++ {
-		if out, err = status(); err == nil {
+		if out, err = status(); err == nil && strings.Contains(strings.ReplaceAll(out, " ", ""), `"listening":true`) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -282,7 +284,7 @@ func TestIntegration_StatusClient(t *testing.T) {
 		}
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil || got.Declared.Label != "it-label" ||
-		!got.Heartbeat.Enabled || !got.Collect.Enabled || got.Collect.Pending == nil || *got.Collect.Pending != 0 {
+		!got.Heartbeat.Enabled || !got.Heartbeat.Listening || !got.Collect.Enabled || got.Collect.Pending == nil || *got.Collect.Pending != 0 {
 		t.Errorf("status output: %s (%v)", out, err)
 	}
 }

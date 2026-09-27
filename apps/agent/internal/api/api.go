@@ -92,12 +92,12 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 	if s.Collect != nil {
 		st, err := s.Collect.Status()
 		c := out.Collect
+		c.Enabled, c.CenterConfigured, c.Pending = true, st.CenterConfigured, uint32(st.Pending)
 		if err != nil {
 			// A spool problem is collect's, not the session's: say so here and keep
-			// the rest of the answer.
-			c.SpoolError = err.Error()
+			// the rest of the answer. A partial count means nothing (agent.proto).
+			c.SpoolError, c.Pending = err.Error(), 0
 		}
-		c.Enabled, c.CenterConfigured, c.Pending = true, st.CenterConfigured, uint32(st.Pending)
 		c.LastForwardedAt, c.LastErrorAt, c.LastError = ts(st.LastForwarded), ts(st.LastErrorAt), st.LastError
 	}
 	return connect.NewResponse(out), nil
@@ -220,58 +220,84 @@ func (c *Concern) run(ctx context.Context) error {
 	}
 	defer c.lock.Close()
 	defer os.Remove(c.socketPath)
-	servers := []*http.Server{server(handler(c.server))}
-	listeners := []net.Listener{ln}
+	unix := server(handler(c.server))
 	if c.lastErr != "" {
 		c.log("api: up again on %s", c.socketPath)
 		c.lastErr = ""
 	}
 
+	// The TCP side runs on its own and never takes the unix side (statusline)
+	// down with it. It ends with run.
+	tcpCtx, stopTCP := context.WithCancel(ctx)
+	defer stopTCP()
 	if c.listen != "" {
 		if c.token == "" || c.tokenErr != nil {
-			// The TCP side is for other hosts; without a token it would answer anyone
-			// on the network. The unix side stays up.
+			// No usable token (none set, or config refused it): TCP is for other
+			// hosts, and opening it would only refuse everyone. Say why instead;
+			// the unix side stays up.
 			why := error(errors.New("no API token (CCX_API_TOKEN or api-token) to require"))
 			if c.tokenErr != nil {
 				why = c.tokenErr
 			}
 			c.log("api: not listening on %s: %v", c.listen, why)
-		} else if tln, err := net.Listen("tcp", c.listen); err != nil {
-			c.log("api: not listening on %s: %v", c.listen, err)
 		} else {
 			remote := *c.server
 			remote.Remote = true
-			servers = append(servers, server(RequireBearer(c.token, handler(&remote))))
-			listeners = append(listeners, tln)
-			c.log("api: listening on %s (bearer required)", tln.Addr())
+			go c.serveTCP(tcpCtx, server(RequireBearer(c.token, handler(&remote))))
 		}
 	}
 
-	// A TCP side that fails must not take the unix side (statusline) down with
-	// it: it is logged and left. The unix side stopping ends run, and Run opens
-	// it again. Serve already retries temporary accept errors, so an error here
-	// is the listener gone.
+	// The unix side stopping ends run, and Run opens it again. Serve already
+	// retries temporary accept errors, so an error here is the listener gone.
 	unixDone := make(chan error, 1)
-	for i, srv := range servers {
-		go func() {
-			err := srv.Serve(listeners[i])
-			if i == 0 {
-				unixDone <- err
-			} else if !errors.Is(err, http.ErrServerClosed) {
-				c.log("api: %s stopped: %v", listeners[i].Addr(), err)
-			}
-		}()
-	}
+	go func() { unixDone <- unix.Serve(ln) }()
 	select {
 	case <-ctx.Done():
 		err = nil
 	case err = <-unixDone:
 		err = fmt.Errorf("unix socket stopped: %w", err)
 	}
-	for _, srv := range servers {
-		_ = srv.Close()
-	}
+	_ = unix.Close()
 	return err
+}
+
+// serveTCP keeps the TCP side up until ctx ends: a bind that fails (the port
+// still held after a restart, an interface not up yet at boot) or a listener
+// that stops is tried again every retry. A reason repeated is logged once.
+func (c *Concern) serveTCP(ctx context.Context, srv *http.Server) {
+	last := ""
+	for ctx.Err() == nil {
+		ln, err := net.Listen("tcp", c.listen)
+		if err == nil {
+			c.log("api: listening on %s (bearer required)", ln.Addr())
+			last = ""
+			served := srv
+			stop := make(chan struct{})
+			go func() {
+				select {
+				case <-ctx.Done():
+					_ = served.Close()
+				case <-stop:
+				}
+			}()
+			err = served.Serve(ln)
+			close(stop)
+			if ctx.Err() != nil {
+				return
+			}
+			// A closed http.Server does not serve again; make a fresh one.
+			srv = &http.Server{Handler: srv.Handler, ReadHeaderTimeout: srv.ReadHeaderTimeout, IdleTimeout: srv.IdleTimeout}
+		}
+		if msg := fmt.Sprint(err); msg != last {
+			c.log("api: not listening on %s, retrying every %v: %v", c.listen, c.retry(), err)
+			last = msg
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(c.retry()):
+		}
+	}
 }
 
 // listenUnix binds the socket under a lock, as the heartbeat concern does: a
@@ -322,7 +348,7 @@ func RequireBearer(token string, next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+		scheme, got, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
 		// Whitespace around the token is dropped (RFC 9110 allows 1*SP after the
 		// scheme); the token itself has none.
 		got = strings.TrimSpace(got)

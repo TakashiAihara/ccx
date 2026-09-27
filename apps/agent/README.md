@@ -71,9 +71,9 @@ handler on two listeners:
   credential. One API token is shared by every host. It is plain HTTP, so the
   token crosses the network in the clear, and any holder can read every host's
   session labels, tasks and metadata; TLS is #180. `claudeHome` in a request is
-  ignored here. An api-token that cannot be used (readable by others, or the
-  same value as the hub token) keeps TCP closed and is logged; the rest of
-  serve runs.
+  ignored here. An API token that cannot be used (the file readable by others
+  or unreadable, or the same value as the hub token, from the file or
+  `CCX_API_TOKEN`) keeps TCP closed and is logged; the rest of serve runs.
 
 Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
 null whenever no heartbeat is scheduled, and `lastError` stays after a later

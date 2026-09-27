@@ -117,7 +117,7 @@ func TestRequireBearer(t *testing.T) {
 	for _, c := range []struct {
 		header string
 		want   int
-	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Basic s3cret", 401}, {"Bearer s3cret", 200}, {"bearer s3cret", 200}, {"Bearer  s3cret", 200}, {"Bearer s3cretx", 401}} {
+	}{{"", 401}, {"Bearer wrong", 401}, {"s3cret", 401}, {"Basic s3cret", 401}, {"Bearer s3cret", 200}, {"bearer s3cret", 200}, {"Bearer  s3cret", 200}, {" Bearer s3cret ", 200}, {"Bearer s3cretx", 401}} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/", nil)
 		if c.header != "" {
@@ -329,7 +329,7 @@ func TestSpoolErrorKeepsTheAnswer(t *testing.T) {
 	}
 	res, err := (&Server{Collect: col, ClaudeHome: home}).GetSessionStatus(context.Background(),
 		connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid}))
-	if err != nil || res.Msg.Declared.GetLabel() != "kept" || res.Msg.Collect.GetSpoolError() == "" {
+	if err != nil || res.Msg.Declared.GetLabel() != "kept" || res.Msg.Collect.GetSpoolError() == "" || res.Msg.Collect.GetPending() != 0 {
 		t.Errorf("got %v %v, want the label and a spool_error", res, err)
 	}
 }
@@ -398,6 +398,36 @@ func TestRunRetriesUntilItOpens(t *testing.T) {
 	if off != 1 || up != 1 {
 		t.Errorf("logs: %q, want one 'api off' and one 'up again'", logs)
 	}
+}
+
+// A TCP bind that fails (the port still held) is tried again: once the port
+// is free the TCP side comes up, while the unix side answered all along.
+func TestTCPRetriesItsBind(t *testing.T) {
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := holder.Addr().String()
+	cfg := config.Config{APISocketPath: filepath.Join(shortDir(t), "a.sock"), APIListen: addr, APIToken: "tok"}
+	c := New(cfg, &Server{ClaudeHome: t.TempDir()}, t.Logf)
+	c.retryAfter = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+	waitDial(t, "unix", cfg.APISocketPath)
+	time.Sleep(60 * time.Millisecond) // refused at least once
+	holder.Close()
+
+	req := connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid})
+	req.Header().Set("Authorization", "Bearer tok")
+	client := ccxv1connect.NewAgentServiceClient(http.DefaultClient, "http://"+addr)
+	for i := 0; i < 100; i++ {
+		if _, err = client.GetSessionStatus(context.Background(), req); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("the TCP side never came up after the port was freed: %v", err)
 }
 
 // The TCP side answers only with the token, and does not open without one.
@@ -471,9 +501,25 @@ func TestTCPListener(t *testing.T) {
 		c.Close()
 		t.Error("TCP listener opened with the token refused")
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !strings.Contains(strings.Join(logs, "\n"), "readable by other users") {
+	said := func(s string) bool { mu.Lock(); defer mu.Unlock(); return strings.Contains(strings.Join(logs, "\n"), s) }
+	for i := 0; i < 100 && !said("readable by other users"); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !said("readable by other users") {
 		t.Errorf("logs %q do not say why TCP is closed", logs)
+	}
+
+	// No API token at all, only the hub token (the center's write credential,
+	// which the agent never uses here): TCP stays closed.
+	work4 := shortDir(t)
+	addr4 := free()
+	cfg4 := config.Config{APISocketPath: filepath.Join(work4, "a.sock"), APIListen: addr4}
+	cfg4.HubToken = "hub-only"
+	go func() { _ = New(cfg4, &Server{ClaudeHome: work4}, t.Logf).Run(ctx) }()
+	waitDial(t, "unix", cfg4.APISocketPath)
+	time.Sleep(50 * time.Millisecond) // past where TCP would have opened
+	if c, err := net.Dial("tcp", addr4); err == nil {
+		c.Close()
+		t.Error("TCP listener opened with no API token")
 	}
 }
