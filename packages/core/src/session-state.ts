@@ -85,6 +85,15 @@ function cleanLabelHistory(raw: unknown): LabelChange[] {
     .map(({ at, label }) => ({ at, label }));
 }
 
+/**
+ * role は宛先を指す値 (値全体で一致させる) なので 1 行に限る: 制御文字 (改行・タブ) と行区切り (U+2028 / U+2029) を
+ * 通さない。読むときはこれに合わないものを「無い」とし (heartbeat と同じ)、書くときは拒む
+ */
+// apps/hub/src/store.ts の ROLE と apps/agent/internal/api/api.go の role が同じ規則を写している。変えるなら 3 つとも
+export const ROLE = /^[^\p{Cc}\u2028\u2029]*$/u;
+export const ROLE_RULE = "one line: no newline, tab or other control character";
+const asRole = (v: unknown): string => (typeof v === "string" && ROLE.test(v) ? v : "");
+
 export const HEARTBEATS = ["on", "off"] as const;
 export type Heartbeat = (typeof HEARTBEATS)[number] | "";
 const asHeartbeat = (v: unknown): Heartbeat => (HEARTBEATS as readonly unknown[]).includes(v) ? (v as Heartbeat) : "";
@@ -120,7 +129,7 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
     archived: r.archived === true,
     label: typeof r.label === "string" ? r.label : "",
     task: typeof r.task === "string" ? r.task : "",
-    role: typeof r.role === "string" ? r.role : "",
+    role: asRole(r.role),
     heartbeat: asHeartbeat(r.heartbeat),
     metadata: cleanMetadata(r.metadata),
     labelHistory: cleanLabelHistory(r.labelHistory),
@@ -208,7 +217,7 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
     readMetadata(dir),
     readLabelHistory(dir),
   ]);
-  return { archived, label, task, role, heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
+  return { archived, label, task, role: asRole(role), heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
 }
 
 /**
@@ -221,6 +230,7 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
  */
 export async function writeDeclared(sessionId: string, patch: DeclaredPatch, home = claudeHome()): Promise<DeclaredState> {
   for (const k of Object.keys(patch.metadata ?? {})) if (!isMetaKey(k)) throw new Error(`invalid metadata key ${JSON.stringify(k)}`);
+  if (patch.role !== undefined && !ROLE.test(patch.role)) throw new Error(`invalid role ${JSON.stringify(patch.role)}: ${ROLE_RULE}`);
   // 読み手 (readDeclared) は trim した値を返す。ファイルにも履歴にも同じ値を書く: " a " を重ねて記録しない
   if (patch.label !== undefined) patch = { ...patch, label: patch.label.trim() };
 

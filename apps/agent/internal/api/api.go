@@ -41,6 +41,10 @@ func ValidSessionID(id string) bool { return sessionID.MatchString(id) }
 // under meta/ with another name is not a key.
 var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
 
+// role mirrors ROLE in packages/core/src/session-state.ts: one line. A file
+// that does not match reads as no role, as the TS reader does.
+var role = regexp.MustCompile(`^[^\p{Cc}\x{2028}\x{2029}]*$`)
+
 // Server is the AgentService handler. Heartbeat and Collect are nil when their
 // concern is off; the answer then says so instead of failing.
 type Server struct {
@@ -119,10 +123,13 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 		b, _ := os.ReadFile(filepath.Join(dir, name))
 		return strings.TrimSpace(string(b))
 	}
-	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Role: text("role"), Metadata: map[string]string{}}
+	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Metadata: map[string]string{}}
 	// Bun.file().exists(), which the TS reader uses, is false for a directory.
 	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		st.Archived = true
+	}
+	if r := text("role"); role.MatchString(r) {
+		st.Role = r
 	}
 	hb := text("heartbeat")
 	if hb != "on" && hb != "off" {

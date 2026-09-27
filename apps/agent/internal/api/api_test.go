@@ -64,6 +64,11 @@ func TestReadDeclared(t *testing.T) {
 	if o, _, _ := ReadDeclared(other); o.Archived {
 		t.Error("a directory named archived read as archived")
 	}
+	// A role that is not one line reads as none, as the TS reader does.
+	write(t, filepath.Join(other, "role"), "a\nb\n")
+	if o, _, _ := ReadDeclared(other); o.Role != "" {
+		t.Errorf("a two-line role read as %q", o.Role)
+	}
 	if !st.Archived || st.Label != "fix ci" || st.Task != "ccx#34" || st.Role != "worker" || hb != "on" {
 		t.Errorf("got archived=%v label=%q task=%q role=%q heartbeat=%q", st.Archived, st.Label, st.Task, st.Role, hb)
 	}

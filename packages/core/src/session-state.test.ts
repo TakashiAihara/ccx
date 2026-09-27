@@ -67,6 +67,17 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(normalizeDeclared({ role: "pm" }).role).toBe("pm");
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, role: "pm" })).toBe(false);
     expect(isEmptyDeclared({ ...EMPTY_DECLARED, role: "pm" })).toBe(false);
+
+    // role は 1 行。書くときは拒み (何も書かない)、保存先やファイルから来た合わない値は「無い」と読む
+    await writeDeclared(SID, { role: "worker" }, home);
+    for (const bad of ["a\nb", "a\rb", "a\tb", "a\u2028b"]) {
+      await expect(writeDeclared(SID, { role: bad }, home)).rejects.toThrow(/invalid role/);
+      expect(normalizeDeclared({ role: bad }).role).toBe("");
+    }
+    expect((await readDeclared(SID, home)).role).toBe("worker");
+    await Bun.write(join(home, "sessions", SID, "role"), "a\nb\n");
+    expect((await readDeclared(SID, home)).role).toBe("");
+    await writeDeclared(SID, { role: "" }, home);
   });
 
   test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {

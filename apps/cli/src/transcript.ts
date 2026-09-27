@@ -214,7 +214,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
         `${humanSince(Date.parse(m.pushedAt))} ago`,
         m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
         m.cwd,
-        m.state?.role ?? "",
+        // 見出しの無い表で、隣の label (自由文) と読み分けられるよう名前を付ける
+        m.state?.role ? `role:${m.state.role}` : "",
         m.state?.label ?? "",
       ]);
       for (const line of table(rows)) console.log(line);

@@ -41,7 +41,7 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `archived` | `~/.claude/sessions/<id>/archived` | empty file present = true |
 | `label` | `…/label` | one line of text |
 | `task` | `…/task` | one line of text, e.g. `kaneo ccx#1`, `owner/repo#123` |
-| `role` | `…/role` | one line of text, e.g. `worker`, `pm` |
+| `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one reads as no role) |
 | `heartbeat` | `…/heartbeat` | `on` / `off`; absent = `ccx-agent`'s default |
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 | `labelHistory` | `…/labels.jsonl` | one `{"at": <ISO 8601 UTC>, "label": <text>}` line per change, oldest first; a clear is a line with `""` |
@@ -152,7 +152,7 @@ missing (`null`) is "the center / the store has not heard", not "no mark".
 | `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript; one GET to the store under this machine's own prefix for `remote`, never a listing) and, for other machines' rows, the state the center last received from `ccx session mark` — no store access for those |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
 | `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds no declaration for that session; a declaration made here — including clearing the last mark — is never overwritten or revived. Checked on `already-here` too, so a pull that died after the transcript but before the marks is repaired by pulling again |
-| `ccx tr ls` | flags and label per stored session |
+| `ccx tr ls` | flags, role and label per stored session |
 | `--archived` on `push` / `prune` | selector: every local session with the flag; `prune` also skips running ones |
 
 `[id]` defaults to `CLAUDE_CODE_SESSION_ID` (validated and lowercased like an argument), so a session can mark itself from a hook or a skill. A
@@ -176,8 +176,10 @@ ambiguous, while `mark` / `status` on that session itself fail with the read err
 `role` says what a session *is* — `worker`, `pm`, whatever the user's methodology names (kaneo
 ccx#47, 2026-09-27). It is top level, not `metadata`, because ccx is to act on it: `scope.md` counts
 "attach a role to a session" and "address a session by role" as ccx's job, the launcher of #82
-picks a skill from it, and ccx never reads a metadata key. Nothing in ccx reads it yet — it is
-carried and shown (`session status` / `ls`, `ccx-agent status`) until addressing and #82 are built;
+picks a skill from it, and ccx never reads a metadata key. Nothing in ccx acts on it yet — it is
+carried, shown (`session status` / `ls`, `tr ls`, `tr pull`, `ccx-agent status`) and found by
+`tr search` (a substring match, like every other value there; addressing is not search) until
+addressing and #82 are built;
 a key that ccx will act on starts at the top level rather than moving there later. What it is not:
 
 - a vocabulary: ccx gives no value a meaning and checks none. Which roles exist, and what a
@@ -199,11 +201,13 @@ hook reads the session, because a repodir can hold several sessions over its lif
 about one of them. The launcher copies the default once and does not keep the two in step, so a
 later change to `ccx.json` reaches only sessions started after it. `claude --resume` keeps the
 session id, so a resumed session keeps its role; `--fork-session` makes a new id with no role
-until the launcher (or someone) writes one.
+until the launcher (or someone) writes one, and so does `--bg --resume` of a session that is
+already running, which starts a copy under a new id (`claude --help`, 2.1.283).
 
-A ccx or center older than this change does not know `role`, the same way as `metadata` above: an
-old `push` rewrites `state.json` without it, and an old center returns rows without it. Update the
-center and every machine's ccx before relying on it across machines.
+A ccx or center older than this change does not know `role`, the same way as `metadata` above: a
+`pull` by an old ccx installs the other keys only, a `push` by an old ccx that changed another key
+rewrites `state.json` without it, and an old center returns rows without it. Update the center and
+every machine's ccx before relying on it across machines.
 
 ## Not here
 

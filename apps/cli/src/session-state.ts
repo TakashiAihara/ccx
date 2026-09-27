@@ -240,8 +240,7 @@ export function registerSessionState(session: Command): void {
       .argument("[session-id]", "full id or unique prefix (default: this session)")
       .option("--json", "print the resulting state as JSON")
       .action(async (value: string, idOrPrefix: string | undefined, o) => {
-        // role は宛先を指す値なので 1 行に限る。label / task は今まで通り (#47 の範囲外)
-        if (key === "role" && /[\r\n]/.test(value.trim())) throw new Error("a role is one line");
+
         const home = claudeHome();
         const id = await target(idOrPrefix, home);
         const s = await writeDeclared(id, { [key]: value.trim() }, home);

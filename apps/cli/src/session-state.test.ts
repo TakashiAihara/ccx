@@ -345,7 +345,10 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     // role: task と同じく 1 行。status に出て、空文字で消える
     expect((await run(["role", "worker", SID])).out).toMatch(/role = worker/);
     expect((await run(["status", SID])).out).toMatch(/role\s+worker/);
-    expect((await run(["role", "a\nb", SID])).code).not.toBe(0);
+    const multi = await run(["role", "a\nb", SID]);
+    expect(multi.code).not.toBe(0);
+    expect(multi.err).toMatch(/invalid role/);
+    expect((await readDeclared(SID, homeA)).role).toBe("worker");
     expect((await run(["role", "", SID])).out).toMatch(/role cleared/);
     expect((await readDeclared(SID, homeA)).role).toBe("");
 
@@ -497,6 +500,14 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(`${code} ${err}`).toBe("0 ");
     expect(out).toMatch(/^pulled/);
     expect(out).toMatch(/^state .*task: kaneo ccx#1  role: worker/m);
+    const ls = Bun.spawn(["bun", "run", cli, "tr", "ls"], {
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [lsOut, , lsCode] = await Promise.all([new Response(ls.stdout).text(), new Response(ls.stderr).text(), ls.exited]);
+    expect(lsCode).toBe(0);
+    expect(lsOut.split("\n").find((l) => l.startsWith(SID.slice(0, 8)))).toMatch(/ role:worker( |$)/);
     expect(err).not.toMatch(/did not take/);
     ingest(db, [hook("host-b", localOrigin().user, SID, 9)]);
     expect(listSessions(db, { limit: 10 }).find((r) => r.machine === "host-b")?.state).toEqual({ archived: true, label: "", task: "kaneo ccx#1", role: "worker", metadata: {} });
@@ -573,7 +584,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     // center に 1 件も届いていない他マシンの session は null
     expect(by(SID4).state).toBeNull();
     // 表でも role が列に出る (宛先を選ぶ読み手が見る面)
-    expect((await run(["ls"])).out.split("\n").find((l) => l.startsWith(SID2.slice(0, 8)))).toMatch(/\bworker\b/);
+    expect((await run(["ls"])).out.split("\n").find((l) => l.startsWith(SID2.slice(0, 8)))).toMatch(/ role:worker( |$)/);
 
     // このマシンの 1 行の印が読めなくても一覧は出る。その行は null
     await Bun.write(join(homeA, "sessions", SID, "meta"), "not a dir");

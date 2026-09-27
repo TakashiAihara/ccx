@@ -388,7 +388,8 @@ session
         humanSince(last),
         s.lastHook,
         s.cwd,
-        state?.role ?? "",
+        // 見出しの無い表で、隣の label (自由文) と読み分けられるよう名前を付ける
+        state?.role ? `role:${state.role}` : "",
         state?.label ?? "",
       ];
     });

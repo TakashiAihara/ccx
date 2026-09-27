@@ -234,6 +234,8 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
  * 届いた payload のまま残る。落とすのは読むとき: 形の崩れた key を ListSessions で返さない
  */
 const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;
+/** packages/core/src/session-state.ts の ROLE と同じ。合わない role は「無い」として持つ */
+const ROLE = /^[^\p{Cc}\u2028\u2029]*$/u;
 
 function parseState(payload: Uint8Array): SessionState | null {
   try {
@@ -244,7 +246,7 @@ function parseState(payload: Uint8Array): SessionState | null {
       archived: s.archived === true,
       label: typeof s.label === "string" ? s.label : "",
       task: typeof s.task === "string" ? s.task : "",
-      role: typeof s.role === "string" ? s.role : "",
+      role: typeof s.role === "string" && ROLE.test(s.role) ? s.role : "",
       metadata:
         s.metadata && typeof s.metadata === "object" && !Array.isArray(s.metadata)
           ? Object.fromEntries(Object.entries(s.metadata).filter(([k, v]) => META_KEY.test(k) && typeof v === "string"))
