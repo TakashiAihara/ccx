@@ -73,6 +73,27 @@ type Config struct {
 	// with serve. Apart from the hook socket: the hook wire is one frame and an
 	// ack, this one stays open for the life of the session.
 	ChannelSocketPath string
+
+	// APISocketPath is where serve answers AgentService (kaneo ccx#34) for this
+	// host: statusline and the `ccx-agent status` client. Guarded by 0600.
+	APISocketPath string
+
+	// APIListen is a TCP address (host:port) where serve also answers
+	// AgentService, for agents on other hosts. Empty (the default) is off. It
+	// requires APIToken: serve refuses to open it without one.
+	APIListen string
+
+	// APIToken is the Bearer the TCP listener requires (kaneo ccx#34). Apart from
+	// HubToken on purpose: a caller that only reads an agent must not hold the
+	// center's write credential, and the TCP side is plain HTTP. One token is
+	// shared by every host (user decision 2026-09-27). CCX_API_TOKEN, else the
+	// file api-token next to config.toml, never git config or config.toml.
+	APIToken string
+	// APITokenErr is why the API token cannot be used. It keeps the TCP
+	// listener closed and nothing else: a bad token file for an optional
+	// listener must not stop collect or the heartbeat (the same rule as
+	// Heartbeat.Err).
+	APITokenErr error
 }
 
 // Heartbeat is the heartbeat concern's settings.
@@ -127,7 +148,10 @@ type fileShape struct {
 	Collect     struct{ Enabled *bool } `toml:"collect"`
 	Carry       struct{ Enabled *bool } `toml:"carry"`
 	Persistence struct{ Enabled *bool } `toml:"persistence"`
-	Heartbeat   struct {
+	API         struct {
+		Listen string `toml:"listen"`
+	} `toml:"api"`
+	Heartbeat struct {
 		Enabled  *bool  `toml:"enabled"`
 		Default  *bool  `toml:"default"`
 		Interval string `toml:"interval"`
@@ -170,6 +194,11 @@ func load(
 	token, err := hubToken(getenv)
 	if err != nil {
 		return Config{}, err
+	}
+	apiToken, apiTokenErr := tokenFrom(getenv, "CCX_API_TOKEN", "api-token", "the agent API's token")
+	if apiTokenErr == nil && apiToken != "" && apiToken == token {
+		// A copy of hub-token would hand the center's write credential to readers.
+		apiToken, apiTokenErr = "", errors.New("the API token is the hub token; give the agent API its own (CCX_API_TOKEN or api-token)")
 	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
@@ -219,6 +248,10 @@ func load(
 			Err:      hbErr,
 		},
 		ChannelSocketPath: channelSocketPath(getenv),
+		APISocketPath:     apiSocketPath(getenv),
+		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
+		APIToken:          apiToken,
+		APITokenErr:       apiTokenErr,
 	}, nil
 }
 
@@ -288,14 +321,21 @@ func pick(vals ...string) string {
 // hubToken fails rather than ignoring a token file it cannot use: a silently
 // empty token turns into "every event refused" with nothing pointing at why.
 func hubToken(getenv func(string) string) (string, error) {
-	if t := strings.TrimSpace(getenv("CCX_HUB_TOKEN")); t != "" {
+	return tokenFrom(getenv, "CCX_HUB_TOKEN", "hub-token", "the center's token")
+}
+
+// tokenFrom is envKey, else the file name next to config.toml, which must not
+// be readable by others. Never git config or config.toml: those get shared
+// along with dotfiles.
+func tokenFrom(getenv func(string) string, envKey, name, holds string) (string, error) {
+	if t := strings.TrimSpace(getenv(envKey)); t != "" {
 		return t, nil
 	}
 	p := configPath(getenv)
 	if p == "" {
 		return "", nil
 	}
-	path := filepath.Join(filepath.Dir(p), "hub-token")
+	path := filepath.Join(filepath.Dir(p), name)
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -304,7 +344,7 @@ func hubToken(getenv func(string) string) (string, error) {
 		return "", err
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds the center's token)", path)
+		return "", fmt.Errorf("%s is readable by other users; chmod 600 it (it holds %s)", path, holds)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -354,6 +394,21 @@ func channelSocketPath(getenv func(string) string) string {
 	// CCX_SOCKET is how a path over the unix-socket limit is fixed, and the
 	// channel socket needs the same fix.
 	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
+}
+
+// APISocket is where serve answers AgentService, resolved from the environment
+// alone. `ccx-agent status` runs on every statusline render and needs nothing
+// else: the full Load runs git config several times and fails on a bad
+// config.toml the socket path does not depend on.
+func APISocket() string { return apiSocketPath(os.Getenv) }
+
+// apiSocketPath is CCX_API_SOCKET, else ccx-api.sock next to the hook socket
+// (for the same reason as the channel socket).
+func apiSocketPath(getenv func(string) string) string {
+	if p := getenv("CCX_API_SOCKET"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-api.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike

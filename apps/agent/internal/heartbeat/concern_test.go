@@ -188,3 +188,59 @@ func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
 		t.Errorf("Accept called %d times, want 3 failures, a connection, then a 5th that waits", f.calls)
 	}
 }
+
+// A reconnect (the channel restarting) registers the session again before the
+// old connection winds down; the old one going away must not unregister it.
+func TestReconnectKeepsTheSessionRegistered(t *testing.T) {
+	const id = "00000000-0000-4000-8000-0000000000bb"
+	dir, err := os.MkdirTemp("", "hb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "c.sock")
+	c := &Concern{socketPath: sock, claudeHome: dir, log: t.Logf, cfg: config.Heartbeat{Interval: 50 * time.Minute}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	current := func() *Heartbeat { c.mu.Lock(); defer c.mu.Unlock(); return c.registered[id] }
+	register := func(prev *Heartbeat) net.Conn {
+		t.Helper()
+		var conn net.Conn
+		for i := 0; i < 100; i++ {
+			if conn, err = net.Dial("unix", sock); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(conn).Encode(Register{Session: id})
+		for i := 0; i < 100 && (current() == nil || current() == prev); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return conn
+	}
+
+	first := register(nil)
+	old := current()
+	second := register(old)
+	defer second.Close()
+	if current() == old {
+		t.Fatal("the second registration never replaced the first")
+	}
+	first.Close()
+	time.Sleep(200 * time.Millisecond)
+	if !c.Status(id, "").Registered {
+		t.Error("closing the old connection unregistered the live one")
+	}
+	second.Close()
+	for i := 0; i < 100 && c.Status(id, "").Registered; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c.Status(id, "").Registered {
+		t.Error("still registered after the last connection closed")
+	}
+}

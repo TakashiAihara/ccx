@@ -177,6 +177,43 @@ func TestStepPushesOnlyWhenDue(t *testing.T) {
 	}
 }
 
+// Only a file named archived folds the session away, not a directory.
+func TestWantedArchivedIsAFile(t *testing.T) {
+	home := t.TempDir()
+	const id = "00000000-0000-4000-8000-0000000000cc"
+	dir := filepath.Join(home, "sessions", id)
+	if err := os.MkdirAll(filepath.Join(dir, "archived"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &Heartbeat{SessionID: id, ClaudeHome: home, Default: true}
+	if !h.wanted() {
+		t.Error("a directory named archived stopped the heartbeat")
+	}
+	_ = os.Remove(filepath.Join(dir, "archived"))
+	_ = os.WriteFile(filepath.Join(dir, "archived"), nil, 0o644)
+	if h.wanted() {
+		t.Error("an archived session is wanted")
+	}
+}
+
+// What the status API shows: the due time while waiting for it, then the push.
+func TestStepRecordsStats(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+
+	h, _, _ := fixture(t, tr, at("10:30:05"))
+	var sent time.Time
+	h.step(&sent)
+	if s := h.Stats(); !s.Next.Equal(at("10:50:00")) || s.Sent != 0 {
+		t.Errorf("before due: %+v, want next 10:50:00 and none sent", s)
+	}
+
+	h.Now = func() time.Time { return at("10:50:05") }
+	h.step(&sent)
+	if s := h.Stats(); !s.Next.IsZero() || s.Sent != 1 || !s.LastSent.Equal(at("10:50:05")) {
+		t.Errorf("after the push: %+v, want no next, 1 sent at 10:50:05", s)
+	}
+}
+
 func TestStepNeverStacksAnUndeliveredBeat(t *testing.T) {
 	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
 	h, pushes, write := fixture(t, tr, at("10:50:05"))

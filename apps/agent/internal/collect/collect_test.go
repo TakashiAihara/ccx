@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +153,62 @@ func TestCenterDown_SpoolsThenDrainsInOrder(t *testing.T) {
 		if want := fmt.Sprintf(`{"n":%d}`, i); p != want {
 			t.Errorf("recovery order[%d]: want %q got %q", i, want, p)
 		}
+	}
+}
+
+// Status reports the backlog and the last outcome against the center, for the
+// agent's status API.
+func TestStatus_ReachAndPending(t *testing.T) {
+	fwd := &stubForwarder{}
+	fwd.setDown(true)
+	srv, sock, _, cancel := startServer(t, fwd)
+	defer cancel()
+
+	if code := Hook(sock, t.TempDir(), strings.NewReader(`{"n":1}`)); code != 0 {
+		t.Fatalf("hook exit %d", code)
+	}
+	waitFor(t, 2*time.Second, func() bool { st, _ := srv.Status(); return st.LastError != "" })
+	st, err := srv.Status()
+	if err != nil || !st.CenterConfigured || st.Pending != 1 || st.LastErrorAt.IsZero() || !st.LastForwarded.IsZero() {
+		t.Fatalf("center down: %+v %v", st, err)
+	}
+
+	// A hook that fell back to incoming/ has not reached the center either.
+	if err := writeIncoming(srv.spool.IncomingDir(), []byte(`{"fallback":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := srv.Status(); st.Pending != 2 {
+		t.Errorf("with one fallback event: pending=%d, want 2", st.Pending)
+	}
+	// A temp file still being written is not an event (drain skips it too).
+	if err := os.WriteFile(filepath.Join(srv.spool.IncomingDir(), ".tmp-x"), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := srv.Status(); err != nil || st.Pending != 2 {
+		t.Errorf("with a temp file: pending=%d err=%v, want 2", st.Pending, err)
+	}
+	// No incoming/ at all is nothing pending there, not an error.
+	if err := os.RemoveAll(srv.spool.IncomingDir()); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := srv.Status(); err != nil || st.Pending != 1 {
+		t.Errorf("without incoming/: pending=%d err=%v, want 1 and no error", st.Pending, err)
+	}
+	// An incoming/ that cannot be read is an error, not 0.
+	if err := os.WriteFile(srv.spool.IncomingDir(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Status(); err == nil {
+		t.Error("an unreadable incoming/ read as nothing pending")
+	}
+	_ = os.Remove(srv.spool.IncomingDir())
+	_ = os.MkdirAll(srv.spool.IncomingDir(), 0o700)
+
+	fwd.setDown(false)
+	srv.loop.wake()
+	waitFor(t, 3*time.Second, func() bool { st, _ := srv.Status(); return !st.LastForwarded.IsZero() })
+	if st, _ := srv.Status(); st.Pending != 0 || st.LastError != "center down" {
+		t.Errorf("recovered: %+v, want nothing pending and the old error kept", st)
 	}
 }
 

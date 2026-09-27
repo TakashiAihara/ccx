@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -184,6 +185,29 @@ func (s *Spool) Pending() (int, error) {
 	return len(names), err
 }
 
+// isIncoming is what DrainIncoming takes from incoming/: a file, not a temp
+// file still being written. PendingIncoming counts by the same rule.
+func isIncoming(e os.DirEntry) bool {
+	return !e.IsDir() && !strings.HasPrefix(e.Name(), ".tmp-")
+}
+
+// PendingIncoming counts what hooks left in incoming/ and the next start will
+// drain. A missing incoming/ holds nothing (the hook recreates it when it
+// falls back); any other read error is returned.
+func (s *Spool) PendingIncoming() (int, error) {
+	ents, err := os.ReadDir(s.incoming)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	n := 0
+	for _, e := range ents {
+		if isIncoming(e) {
+			n++
+		}
+	}
+	return n, err
+}
+
 // DrainIncoming moves everything the hook dropped into incoming/ (because ccx-agent
 // was down when the hook fired) into the main queue, in name order, enveloping
 // each as it goes. Returns how many were drained.
@@ -194,7 +218,7 @@ func (s *Spool) DrainIncoming() (int, error) {
 	}
 	names := make([]string, 0, len(ents))
 	for _, e := range ents {
-		if !e.IsDir() && !strings.HasPrefix(e.Name(), ".tmp-") {
+		if isIncoming(e) {
 			names = append(names, e.Name())
 		}
 	}
