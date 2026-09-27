@@ -360,7 +360,21 @@ func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
 	if err := os.Chmod(filepath.Join(dir, "api-token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h")); err == nil {
-		t.Error("a 0644 api-token must fail the load")
+	// A bad api-token keeps the TCP listener closed and nothing else: the load
+	// succeeds, with the reason kept.
+	c, err = load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h"))
+	if err != nil || c.APIToken != "" || c.APITokenErr == nil || c.HubToken != "hub" {
+		t.Errorf("0644 api-token: load err %v, api %q, reason %v, hub %q; want the load to pass with no api token", err, c.APIToken, c.APITokenErr, c.HubToken)
+	}
+
+	// A copy of the hub token is refused: it would hand readers the center's write credential.
+	if err := os.WriteFile(filepath.Join(dir, "api-token"), []byte("hub\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "api-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h")); err != nil || c.APIToken != "" || c.APITokenErr == nil {
+		t.Errorf("api-token equal to hub-token: api %q reason %v (%v), want refused", c.APIToken, c.APITokenErr, err)
 	}
 }

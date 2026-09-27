@@ -65,9 +65,9 @@ type Status struct {
 func (s *Collect) Status() (Status, error) {
 	n, err := s.spool.Pending()
 	if err == nil {
-		var raw []string
-		raw, err = filepath.Glob(filepath.Join(s.spool.IncomingDir(), "*.raw"))
-		n += len(raw)
+		var in int
+		in, err = s.spool.PendingIncoming()
+		n += in
 	}
 	st := Status{CenterConfigured: s.loop != nil, Pending: n}
 	if s.loop != nil {

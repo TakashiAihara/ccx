@@ -436,10 +436,12 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("with token: %v", err)
 	}
 	// The TCP side ignores claude_home (TestClaudeHomeChoice covers the reads).
+	// The agent's own home answers (so an empty answer cannot pass for it).
+	write(t, filepath.Join(work, "sessions", sid, "label"), "own")
 	write(t, filepath.Join(work, "evil", "sessions", sid, "label"), "evil")
 	c := ccxv1connect.NewAgentServiceClient(http.DefaultClient, "http://"+addr, withToken)
 	res, err := c.GetSessionStatus(context.Background(), connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid, ClaudeHome: filepath.Join(work, "evil")}))
-	if err != nil || res.Msg.Declared.GetLabel() != "" {
+	if err != nil || res.Msg.Declared.GetLabel() != "own" {
 		t.Errorf("claude_home over TCP was honoured: %v %v", res, err)
 	}
 
@@ -463,6 +465,6 @@ func TestTCPListener(t *testing.T) {
 	waitDial(t, "unix", cfg2.APISocketPath)
 	if c, err := net.Dial("tcp", addr2); err == nil {
 		c.Close()
-		t.Error("TCP listener opened without a token")
+		t.Error("TCP listener opened with only the hub token")
 	}
 }

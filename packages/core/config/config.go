@@ -83,12 +83,17 @@ type Config struct {
 	// requires APIToken: serve refuses to open it without one.
 	APIListen string
 
-	// APIToken is the Bearer the TCP listener requires (#180). Apart from
+	// APIToken is the Bearer the TCP listener requires (kaneo ccx#34). Apart from
 	// HubToken on purpose: a caller that only reads an agent must not hold the
 	// center's write credential, and the TCP side is plain HTTP. One token is
 	// shared by every host (user decision 2026-09-27). CCX_API_TOKEN, else the
 	// file api-token next to config.toml, never git config or config.toml.
 	APIToken string
+	// APITokenErr is why the API token cannot be used. It keeps the TCP
+	// listener closed and nothing else: a bad token file for an optional
+	// listener must not stop collect or the heartbeat (the same rule as
+	// Heartbeat.Err).
+	APITokenErr error
 }
 
 // Heartbeat is the heartbeat concern's settings.
@@ -190,9 +195,10 @@ func load(
 	if err != nil {
 		return Config{}, err
 	}
-	apiToken, err := tokenFrom(getenv, "CCX_API_TOKEN", "api-token", "the agent API's token")
-	if err != nil {
-		return Config{}, err
+	apiToken, apiTokenErr := tokenFrom(getenv, "CCX_API_TOKEN", "api-token", "the agent API's token")
+	if apiTokenErr == nil && apiToken != "" && apiToken == token {
+		// A copy of hub-token would hand the center's write credential to readers.
+		apiToken, apiTokenErr = "", errors.New("the API token is the hub token; give the agent API its own (CCX_API_TOKEN or api-token)")
 	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
@@ -245,6 +251,7 @@ func load(
 		APISocketPath:     apiSocketPath(getenv),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
 		APIToken:          apiToken,
+		APITokenErr:       apiTokenErr,
 	}, nil
 }
 

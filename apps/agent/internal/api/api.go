@@ -157,12 +157,13 @@ type Concern struct {
 	token      string
 	log        func(string, ...any)
 	lock       *os.File
+	tokenErr   error         // why the API token is unusable, if it is
 	retryAfter time.Duration // 0 is a minute; tests shorten it
 	lastErr    string        // the reason last logged; cleared once the API is up
 }
 
 func New(cfg config.Config, srv *Server, log func(string, ...any)) *Concern {
-	return &Concern{server: srv, socketPath: cfg.APISocketPath, listen: cfg.APIListen, token: cfg.APIToken, log: log}
+	return &Concern{tokenErr: cfg.APITokenErr, server: srv, socketPath: cfg.APISocketPath, listen: cfg.APIListen, token: cfg.APIToken, log: log}
 }
 
 func (c *Concern) Name() string { return "api" }
@@ -230,7 +231,11 @@ func (c *Concern) run(ctx context.Context) error {
 		if c.token == "" {
 			// The TCP side is for other hosts; without a token it would answer anyone
 			// on the network. The unix side stays up.
-			c.log("api: not listening on %s: no API token (CCX_API_TOKEN or api-token) to require", c.listen)
+			why := error(errors.New("no API token (CCX_API_TOKEN or api-token) to require"))
+			if c.tokenErr != nil {
+				why = c.tokenErr
+			}
+			c.log("api: not listening on %s: %v", c.listen, why)
 		} else if tln, err := net.Listen("tcp", c.listen); err != nil {
 			c.log("api: not listening on %s: %v", c.listen, err)
 		} else {
