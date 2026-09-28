@@ -62,6 +62,16 @@ believed.
 - **heartbeat** — a channel event with the attribute ` kind="heartbeat"` (the whole name) that wakes an idle session for one short turn so
   its prompt cache does not expire (`docs/design/heartbeat.md`). Not a message; a heartbeat turn is not use.
   Decided by the `heartbeat` concern in serve; a session's own `on` / `off` is declared state.
+- **statusline input** — the JSON Claude Code writes to the statusline command's stdin (model, context
+  use, rate limits, ...). Claude Code gives it to nothing else (`docs/design/statusline-snapshot.md`).
+  Planned, not built.
+- **snapshot** — what `ccx-agent status` returns for one session: declared state, built-in values and
+  readings, prepared ahead of the request (`docs/design/statusline-snapshot.md`). Planned, not built.
+- **probe** — a command the user configures for ccx-agent or the center to run on an interval
+  (`[[probe]]`, `docs/design/statusline-snapshot.md`). Not the `collect` concern, which forwards hook
+  events and runs nothing. Planned, not built.
+- **reading** — one probe's latest output, kept under the probe's key with when it was taken. ccx gives
+  it no meaning, like `metadata`. Planned, not built.
 
 ## Repodirs
 
