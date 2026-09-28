@@ -62,16 +62,10 @@ believed.
 - **heartbeat** — a channel event with the attribute ` kind="heartbeat"` (the whole name) that wakes an idle session for one short turn so
   its prompt cache does not expire (`docs/design/heartbeat.md`). Not a message; a heartbeat turn is not use.
   Decided by the `heartbeat` concern in serve; a session's own `on` / `off` is declared state.
-- **statusline input** — the JSON Claude Code writes to the statusline command's stdin (model, context
-  use, rate limits, ...). Claude Code gives it to nothing else (`docs/design/statusline-snapshot.md`).
-  Planned, not built.
-- **snapshot** — what `ccx-agent status` returns for one session: declared state, built-in values and
-  readings, prepared ahead of the request (`docs/design/statusline-snapshot.md`). Planned, not built.
-- **probe** — a command the user configures for ccx-agent or the center to run on an interval
-  (`[[probe]]`, `docs/design/statusline-snapshot.md`). Not the `collect` concern, which forwards hook
-  events and runs nothing. Planned, not built.
-- **reading** — one probe's latest output, kept under the probe's key with when it was taken. ccx gives
-  it no meaning, like `metadata`. Planned, not built.
+- **statusline input** — the JSON Claude Code writes to the statusline command's stdin (model, context use, rate limits, ...). Rate limits, context window size and fast mode are in nothing else; other fields are also in hooks or the transcript (`docs/design/measurements/hooks-statusline-fields.md`). Planned as an input to ccx-agent (`docs/design/statusline-snapshot.md`).
+- **session snapshot** — what ccx-agent's `Render` returns for one session: declared state, built-in values, probe readings and the latest statusline input. Not the store's per-push snapshot (`transcript-store.md`). Planned, not built.
+- **probe** — a command the user configures for ccx-agent, or on the center host for the center, to run on an interval (`[[probe]]`, `docs/design/statusline-snapshot.md`). Not the `collect` concern, which forwards hook events and runs nothing. Planned, not built.
+- **probe reading** — one probe's last successful output, kept under the probe's key with when it was taken. ccx gives it no meaning, like `metadata`. Prose says "probe reading", not bare "reading". Planned, not built.
 
 ## Repodirs
 
