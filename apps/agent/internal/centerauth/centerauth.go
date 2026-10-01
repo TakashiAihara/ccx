@@ -1,7 +1,7 @@
-// Package hubauth attaches the center's shared token to ccx-agent's Connect
+// Package centerauth attaches the center's shared token to ccx-agent's Connect
 // calls (#158). One place, so collect and carry cannot drift apart on how they
 // authenticate.
-package hubauth
+package centerauth
 
 import (
 	"context"

@@ -4,7 +4,7 @@ Status: accepted (2026-07-19)
 
 ## Context
 
-ccx-agent carries three concerns: collecting information (hooks → center), carrying instructions (broker → session), and persistence (keeping a `desired: running` session alive). Should these be one process or several — the way a full Kubernetes control plane splits apiserver, scheduler, controller-manager, etcd, and kubelet into separate processes?
+ccx-agent carries three concerns: collecting information (hooks → ccx-center), carrying instructions (broker → session), and persistence (keeping a `desired: running` session alive). Should these be one process or several — the way a full Kubernetes control plane splits apiserver, scheduler, controller-manager, etcd, and kubelet into separate processes?
 
 ## Decision
 
@@ -42,7 +42,7 @@ The clean module boundaries do double duty: they are the seam for future process
 
 Defaults follow the same discipline as everywhere else — the passive concerns may default on, the one active concern is opt-in:
 
-- **collect** (hooks → center): may default on, but is inert without a destination — no center configured means it forwards nowhere. Harmless when unconfigured.
+- **collect** (hooks → ccx-center): may default on, but is inert without a destination — no ccx-center configured means it forwards nowhere. Harmless when unconfigured.
 - **carry** (broker → session): inert without a broker and a session started with `--channels`. Effectively off until configured.
 - **persistence** (keep a `desired: running` session alive): **defaults off, opt-in.** It is the only *active* verb ccx-agent has — the one that spawns and restarts (`START`) — so it is the one that must be deliberately chosen, never on by surprise. This mirrors `desired: running` itself being a flag someone sets, and the worker gate being off unless a role was chosen: the machine does not act on its own until told to.
 

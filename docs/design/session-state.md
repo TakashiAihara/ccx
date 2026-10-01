@@ -33,7 +33,7 @@ wants to act on is promoted to the top level, not read out of `metadata`.
 
 ## Where it lives
 
-Declared state is local first — a `ccx session mark` works with no center and no store
+Declared state is local first — a `ccx session mark` works with no ccx-center and no store
 (`scope.md`'s invariant).
 
 | Key | File | Form |
@@ -41,7 +41,7 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `archived` | `~/.claude/sessions/<id>/archived` | empty file present = true |
 | `label` | `…/label` | one line of text |
 | `task` | `…/task` | one line of text, e.g. `kaneo ccx#1`, `owner/repo#123` |
-| `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one — or a file that is not UTF-8 — reads as no role; the rule and its test cases are shared by core, the center and `ccx-agent`: `packages/core/testdata/role-cases.json`) |
+| `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one — or a file that is not UTF-8 — reads as no role; the rule and its test cases are shared by core, ccx-center and `ccx-agent`: `packages/core/testdata/role-cases.json`) |
 | `heartbeat` | `…/heartbeat` | `on` / `off`; absent = `ccx-agent`'s default |
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 | `labelHistory` | `…/labels.jsonl` | one `{"at": <ISO 8601 UTC>, "label": <text>}` line per change, oldest first; a clear is a line with `""` |
@@ -50,17 +50,17 @@ A metadata key is a file name, so it is limited to lowercase letters, digits, `_
 does not start with `.` or `-`, and is at most 128 characters; `=` is excluded so
 `meta set key=value` has one reading, and upper case is excluded for the same reason session ids
 are lowercased — on a case-insensitive filesystem (macOS's default) `Done` and `done` would be one
-file. The center drops keys outside this rule too. A value is kept as given (only the one trailing
+file. ccx-center drops keys outside this rule too. A value is kept as given (only the one trailing
 newline ccx writes is removed on read); `key` and `key=` both set the key with no value. A file per
 key rather than one JSON keeps a shell reader at `[ -e …/meta/done ]` — a hook can test a key
 without parsing JSON. That path is therefore an interface for readers: changing it breaks the
 scripts that read it, and ccx-agent's status API (`ccx.v1.AgentService`, kaneo ccx#34) reads the
 same files (`ReadDeclared` in `apps/agent/internal/api`). The statusline is meant to ask that API
 (`ccx-agent status --session <id>`) rather than the files (the switch is claude-config#97, outside
-this repo), so what it shows and what the agent alone knows (heartbeat, spool, center reach) come
+this repo), so what it shows and what the agent alone knows (heartbeat, spool, ccx-center reach) come
 from one place; with the agent down it shows nothing rather than a value read some other way. Writers go through `ccx session meta` — a
 file written by hand is read, but it does not leave `.ccx-declared` and is not reported to the
-center until the next write through ccx. A hand-written `role` that breaks the one-line rule is
+ccx-center until the next write through ccx. A hand-written `role` that breaks the one-line rule is
 less than that: it reads as no role, so a session holding only it counts as unmarked, and `pull`
 installs the store's state over it (removing the file when the store has no role). `meta set key=value` rather than `meta set key [value]`:
 with both the value and `[id]` optional, `meta set done <id>` would read the id as the value.
@@ -69,13 +69,13 @@ with both the value and `[id]` optional, `meta set done <id>` would read the id 
 `.ccx-declared`, so `pull` no longer installs the store's state for that session on this machine. A
 hook should unset only on the sessions it means to, not on every session "just in case".
 
-The map travels whole, not merged per key: each machine's `state.json` and each machine's center
+The map travels whole, not merged per key: each machine's `state.json` and each machine's ccx-center
 row hold that machine's full state, and `pull` takes the copy of the machine that last pushed the
 transcript.
 
-A ccx or center older than #165 does not know `metadata`: a `pull` by an old ccx installs the other
+A ccx or ccx-center older than #165 does not know `metadata`: a `pull` by an old ccx installs the other
 keys only, a `push` by an old ccx that changed another key rewrites `state.json` without it, and an
-old center returns rows without it. Update the center and every machine's ccx before relying on
+old ccx-center returns rows without it. Update ccx-center and every machine's ccx before relying on
 metadata across machines.
 
 Claude Code itself writes only `~/.claude/sessions/<pid>.json` there (which ccx already reads); the
@@ -116,42 +116,42 @@ Two copies leave the machine, for two readers:
 
 - `state.json` in the store, next to `session.json` (`transcript-store.md`): what `pull` installs on
   another machine. Written by `ccx tr push`.
-- an event at the center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
+- an event at ccx-center (`ingest.proto`, `PRODUCER_CCX_SESSION_STATE`): what `ccx session ls`
   shows for other machines' rows. Sent by `ccx session mark` / `label` / `task` / `role` / `meta` right after the local
-  write, best effort — no center means nothing is sent, an unreachable center is one line on stderr
-  and the next mark sends the whole state again; a center that accepts and never answers is cut off
+  write, best effort — no ccx-center means nothing is sent, an unreachable ccx-center is one line on stderr
+  and the next mark sends the whole state again; a ccx-center that accepts and never answers is cut off
   after a short deadline (and reported as "not confirmed", since it may have been recorded); a config
   that cannot be read skips the report but not the local write; `ccx tr pull` reports the state it
   installed the same way. Each report carries `rev`, the sender's clock just before sending; within
-  one (machine, user, session) that is one clock, so the center keeps the readable event with the
+  one (machine, user, session) that is one clock, so ccx-center keeps the readable event with the
   highest `rev` (arrival order only breaks ties) — a report written first but delivered late does not
   overwrite a newer one. It reads one row per session, not the history (`Session.state` in
   `fleet.proto`), and does not count these as hooks: a mark never
   moves `last_seen`, and a session whose only events are marks is not listed (a machine without
-  `ccx-agent` wired sends marks the center accepts but never shows). `ccx session show` prints them
+  `ccx-agent` wired sends marks ccx-center accepts but never shows). `ccx session show` prints them
   as `ccx.session.state`.
 
-The center's copy lags by construction in two cases, both accepted: a report that did not get
+ccx-center's copy lags by construction in two cases, both accepted: a report that did not get
 through (the next mark resends the whole state), and `label`, which the auto-label hook rewrites on
-disk without telling ccx — the center's `label` is the last one a `ccx session label` (or `tr pull`)
+disk without telling ccx — ccx-center's `label` is the last one a `ccx session label` (or `tr pull`)
 sent. (User decision, 2026-09-21:
-  the center has a database, the list should come from it rather than from one GET per row.)
+  ccx-center has a database, the list should come from it rather than from one GET per row.)
 
 The local files stay the source of truth; both copies are projections of them, and a copy that is
-missing (`null`) is "the center / the store has not heard", not "no mark".
+missing (`null`) is "ccx-center / the store has not heard", not "no mark".
 
 ## Verbs
 
 | Verb | Does |
 |---|---|
-| `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to the center if one is configured |
+| `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to ccx-center if one is configured |
 | `ccx session label <text> [id]` | set the label; an empty string clears it; report as above |
 | `ccx session task <ref> [id]` | set the task reference; an empty string clears it; report as above |
 | `ccx session role <role> [id]` | set the role; an empty string clears it; report as above |
 | `ccx session meta set <key>[=<value>] [id]` | set a metadata key, with or without a value; report as above |
 | `ccx session meta unset <key> [id]` | remove a metadata key; report as above |
 | `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
-| `ccx session ls` | the center's list, with lifecycle and flags for this machine's rows (pid, local transcript; one GET to the store under this machine's own prefix for `remote`, never a listing) and, for other machines' rows, the state the center last received from `ccx session mark` — no store access for those |
+| `ccx session ls` | ccx-center's list, with lifecycle and flags for this machine's rows (pid, local transcript; one GET to the store under this machine's own prefix for `remote`, never a listing) and, for other machines' rows, the state ccx-center last received from `ccx session mark` — no store access for those |
 | `ccx tr push` | writes `state.json` whenever it differs from the store's copy, transcript changed or not (`state` in the output, `state` in `history/`) |
 | `ccx tr pull` | the store's `state.json` becomes the local marks only when this machine holds no declaration for that session; a declaration made here — including clearing the last mark — is never overwritten or revived. Checked on `already-here` too, so a pull that died after the transcript but before the marks is repaired by pulling again |
 | `ccx tr ls` | flags, role and label per stored session |
@@ -198,7 +198,7 @@ a key that ccx will act on starts at the top level rather than moving there late
 
 The repodir's `.git/ccx.json` `role` of GitHub ccx#82 (not built) is a launch default, not a second
 source: the launcher writes it into the session with `ccx session role`, and from then on the
-session's declared state is what everything reads — the center, `ccx-agent status`, a hook deciding
+session's declared state is what everything reads — ccx-center, `ccx-agent status`, a hook deciding
 how to treat a worker. This changes #82's "one source, read by the hook and by the launcher": the
 hook reads the session, because a repodir can hold several sessions over its life and a role is
 about one of them. The launcher copies the default once and does not keep the two in step, so a
@@ -207,9 +207,9 @@ session id, so a resumed session keeps its role; `--fork-session` makes a new id
 until the launcher (or someone) writes one, and so does `--bg --resume` of a session that is
 already running, which starts a copy under a new id (`claude --help`, 2.1.283).
 
-A ccx or center older than this change does not know `role`, the same way as `metadata` above: a
+A ccx or ccx-center older than this change does not know `role`, the same way as `metadata` above: a
 `pull` by an old ccx installs the other keys only, a `push` by an old ccx that changed another key
-rewrites `state.json` without it, and an old center returns rows without it. Update the center and
+rewrites `state.json` without it, and an old ccx-center returns rows without it. Update ccx-center and
 every machine's ccx before relying on it across machines.
 
 ## Not here
@@ -217,8 +217,8 @@ every machine's ccx before relying on it across machines.
 - deriving `archived` from the store: the earlier draft had `archived` as the observed "only in the
   store" value; the user wanted it as a declaration, so that fact is now `remote` and `archived` is
   a flag
-- the label history at the center: the report leaves it out (nothing there reads it, and resending
-  the whole history on every mark grows the center's events with the square of its length — 11.8 MB
+- the label history at ccx-center: the report leaves it out (nothing there reads it, and resending
+  the whole history on every mark grows ccx-center's events with the square of its length — 11.8 MB
   for one session at 500 changes, measured by the reviewer), so `session ls` shows other machines'
   rows with an empty history. Search reads the store's `state.json`, which has it
 - removing `~/.claude/sessions/<id>/` when a transcript is pruned or deleted: the marks outlive the

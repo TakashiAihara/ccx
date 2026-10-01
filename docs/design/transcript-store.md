@@ -16,17 +16,17 @@ store and brings it back on any machine. (#121)
 ## The store is S3, whoever serves it
 
 The client speaks S3 and nothing else. By default that is `ccx-center`'s object API
-(`apps/hub/README.md`), so a center is all you need; point `CCX_TRANSCRIPT_ENDPOINT` elsewhere and
+(`apps/center/README.md`), so a ccx-center is all you need; point `CCX_TRANSCRIPT_ENDPOINT` elsewhere and
 it is MinIO, R2, Garage or AWS instead. DuckDB's `httpfs` reads the same layout from either.
 
 This is the usual invariant (`scope.md`): the centre adds reach, it is never a dependency for acting
 locally. With no store configured, `ccx transcript` says so and exits `3` (the same code `ccx session`
-uses for a missing center); `ccx repodir` does not notice. A center reachable from other machines has
-to be bound beyond loopback, which the center refuses unless told the network is trusted
-(`apps/hub/README.md`).
+uses for a missing ccx-center); `ccx repodir` does not notice. A ccx-center reachable from other machines has
+to be bound beyond loopback, which ccx-center refuses unless told the network is trusted
+(`apps/center/README.md`).
 
 `machine` in the layout follows ccx-agent's rule (`CCX_MACHINE` / `ccx.machine` / `machine` / hostname),
-so the center's events and the store name a machine the same way and a DuckDB join between them holds.
+so ccx-center's events and the store name a machine the same way and a DuckDB join between them holds.
 
 ## Layout
 
@@ -88,7 +88,7 @@ WHERE type = 'assistant';
 ```
 
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
-USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
+USE_SSL false, KEY_ID 'x', SECRET 'x')` — ccx-center accepts any signature. `ccx transcript search`
 does exactly this and exposes four views for `--sql`: `transcripts` (structured, `union_by_name`
 across record types), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
@@ -132,11 +132,11 @@ drops the target's bindings package next to `@duckdb/node-bindings` (where that 
 from — under `node_modules/.bun/` in an isolated install) when it is not the host's. Measured: a
 `bun-linux-arm64` build from linux-x64 bundles and links (not run — no arm64 host).
 
-## Measured (2026-09-19, one host, real center on loopback)
+## Measured (2026-09-19, one host, real ccx-center on loopback)
 
 `push` → `prune` (local file gone) → `pull` → `claude --resume <id> -p "what was the token?"`
 answered with the token given in the first turn. The two-host round trip (#121's acceptance) is the
-same sequence with `CCX_HUB_URL` pointing at a center both hosts reach; it has **not** been run on two
+same sequence with `CCX_CENTER_URL` pointing at a ccx-center both hosts reach; it has **not** been run on two
 real machines yet — `apps/cli/src/transcript.test.ts` stands two config dirs in for two machines.
 
 ## Not here

@@ -186,7 +186,7 @@ stable part is the attribute ` kind="heartbeat"` (with its leading space); `sour
   Stop hook that notifies a person fires every 50 minutes per idle session unless it skips heartbeats.
 - Whether UserPromptSubmit runs for a channel event is not measured here: the transcript records Stop hooks
   but not UserPromptSubmit, for a person's turn as well. `transport.md` says it runs.
-- ccx's own `collect` forwards those Stop events to the center as it does any other.
+- ccx's own `collect` forwards those Stop events to ccx-center as it does any other.
 
 ## Rejected
 
@@ -204,9 +204,9 @@ stable part is the attribute ` kind="heartbeat"` (with its leading space); `sour
 
 - ccx-center should see every machine's ccx-agent settings, while each machine keeps them in its local
   file (user, 2026-09-24: "the final shape"). Not built. Today the declared-state event sent to the
-  center carries a session's heartbeat override, but the center indexes only archived / label / task, and
+  ccx-center carries a session's heartbeat override, but ccx-center indexes only archived / label / task / role / metadata, and
   nothing sends `config.toml`.
-- The center should not read a heartbeat's Stop event as the session being used.
+- ccx-center should not read a heartbeat's Stop event as the session being used.
 - After `/clear` the channel still registers the old session id, so the new conversation is not kept warm.
   The current id is in `~/.claude/sessions/<claude pid>.json`; the channel could resolve it from its parent.
 - Delivery is inferred from the heartbeat's user record appearing. The transcript also records a

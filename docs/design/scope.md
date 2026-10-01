@@ -55,7 +55,7 @@ user's own scripts had been writing, now ccx's format, written by `ccx session m
 
 | Verb | Does | Example |
 |---|---|---|
-| **COLLECT** | Gather facts and forward them | hooks, statusline, and contradictions between them → hub |
+| **COLLECT** | Gather facts and forward them | hooks, statusline, and contradictions between them → ccx-center |
 | **START / keep alive** | Maintain a session that is declared to exist | `desired: running` in `.git/ccx.state` — restart on crash |
 | **CARRY** | Move an instruction or a reply, without inspecting it to decide anything | broker → channel → session; reply → broker |
 
@@ -80,7 +80,7 @@ This keeps the deterministic layer honest. The moment a daemon starts advising, 
 
 ## The invariant everything rests on
 
-**The central pieces may be absent, and the local thing still works.** No ccx-agent, no hub, no broker — `ccx repodir new` still creates a repodir; `ccx repodir gc` still reclaims one. A command that failed because a daemon was down would break the one promise the whole design keeps everywhere else. The centre adds visibility across machines; it is never a dependency for acting on one.
+**The central pieces may be absent, and the local thing still works.** No ccx-agent, no ccx-center, no broker — `ccx repodir new` still creates a repodir; `ccx repodir gc` still reclaims one. A command that failed because a daemon was down would break the one promise the whole design keeps everywhere else. The centre adds visibility across machines; it is never a dependency for acting on one.
 
 ## How to use this document
 

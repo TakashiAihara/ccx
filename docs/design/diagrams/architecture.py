@@ -32,10 +32,10 @@ with Diagram(
 
     with Cluster("central (optional — omit it and the CLI still works)"):
         broker = Rabbitmq("broker\npluggable")
-        hub = Server("hub\nAPI + web UI")
+        center = Server("ccx-center\nAPI + web UI")
         registry = Database("registry\nsessions + repodirs")
 
-        broker >> hub >> registry
+        broker >> center >> registry
 
     with Cluster("machine (one of many)"):
         cli = Server("ccx\none-shot CLI")
@@ -50,7 +50,7 @@ with Diagram(
 
     # ---- what the human does ----
     human >> Edge(label="rd new / open / gc") >> cli
-    human >> Edge(label="watch every machine,\nread the conversation", style="dotted") >> hub
+    human >> Edge(label="watch every machine,\nread the conversation", style="dotted") >> center
 
     # ---- how a repodir comes into being ----
     mirror >> Edge(label="hardlink clone — 0.07s", style="bold") >> repodir

@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
-import { centerTransport, type Hub } from "./fleet.ts";
+import { centerTransport, type Center } from "./fleet.ts";
 
 import { table } from "./format.ts";
 
@@ -91,7 +91,7 @@ async function storeOrNull(): Promise<TranscriptClient | null> {
 /** 手元に書いた後で center に写す。設定が読めなければ写さない (書き込みは済んでいる) */
 async function reportAfterWrite(sessionId: string, state: DeclaredState): Promise<void> {
   const cfg = await configOrNull();
-  if (cfg) await reportState(cfg.hub, cfg.machine, sessionId, state);
+  if (cfg) await reportState(cfg.center, cfg.machine, sessionId, state);
 }
 
 /**
@@ -103,10 +103,10 @@ const REPORT_TIMEOUT_MS = 3000;
 
 const withoutHistory = ({ labelHistory: _, ...rest }: DeclaredState) => rest;
 
-export async function reportState(hub: Hub | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
-  if (!hub) return;
+export async function reportState(center: Center | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
+  if (!center) return;
   const origin = localOrigin(machine);
-  const client = createClient(IngestService, centerTransport(hub));
+  const client = createClient(IngestService, centerTransport(center));
   try {
     await client.ingest(
       {
@@ -131,7 +131,7 @@ export async function reportState(hub: Hub | undefined, machine: string | undefi
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
   } catch (e) {
-    console.error(`(center ${hub.url} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
+    console.error(`(center ${center.url} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
   }
 }
 

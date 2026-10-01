@@ -17,7 +17,7 @@ modules behind an interface, each independently toggled in config.
 
 | Concern | Does | Default | Status |
 |---|---|---|---|
-| **collect** | hooks → center | on (inert without a center) | built (#90) |
+| **collect** | hooks → ccx-center | on (inert without a ccx-center) | built (#90) |
 | **carry** | broker → session | off (inert without a broker) | later (#23) |
 | **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
 | **heartbeat** | keep idle sessions' prompt caches warm | on (inert until a session loads the channel) | built (#142) |
@@ -33,7 +33,7 @@ A ccx-agent with every concern off is a valid state.
 
 ```text
 ccx-agent serve    the resident agent: owns the socket, spools what arrives,
-                   forwards it to the center, retries on outage, loses nothing
+                   forwards it to ccx-center, retries on outage, loses nothing
                    across restarts.
 
 ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
@@ -49,7 +49,7 @@ ccx-agent status --session <id> [--json]
                    its declared state (archived / label / task / metadata),
                    its heartbeat (enabled / listening / declared / wanted /
                    registered / next / sent),
-                   and collect (spool backlog, last reach of the center).
+                   and collect (spool backlog, last reach of ccx-center).
 ```
 
 serve answers `ccx.v1.AgentService` (packages/proto/ccx/v1/agent.proto) with one
@@ -67,12 +67,12 @@ handler on two listeners:
   every request needs `Authorization: Bearer <API token>` (`CCX_API_TOKEN`, else
   the file `api-token` next to config.toml, mode 0600). Without one serve
   refuses to open it (the unix side stays up). The API token is apart from the
-  hub token on purpose: reading an agent must not need the center's write
+  ccx-center token on purpose: reading an agent must not need ccx-center's write
   credential. One API token is shared by every host. It is plain HTTP, so the
   token crosses the network in the clear, and any holder can read every host's
   session labels, tasks and metadata; TLS is #180. `claudeHome` in a request is
   ignored here. An API token that cannot be used (the file readable by others
-  or unreadable, or the same value as the hub token, from the file or
+  or unreadable, or the same value as the ccx-center token, from the file or
   `CCX_API_TOKEN`) keeps TCP closed and is logged; the rest of serve runs.
 
 Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
@@ -136,27 +136,27 @@ could block a session on a timeout.
 
 - **A hook never blocks the session.** The socket write has a short deadline; if
   ccx-agent is down or wedged, the hook drops the event in `incoming/` and exits 0.
-- **The center being down loses nothing.** Events spool to `~/.ccx/spool` and
-  forward in order when the center returns.
+- **ccx-center being down loses nothing.** Events spool to `~/.ccx/spool` and
+  forward in order when ccx-center returns.
 - **A ccx-agent crash loses nothing.** The spool is durable numbered files; on
   restart, forwarding resumes from the oldest un-acked event.
 - **At-least-once.** An event may be delivered twice (e.g. ccx-agent is killed after
-  the center acked but before the spool file was deleted); the center drops the
+  ccx-center acked but before the spool file was deleted); ccx-center drops the
   duplicate by `event_id`. Duplicates are acceptable; losing an event is not.
 - **It forwards bytes; it does not read them.** The payload is opaque to ccx-agent —
   there is no branch in the forward path that depends on its content
   (`docs/design/scope.md`: COLLECT + CARRY, never CONSULT). The parsed shape
-  (session, hook type) is derived by the center (#91).
+  (session, hook type) is derived by ccx-center (#91).
 
 ## Configuration
 
 Everything resolves env → git config → file → default (see
 `packages/core/config`). All optional; with nothing set, ccx-agent runs and spools,
-it simply has no center to forward to.
+it simply has no ccx-center to forward to.
 
 | What | env | git config | config.toml | default |
 |---|---|---|---|---|
-| center URL | `CCX_HUB_URL` | `ccx.hubUrl` | `[hub] url` | none (spool only) |
+| ccx-center URL | `CCX_CENTER_URL` | `ccx.centerUrl` | `[center] url` | none (spool only) |
 | machine name | `CCX_MACHINE` | `ccx.machine` | `machine` | hostname |
 | socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccx-agent.sock` |
 | spool | `CCX_SPOOL` | — | — | `~/.ccx/spool` |
@@ -175,7 +175,7 @@ it simply has no center to forward to.
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 
 The machine name defaults to the hostname but is overridable, because hostnames
-collide (cloned VMs, same-named containers) and the center keys records on it
+collide (cloned VMs, same-named containers) and ccx-center keys records on it
 (#92).
 
 Note: a unix socket path is capped near 108 bytes by the kernel. ccx-agent fails fast
@@ -207,19 +207,19 @@ To keep it up across logout, the user needs lingering: `loginctl enable-linger "
 
 Then two steps install does not do for you:
 
-1. Point it at a center: `git config --global ccx.hubUrl http://<center>:8791` (or
-   `[hub] url` in the config file). Without one it spools and forwards nowhere. It
+1. Point it at a ccx-center: `git config --global ccx.centerUrl http://<ccx-center>:8791` (or
+   `[center] url` in the config file). Without one it spools and forwards nowhere. It
    reads the setting at start, so `systemctl --user restart ccx-agent` after. An
-   exported `CCX_HUB_URL` does not reach the service; that takes a drop-in with
+   exported `CCX_CENTER_URL` does not reach the service; that takes a drop-in with
    `Environment=`.
-   If the center has a token (`CCX_CENTER_TOKEN`, #158), put the same value in
-   `~/.config/ccx/hub-token` (mode 600). Without it the center refuses every event
+   If ccx-center has a token (`CCX_CENTER_TOKEN`, #158), put the same value in
+   `~/.config/ccx/center-token` (mode 600). Without it ccx-center refuses every event
    and ccx-agent keeps them spooled.
 2. Wire the hooks (below).
 
 ## Wiring the hooks
 
-The center builds `ccx session ls` from hook events alone: a session appears with its
+ccx-center builds `ccx session ls` from hook events alone: a session appears with its
 first event, its age is its latest event, and it counts as ended once a `SessionEnd`
 arrives. The smallest set that keeps that list right:
 
@@ -243,8 +243,8 @@ arrives. The smallest set that keeps that list right:
 absolute path (`~/.local/bin/ccx-agent hook`) — a hook that cannot find it drops the
 event.
 
-Each payload is forwarded to the center as is: `UserPromptSubmit` carries the prompt
-text, `Stop` the last assistant message. The center URL is plain HTTP unless you put
+Each payload is forwarded to ccx-center as is: `UserPromptSubmit` carries the prompt
+text, `Stop` the last assistant message. The ccx-center URL is plain HTTP unless you put
 TLS in front of it.
 
 Any other event can be added the same way; `ccx session show` then has more to show.
@@ -254,7 +254,7 @@ fires on every tool call.
 ## Checking it end to end
 
 ```bash
-ccx agent status          # running, spool 0, center reachable
+ccx agent status          # running, spool 0, ccx-center reachable
 ccx session ls            # a row with this machine's name appears after the next hook
 ccx session mark archived # from inside a session; the flag shows in `ccx session ls` on any other machine
 ```

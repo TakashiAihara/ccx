@@ -208,7 +208,7 @@ export const CollectStatusSchema: GenMessage<CollectStatus> = /*@__PURE__*/
  *
  * 同じ handler を 2 つの listener に載せる。unix socket (同じホストの statusline 用、
  * パーミッション 0600 で守る) と TCP (別ホストの ccx-agent 用、既定 off、API token を
- * 要求。center への書き込み権限を持つ hub token とは分ける)。プロトコルを 1 つにするのは、
+ * 要求。center への書き込み権限を持つ center token とは分ける)。プロトコルを 1 つにするのは、
  * 項目を足すたびに 2 か所を変えないため。
  *
  * 読むだけの口。ここから agent の状態を変える RPC は置かない。

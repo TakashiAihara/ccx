@@ -127,8 +127,8 @@ func cmdServe() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v heartbeat=%v interval=%v default=%v)",
-		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect,
+	logger("ccx-agent serving (machine=%s user=%s center=%q collect=%v heartbeat=%v interval=%v default=%v)",
+		cfg.Machine, cfg.User, cfg.CenterURL, cfg.Concerns.Collect,
 		cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval, cfg.Heartbeat.Default)
 	if err := concern.Run(ctx, logger, concerns...); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)

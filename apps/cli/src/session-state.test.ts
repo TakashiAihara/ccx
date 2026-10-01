@@ -9,10 +9,10 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { openDb } from "@ccx/hub/src/db/open.ts";
-import { ObjectStore } from "@ccx/hub/src/objects.ts";
-import { createApp } from "@ccx/hub/src/server.ts";
-import { ingest, listEvents, listSessions } from "@ccx/hub/src/store.ts";
+import { openDb } from "@ccx/center/src/db/open.ts";
+import { ObjectStore } from "@ccx/center/src/objects.ts";
+import { createApp } from "@ccx/center/src/server.ts";
+import { ingest, listEvents, listSessions } from "@ccx/center/src/store.ts";
 
 import { encodeCwd, EMPTY_DECLARED, holdsDeclared, localOrigin, localTranscripts, readDeclared, TranscriptClient, writeDeclared, type LocalTranscript } from "@ccx/core";
 
@@ -311,7 +311,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", CCX_TRANSCRIPT_ENDPOINT: "", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_CENTER_URL: "", CCX_TRANSCRIPT_ENDPOINT: "", ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -411,7 +411,7 @@ describe("ccx session with a center: marks are reported as events, and session l
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_CENTER_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a", ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -453,7 +453,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     // hook の統計は増えない (state event は 4 件届いている)
     expect(me?.eventCount).toBe(1);
 
-    const down = await run(["mark", "archived", "--off", SID], { CCX_HUB_URL: "http://127.0.0.1:1" });
+    const down = await run(["mark", "archived", "--off", SID], { CCX_CENTER_URL: "http://127.0.0.1:1" });
     expect(down.code).toBe(0);
     expect(down.err).toMatch(/did not confirm the state/);
     expect((await readDeclared(SID, homeA)).archived).toBe(false);
@@ -492,7 +492,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     await writeDeclared(SID, { archived: true, task: "kaneo ccx#1", role: "worker" }, homeA);
     await A.push(t, homeA);
     const p = Bun.spawn(["bun", "run", cli, "tr", "pull", SID, "--no-repodir"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_CENTER_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -501,7 +501,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(out).toMatch(/^pulled/);
     expect(out).toMatch(/^state .*task: kaneo ccx#1  role: worker/m);
     const ls = Bun.spawn(["bun", "run", cli, "tr", "ls"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeB, CCX_CENTER_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-b" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -530,7 +530,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     try {
       const started = Date.now();
       const p = Bun.spawn(["bun", "run", cli, "session", "mark", "archived", SID], {
-        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${silent.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a" },
+        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_CENTER_URL: `http://127.0.0.1:${silent.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -603,7 +603,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     await writeDeclared(SID2, { archived: true }, homeA);
     await Bun.write(join(homeA, "sessions", SID2, "meta"), "not a dir");
     const p = Bun.spawn(["bun", "run", cli, "tr", "push", "--archived"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_CENTER_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -615,7 +615,7 @@ describe("ccx session with a center: marks are reported as events, and session l
 
     // id を名指しした push は transcript を運び、state.json は書かずに exit 1
     const q = Bun.spawn(["bun", "run", cli, "tr", "push", SID2, "--json"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_CENTER_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" },
       stdout: "pipe",
       stderr: "pipe",
     });

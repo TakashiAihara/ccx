@@ -5,7 +5,7 @@ import { TOKEN_SHAPE } from "./auth.ts";
 
 /**
  * center 自身の設定。`packages/core` の Config とは別物なので分けてある。
- * あちらは「どの center に送るか」(hub.url) を持つ側、こちらは「どこで待つか」を
+ * あちらは「どの center に送るか」(center.url) を持つ側、こちらは「どこで待つか」を
  * 持つ側で、同じ機械に同居するとは限らない。
  */
 export type CenterConfig = {
@@ -61,7 +61,7 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
         "Anyone who can reach it can store events and read every collected payload.",
         "",
         "Either:",
-        "  - set CCX_CENTER_TOKEN to a shared secret (clients send it as CCX_HUB_TOKEN), or",
+        "  - set CCX_CENTER_TOKEN to a shared secret (clients set the same value in their own CCX_CENTER_TOKEN or center-token), or",
         "  - keep the default loopback bind and put a TLS-terminating, authenticating",
         "    proxy in front of it, or",
         `  - set ${INSECURE_BIND_ENV}=1 if the network it binds to is already trusted.`,

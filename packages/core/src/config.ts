@@ -40,14 +40,14 @@ export type Config = {
    */
   machine: string;
   /**
-   * 未設定なら hub 無し = ローカル単独動作。token は center の CCX_CENTER_TOKEN と
-   * 同じ値 (#158)。CCX_HUB_TOKEN か、config.toml の隣の `hub-token` ファイルから
+   * 未設定なら center 無し = ローカル単独動作。token は center の CCX_CENTER_TOKEN と
+   * 同じ値 (#158)。CCX_CENTER_TOKEN か、config.toml の隣の `center-token` ファイルから
    */
-  hub?: { url: string; token?: string };
+  center?: { url: string; token?: string };
   /**
    * transcript の保存先 (S3 互換)。未設定なら `ccx transcript` だけが使えない。
-   * endpoint を書かなければ hub.url (center の object API) が保存先になる。token を持つのは
-   * 保存先が center のとき (無指定か、hub.url と同じ origin) だけ。外部の S3 に center の token を送らない
+   * endpoint を書かなければ center.url (center の object API) が保存先になる。token を持つのは
+   * 保存先が center のとき (無指定か、center.url と同じ origin) だけ。外部の S3 に center の token を送らない
    */
   transcript?: { endpoint: string; bucket: string; prefix: string; region?: string; token?: string };
 };
@@ -87,10 +87,10 @@ export function normalizePrefix(raw: string): string {
  * center の token。git config と config.toml には置かない (dotfiles ごと共有・公開
  * されやすい置き場所なので)。env か、config.toml の隣の専用ファイル
  */
-async function readHubToken(env: Record<string, string | undefined>): Promise<string | undefined> {
-  const fromEnv = env.CCX_HUB_TOKEN?.trim();
+async function readCenterToken(env: Record<string, string | undefined>): Promise<string | undefined> {
+  const fromEnv = env.CCX_CENTER_TOKEN?.trim();
   if (fromEnv) return fromEnv;
-  const path = join(dirname(configPath(env)), "hub-token");
+  const path = join(dirname(configPath(env)), "center-token");
   const f = Bun.file(path);
   if (!(await f.exists())) return undefined;
   // 読めない / 他人に読める token を黙って無視すると、「設定したのに 401」の原因が見えなくなる
@@ -185,7 +185,7 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
 
   const s: Sources = { env, file, git: readGit };
   const fileDefaults = (file.defaults ?? {}) as Record<string, unknown>;
-  const fileHub = file.hub as { url?: unknown } | undefined;
+  const fileCenter = file.center as { url?: unknown } | undefined;
 
   const rootRaw = await pick(s, "CCX_ROOT", "ccx.root", "root");
   const root = rootRaw ? expandTilde(rootRaw) : base.root;
@@ -198,15 +198,15 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
     env.CCX_AGENT ?? (await readGit("ccx.agent")) ?? (fileDefaults.agent as string | undefined);
   const model =
     env.CCX_MODEL ?? (await readGit("ccx.model")) ?? (fileDefaults.model as string | undefined);
-  const hubUrl = env.CCX_HUB_URL ?? (await readGit("ccx.hubUrl")) ?? (fileHub?.url as string | undefined);
-  const hubToken = await readHubToken(env);
+  const centerUrl = env.CCX_CENTER_URL ?? (await readGit("ccx.centerUrl")) ?? (fileCenter?.url as string | undefined);
+  const centerToken = await readCenterToken(env);
 
-  // [transcript] テーブルは同じ 3 段で引く。endpoint だけは hub.url に落ちる。
-  // ただし center の object API は HTTP なので、hub.url が http(s) でなければ落とさない
+  // [transcript] テーブルは同じ 3 段で引く。endpoint だけは center.url に落ちる。
+  // ただし center の object API は HTTP なので、center.url が http(s) でなければ落とさない
   const t: Sources = { ...s, file: (file.transcript ?? {}) as Record<string, unknown> };
-  const hubHttp = hubUrl && /^https?:\/\//.test(hubUrl) ? hubUrl : undefined;
+  const centerHttp = centerUrl && /^https?:\/\//.test(centerUrl) ? centerUrl : undefined;
   const tExplicit = await pick(t, "CCX_TRANSCRIPT_ENDPOINT", "ccx.transcriptEndpoint", "endpoint");
-  const tEndpoint = tExplicit ?? hubHttp;
+  const tEndpoint = tExplicit ?? centerHttp;
   const tBucket = (await pick(t, "CCX_TRANSCRIPT_BUCKET", "ccx.transcriptBucket", "bucket")) ?? "ccx";
   const tPrefixRaw = (await pick(t, "CCX_TRANSCRIPT_PREFIX", "ccx.transcriptPrefix", "prefix")) ?? "";
   const tRegion = await pick(t, "CCX_TRANSCRIPT_REGION", "ccx.transcriptRegion", "region");
@@ -223,14 +223,14 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
       model: model || undefined,
     },
     machine: (await pick(s, "CCX_MACHINE", "ccx.machine", "machine")) ?? hostname(),
-    hub: hubUrl ? { url: String(hubUrl), ...(hubToken ? { token: hubToken } : {}) } : undefined,
+    center: centerUrl ? { url: String(centerUrl), ...(centerToken ? { token: centerToken } : {}) } : undefined,
     transcript: tEndpoint
       ? {
           endpoint: String(tEndpoint),
           bucket: String(tBucket),
           prefix: normalizePrefix(tPrefixRaw),
           region: tRegion || undefined,
-          ...(hubToken && (tExplicit === null || sameOrigin(tExplicit, hubHttp)) ? { token: hubToken } : {}),
+          ...(centerToken && (tExplicit === null || sameOrigin(tExplicit, centerHttp)) ? { token: centerToken } : {}),
         }
       : undefined,
   };

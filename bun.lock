@@ -9,6 +9,18 @@
         "typescript": "^5.7.2",
       },
     },
+    "apps/center": {
+      "name": "@ccx/center",
+      "version": "0.1.0",
+      "dependencies": {
+        "@bufbuild/protobuf": "^2.14.0",
+        "@ccx/proto": "workspace:*",
+        "@connectrpc/connect": "^2.1.0",
+        "@connectrpc/connect-node": "^2.1.0",
+        "drizzle-orm": "^0.44.0",
+        "hono": "^4.9.0",
+      },
+    },
     "apps/cli": {
       "name": "@ccx/cli",
       "version": "0.1.0",
@@ -22,19 +34,7 @@
         "commander": "^13.1.0",
       },
       "devDependencies": {
-        "@ccx/hub": "workspace:*",
-      },
-    },
-    "apps/hub": {
-      "name": "@ccx/hub",
-      "version": "0.1.0",
-      "dependencies": {
-        "@bufbuild/protobuf": "^2.14.0",
-        "@ccx/proto": "workspace:*",
-        "@connectrpc/connect": "^2.1.0",
-        "@connectrpc/connect-node": "^2.1.0",
-        "drizzle-orm": "^0.44.0",
-        "hono": "^4.9.0",
+        "@ccx/center": "workspace:*",
       },
     },
     "packages/core": {
@@ -52,11 +52,11 @@
   "packages": {
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.14.0", "", {}, "sha512-C3UGsiCwSprE2NKIIFA3hCDlpXTMCAXRZuEVp88L1GY36Y41+rYL5fryE+nOFhp4p4JPQvdV8PQ4DWgHgeTE+w=="],
 
+    "@ccx/center": ["@ccx/center@workspace:apps/center"],
+
     "@ccx/cli": ["@ccx/cli@workspace:apps/cli"],
 
     "@ccx/core": ["@ccx/core@workspace:packages/core"],
-
-    "@ccx/hub": ["@ccx/hub@workspace:apps/hub"],
 
     "@ccx/proto": ["@ccx/proto@workspace:packages/proto"],
 

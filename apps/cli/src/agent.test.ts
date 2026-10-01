@@ -52,8 +52,8 @@ describe("agentStatus", () => {
     expect(st.socketConnectable).toBe(false);
     expect(st.spooled).toBe(0);
     expect(st.incoming).toBe(0);
-    // hub 未設定は「届かない」ではない。区別できる形で返す
-    expect(st.hubReachable).toBeUndefined();
+    // center 未設定は「届かない」ではない。区別できる形で返す
+    expect(st.centerReachable).toBeUndefined();
   });
 
   test("socket が在って繋がれば running", async () => {
@@ -105,49 +105,49 @@ describe("agentStatus", () => {
     expect(st.incoming).toBe(1);
   });
 
-  test("hub が設定されていて届かなければ false", async () => {
+  test("center が設定されていて届かなければ false", async () => {
     const st = await agentStatus("http://127.0.0.1:1", {
       CCX_SOCKET: join(dir, "n.sock"),
       CCX_SPOOL: join(dir, "spool"),
     });
-    expect(st.hubReachable).toBe(false);
+    expect(st.centerReachable).toBe(false);
   });
 
-  test("URL として読めない hub は、届かないのとは別の状態として返す", async () => {
+  test("URL として読めない center は、届かないのとは別の状態として返す", async () => {
     // scheme を書き忘れただけで status 全体が落ちるのは、用途に対して過剰
     const st = await agentStatus("127.0.0.1:8791", {
       CCX_SOCKET: join(dir, "n.sock"),
       CCX_SPOOL: join(dir, "spool"),
     });
-    expect(st.hubUrlInvalid).toBe(true);
-    expect(st.hubReachable).toBe(false);
+    expect(st.centerUrlInvalid).toBe(true);
+    expect(st.centerReachable).toBe(false);
     // ccx-agent 側の情報は URL が壊れていても取れる
     expect(st.socketConnectable).toBe(false);
   });
 
-  test("正しい URL では hubUrlInvalid が立たない", async () => {
+  test("正しい URL では centerUrlInvalid が立たない", async () => {
     const st = await agentStatus("http://127.0.0.1:1", {
       CCX_SOCKET: join(dir, "n.sock"),
       CCX_SPOOL: join(dir, "spool"),
     });
-    expect(st.hubUrlInvalid).toBeUndefined();
-    expect(st.hubReachable).toBe(false);
+    expect(st.centerUrlInvalid).toBeUndefined();
+    expect(st.centerReachable).toBe(false);
   });
 
-  test("hub が届けば true", async () => {
+  test("center が届けば true", async () => {
     const srv = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok\n") });
     try {
       const st = await agentStatus(`http://127.0.0.1:${srv.port}`, {
         CCX_SOCKET: join(dir, "n.sock"),
         CCX_SPOOL: join(dir, "spool"),
       });
-      expect(st.hubReachable).toBe(true);
+      expect(st.centerReachable).toBe(true);
     } finally {
       await srv.stop(true);
     }
   });
 
-  test("healthz は答えても token を受けない center は hubTokenAccepted=false (#158)", async () => {
+  test("healthz は答えても token を受けない center は centerTokenAccepted=false (#158)", async () => {
     const want = "tok-for-agent-status";
     const srv = Bun.serve({
       hostname: "127.0.0.1",
@@ -160,10 +160,10 @@ describe("agentStatus", () => {
     const env = { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: join(dir, "spool") };
     try {
       const refused = await agentStatus(`http://127.0.0.1:${srv.port}`, env, "wrong");
-      expect(refused.hubReachable).toBe(true);
-      expect(refused.hubTokenAccepted).toBe(false);
+      expect(refused.centerReachable).toBe(true);
+      expect(refused.centerTokenAccepted).toBe(false);
       const ok = await agentStatus(`http://127.0.0.1:${srv.port}`, env, want);
-      expect(ok.hubTokenAccepted).toBe(true);
+      expect(ok.centerTokenAccepted).toBe(true);
     } finally {
       await srv.stop(true);
     }

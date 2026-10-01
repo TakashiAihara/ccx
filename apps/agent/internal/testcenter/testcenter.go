@@ -3,7 +3,7 @@
 // the binary integration test both talk to it. It implements IngestService,
 // dedups by event_id, and can be flipped "unavailable" to simulate an outage.
 //
-// It is a test double, not the shipped center; the real hub arrives in #91. It
+// It is a test double, not the shipped center; the real center arrives in #91. It
 // lives in a normal package (not a _test file) only so both the collect package
 // and the main package's tests can share it across the process boundary.
 package testcenter

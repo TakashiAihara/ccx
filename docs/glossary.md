@@ -21,12 +21,20 @@ believed.
   server, `ccx-agent channel`. Prose says "the ccx channel" for ours.
 - **done** — a repodir word only (`.git/ccx.state`). The user's `~/.claude/sessions/<id>/done`
   marker is not ccx's; ccx's word for a folded-away session is `archived`.
-- **hub** vs **center** — the same thing. *hub* is the older word and survives in `apps/hub`, the
-  config keys (`CCX_HUB_URL` / `ccx.hubUrl` / `hub.url`) and the design docs; prose says "center".
-- **broker** vs **center** — the design docs (`architecture.md`, `transport.md`) draw the *broker* as
-  a separate transport between center and ccx-agent. It does not exist; whether the center takes its
-  place (#155 assumes the center fans a message out) is not decided. Don't write "broker" for the
-  center.
+- **hub** — the former name of ccx-center, removed in #136 (`apps/hub` → `apps/center`, `CCX_HUB_URL` →
+  `CCX_CENTER_URL`, `ccx.hubUrl` → `ccx.centerUrl`, `[hub]` → `[center]`, `hub-token` → `center-token`, and the client
+  token env, which became `CCX_CENTER_TOKEN`). Don't write it for ccx-center; whether it gets another
+  meaning is #156.
+- **`CCX_CENTER_*` sender vs listener** — the namespace holds both sides. ccx-center reads
+  `CCX_CENTER_HOST` / `_PORT` / `_DB` / `_OBJECTS` / `_ALLOW_INSECURE_BIND` (where it listens);
+  ccx and ccx-agent read `CCX_CENTER_URL` (where they send). `CCX_CENTER_TOKEN` is read by both on
+  purpose: the clients send the same value the center requires (#158). The center reads it from the env
+  only; the clients read the env, then `center-token`. On a host that runs both, one exported value
+  serves both.
+- **broker** vs **ccx-center** — the design docs (`architecture.md`, `transport.md`) draw the *broker* as
+  a separate transport between ccx-center and ccx-agent. It does not exist; whether ccx-center takes its
+  place (#155 assumes ccx-center fans a message out) is not decided. Don't write "broker" for
+  ccx-center.
 
 ## Sessions
 
@@ -53,8 +61,9 @@ believed.
 - **role** — what a session is, e.g. `worker` or `pm` (`~/.claude/sessions/<id>/role`). One free-text
   value; ccx gives no value a meaning. Not the `label` (its name) (`docs/design/session-state.md`, "Role").
 - **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
-- **center** — `ccx-center` (`apps/hub`), which collects hook events and, by default, serves the store.
-  Formerly called the hub.
+- **ccx-center** — the central server (`apps/center`, binary and unit `ccx-center`), which collects hook events
+  and, by default, serves the store. Docs and READMEs write `ccx-center`, paired with `ccx-agent`. Names inside the
+  ccx namespace, code comments and CLI messages included, say `center` (`CCX_CENTER_URL`, `ccx.centerUrl`, `[center]`, `@ccx/center`). Formerly the hub.
 - **broker** — the planned carrier of messages to ccx-agent (`docs/design/transport.md`). Not built.
 - **ccx-agent** — the per-machine resident process (formerly `ccxd`, #131).
 - **channel** — `ccx-agent channel`, the MCP server Claude Code spawns per session. It registers the session

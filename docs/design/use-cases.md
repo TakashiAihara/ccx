@@ -173,12 +173,12 @@ sequenceDiagram
     participant SL as statusline
     participant AGENT as ccx-agent
     participant C as channel
-    participant HUB as hub
+    participant CENTER as ccx-center
 
     loop every assistant message
         S->>SL: context_window, tokens, rate_limits
         SL->>AGENT: forward
-        AGENT->>HUB: store
+        AGENT->>CENTER: store
     end
 
     Note over AGENT: crosses 85%
@@ -211,14 +211,14 @@ sequenceDiagram
     participant SL as statusline
     participant HK as PreToolUse / PostToolUse
     participant AGENT as ccx-agent
-    participant HUB as hub
+    participant CENTER as ccx-center
 
     S->>SL: token counters (per assistant message)
     S->>HK: tool name, arguments, output size
     SL->>AGENT: counters
     HK->>AGENT: activity
-    AGENT->>HUB: both, keyed by session_id + turn
-    Note over HUB: join → which tool call cost what
+    AGENT->>CENTER: both, keyed by session_id + turn
+    Note over CENTER: join → which tool call cost what
 ```
 
 **Satisfied when**

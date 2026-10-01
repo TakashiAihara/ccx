@@ -2,7 +2,7 @@
  * session の transcript を S3 互換の保存先に置き、別マシンで取り出す (#121)。
  *
  * 保存先は S3 の API を話すものなら何でもよい。既定は ccx-center の object API
- * (apps/hub/src/objects.ts) だが、利用者が自分の bucket を指してもコードは変わらない。
+ * (apps/center/src/objects.ts) だが、利用者が自分の bucket を指してもコードは変わらない。
  *
  * レイアウトは Hive 形式 (`key=value` のディレクトリ) で、DuckDB が manifest 無しに
  * machine / user / session_id を列として読める:
@@ -33,7 +33,7 @@ import { encodeCwd } from "./scan.ts";
 import { claudeHome, holdsDeclared, isEmptyDeclared, normalizeDeclared, readDeclared, sameDeclared, UUID, writeDeclared, type DeclaredState } from "./session-state.ts";
 
 export type TranscriptStore = {
-  /** S3 互換の endpoint。ccx-center なら hub.url と同じ */
+  /** S3 互換の endpoint。ccx-center なら center.url と同じ */
   endpoint: string;
   bucket: string;
   /** key の前に付ける。空か、`/` で終わる文字列 */
@@ -300,7 +300,7 @@ export class NoTranscriptStore extends Error {
         "no transcript store configured — nowhere to push to or pull from.",
         "",
         "Point ccx at a center (its object API is the default store):",
-        "  CCX_HUB_URL=http://host:8791",
+        "  CCX_CENTER_URL=http://host:8791",
         "or at any S3-compatible endpoint:",
         "  CCX_TRANSCRIPT_ENDPOINT=https://s3.example  CCX_TRANSCRIPT_BUCKET=ccx",
         "  ~/.config/ccx/config.toml   [transcript] endpoint = \"...\"  bucket = \"ccx\"",

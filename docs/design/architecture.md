@@ -16,13 +16,13 @@ per machine
   ccx-agent  resident agent, one process per machine
                observes repodirs                    — observes only, never writes them
                observes sessions and starts them    — actively
-               reports to the hub
+               reports to ccx-center
 
   herdr      session substrate: persistence and visibility
 
 central (optional)
-  hub        holds session and repodir records for every machine
-  broker     transport between ccx-agent and the hub
+  ccx-center holds session and repodir records for every machine
+  broker     transport between ccx-agent and ccx-center
 ```
 
 ## What owns what
@@ -32,25 +32,25 @@ central (optional)
 | `ccx` (CLI) | creates and removes them | records intent (`open`, `done`) |
 | `ccx-agent` (resident) | **observes only** | **observes, and starts them** |
 | herdr | — | persistence and visibility |
-| hub | holds records for every machine | holds records for every machine |
+| ccx-center | holds records for every machine | holds records for every machine |
 
-`ccx` does not know `ccx-agent` exists. **If `ccx-agent` is not running, or the hub is unreachable, `ccx`
+`ccx` does not know `ccx-agent` exists. **If `ccx-agent` is not running, or ccx-center is unreachable, `ccx`
 still works completely** — you lose the cross-machine view, nothing else.
 
-## The hub holds state
+## ccx-center holds state
 
-Cross-machine management is the whole point of the hub, and one session being able to see another's
-state is a requirement. Neither is possible if the hub holds nothing. So it holds everything.
+Cross-machine management is the whole point of ccx-center, and one session being able to see another's
+state is a requirement. Neither is possible if ccx-center holds nothing. So it holds everything.
 
 What it does *not* do is become the thing that must not fail. The authoritative copy of a repodir's
-creation facts is the `.git/ccx.json` inside that repodir; the hub holds a copy of every machine's.
-Losing the hub degrades the system to "local only". It does not break it.
+creation facts is the `.git/ccx.json` inside that repodir; ccx-center holds a copy of every machine's.
+Losing ccx-center degrades the system to "local only". It does not break it.
 
 The same principle rules out a local registry file: a single file owning the state of every repodir
 would race on concurrent creation, and its corruption would make every directory unidentifiable. Each
 directory carries its own truth instead.
 
-Because a directory id is only unique per machine (see [repodir.md](./repodir.md)), the hub keys
+Because a directory id is only unique per machine (see [repodir.md](./repodir.md)), ccx-center keys
 records on **`machine + path`**.
 
 ## Sessions run on herdr
@@ -58,7 +58,7 @@ records on **`machine + path`**.
 Session startup, persistence, and visibility are delegated to
 [herdr](https://herdr.dev). `ccx-agent` drives herdr rather than a terminal multiplexer directly.
 
-herdr provides persistence and local visibility. The hub provides the cross-machine view. They are
+herdr provides persistence and local visibility. ccx-center provides the cross-machine view. They are
 different jobs and both exist.
 
 **The repodir layer does not depend on herdr.** `ccx repodir new` works on a machine that has never
@@ -82,7 +82,7 @@ agent = "claude"
 model = "opus-4.8"
 
 # Omit entirely to run standalone.
-# [hub]
+# [center]
 # url = "nats://broker.internal:4222"
 ```
 

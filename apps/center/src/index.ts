@@ -20,8 +20,8 @@ env:
   CCX_CENTER_DB     sqlite file (default $CCX_ROOT/center.db, or ~/.ccx/center.db)
   CCX_CENTER_OBJECTS  directory behind the S3-compatible object API
                     (default $CCX_ROOT/center-objects, or ~/.ccx/center-objects)
-  CCX_CENTER_TOKEN  shared token every endpoint but /healthz requires; clients send
-                    it as CCX_HUB_TOKEN. With it set the center may bind beyond loopback
+  CCX_CENTER_TOKEN  shared token every endpoint but /healthz requires; clients set the
+                    same value. With it set the center may bind beyond loopback
 `);
 }
 
