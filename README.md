@@ -116,7 +116,7 @@ own files, plus one store GET to tell `remote` from `unknown`). What you *do* wi
 `archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
 
 Point the CLI at a ccx-center the same way `ccx-agent` is pointed at one (`CCX_CENTER_URL` / `ccx.centerUrl` /
-`center.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
+`[center] url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
 empty.
 
 ### Taking a session's transcript with you
@@ -241,7 +241,7 @@ config file lives.
 | mirror staleness | `CCX_MIRROR_MAX_AGE` | `ccx.mirrorMaxAge` | `mirrorMaxAge` |
 | agent to run | `CCX_AGENT` | `ccx.agent` | `defaults.agent` |
 | model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
-| ccx-center to report to | `CCX_CENTER_URL` | `ccx.centerUrl` | `center.url` |
+| ccx-center to report to | `CCX_CENTER_URL` | `ccx.centerUrl` | `[center] url` |
 | ccx-center's token | `CCX_CENTER_TOKEN` | — | `center-token` file next to `config.toml` |
 
 Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.

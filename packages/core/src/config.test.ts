@@ -109,8 +109,8 @@ describe("設定の解決", () => {
     expect(centerOnly.transcript).toEqual({ endpoint: "http://center:8791", bucket: "ccx", prefix: "", region: undefined });
 
     // http でない center.url (nats 等) は S3 の endpoint にならない
-    const natsHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_CENTER_URL: "nats://center:4222" }, git: noGit });
-    expect(natsHub.transcript).toBeUndefined();
+    const natsCenter = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_CENTER_URL: "nats://center:4222" }, git: noGit });
+    expect(natsCenter.transcript).toBeUndefined();
   });
 
   test("center の token: CCX_CENTER_TOKEN > config.toml の隣の center-token。git config は読まない", async () => {
@@ -132,8 +132,8 @@ describe("設定の解決", () => {
   });
 
   test("transcript が center の token を持つのは、保存先が center (endpoint 無指定) のときだけ", async () => {
-    const onHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_CENTER_URL: "http://c", CCX_CENTER_TOKEN: "t" }, git: noGit });
-    expect(onHub.transcript?.token).toBe("t");
+    const onCenter = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_CENTER_URL: "http://c", CCX_CENTER_TOKEN: "t" }, git: noGit });
+    expect(onCenter.transcript?.token).toBe("t");
     // 外部の S3 に center の token を送らない
     const external = await loadConfig({
       env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_CENTER_URL: "http://c", CCX_CENTER_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://s3" },
@@ -212,6 +212,15 @@ describe("設定の解決", () => {
     expect(cfg.defaults.agent).toBe("opencode");
     expect(cfg.defaults.model).toBe("sonnet-5");
     expect(cfg.center?.url).toBe("nats://env:4222");
+  });
+
+  test("center の url: git config の ccx.centerUrl は config.toml の [center] より勝つ", async () => {
+    const fromGit = await loadConfig({
+      env: { CCX_CONFIG: cfgFile },
+      git: gitStub({ "ccx.centerUrl": "http://git.example:8791" }),
+    });
+
+    expect(fromGit.center?.url).toBe("http://git.example:8791");
   });
 
   test("machine follows ccx-agent's rule: CCX_MACHINE > ccx.machine > file > hostname", async () => {

@@ -5,15 +5,6 @@ ccx-agent が集めた事実を受け取り、貯め、読み返せる形で返�
 judge しない。advise しない。「session X の context が 85% である」は答えるが、
 「だから畳むべきだ」は答えない (`docs/design/scope.md`)。解釈は読んだ側の仕事。
 
-## 名前が 2 つある
-
-同じものを、ディレクトリでは `ccx-center`、サービス名では `ccx-center` と呼んでいる。
-`docs/design/architecture.md` は ccx-center、`#91` と ccx-agent 側は ccx-center。config のキーも
-`CCX_CENTER_URL` (送る側) と `CCX_CENTER_*` (待つ側) で割れている。
-
-今は割れたままにしてある。片方に寄せるのは docs / proto / config / ccx-agent に跨る
-変更で、この PR の範囲を超えるため。どちらの名前も同じものを指す。
-
 ## 通り道
 
 ```mermaid

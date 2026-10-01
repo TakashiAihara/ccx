@@ -354,7 +354,7 @@ func TestCenterToken_RefusesOtherReadableFile(t *testing.T) {
 
 // The agent API's token has its own env and file, apart from the center token,
 // and a file other users can read is refused like center-token.
-func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
+func TestAPIToken_EnvThenFile_ApartFromCenter(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(filepath.Join(dir, "center-token"), []byte("center\n"), 0o600); err != nil {

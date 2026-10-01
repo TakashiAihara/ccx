@@ -67,7 +67,7 @@ handler on two listeners:
   every request needs `Authorization: Bearer <API token>` (`CCX_API_TOKEN`, else
   the file `api-token` next to config.toml, mode 0600). Without one serve
   refuses to open it (the unix side stays up). The API token is apart from the
-  the ccx-center token on purpose: reading an agent must not need ccx-center's write
+  ccx-center token on purpose: reading an agent must not need ccx-center's write
   credential. One API token is shared by every host. It is plain HTTP, so the
   token crosses the network in the clear, and any holder can read every host's
   session labels, tasks and metadata; TLS is #180. `claudeHome` in a request is

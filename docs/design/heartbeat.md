@@ -204,7 +204,7 @@ stable part is the attribute ` kind="heartbeat"` (with its leading space); `sour
 
 - ccx-center should see every machine's ccx-agent settings, while each machine keeps them in its local
   file (user, 2026-09-24: "the final shape"). Not built. Today the declared-state event sent to the
-  ccx-center carries a session's heartbeat override, but ccx-center indexes only archived / label / task, and
+  ccx-center carries a session's heartbeat override, but ccx-center indexes only archived / label / task / role / metadata, and
   nothing sends `config.toml`.
 - ccx-center should not read a heartbeat's Stop event as the session being used.
 - After `/clear` the channel still registers the old session id, so the new conversation is not kept warm.
