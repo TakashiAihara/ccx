@@ -96,7 +96,7 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	spool := filepath.Join(work, "spool")
 
 	env := append(os.Environ(),
-		"CCX_HUB_URL="+url,
+		"CCX_CENTER_URL="+url,
 		"CCX_SOCKET="+sock,
 		"CCX_SPOOL="+spool,
 		"CCX_MACHINE=it-host",
@@ -230,7 +230,7 @@ func TestIntegration_StatusClient(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(home, "sessions", sid, "label"), []byte("it-label\n"), 0o644)
 	env := append(os.Environ(),
-		"CCX_HUB_URL=", "CCX_SOCKET="+filepath.Join(work, "s.sock"), "CCX_SPOOL="+filepath.Join(work, "spool"),
+		"CCX_CENTER_URL=", "CCX_SOCKET="+filepath.Join(work, "s.sock"), "CCX_SPOOL="+filepath.Join(work, "spool"),
 		"CLAUDE_CONFIG_DIR="+home,
 		// Nothing from the developer's setup may point this serve at the real
 		// agent's sockets or a port.

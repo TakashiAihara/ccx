@@ -9,7 +9,7 @@
 #
 # To be reachable from other machines (ccx-agent forwarding, `ccx transcript` from
 # elsewhere) it must bind beyond loopback. That takes a shared token (#158); the
-# clients put the same value in ~/.config/ccx/hub-token:
+# clients put the same value in ~/.config/ccx/center-token:
 #   systemctl --user edit ccx-center   # add under [Service]:
 #   Environment=CCX_CENTER_HOST=0.0.0.0
 #   EnvironmentFile=%h/.config/ccx/center.env    # CCX_CENTER_TOKEN=..., mode 600
@@ -25,7 +25,7 @@ Type=simple
 # ccx-center is not a compiled binary yet: it runs from the repo with bun.
 # %h is the user's home; adjust the path to where the repo is checked out.
 WorkingDirectory=%h/.local/share/ccx/repo
-ExecStart=%h/.bun/bin/bun run apps/hub/src/index.ts serve
+ExecStart=%h/.bun/bin/bun run apps/center/src/index.ts serve
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

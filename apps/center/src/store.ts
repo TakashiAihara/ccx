@@ -230,7 +230,7 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
 }
 
 /**
- * packages/core/src/session-state.ts の META_KEY と同じ (hub は core に依存しない)。events には
+ * packages/core/src/session-state.ts の META_KEY と同じ (center は core に依存しない)。events には
  * 届いた payload のまま残る。落とすのは読むとき: 形の崩れた key を ListSessions で返さない
  */
 const META_KEY = /^[a-z0-9_][a-z0-9_.-]{0,127}$/;

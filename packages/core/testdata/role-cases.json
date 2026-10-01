@@ -1,5 +1,5 @@
 {
-  "comment": "The one-line rule for a session's role. `rule` is read by the tests of packages/core (session-state.ts ROLE), apps/hub (store.ts ROLE) and apps/agent (api.go role); `read` (a role file on disk) by core (readDeclared) and apps/agent (ReadDeclared) only, since the center reads no files. One table so the copies cannot drift.",
+  "comment": "The one-line rule for a session's role. `rule` is read by the tests of packages/core (session-state.ts ROLE), apps/center (store.ts ROLE) and apps/agent (api.go role); `read` (a role file on disk) by core (readDeclared) and apps/agent (ReadDeclared) only, since the center reads no files. One table so the copies cannot drift.",
   "rule": [
     { "value": "worker", "valid": true },
     { "value": "a b", "valid": true },

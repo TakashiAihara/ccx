@@ -6,8 +6,8 @@
 //
 // Resolution order mirrors the TS core (which follows ghq):
 //
-//  1. environment variable   CCX_HUB_URL / CCX_MACHINE / ...
-//  2. git config             ccx.hubUrl / ccx.machine / ...
+//  1. environment variable   CCX_CENTER_URL / CCX_MACHINE / ...
+//  2. git config             ccx.centerUrl / ccx.machine / ...
 //  3. config file            ~/.config/ccx/config.toml
 //  4. built-in default
 //
@@ -30,15 +30,15 @@ import (
 
 // Config is the resolved ccx-agent configuration. Only the fields ccx-agent basic needs.
 type Config struct {
-	// HubURL is where ccx-agent forwards. Empty means "no center configured" — ccx-agent
+	// CenterURL is where ccx-agent forwards. Empty means "no center configured" — ccx-agent
 	// still runs and spools; it just has nowhere to drain to yet. The local
 	// side never depends on the center existing (scope.md).
-	HubURL string
+	CenterURL string
 
-	// HubToken is the center's CCX_CENTER_TOKEN, sent as a Bearer on every call
-	// (#158). CCX_HUB_TOKEN, else the file hub-token next to config.toml. Never
+	// CenterToken is the center's CCX_CENTER_TOKEN, sent as a Bearer on every call
+	// (#158). CCX_CENTER_TOKEN, else the file center-token next to config.toml. Never
 	// git config or config.toml: those get shared along with dotfiles.
-	HubToken string
+	CenterToken string
 
 	// Machine names this host in the (user, machine, session) key (#92). The
 	// default is the hostname, but the default is NOT the single source of
@@ -84,7 +84,7 @@ type Config struct {
 	APIListen string
 
 	// APIToken is the Bearer the TCP listener requires (kaneo ccx#34). Apart from
-	// HubToken on purpose: a caller that only reads an agent must not hold the
+	// CenterToken on purpose: a caller that only reads an agent must not hold the
 	// center's write credential, and the TCP side is plain HTTP. One token is
 	// shared by every host (user decision 2026-09-27). CCX_API_TOKEN, else the
 	// file api-token next to config.toml, never git config or config.toml.
@@ -141,9 +141,9 @@ type Concerns struct {
 // fileShape is the subset of ~/.config/ccx/config.toml this port reads.
 type fileShape struct {
 	Machine string `toml:"machine"`
-	Hub     struct {
+	Center  struct {
 		URL string `toml:"url"`
-	} `toml:"hub"`
+	} `toml:"center"`
 	// *bool so "unset in file" is distinguishable from "set to false".
 	Collect     struct{ Enabled *bool } `toml:"collect"`
 	Carry       struct{ Enabled *bool } `toml:"carry"`
@@ -190,15 +190,15 @@ func load(
 		}
 	}
 
-	hub := pick(getenv("CCX_HUB_URL"), gitcfg("ccx.hubUrl"), file.Hub.URL)
-	token, err := hubToken(getenv)
+	center := pick(getenv("CCX_CENTER_URL"), gitcfg("ccx.centerUrl"), file.Center.URL)
+	token, err := centerToken(getenv)
 	if err != nil {
 		return Config{}, err
 	}
 	apiToken, apiTokenErr := tokenFrom(getenv, "CCX_API_TOKEN", "api-token", "the agent API's token")
 	if apiTokenErr == nil && apiToken != "" && apiToken == token {
-		// A copy of hub-token would hand the center's write credential to readers.
-		apiToken, apiTokenErr = "", errors.New("the API token is the hub token; give the agent API its own (CCX_API_TOKEN or api-token)")
+		// A copy of center-token would hand the center's write credential to readers.
+		apiToken, apiTokenErr = "", errors.New("the API token is the center token; give the agent API its own (CCX_API_TOKEN or api-token)")
 	}
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
@@ -227,12 +227,12 @@ func load(
 	}
 
 	return Config{
-		HubURL:     hub,
-		HubToken:   token,
-		Machine:    machine,
-		User:       uname,
-		SocketPath: socketPath(getenv),
-		SpoolDir:   spoolDir(getenv),
+		CenterURL:   center,
+		CenterToken: token,
+		Machine:     machine,
+		User:        uname,
+		SocketPath:  socketPath(getenv),
+		SpoolDir:    spoolDir(getenv),
 		Concerns: Concerns{
 			// Defaults per ADR 0002: passive concerns may default on, the one
 			// active concern (persistence) is opt-in.
@@ -318,10 +318,10 @@ func pick(vals ...string) string {
 	return ""
 }
 
-// hubToken fails rather than ignoring a token file it cannot use: a silently
+// centerToken fails rather than ignoring a token file it cannot use: a silently
 // empty token turns into "every event refused" with nothing pointing at why.
-func hubToken(getenv func(string) string) (string, error) {
-	return tokenFrom(getenv, "CCX_HUB_TOKEN", "hub-token", "the center's token")
+func centerToken(getenv func(string) string) (string, error) {
+	return tokenFrom(getenv, "CCX_CENTER_TOKEN", "center-token", "the center's token")
 }
 
 // tokenFrom is envKey, else the file name next to config.toml, which must not

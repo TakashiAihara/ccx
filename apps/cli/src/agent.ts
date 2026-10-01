@@ -18,17 +18,17 @@ export type AgentStatus = {
   spooled: number;
   /** ccx-agent に渡せず hook が直接落とした event 数。次の ccx-agent 起動で取り込まれる */
   incoming: number;
-  /** hubUrl が URL として読めなかった。「届かない」とは別の状態 */
-  hubUrlInvalid?: boolean;
-  hubUrl?: string;
-  /** hub が未設定なら undefined。設定されていて届かなければ false */
-  hubReachable?: boolean;
+  /** centerUrl が URL として読めなかった。「届かない」とは別の状態 */
+  centerUrlInvalid?: boolean;
+  centerUrl?: string;
+  /** center が未設定なら undefined。設定されていて届かなければ false */
+  centerReachable?: boolean;
   /**
    * center がこの手元の token を受けたか (#158)。`/healthz` は token 無しで答えるので、
    * reachable だけでは「全 event が 401 で spool に溜まり続けている」が見えない。
    * 見ているのは ccx CLI の token で、ccx-agent (systemd の環境) の token ではない
    */
-  hubTokenAccepted?: boolean;
+  centerTokenAccepted?: boolean;
 };
 
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -79,7 +79,7 @@ async function countFiles(dir: string, suffix: string): Promise<number> {
 }
 
 export async function agentStatus(
-  hubUrl: string | undefined,
+  centerUrl: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
   token?: string,
 ): Promise<AgentStatus> {
@@ -101,28 +101,28 @@ export async function agentStatus(
   // scheme を書き忘れた ("127.0.0.1:8791") だけで status 全体が落ちるのは、
   // 「ccx-agent の状態を見る」という用途に対して過剰。読めなかったことを状態として返す。
   let healthz: URL | undefined;
-  let hubUrlInvalid = false;
-  if (hubUrl) {
+  let centerUrlInvalid = false;
+  if (centerUrl) {
     try {
-      healthz = new URL("/healthz", hubUrl);
+      healthz = new URL("/healthz", centerUrl);
     } catch {
-      hubUrlInvalid = true;
+      centerUrlInvalid = true;
     }
   }
 
-  let hubReachable: boolean | undefined;
+  let centerReachable: boolean | undefined;
   if (healthz) {
-    hubReachable = await fetch(healthz, { signal: AbortSignal.timeout(2000) })
+    centerReachable = await fetch(healthz, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.ok)
       .catch(() => false);
-  } else if (hubUrlInvalid) {
-    hubReachable = false;
+  } else if (centerUrlInvalid) {
+    centerReachable = false;
   }
 
-  let hubTokenAccepted: boolean | undefined;
-  if (healthz && hubReachable) {
+  let centerTokenAccepted: boolean | undefined;
+  if (healthz && centerReachable) {
     // 最小の認証付き呼び出し。401 だけを「受けなかった」とし、それ以外の失敗は判定しない
-    hubTokenAccepted = await fetch(new URL("/ccx.v1.FleetService/ListSessions", healthz), {
+    centerTokenAccepted = await fetch(new URL("/ccx.v1.FleetService/ListSessions", healthz), {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ limit: 1 }),
@@ -139,9 +139,9 @@ export async function agentStatus(
     spoolDir,
     spooled,
     incoming,
-    hubUrl,
-    hubReachable,
-    ...(hubTokenAccepted !== undefined ? { hubTokenAccepted } : {}),
-    ...(hubUrlInvalid ? { hubUrlInvalid: true } : {}),
+    centerUrl,
+    centerReachable,
+    ...(centerTokenAccepted !== undefined ? { centerTokenAccepted } : {}),
+    ...(centerUrlInvalid ? { centerUrlInvalid: true } : {}),
   };
 }

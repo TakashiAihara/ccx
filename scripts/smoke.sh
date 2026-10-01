@@ -9,12 +9,12 @@ WORK=$(mktemp -d)
 PORT=${CCX_SMOKE_PORT:-18791}
 trap 'kill "$CENTER" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
-CCX_ROOT="$WORK/root" CCX_CENTER_PORT=$PORT bun run apps/hub/src/index.ts serve >"$WORK/center.log" 2>&1 &
+CCX_ROOT="$WORK/root" CCX_CENTER_PORT=$PORT bun run apps/center/src/index.ts serve >"$WORK/center.log" 2>&1 &
 CENTER=$!
 for _ in $(seq 1 50); do curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null && break; sleep 0.2; done
 curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null || { cat "$WORK/center.log"; exit 1; }
 
-export CCX_HUB_URL="http://127.0.0.1:$PORT" CLAUDE_CONFIG_DIR="$WORK/claude" XDG_CACHE_HOME="$WORK/cache"
+export CCX_CENTER_URL="http://127.0.0.1:$PORT" CLAUDE_CONFIG_DIR="$WORK/claude" XDG_CACHE_HOME="$WORK/cache"
 mkdir -p "$CLAUDE_CONFIG_DIR/projects/-w"
 printf '{"type":"user","cwd":"/w","timestamp":"2026-01-01T00:00:00Z","message":{"content":"SMOKE-NEEDLE here"}}\n' \
   >"$CLAUDE_CONFIG_DIR/projects/-w/0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b.jsonl"

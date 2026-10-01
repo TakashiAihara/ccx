@@ -39,7 +39,7 @@ async function client() {
   );
   if (probe.status === 401) {
     throw new Error(
-      `${cfg.transcript.endpoint} wants a token (401). Set CCX_HUB_TOKEN, or put it in ~/.config/ccx/hub-token, ` +
+      `${cfg.transcript.endpoint} wants a token (401). Set CCX_CENTER_TOKEN, or put it in ~/.config/ccx/center-token, ` +
         "with the value of the center's CCX_CENTER_TOKEN.",
     );
   }
@@ -149,7 +149,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
       const r = await c.pull(id, claudeHome(), Boolean(o.force));
       // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
-      if (r.stateApplied && r.state) await reportState(cfg.hub, cfg.machine, id, r.state);
+      if (r.stateApplied && r.state) await reportState(cfg.center, cfg.machine, id, r.state);
       if (r.stateError) console.error(`(${id}: the store's state was not applied: this machine's declared state could not be read: ${r.stateError})`);
 
       // 会話だけでは作業できない。session.json の repo から、default branch の最新で

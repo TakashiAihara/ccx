@@ -3,7 +3,7 @@
 //
 // One handler, two listeners. The unix socket is always on and guarded by its
 // 0600 mode; the TCP listener is off unless an address is configured, and then
-// demands the API token (not the hub token: reading an agent must not need the
+// demands the API token (not the center token: reading an agent must not need the
 // center's write credential). One protocol for both, so a field added is added once.
 package api
 
@@ -44,7 +44,7 @@ func ValidSessionID(id string) bool { return sessionID.MatchString(id) }
 var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
 
 // role mirrors ROLE in packages/core/src/session-state.ts (and ROLE in
-// apps/hub/src/store.ts): one line. A file that does not match, or is not
+// apps/center/src/store.ts): one line. A file that does not match, or is not
 // UTF-8, reads as no role, as the TS reader does.
 var role = regexp.MustCompile(`^[^\p{Cc}\x{2028}\x{2029}]*$`)
 

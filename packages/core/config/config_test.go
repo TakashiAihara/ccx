@@ -26,15 +26,15 @@ func TestPrecedence_EnvBeatsGitBeatsFileBeatsDefault(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(cfgPath, []byte(`
 machine = "from-file"
-[hub]
-url = "http://file-hub"
+[center]
+url = "http://file-center"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	git := func(key string) string {
-		if key == "ccx.hubUrl" {
-			return "http://git-hub"
+		if key == "ccx.centerUrl" {
+			return "http://git-center"
 		}
 		return ""
 	}
@@ -42,7 +42,7 @@ url = "http://file-hub"
 	c, err := load(env(map[string]string{
 		"CCX_CONFIG":  cfgPath,
 		"CCX_MACHINE": "from-env",
-		// hubUrl not in env → should fall to git ("http://git-hub")
+		// centerUrl not in env → should fall to git ("http://git-center")
 	}), git, fixedHost("the-host"))
 	if err != nil {
 		t.Fatal(err)
@@ -51,8 +51,24 @@ url = "http://file-hub"
 	if c.Machine != "from-env" {
 		t.Errorf("machine: env should win, got %q", c.Machine)
 	}
-	if c.HubURL != "http://git-hub" {
-		t.Errorf("hubURL: git should beat file, got %q", c.HubURL)
+	if c.CenterURL != "http://git-center" {
+		t.Errorf("centerURL: git should beat file, got %q", c.CenterURL)
+	}
+
+	fromFile, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("the-host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromFile.CenterURL != "http://file-center" {
+		t.Errorf("centerURL: [center] url in the file should be read, got %q", fromFile.CenterURL)
+	}
+
+	fromEnv, err := load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_CENTER_URL": "http://env-center"}), git, fixedHost("the-host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromEnv.CenterURL != "http://env-center" {
+		t.Errorf("centerURL: env should beat git, got %q", fromEnv.CenterURL)
 	}
 }
 
@@ -77,14 +93,14 @@ func TestMachine_DefaultsToHostname_ButIsOverridable(t *testing.T) {
 }
 
 func TestNoConfigAtAll_StillResolves(t *testing.T) {
-	// scope.md: it must run with no configuration. Empty hub is fine — ccx-agent
+	// scope.md: it must run with no configuration. Empty center is fine — ccx-agent
 	// spools and simply has nowhere to drain to.
 	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.HubURL != "" {
-		t.Errorf("hubURL should be empty with no config, got %q", c.HubURL)
+	if c.CenterURL != "" {
+		t.Errorf("centerURL should be empty with no config, got %q", c.CenterURL)
 	}
 	if c.Machine != "h" {
 		t.Errorf("machine should still resolve, got %q", c.Machine)
@@ -296,9 +312,9 @@ func TestAPI_SocketAndListen(t *testing.T) {
 	}
 }
 
-// The token comes from CCX_HUB_TOKEN, else the hub-token file next to
+// The token comes from CCX_CENTER_TOKEN, else the center-token file next to
 // config.toml, and never from git config (git config travels with dotfiles).
-func TestHubToken_EnvThenFile_NeverGit(t *testing.T) {
+func TestCenterToken_EnvThenFile_NeverGit(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	git := func(key string) string { return "from-git" }
@@ -307,46 +323,46 @@ func TestHubToken_EnvThenFile_NeverGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.HubToken != "" {
-		t.Errorf("no env, no file: want empty, got %q", c.HubToken)
+	if c.CenterToken != "" {
+		t.Errorf("no env, no file: want empty, got %q", c.CenterToken)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("from-file\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "center-token"), []byte("from-file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath}), git, fixedHost("h"))
-	if c.HubToken != "from-file" {
-		t.Errorf("file: want trimmed from-file, got %q", c.HubToken)
+	if c.CenterToken != "from-file" {
+		t.Errorf("file: want trimmed from-file, got %q", c.CenterToken)
 	}
 
-	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_HUB_TOKEN": " from-env "}), git, fixedHost("h"))
-	if c.HubToken != "from-env" {
-		t.Errorf("env should beat file, got %q", c.HubToken)
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_CENTER_TOKEN": " from-env "}), git, fixedHost("h"))
+	if c.CenterToken != "from-env" {
+		t.Errorf("env should beat file, got %q", c.CenterToken)
 	}
 }
 
 // A token file other users can read is refused, not used and not ignored.
-func TestHubToken_RefusesOtherReadableFile(t *testing.T) {
+func TestCenterToken_RefusesOtherReadableFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "center-token"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := load(env(map[string]string{"CCX_CONFIG": filepath.Join(dir, "config.toml")}), noGit, fixedHost("h")); err == nil {
-		t.Fatal("a 0644 hub-token must fail the load")
+		t.Fatal("a 0644 center-token must fail the load")
 	}
 }
 
-// The agent API's token has its own env and file, apart from the hub token,
-// and a file other users can read is refused like hub-token.
+// The agent API's token has its own env and file, apart from the center token,
+// and a file other users can read is refused like center-token.
 func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(filepath.Join(dir, "hub-token"), []byte("hub\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "center-token"), []byte("center\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h"))
 	if err != nil || c.APIToken != "" {
-		t.Fatalf("only a hub-token: api token %q (%v), want empty", c.APIToken, err)
+		t.Fatalf("only a center-token: api token %q (%v), want empty", c.APIToken, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "api-token"), []byte(" api \n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -363,18 +379,18 @@ func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
 	// A bad api-token keeps the TCP listener closed and nothing else: the load
 	// succeeds, with the reason kept.
 	c, err = load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h"))
-	if err != nil || c.APIToken != "" || c.APITokenErr == nil || c.HubToken != "hub" {
-		t.Errorf("0644 api-token: load err %v, api %q, reason %v, hub %q; want the load to pass with no api token", err, c.APIToken, c.APITokenErr, c.HubToken)
+	if err != nil || c.APIToken != "" || c.APITokenErr == nil || c.CenterToken != "center" {
+		t.Errorf("0644 api-token: load err %v, api %q, reason %v, center %q; want the load to pass with no api token", err, c.APIToken, c.APITokenErr, c.CenterToken)
 	}
 
-	// A copy of the hub token is refused: it would hand readers the center's write credential.
-	if err := os.WriteFile(filepath.Join(dir, "api-token"), []byte("hub\n"), 0o600); err != nil {
+	// A copy of the center token is refused: it would hand readers the center's write credential.
+	if err := os.WriteFile(filepath.Join(dir, "api-token"), []byte("center\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(dir, "api-token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if c, err = load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h")); err != nil || c.APIToken != "" || c.APITokenErr == nil {
-		t.Errorf("api-token equal to hub-token: api %q reason %v (%v), want refused", c.APIToken, c.APITokenErr, err)
+		t.Errorf("api-token equal to center-token: api %q reason %v (%v), want refused", c.APIToken, c.APITokenErr, err)
 	}
 }

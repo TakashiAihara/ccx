@@ -30,7 +30,7 @@ type Collect struct {
 }
 
 // New builds the collect concern from resolved config. The center may be unset
-// (HubURL == ""), in which case Collect still accepts and spools hook events; it
+// (CenterURL == ""), in which case Collect still accepts and spools hook events; it
 // just has nowhere to forward them yet. The local side never depends on the
 // center (scope.md).
 func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
@@ -39,7 +39,7 @@ func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newCollect(cfg.SocketPath, spool, NewForwarder(cfg.HubURL, cfg.HubToken), log), nil
+	return newCollect(cfg.SocketPath, spool, NewForwarder(cfg.CenterURL, cfg.CenterToken), log), nil
 }
 
 // newCollect is the lower-level constructor with the spool and forwarder

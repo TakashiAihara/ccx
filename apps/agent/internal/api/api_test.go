@@ -540,7 +540,7 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("unix side with the TCP address taken: %v", err)
 	}
 
-	// A token config refused (a bad api-token file, a copy of the hub token):
+	// A token config refused (a bad api-token file, a copy of the center token):
 	// the unix side comes up, the TCP side does not, and the log says why.
 	work2 := shortDir(t)
 	addr2 := free()
@@ -555,7 +555,11 @@ func TestTCPListener(t *testing.T) {
 		c.Close()
 		t.Error("TCP listener opened with the token refused")
 	}
-	said := func(s string) bool { mu.Lock(); defer mu.Unlock(); return strings.Contains(strings.Join(logs, "\n"), s) }
+	said := func(s string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(strings.Join(logs, "\n"), s)
+	}
 	for i := 0; i < 100 && !said("readable by other users"); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -563,13 +567,13 @@ func TestTCPListener(t *testing.T) {
 		t.Errorf("logs %q do not say why TCP is closed", logs)
 	}
 
-	// The hub token set and no API token: New never reads the hub token, so
-	// TCP stays closed (config's own test covers that the hub token is not
+	// The center token set and no API token: New never reads the center token, so
+	// TCP stays closed (config's own test covers that the center token is not
 	// picked up as the API token).
 	work4 := shortDir(t)
 	addr4 := free()
 	cfg4 := config.Config{APISocketPath: filepath.Join(work4, "a.sock"), APIListen: addr4}
-	cfg4.HubToken = "hub-only"
+	cfg4.CenterToken = "center-only"
 	var mu4 sync.Mutex
 	var logs4 []string
 	go func() {
@@ -581,7 +585,11 @@ func TestTCPListener(t *testing.T) {
 	}()
 	waitDial(t, "unix", cfg4.APISocketPath)
 	// The decision is logged; once it is, TCP would already be open if it were going to be.
-	said4 := func() bool { mu4.Lock(); defer mu4.Unlock(); return strings.Contains(strings.Join(logs4, "\n"), "no API token") }
+	said4 := func() bool {
+		mu4.Lock()
+		defer mu4.Unlock()
+		return strings.Contains(strings.Join(logs4, "\n"), "no API token")
+	}
 	for i := 0; i < 100 && !said4(); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}

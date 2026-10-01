@@ -89,7 +89,7 @@ function cleanLabelHistory(raw: unknown): LabelChange[] {
  * role は宛先を指す値 (値全体で一致させる) なので 1 行に限る: 制御文字 (改行・タブ) と行区切り (U+2028 / U+2029) を
  * 通さない。読むときはこれに合わないものを「無い」とし (heartbeat と同じ)、書くときは拒む
  */
-// apps/hub/src/store.ts の ROLE と apps/agent/internal/api/api.go の role が同じ規則を写している。変えるなら 3 つとも
+// apps/center/src/store.ts の ROLE と apps/agent/internal/api/api.go の role が同じ規則を写している。変えるなら 3 つとも
 export const ROLE = /^[^\p{Cc}\u2028\u2029]*$/u;
 export const ROLE_RULE = "one line: no newline, tab or other control character";
 const asRole = (v: unknown): string => (typeof v === "string" && ROLE.test(v) ? v : "");

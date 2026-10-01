@@ -184,7 +184,7 @@ Every mechanism is a way into a session. Having several is worse than having one
 
 ```text
 human (own web UI) ─┐
-another session     ├─→ hub → broker → ccx-agent → channel (MCP push) → session
+another session     ├─→ ccx-center → broker → ccx-agent → channel (MCP push) → session
 CI, external events ─┘
 ```
 
@@ -201,7 +201,7 @@ The one thing that stays is not a delivery path. Terminal-level interruption —
 ## What is left to build
 
 1. **The channel server, per session.** `ccx-agent` subscribes to the broker and pushes. The measured minimum above is most of it.
-2. **The hook feed.** Every session's hooks write to a local socket; `ccx-agent` forwards to the hub. Receipt, completion, tool activity, stalls — all of it, from hooks that already fire.
+2. **The hook feed.** Every session's hooks write to a local socket; `ccx-agent` forwards to ccx-center. Receipt, completion, tool activity, stalls — all of it, from hooks that already fire.
 3. **Group addressing** (#78). The sender names a group; `ccx-agent` fans out. Delivery is tracked per member, because "I told everyone" is the claim most often false and least often checked.
 4. **Priority.** The sender — the PM role — decides. `ccx-agent` routes. It does not judge.
 5. **A decision about stalled questions.** Detection is done. Whether an orchestrator answers on the session's behalf, or whether sessions are simply forbidden from asking, is not.

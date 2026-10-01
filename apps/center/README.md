@@ -7,9 +7,9 @@ judge しない。advise しない。「session X の context が 85% である�
 
 ## 名前が 2 つある
 
-同じものを、ディレクトリでは `hub`、サービス名では `ccx-center` と呼んでいる。
-`docs/design/architecture.md` は hub、`#91` と ccx-agent 側は center。config のキーも
-`CCX_HUB_URL` (送る側) と `CCX_CENTER_*` (待つ側) で割れている。
+同じものを、ディレクトリでは `ccx-center`、サービス名では `ccx-center` と呼んでいる。
+`docs/design/architecture.md` は ccx-center、`#91` と ccx-agent 側は ccx-center。config のキーも
+`CCX_CENTER_URL` (送る側) と `CCX_CENTER_*` (待つ側) で割れている。
 
 今は割れたままにしてある。片方に寄せるのは docs / proto / config / ccx-agent に跨る
 変更で、この PR の範囲を超えるため。どちらの名前も同じものを指す。
@@ -33,8 +33,8 @@ sequenceDiagram
     C-->>Q: 事実
 ```
 
-center が落ちている間、機械側は何も失わない。ccx-agent が spool に貯め、復旧後に順序
-どおり流し込む。逆に center が上がっていても、機械側の動作は一切それに依存しない。
+ccx-center が落ちている間、機械側は何も失わない。ccx-agent が spool に貯め、復旧後に順序
+どおり流し込む。逆に ccx-center が上がっていても、機械側の動作は一切それに依存しない。
 
 ## パースはここでする
 
@@ -43,7 +43,7 @@ ccx-agent は payload を読まない。読むのはここ。理由は `packages
 
 - ccx-agent の forward path に中身依存の分岐が無いことを、grep で検証できる状態に保てる
   (`scope.md`: COLLECT と CARRY のみ、CONSULT はしない)
-- ccx-agent は他人の機械で動く単一バイナリでこちらから直せない。center のパーサは直せて、
+- ccx-agent は他人の機械で動く単一バイナリでこちらから直せない。ccx-center のパーサは直せて、
   生バイトは常に残っているので、読み違えは後から読み直して直せる
 
 その帰結として、**読めなかった payload も捨てない**。`parsed=false` を立てて行として
@@ -102,9 +102,9 @@ event が二度届くのは異常ではなく正常系。
 
 ## object API (S3 互換)
 
-`ccx transcript` (#121) が session の transcript を置く先。center が「どこにでもある S3」
+`ccx transcript` (#121) が session の transcript を置く先。ccx-center が「どこにでもある S3」
 の 1 つになる形にしてあるので、`ccx transcript` も DuckDB の httpfs も既製の S3
-クライアントのまま center を向ける。外部の S3 互換サービスを向けても同じ。
+クライアントのまま ccx-center を向ける。外部の S3 互換サービスを向けても同じ。
 
 ```text
 GET    /                                     ListBuckets
@@ -124,9 +124,9 @@ POST   /<bucket>/<key>?uploadId=             multipart 完了 (本文に並ん�
 DELETE /<bucket>/<key>?uploadId=             multipart 中止
 ```
 
-- 置き場所は `<objects dir>/<bucket>/<key>`。center を止めて `ls` するだけで中身が分かる
+- 置き場所は `<objects dir>/<bucket>/<key>`。ccx-center を止めて `ls` するだけで中身が分かる
 - bucket は暗黙に存在する。CreateBucket は mkdir で、未知の bucket の一覧は空
-- 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
+- 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は ccx-center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
 - ファイルシステムの上に置くことから来る制約: `a` と `a/b` は両立しない (S3 では両方置ける。後から来た方を 409 `KeyConflict` で断る) / `/` で終わる key (ディレクトリ marker) は置けない (400) / 1 セグメント 255 バイト超は 400 `KeyTooLongError` / Content-Type と `x-amz-meta-*` は保存しない / 一覧の `Contents` に ETag は載らない (載せるには全 object を読むことになる)
 - 動かして確かめたクライアント: Bun.S3Client (`objects.test.ts`) / DuckDB httpfs (`ccx transcript search`、`apps/cli/src/search.test.ts`) / aws cli (`s3 ls` / `cp`、レビュー時)
 - `/healthz` と `/ccx.v1.*` の route が先に照合されるので、`healthz` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
@@ -165,23 +165,23 @@ token は 16 文字以上の `A-Z a-z 0-9 . _ ~ -` に限る (S3 は `Credential
 `/` や `,` を含むと切れる)。作るなら `openssl rand -hex 32`。
 TLS は無いので token は LAN を平文で流れる。LAN を信頼する前提は変わらず、無認証ではなくなるだけ。
 
-クライアント側 (ccx-agent / ccx CLI) は同じ値を `CCX_HUB_TOKEN` か `~/.config/ccx/hub-token`
+クライアント側 (ccx-agent / ccx CLI) は同じ値を `CCX_CENTER_TOKEN` か `~/.config/ccx/center-token`
 (`config.toml` の隣) から読む。git config と `config.toml` には置かない (dotfiles ごと共有されやすいため)。
-ccx-agent は systemd の user unit で動くので、shell の `CCX_HUB_TOKEN` は届かない。`hub-token` ファイルに置く。
-ファイルは mode 600 にする。他人に読める `hub-token` は、ccx-agent も ccx CLI も読まずにエラーで止まる。
+ccx-agent は systemd の user unit で動くので、shell の `CCX_CENTER_TOKEN` は届かない。`center-token` ファイルに置く。
+ファイルは mode 600 にする。他人に読める `center-token` は、ccx-agent も ccx CLI も読まずにエラーで止まる。
 
 有効にする順番と入れ替え:
 
-1. 各ホストの `~/.config/ccx/hub-token` に新しい値を置き、`systemctl --user restart ccx-agent` (agent は起動時にしか読まない)
-2. center に `CCX_CENTER_TOKEN` を設定して再起動。`CCX_CENTER_ALLOW_INSECURE_BIND` は外す
+1. 各ホストの `~/.config/ccx/center-token` に新しい値を置き、`systemctl --user restart ccx-agent` (agent は起動時にしか読まない)
+2. ccx-center に `CCX_CENTER_TOKEN` を設定して再起動。`CCX_CENTER_ALLOW_INSECURE_BIND` は外す
 3. 各ホストで `ccx agent status` を見る。token が合っていなければ `refuses this token (401)` と出る
 
-1 と 2 の間 (と、2 の後に置き忘れたホスト) は、center が event を 401 で断り、ccx-agent は spool に溜めて
-送り直し続ける。失われはしないが、揃うまで center には届かない。
+1 と 2 の間 (と、2 の後に置き忘れたホスト) は、ccx-center が event を 401 で断り、ccx-agent は spool に溜めて
+送り直し続ける。失われはしないが、揃うまで ccx-center には届かない。
 
 ### 非 loopback bind は token が無ければ拒む
 
-token の無い center は**認証が無く、平文 HTTP で話す**。届く相手は誰でも event を
+token の無い ccx-center は**認証が無く、平文 HTTP で話す**。届く相手は誰でも event を
 書けるし、集まった payload と transcript を全部読める。
 
 なので token 無しで loopback 以外に bind しようとすると起動時に拒否する (exit 2)。README に
@@ -203,15 +203,15 @@ loopback の判定は `127.0.0.0/8` 全体と `::1` / `localhost`。`127.0.0.1` 
 ## 動かす
 
 ```bash
-bun run apps/hub/src/index.ts serve
+bun run apps/center/src/index.ts serve
 ```
 
 常駐させるなら `systemd/ccx-center.service` (user service。`ccx-agent.service` と同じ流儀)。
 別マシンから使う (ccx-agent の転送先 / `ccx transcript` の保存先) には loopback の外に bind する
-必要があり、その条件は下の「非 loopback bind は既定で拒む」。center はまだ単一バイナリでは
+必要があり、その条件は下の「非 loopback bind は既定で拒む」。ccx-center はまだ単一バイナリでは
 なく、repo の checkout から `bun run` で動く。
 
-ccx-agent 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / `[hub] url`)。
+ccx-agent 側は ccx-center の URL を設定する (`CCX_CENTER_URL` / `ccx.centerUrl` / `[center] url`)。
 未設定なら ccx-agent は spool するだけで、それも正常な状態。
 
 ## まだ無いもの

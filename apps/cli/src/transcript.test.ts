@@ -2,7 +2,7 @@
  * push / pull / prune を、本物の保存先 (ccx-center の object API) に対して HTTP 越しに回す。
  * 2 つの偽 CLAUDE_CONFIG_DIR を「マシン A」「マシン B」に見立てる。
  *
- * core ではなく cli に置くのは、core (library) が hub (app) に依存する向きを作らないため。
+ * core ではなく cli に置くのは、core (library) が center (app) に依存する向きを作らないため。
  * 両方を繋ぐのは cli の役目
  */
 
@@ -11,9 +11,9 @@ import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { openDb } from "@ccx/hub/src/db/open.ts";
-import { ObjectStore } from "@ccx/hub/src/objects.ts";
-import { createApp } from "@ccx/hub/src/server.ts";
+import { openDb } from "@ccx/center/src/db/open.ts";
+import { ObjectStore } from "@ccx/center/src/objects.ts";
+import { createApp } from "@ccx/center/src/server.ts";
 
 import {
   AmbiguousSessionId,
@@ -529,7 +529,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", SID.slice(0, 8), "--json"], {
       env: {
         ...process.env,
-        CCX_HUB_URL: A.store.endpoint,
+        CCX_CENTER_URL: A.store.endpoint,
         CCX_TRANSCRIPT_PREFIX: "p",
         CCX_ROOT: ccxRoot,
         CLAUDE_CONFIG_DIR: homeB,
@@ -557,7 +557,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     const ccxRoot = join(tmp, "repodirs2");
     const run = (...args: string[]) =>
       Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", SID, "--json", ...args], {
-        env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: ccxRoot, CLAUDE_CONFIG_DIR: homeB, XDG_CONFIG_HOME: tmp },
+        env: { ...process.env, CCX_CENTER_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: ccxRoot, CLAUDE_CONFIG_DIR: homeB, XDG_CONFIG_HOME: tmp },
         stdout: "pipe",
         stderr: "pipe",
       });

@@ -8,9 +8,9 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { openDb } from "@ccx/hub/src/db/open.ts";
-import { ObjectStore } from "@ccx/hub/src/objects.ts";
-import { createApp } from "@ccx/hub/src/server.ts";
+import { openDb } from "@ccx/center/src/db/open.ts";
+import { ObjectStore } from "@ccx/center/src/objects.ts";
+import { createApp } from "@ccx/center/src/server.ts";
 
 import { encodeCwd, localTranscripts, TranscriptClient, writeDeclared, type TranscriptStore } from "@ccx/core";
 
@@ -61,7 +61,7 @@ beforeEach(async () => {
 /** 本物のコマンドを、この store を向けて走らせる */
 async function ccx(...args: string[]): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", ...args], {
-    env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
+    env: { ...process.env, CCX_CENTER_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
     stdout: "pipe",
     stderr: "pipe",
   });

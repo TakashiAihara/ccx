@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/inst
 
 To see sessions across machines, add the resident agent too. `--with-agent` installs `ccx-agent` from
 the same release and, where `systemctl --user` works, runs it as a systemd **user** service (never a
-system unit; elsewhere it says how to supervise it yourself). The hooks and the center URL
+system unit; elsewhere it says how to supervise it yourself). The hooks and the ccx-center URL
 are separate steps, in [apps/agent/README.md](apps/agent/README.md#install):
 
 ```bash
@@ -75,8 +75,8 @@ gathered. Both are optional: without them, everything above still works, you jus
 across machines. Setting up the agent is in [apps/agent/README.md](apps/agent/README.md#install).
 
 ```bash
-ccx agent status              # is the local ccx-agent up, how much is waiting, can it reach the center
-ccx session ls                # every session the center knows about, newest activity first
+ccx agent status              # is the local ccx-agent up, how much is waiting, can it reach ccx-center
+ccx session ls                # every session ccx-center knows about, newest activity first
 ccx session ls --active       # only those with no SessionEnd observed
 ccx session show <id>         # what one session did, newest first
 ccx session show <id> --hook PostToolUse --payload
@@ -88,7 +88,7 @@ age column alongside it.
 
 ### What ccx holds about a session
 
-A session's state is ccx's to keep (`docs/design/scope.md`), and it needs no center: the declared
+A session's state is ccx's to keep (`docs/design/scope.md`), and it needs no ccx-center: the declared
 part lives as files under `~/.claude/sessions/<id>/`, the observed part is read from pids, local
 transcripts and the store.
 
@@ -109,14 +109,14 @@ here, a copy in the store), `unknown` (no transcript here and no store to ask). 
 `archived` (folded away — the word the Claude Desktop app uses; the only flag, on purpose), a
 free-text `label`, one external `task` reference and a free-text `role`. `ccx session ls` and `ccx tr ls` show them;
 `ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
-machine that holds none yet (marks already set there are never overwritten). With a center
+machine that holds none yet (marks already set there are never overwritten). With a ccx-center
 configured, every `mark` / `label` / `task` / `role` also reports the state there, so `ccx session ls` shows
-other machines' and users' flags from the center's own database (this machine's rows come from its
+other machines' and users' flags from ccx-center's own database (this machine's rows come from its
 own files, plus one store GET to tell `remote` from `unknown`). What you *do* with
 `archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
 
-Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /
-`hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
+Point the CLI at a ccx-center the same way `ccx-agent` is pointed at one (`CCX_CENTER_URL` / `ccx.centerUrl` /
+`center.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
 empty.
 
 ### Taking a session's transcript with you
@@ -138,8 +138,8 @@ ccx tr search "rate limit"    # every transcript in the store, searched with the
 ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
 ```
 
-The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to
-reach it from another machine the center must be bound beyond loopback, see `apps/hub/README.md`), or
+The store is ccx-center's own object API by default (an `http(s)://` `CCX_CENTER_URL` is enough — to
+reach it from another machine ccx-center must be bound beyond loopback, see `apps/center/README.md`), or
 any S3-compatible endpoint via `CCX_TRANSCRIPT_ENDPOINT` / `CCX_TRANSCRIPT_BUCKET` / `[transcript]`
 in the config file. Nothing is set → `ccx transcript` exits `3` like `ccx session` does, and says so;
 every other verb is unaffected.
@@ -241,8 +241,8 @@ config file lives.
 | mirror staleness | `CCX_MIRROR_MAX_AGE` | `ccx.mirrorMaxAge` | `mirrorMaxAge` |
 | agent to run | `CCX_AGENT` | `ccx.agent` | `defaults.agent` |
 | model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
-| hub to report to | `CCX_HUB_URL` | `ccx.hubUrl` | `hub.url` |
-| the hub's token | `CCX_HUB_TOKEN` | — | `hub-token` file next to `config.toml` |
+| ccx-center to report to | `CCX_CENTER_URL` | `ccx.centerUrl` | `center.url` |
+| ccx-center's token | `CCX_CENTER_TOKEN` | — | `center-token` file next to `config.toml` |
 
 Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.
 `mirrorRoot` follows `root` unless you set it separately.
@@ -271,7 +271,7 @@ With no configuration at all, `ccx rd new owner/repo` works.
 ## Status
 
 `ccx repodir new`, `ls`, `cd`, `rm` and `gc` work, and so do the resident agent (`ccx-agent`) and the
-center across machines. `open` is next.
+ccx-center across machines. `open` is next.
 
 ## License
 

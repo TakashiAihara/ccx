@@ -10,7 +10,7 @@ The whole decision turns on one thing that was corrected twice during discussion
 
 ## Decision
 
-**Host-side tooling is Go. The center is TypeScript in a container. The contract between them is protobuf/Buf.**
+**Host-side tooling is Go. ccx-center is TypeScript in a container. The contract between them is protobuf/Buf.**
 
 ```text
 Go binaries (curl one file, no runtime):   core + CLI (ccx) + ccx-agent
@@ -27,14 +27,14 @@ Contract:                                    packages/proto → connect-go for c
 
 WASI was considered and rejected: its sandbox forbids process spawning by design, which is exactly ccx-agent's `START` verb. Rust was considered and set aside: for I/O-plumbing work where the complex logic lives elsewhere, Rust's advantages (zero-GC, stricter types) do not pay for its lower dev velocity here; the size edge over Go (3–10 MB vs 10–15 MB) does not matter for the distribution.
 
-## Why TS-in-a-container for the center, not Go
+## Why TS-in-a-container for ccx-center, not Go
 
-- The center is a **service** (DB + API + web UI, resident, stateful) that others **self-host**. A service like that is deployed as a container — `docker run` or a one-file compose — which is how a stranger with no assumed runtime stands it up. The runtime lives in the image; the "needs Bun on the host" objection dissolves.
+- ccx-center is a **service** (DB + API + web UI, resident, stateful) that others **self-host**. A service like that is deployed as a container — `docker run` or a one-file compose — which is how a stranger with no assumed runtime stands it up. The runtime lives in the image; the "needs Bun on the host" objection dissolves.
 - A single container can serve **both the Connect API and the React static files from one process** (Hono), with sqlite as an embedded file (one volume). One image, one `docker run`, for the recipient.
-- The center shares **no code** with the host-side Go — only the wire contract (protobuf, codegen'd regardless). So "unify the language" buys nothing at that boundary; the center's own cohesion (Hono backend + React frontend, one TS stack) is the thing worth keeping whole.
-- `bun --compile` *can* embed Hono + React assets + `bun:sqlite` into one binary (verified) — so a binary center is technically possible. It is not chosen, because a stateful service is easier for a recipient to run, persist, and restart as a container than as a bare binary they must supervise themselves.
+- ccx-center shares **no code** with the host-side Go — only the wire contract (protobuf, codegen'd regardless). So "unify the language" buys nothing at that boundary; ccx-center's own cohesion (Hono backend + React frontend, one TS stack) is the thing worth keeping whole.
+- `bun --compile` *can* embed Hono + React assets + `bun:sqlite` into one binary (verified) — so a binary ccx-center is technically possible. It is not chosen, because a stateful service is easier for a recipient to run, persist, and restart as a container than as a bare binary they must supervise themselves.
 
-The image is kept lean: build the center to a single Bun binary (musl target for Alpine) and put it in a minimal base (Alpine, or distroless/scratch if the binary links statically). **To verify at build time:** that Bun's musl `--compile` target produces a working full-stack executable (assets + sqlite) and how statically it links (this decides Alpine vs distroless vs scratch).
+The image is kept lean: build ccx-center to a single Bun binary (musl target for Alpine) and put it in a minimal base (Alpine, or distroless/scratch if the binary links statically). **To verify at build time:** that Bun's musl `--compile` target produces a working full-stack executable (assets + sqlite) and how statically it links (this decides Alpine vs distroless vs scratch).
 
 ## Why the contract is protobuf/Buf, not Hono RPC
 
@@ -42,8 +42,8 @@ The image is kept lean: build the center to a single Bun binary (musl target for
 
 ## Consequences
 
-- `packages/proto` is defined **first** — the `#90`/`#91` acceptance ("hook payload reaches the center") depends on it, and the language codegen target depends on the proto existing. Deciding Go *before* `#90` is built is the cheapest point; deferring adds re-cut cost. (Observed by the impl session.)
+- `packages/proto` is defined **first** — the `#90`/`#91` acceptance ("hook payload reaches ccx-center") depends on it, and the language codegen target depends on the proto existing. Deciding Go *before* `#90` is built is the cheapest point; deferring adds re-cut cost. (Observed by the impl session.)
 - The existing TS `core` + `cli` are ported to Go. ~10 small, tested files; the tests are the porting spec. `v0.1.0` is early enough that porting now is far cheaper than later.
 - ccx-agent's spool moves from `bun:sqlite` to a Go option (`modernc.org/sqlite` or an append-only file). The ordering / restart-durability acceptance is unchanged and satisfiable either way.
 - The hook is a **subcommand of the ccx-agent binary** (`ccx-agent hook`), not an addition to `apps/cli/src/index.ts` — which keeps it clear of the coordinator chain's territory (#61/#62) and vertically self-contained. Holds under Go.
-- Monorepo becomes: Go module(s) for `core` + `apps/cli` + `apps/agent` (ccx-agent); TS for `apps/hub` (center) + its UI; `packages/proto` shared.
+- Monorepo becomes: Go module(s) for `core` + `apps/cli` + `apps/agent` (ccx-agent); TS for `apps/center` (ccx-center) + its UI; `packages/proto` shared.

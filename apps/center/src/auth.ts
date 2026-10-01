@@ -39,7 +39,7 @@ function same(a: string, b: string): boolean {
 }
 
 const HINT =
-  "missing or wrong token: set CCX_HUB_TOKEN (or ~/.config/ccx/hub-token) to the center's CCX_CENTER_TOKEN";
+  "missing or wrong token: set CCX_CENTER_TOKEN (or ~/.config/ccx/center-token) to the value ccx-center runs with";
 
 /**
  * token が一致しない要求を 401 で返す。`GET /healthz` だけは生死の確認なので通す。

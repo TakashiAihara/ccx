@@ -314,7 +314,7 @@ session
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const client = fleetClient(cfg.hub);
+    const client = fleetClient(cfg.center);
 
     const res = await client
       .listSessions({
@@ -324,7 +324,7 @@ session
         limit: o.limit ?? 0,
       })
       .catch((e: unknown) => {
-        throw unreachable(cfg.hub!.url, e);
+        throw unreachable(cfg.center!.url, e);
       });
 
     if (res.sessions.length === 0) {
@@ -414,7 +414,7 @@ session
   .option("--json", "print as JSON")
   .action(async (sessionId: string, o) => {
     const cfg = await loadConfig();
-    const client = fleetClient(cfg.hub);
+    const client = fleetClient(cfg.center);
 
     const res = await client
       .listEvents({
@@ -426,7 +426,7 @@ session
         includePayload: Boolean(o.payload),
       })
       .catch((e: unknown) => {
-        throw unreachable(cfg.hub!.url, e);
+        throw unreachable(cfg.center!.url, e);
       });
 
     if (o.json) {
@@ -471,7 +471,7 @@ agent
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const st = await agentStatus(cfg.hub?.url, process.env, cfg.hub?.token);
+    const st = await agentStatus(cfg.center?.url, process.env, cfg.center?.token);
 
     if (o.json) {
       console.log(JSON.stringify(st, null, 2));
@@ -484,11 +484,11 @@ agent
       ["socket", st.socketPath],
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
-      ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
+      ["center", st.centerUrl ?? "not configured (ccx-agent spools only)"],
     ];
-    if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);
-    if (st.hubTokenAccepted === false) {
-      rows.push(["", "refuses this CLI's token (401): fix CCX_HUB_TOKEN / ~/.config/ccx/hub-token. ccx-agent's own token (read at its start) is not checked here"]);
+    if (st.centerUrl) rows.push(["", st.centerReachable ? "reachable" : "not answering"]);
+    if (st.centerTokenAccepted === false) {
+      rows.push(["", "refuses this CLI's token (401): fix CCX_CENTER_TOKEN / ~/.config/ccx/center-token. ccx-agent's own token (read at its start) is not checked here"]);
     }
 
     for (const line of table(rows)) console.log(line);

@@ -70,7 +70,7 @@ func TestConnectForwarder_DedupByEventID(t *testing.T) {
 // The configured token reaches the center as a Bearer; without it a center that
 // requires one refuses the event with Unauthenticated (#158). Forward returning
 // an error is what keeps the event spooled (TestConnectForwarder_UnavailableReturnsError).
-func TestConnectForwarder_SendsHubToken(t *testing.T) {
+func TestConnectForwarder_SendsCenterToken(t *testing.T) {
 	c, url := testcenter.Start()
 	defer c.Close()
 	c.RequireToken("tok-for-test")

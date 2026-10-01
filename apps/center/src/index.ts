@@ -21,7 +21,7 @@ env:
   CCX_CENTER_OBJECTS  directory behind the S3-compatible object API
                     (default $CCX_ROOT/center-objects, or ~/.ccx/center-objects)
   CCX_CENTER_TOKEN  shared token every endpoint but /healthz requires; clients send
-                    it as CCX_HUB_TOKEN. With it set the center may bind beyond loopback
+                    it as CCX_CENTER_TOKEN. With it set the center may bind beyond loopback
 `);
 }
 

@@ -5,7 +5,7 @@ version: v2
 #   buf generate packages/proto --template packages/proto/buf.gen.ts.yaml -o packages/proto
 #
 # 生成物を apps/ の下ではなく packages/proto に置くのは、消費者が 1 つではないから。
-# center (apps/hub) と CLI (apps/cli) の両方が同じ契約を読む。片方の app の下に
+# center (apps/center) と CLI (apps/cli) の両方が同じ契約を読む。片方の app の下に
 # 置くと、もう片方が app を跨いで import することになり、依存の向きが嘘になる。
 #
 # Go 側 (buf.gen.yaml) と同じく生成物は commit し、drift は CI が regenerate 後の

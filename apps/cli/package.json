@@ -13,6 +13,6 @@
     "commander": "^13.1.0"
   },
   "devDependencies": {
-    "@ccx/hub": "workspace:*"
+    "@ccx/center": "workspace:*"
   }
 }
