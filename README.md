@@ -136,6 +136,7 @@ ccx tr prune --ended          # delete local copies — only where the store's c
 ccx tr prune --archived       # the same, for archived sessions that are not running
 ccx tr search "rate limit"    # every transcript in the store, searched with the DuckDB inside ccx
 ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
+ccx tr stats                  # per day: how often you typed, cut in, pressed Esc or refused a tool (columns: docs/design/transcript-store.md)
 ```
 
 The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to

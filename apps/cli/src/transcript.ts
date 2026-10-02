@@ -286,6 +286,27 @@ export function registerTranscript(program: Command, VERSION: string): void {
     });
 
   transcript
+    .command("stats")
+    .description("Per day: how often a person typed to the AI, and how often they interrupted or refused it")
+    .option("--tz <zone>", "IANA time zone that decides where a day starts (default: this machine's)")
+    .option("--json", "print rows as JSON")
+    .action(async (o) => {
+      const cfg = await loadConfig();
+      if (!cfg.transcript) throw new NoTranscriptStore();
+      const { openDuckDB } = await import("./duckdb.ts");
+      const { interactionSql } = await import("./stats.ts");
+      const c = await openDuckDB(cfg.transcript);
+      const r = await c.runAndReadAll(interactionSql(o.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone));
+      const rows = r.getRowObjectsJson();
+      if (o.json) {
+        console.log(JSON.stringify(rows, null, 2));
+        return;
+      }
+      const cols = r.columnNames();
+      for (const line of table([cols, ...rows.map((row) => cols.map((k) => (row[k] == null ? "" : String(row[k]))))])) console.log(line);
+    });
+
+  transcript
     .command("prune")
     .description("Delete local transcripts whose copy in the store matches byte for byte")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
