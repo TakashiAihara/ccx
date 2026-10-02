@@ -237,59 +237,107 @@ describe("search: embedded DuckDB over the store", () => {
     expect(r.getRowObjects()[0]).toEqual({ rows: n, sessions: n });
   }, 20_000);
 
-  test("stats: typed inputs, queued inputs, interrupts and refusals per day; non-human records are not counted", async () => {
+  test("stats: per day, typed inputs, queued inputs, Esc and refusals; copies, forks, heartbeats and machine records are not counted", async () => {
     const at = (s: number) => new Date(Date.parse("2026-09-20T00:00:00Z") + s * 1000).toISOString();
     const tool = { type: "tool_use", id: "t", name: "Bash", input: {} };
-    const recs = [
-      { type: "user", timestamp: at(0), message: { content: "do X" } },
-      { type: "assistant", timestamp: at(10), message: { content: [tool, tool] } },
-      { type: "user", timestamp: at(20), message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
-      { type: "assistant", timestamp: at(30), message: { content: [{ type: "text", text: "ok" }] } },
+    const human = { kind: "human" };
+    const text = (t: string) => ({ content: [{ type: "text", text: t }] });
+    const a = [
+      { uuid: "a1", type: "user", origin: human, timestamp: at(0), message: { content: "do X" } },
+      { uuid: "a2", type: "assistant", timestamp: at(10), message: { content: [tool, tool] } },
+      { uuid: "a3", type: "user", timestamp: at(20), message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { uuid: "a4", type: "assistant", timestamp: at(30), message: text("ok") },
       { type: "queue-operation", operation: "enqueue", timestamp: at(40), content: "also Y" },
+      { type: "queue-operation", operation: "remove", timestamp: at(40.5) },
+      // 入力欄に戻された (popAll) ものは数えない
+      { type: "queue-operation", operation: "enqueue", timestamp: at(41), content: "pulled back" },
+      { type: "queue-operation", operation: "popAll", timestamp: at(42) },
       { type: "queue-operation", operation: "enqueue", timestamp: at(45), content: "<task-notification>x</task-notification>" },
-      { type: "user", timestamp: at(90), message: { content: "<task-notification>x</task-notification>" } },
-      { type: "assistant", timestamp: at(100), message: { content: [{ type: "text", text: "noted" }] } },
-      { type: "user", timestamp: at(160), message: { content: "next" } },
-      { type: "assistant", timestamp: at(170), message: { content: [tool] } },
-      { type: "user", timestamp: at(175), toolDenialKind: "user-rejected", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
-      { type: "user", timestamp: at(176), toolDenialKind: "permission-rule", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
-      { type: "user", timestamp: at(180), message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } },
+      // 通知で AI が続けた作業は「do X」の作業に含める
+      { uuid: "a5", type: "user", origin: { kind: "task-notification" }, timestamp: at(90), message: { content: "<task-notification>x</task-notification>" } },
+      { uuid: "a6", type: "assistant", timestamp: at(100), message: { content: [tool] } },
+      // heartbeat への返事は応答に数えない: 次の待ちは 151s ではなく 100s から測る
+      { uuid: "a7", type: "user", isMeta: true, origin: { kind: "channel" }, timestamp: at(150), message: { content: '<channel source="ccx" kind="heartbeat">' } },
+      { uuid: "a8", type: "assistant", timestamp: at(151), message: text(".") },
+      { uuid: "a9", type: "user", origin: human, timestamp: at(160), message: { content: "next" } },
+      { uuid: "a10", type: "assistant", timestamp: at(170), message: { content: [tool] } },
+      { uuid: "a11", type: "user", timestamp: at(175), toolDenialKind: "user-rejected", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      // tool を断ったときの付随記録は Esc ではない
+      { uuid: "a12", type: "user", timestamp: at(176), message: text("[Request interrupted by user for tool use]") },
+      { uuid: "a13", type: "user", timestamp: at(177), toolDenialKind: "permission-rule", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { uuid: "a14", type: "user", timestamp: at(178), toolDenialKind: "interrupted", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { uuid: "a15", type: "user", timestamp: at(180), message: text("[Request interrupted by user]") },
+      // 前に同じ本文を打っていても、後に user 記録が無い割り込みは数える
+      { type: "queue-operation", operation: "enqueue", timestamp: at(185), content: "next" },
+      { type: "queue-operation", operation: "remove", timestamp: at(185.5) },
       { type: "queue-operation", operation: "enqueue", timestamp: at(190), content: "next2" },
-      { type: "user", timestamp: at(200), message: { content: "next2" } },
-      { type: "assistant", timestamp: at(210), message: { content: [{ type: "text", text: "done" }] } },
-      { type: "user", timestamp: at(220), isSidechain: true, message: { content: "subagent prompt" } },
-      { type: "user", timestamp: at(230), isMeta: true, message: { content: "injected" } },
-      // 16:00Z は東京では翌日、UTC では同じ日
-      { type: "user", timestamp: "2026-09-20T16:00:00Z", message: { content: "late" } },
+      { type: "queue-operation", operation: "dequeue", timestamp: at(199) },
+      { uuid: "a16", type: "user", origin: human, timestamp: at(200), message: { content: "next2" } },
+      { uuid: "a17", type: "assistant", timestamp: at(210), message: text("done") },
+      { uuid: "a18", type: "user", isCompactSummary: true, timestamp: at(215), message: { content: "This session is being continued" } },
+      // 人が打った slash command は数える
+      { uuid: "a19", type: "user", origin: human, timestamp: at(216), message: { content: "<command-message>retro</command-message>" } },
+      { uuid: "a20", type: "assistant", timestamp: at(217), message: text("retro") },
+      { uuid: "a21", type: "user", isSidechain: true, origin: human, timestamp: at(220), message: { content: "subagent prompt" } },
+      { uuid: "a22", type: "user", isMeta: true, timestamp: at(230), message: { content: "injected" } },
+      // origin の無い古い版は本文で判定する。16:00Z は東京では翌日、UTC では同じ日。待ちは 6 時間を超えるので中央値に入れない
+      { uuid: "a23", type: "user", timestamp: "2026-09-20T16:00:00Z", message: { content: "late" } },
     ];
-    const dir = join(root, "ccx", "pre", "transcripts", "machine=host-b", "user=u", "session_id=stats-1");
-    await Bun.write(join(dir, "transcript.jsonl"), recs.map(line).join(""));
+    // 同じ日に並行して動いた別の session。turn と待ちを session ごとに切らないと「do X」の turn が割れる。
+    // 「also Y」は stats-1 の割り込みと同じ本文だが、別の session の記録なので割り込みを打ち消さない
+    const b = [
+      { uuid: "b1", type: "user", origin: human, timestamp: at(5), message: { content: "other" } },
+      { uuid: "b2", type: "assistant", timestamp: at(50), message: { content: [tool] } },
+      { uuid: "b3", type: "user", origin: human, timestamp: at(60), message: { content: "also Y" } },
+      { uuid: "b4", type: "assistant", timestamp: at(70), message: text("ok") },
+    ];
+    // fork: 親の記録を同じ uuid で持つ。親の分は数えない
+    const fork = [a[0]!, a[1]!, { uuid: "f1", type: "user", origin: human, timestamp: at(300), message: { content: "forked" } }, { uuid: "f2", type: "assistant", timestamp: at(310), message: { content: [tool] } }];
+    // 規則の拒否だけの日と、何も無い日 (東京の 09-22)
+    const quiet = [{ uuid: "q1", type: "user", timestamp: "2026-09-23T03:00:00Z", toolDenialKind: "permission-rule", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } }];
+    const put = (machine: string, sid: string, recs: Record<string, unknown>[]) =>
+      Bun.write(join(root, "ccx", "pre", "transcripts", `machine=${machine}`, "user=u", `session_id=${sid}`, "transcript.jsonl"), recs.map(line).join(""));
+    await put("host-b", "stats-1", a);
+    // 別の machine に残った古い写し (resume する前に push したもの)。行数の多い写しだけを読む
+    await put("host-c", "stats-1", a.slice(0, 6));
+    await put("host-b", "stats-2", b);
+    await put("host-b", "stats-3", fork);
+    await put("host-b", "stats-4", quiet);
 
     const { interactionSql } = await import("./stats.ts");
     const c = await openDuckDB(store);
     const tokyo = (await c.runAndReadAll(interactionSql("Asia/Tokyo"))).getRowObjectsJson();
-    expect(tokyo.find((r) => r.day === "2026-09-20")).toEqual({
+    const day = (rows: typeof tokyo, d: string) => rows.find((r) => r.day === d);
+    expect(day(tokyo, "2026-09-20")).toEqual({
       day: "2026-09-20",
-      // 人の turn 3 (do X / next / next2) + user 記録にならなかった割り込み 1 (also Y)
-      prompts: "4",
-      queued: "2",
-      interrupts: "1",
-      rejected: "1",
-      gated: "1",
-      sessions: "1",
-      // tool_use 3 / 人の turn 3
-      tools_per_prompt: 1,
-      // 自走 30s / 10s / 10s の中央値
+      // 人の turn 7 (do X / next / next2 / retro / other / also Y / forked) + user 記録にならなかった割り込み 2 (also Y / next)
+      prompts: 9,
+      queued: 3,
+      interrupts: 1,
+      rejected: 1,
+      rule_denied: 1,
+      turns: 7,
+      // tool_use 3 + 1 + 0 + 0 + 1 + 0 + 1 / 7 turn
+      tools_per_turn: 0.9,
+      // 自走 100s / 10s / 10s / 1s / 45s / 10s / 10s の中央値
       run_min_p50: 0.2,
-      // 待ち 60s (通知の応答 100s → next 160s) / 30s の中央値
-      wait_min_p50: 0.8,
+      // 待ち 60s (heartbeat ではなく 100s の応答から) / 30s / 6s / 10s の中央値 20s
+      wait_min_p50: 0.3,
+      sessions: 3,
+      machines: 1,
     });
-    expect(tokyo.find((r) => r.day === "2026-09-21")?.prompts).toBe("1");
-    expect(tokyo.find((r) => r.day === "2026-09-19")?.prompts).toBe("2");
+    expect(day(tokyo, "2026-09-21")).toMatchObject({ prompts: 1, turns: 1, wait_min_p50: null });
+    expect(day(tokyo, "2026-09-22")).toEqual({
+      day: "2026-09-22", prompts: 0, queued: 0, interrupts: 0, rejected: 0, rule_denied: 0, turns: 0,
+      tools_per_turn: null, run_min_p50: null, wait_min_p50: null, sessions: 0, machines: 0,
+    });
+    expect(day(tokyo, "2026-09-23")).toMatchObject({ prompts: 0, rule_denied: 1, sessions: 0, machines: 1 });
+    // beforeEach の 2 session (origin の無い古い形)
+    expect(day(tokyo, "2026-09-19")).toMatchObject({ prompts: 2, sessions: 2 });
 
     const utc = (await c.runAndReadAll(interactionSql("UTC"))).getRowObjectsJson();
-    expect(utc.find((r) => r.day === "2026-09-20")?.prompts).toBe("5");
-    expect(utc.find((r) => r.day === "2026-09-21")).toBeUndefined();
+    expect(day(utc, "2026-09-20")?.prompts).toBe(10);
+    expect(day(utc, "2026-09-21")?.prompts).toBe(0);
   });
 
   test("an empty store says so instead of a DuckDB IO error", async () => {

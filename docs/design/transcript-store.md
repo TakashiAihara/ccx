@@ -57,7 +57,22 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | `ls [-m machine]` | every `session.json`, newest push first, with its flags and label and who last pulled it | — |
 | `prune [id...] \| --ended \| --archived` | delete the local transcript, tool-results, subagents and workflows (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript, tool-results, subagents and workflows (a copy pushed before subagents or workflows were carried has no list for them, so push again); the matching copy, **read back and hashed**, differs from the local files |
 | `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl` and `state.json`; `transcripts`, `history` and `sessions` views | — |
-| `stats [--tz] [--json]` | the same DuckDB, one row per day: prompts a person typed (mid-turn ones included), mid-turn inputs, Esc interrupts, tools refused by a person / by a hook, and per prompt the tool calls, the time the AI ran on its own and the time it waited for the person. How each is counted is in `apps/cli/src/stats.ts` | — |
+| `stats [--tz] [--json]` | the same DuckDB, one row per day in `--tz` (default: this machine's), every day from the first to the last record (a quiet day is a row of zeros); the columns are below | — |
+
+`stats` columns. "Typed" means a record Claude Code marks `origin.kind = human` (slash commands the person typed included); one copy per session is read, and a fork's copy of its parent's records is not counted twice. The rules and the measurements behind them are in `apps/cli/src/stats.ts`.
+
+| column | what it counts |
+|---|---|
+| `prompts` | inputs the person typed, including ones typed while the AI was working (`queued`) that never became a turn of their own |
+| `queued` | inputs typed while the AI was working (pulled back into the input box with popAll: not counted) |
+| `interrupts` | Esc pressed mid-turn (not the marker a tool refusal leaves) |
+| `rejected` | tool calls the person refused at a permission prompt. A prompt the person accepted leaves no record, so this view cannot list auto-approve candidates |
+| `rule_denied` | tool calls a hook or a settings rule refused; no person involved |
+| `turns` | instructions: from one typed input to the next, including the work the AI did on notifications and channel events in between |
+| `tools_per_turn` | tool calls per turn (mean) |
+| `run_min_p50` | minutes from the typed input to the AI's last answer of that turn (median) |
+| `wait_min_p50` | minutes from the AI's last answer (heartbeat replies excluded) to the next typed input in the same session (median; waits over 6 h are left out as time away) |
+| `sessions` / `machines` | sessions with a typed input, Esc or refusal that day / machines whose records fall on that day — a day with only one machine may be one whose other machine has not pushed yet |
 
 Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
 takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
