@@ -288,8 +288,13 @@ describe("search: embedded DuckDB over the store", () => {
     const b = [
       { uuid: "b1", type: "user", origin: human, timestamp: at(5), message: { content: "other" } },
       { uuid: "b2", type: "assistant", timestamp: at(50), message: { content: [tool] } },
+      // 待っている AI にすぐ取られた enqueue は割り込みではない
+      { type: "queue-operation", operation: "enqueue", timestamp: at(59), content: "also Y" },
+      { type: "queue-operation", operation: "dequeue", timestamp: at(59.5) },
       { uuid: "b3", type: "user", origin: human, timestamp: at(60), message: { content: "also Y" } },
       { uuid: "b4", type: "assistant", timestamp: at(70), message: text("ok") },
+      // 拒否を伴わない「for tool use」は tool の実行中に押した Esc
+      { uuid: "b5", type: "user", timestamp: at(75), message: text("[Request interrupted by user for tool use]") },
     ];
     // fork: 親の記録を同じ uuid で持つ。親の分は数えない
     const fork = [a[0]!, a[1]!, { uuid: "f1", type: "user", origin: human, timestamp: at(300), message: { content: "forked" } }, { uuid: "f2", type: "assistant", timestamp: at(310), message: { content: [tool] } }];
@@ -303,6 +308,22 @@ describe("search: embedded DuckDB over the store", () => {
     await put("host-b", "stats-2", b);
     await put("host-b", "stats-3", fork);
     await put("host-b", "stats-4", quiet);
+    // 1 turn だけの日: 自走は 0→10、通知の 600→620、質問の答えの 5000→5010、enqueue の通知の 7000→7010 の和 50s。通知と人の答えを待った間は入れない。
+    // 日を置いて開き直したときの合成の応答は AI の作業ではない
+    const t5 = (s: number) => new Date(Date.parse("2026-09-25T00:00:00Z") + s * 1000).toISOString();
+    await put("host-b", "stats-5", [
+      { uuid: "s1", type: "user", origin: human, timestamp: t5(0), message: { content: "start a job" } },
+      { uuid: "s2", type: "assistant", timestamp: t5(10), message: { content: [tool] } },
+      { uuid: "s3", type: "user", origin: { kind: "task-notification" }, timestamp: t5(600), message: { content: "<task-notification>done</task-notification>" } },
+      { uuid: "s4", type: "assistant", timestamp: t5(610), message: { content: [tool, tool] } },
+      { uuid: "s5", type: "assistant", timestamp: t5(620), message: { content: [{ type: "tool_use", id: "ask1", name: "AskUserQuestion", input: {} }] } },
+      { uuid: "s6", type: "user", timestamp: t5(5000), message: { content: [{ type: "tool_result", tool_use_id: "ask1" }] } },
+      { uuid: "s7", type: "assistant", timestamp: t5(5010), message: text("thanks") },
+      // 待っている AI に enqueue だけで届いた通知: 7000→7010 を足す (5010→7000 の待ちは入れない)
+      { type: "queue-operation", operation: "enqueue", timestamp: t5(7000), content: "<task-notification>late</task-notification>" },
+      { uuid: "s7b", type: "assistant", timestamp: t5(7010), message: text("noted") },
+      { uuid: "s8", type: "assistant", timestamp: t5(90000), message: { model: "<synthetic>", ...text("No response requested.") } },
+    ]);
 
     const { interactionSql } = await import("./stats.ts");
     const c = await openDuckDB(store);
@@ -313,13 +334,14 @@ describe("search: embedded DuckDB over the store", () => {
       // 人の turn 7 (do X / next / next2 / retro / other / also Y / forked) + user 記録にならなかった割り込み 2 (also Y / next)
       prompts: 9,
       queued: 3,
-      interrupts: 1,
+      // 素の Esc (a15) と、tool の実行中の Esc (b5)。拒否に付いた印 (a12) は数えない
+      interrupts: 2,
       rejected: 1,
       rule_denied: 1,
       turns: 7,
-      // tool_use 3 + 1 + 0 + 0 + 1 + 0 + 1 / 7 turn
-      tools_per_turn: 0.9,
-      // 自走 100s / 10s / 10s / 1s / 45s / 10s / 10s の中央値
+      // tool_use 3 / 1 / 0 / 0 / 1 / 0 / 1 の中央値
+      tools_per_turn: 1,
+      // 自走 40s (0→30 と通知の 90→100。通知を待った 60s と heartbeat は入れない) / 10s / 10s / 1s / 45s / 10s / 10s の中央値
       run_min_p50: 0.2,
       // 待ち 60s (heartbeat ではなく 100s の応答から) / 30s / 6s / 10s の中央値 20s
       wait_min_p50: 0.3,
@@ -332,6 +354,7 @@ describe("search: embedded DuckDB over the store", () => {
       tools_per_turn: null, run_min_p50: null, wait_min_p50: null, sessions: 0, machines: 0,
     });
     expect(day(tokyo, "2026-09-23")).toMatchObject({ prompts: 0, rule_denied: 1, sessions: 0, machines: 1 });
+    expect(day(tokyo, "2026-09-25")).toMatchObject({ prompts: 1, turns: 1, tools_per_turn: 4, run_min_p50: 0.8 });
     // beforeEach の 2 session (origin の無い古い形)
     expect(day(tokyo, "2026-09-19")).toMatchObject({ prompts: 2, sessions: 2 });
 

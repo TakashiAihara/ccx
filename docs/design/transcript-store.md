@@ -59,20 +59,20 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl` and `state.json`; `transcripts`, `history` and `sessions` views | — |
 | `stats [--tz] [--json]` | the same DuckDB, one row per day in `--tz` (default: this machine's), every day from the first to the last record (a quiet day is a row of zeros); the columns are below | — |
 
-`stats` columns. "Typed" means a record Claude Code marks `origin.kind = human` (slash commands the person typed included); one copy per session is read, and a fork's copy of its parent's records is not counted twice. The rules and the measurements behind them are in `apps/cli/src/stats.ts`.
+`stats` columns. "Typed" means a record Claude Code marks `origin.kind = human` (skill slash commands included; built-in ones such as `/model` or `/clear` carry no origin and are not counted); one copy per session is read, and a fork's copy of its parent's records is not counted twice. The rules and the measurements behind them are in `apps/cli/src/stats.ts`.
 
 | column | what it counts |
 |---|---|
 | `prompts` | inputs the person typed, including ones typed while the AI was working (`queued`) that never became a turn of their own |
-| `queued` | inputs typed while the AI was working (pulled back into the input box with popAll: not counted) |
-| `interrupts` | Esc pressed mid-turn (not the marker a tool refusal leaves) |
+| `queued` | inputs typed while the AI was working (pulled back into the input box with popAll, or taken at once by an idle AI: not counted) |
+| `interrupts` | Esc pressed mid-turn, also while a tool ran (not the marker a tool refusal leaves) |
 | `rejected` | tool calls the person refused at a permission prompt. A prompt the person accepted leaves no record, so this view cannot list auto-approve candidates |
 | `rule_denied` | tool calls a hook or a settings rule refused; no person involved |
 | `turns` | instructions: from one typed input to the next, including the work the AI did on notifications and channel events in between |
-| `tools_per_turn` | tool calls per turn (mean) |
-| `run_min_p50` | minutes from the typed input to the AI's last answer of that turn (median) |
+| `tools_per_turn` | tool calls per turn (median) |
+| `run_min_p50` | minutes the AI worked in a turn: from each input, notification, channel event or answer to an AskUserQuestion to the last answer it led to, summed; time spent waiting for any of them is left out, and replies Claude Code synthesised (API errors, "No response requested." on a resume) are not answers (median) |
 | `wait_min_p50` | minutes from the AI's last answer (heartbeat replies excluded) to the next typed input in the same session (median; waits over 6 h are left out as time away) |
-| `sessions` / `machines` | sessions with a typed input, Esc or refusal that day / machines whose records fall on that day — a day with only one machine may be one whose other machine has not pushed yet |
+| `sessions` / `machines` | sessions with a typed input, Esc or refusal that day / machines that pushed the copy read for a session with records on that day — a day with only one machine may be one whose other machine has not pushed yet |
 
 Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
 takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
