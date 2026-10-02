@@ -65,12 +65,12 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 |---|---|
 | `prompts` | inputs the person typed, including ones typed while the AI was working (`queued`) that never became a turn of their own |
 | `queued` | inputs typed while the AI was working (pulled back into the input box with popAll, or taken at once by an idle AI: not counted) |
-| `interrupts` | Esc pressed mid-turn, also while a tool ran (not the marker a tool refusal leaves) |
+| `interrupts` | Esc pressed mid-turn, also while a tool ran (not the marker a tool refusal leaves, nor a tool cut off by the session ending) |
 | `rejected` | tool calls the person refused at a permission prompt. A prompt the person accepted leaves no record, so this view cannot list auto-approve candidates |
 | `rule_denied` | tool calls a hook or a settings rule refused; no person involved |
 | `turns` | instructions: from one typed input to the next, including the work the AI did on notifications and channel events in between |
 | `tools_per_turn` | tool calls per turn (median) |
-| `run_min_p50` | minutes the AI worked in a turn: from each input, notification, channel event or answer to an AskUserQuestion to the last answer it led to, summed; time spent waiting for any of them is left out, and replies Claude Code synthesised (API errors, "No response requested." on a resume) are not answers (median) |
+| `run_min_p50` | minutes the AI worked in a turn: from each input, notification, channel event or answer to an AskUserQuestion to the last answer it led to, summed; time spent waiting for any of them is left out, and replies Claude Code synthesised (API errors, "No response requested." on a resume) are not answers; a turn with no answer is left out (median) |
 | `wait_min_p50` | minutes from the AI's last answer (heartbeat replies excluded) to the next typed input in the same session (median; waits over 6 h are left out as time away) |
 | `sessions` / `machines` | sessions with a typed input, Esc or refusal that day / machines that pushed the copy read for a session with records on that day — a day with only one machine may be one whose other machine has not pushed yet |
 

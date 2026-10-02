@@ -4,7 +4,7 @@
  * 数え方は実 transcript (2026-10-02、197 session) で確かめた形に拠る (memory reference_transcript_record_shapes):
  * - 同じ session は 1 写しだけ読む。resume した session は別の machine からも push され、後の写しが前の写しを含む
  *   (3 件)。行数の多い写しを取る。fork は親の記録を同じ uuid・同じ時刻のまま新しい session に写すので、uuid ごとに 1 件だけ残す。
- *   どちらの session に付くかは決められない (時刻が同じ) が、日別の合計は変わらない
+ *   どちらの session に付くかは決められない (時刻が同じ)。件数の列は変わらないが、中央値の列は付き先で ±0.2 分動く (実測 5 組で 3 日)
  * - 手入力 = subagent (isSidechain) でも meta でも compact の要約でもない user 記録のうち、`origin.kind = human` のもの。
  *   origin が無い古い版だけ、本文が文字列で `<` で始まらないものとする。人が打った slash command も数える
  * - ターン途中に打った入力は `queue-operation` の enqueue にだけ出て、user 記録にならないことがある。それも手入力に数える。
@@ -15,14 +15,17 @@
  * - 1 回の指示 (turn) = 人の入力から次の人の入力まで。通知・channel・hook の返しで AI が続けた作業も、その指示の作業に含める。
  *   自走時間は AI が実際に動いた時間で、turn の中の区切り (人の入力・通知・channel ごと) の始まりからその区切りの最後の応答までの和。
  *   通知や人の答えを待っていた空き時間は入れない (入れると夜通し待った通知で 2.5 日の turn になる)。区切りには enqueue と
- *   AskUserQuestion の答えも含め、合成の応答 (model `<synthetic>`) は応答に数えない。tool 数も 1 turn が数千を持つので中央値を取る。
+ *   AskUserQuestion の答えも含め、合成の応答 (model `<synthetic>`) は応答に数えない。許可プロンプトを待った間は区切れず入る
+ *   (実データで 20 分を超えたのは 1 件)。応答の無い turn は「0 分」ではなく測れないので、中央値に入れないtool 数も 1 turn が数千を持つので中央値を取る。
  *   待ち時間は前の指示の最後の応答から人の入力まで (同じ session の中だけ)。
  *   heartbeat への "." の返事は応答に数えない (数えると待ち時間が heartbeat の間隔で切れる)。
  *   6 時間を超える待ちは席を外していたとみなし、中央値に入れない (claude-idle-reaper の既定と同じ)
- * - Esc 中断は本文が `[Request interrupted by user]` のもの。`… for tool use` は、直前 5 秒に人の拒否があればその付随記録 (rejected と
- *   重なる、20 件中 14 件) で、無ければ tool の実行中に押した Esc なので数える
+ * - Esc 中断は本文が `[Request interrupted by user]` のものと、tool の実行中に押した Esc (tool の結果の `toolDenialKind = interrupted`)。
+ *   `interrupted` には session の終了で切れた tool も入り、それは結果の本文でしか見分けられない (実データの 3 件はすべてこれ)。
+ *   `[Request interrupted by user for tool use]` は tool を断ったときに付く印で、rejected と重なるので数えない
  * - 拒否は `toolDenialKind`: `user-rejected` は人が断ったもの、`permission-rule` は hook か設定の規則が止めたもの。
- *   `interrupted` (session の終了) と `cancelled` は介入ではないので数えない。許可を求められて人が通したものは記録に無い
+ *   `cancelled` は介入ではないので数えない。許可を求められて人が通したものは記録に無い。AskUserQuestion の答えも人の入力だが、
+ *   AI に聞かれて答えたもので自分から打ったものではないので prompts に入れない (区切りにだけ使う)
  * - subagent の transcript は読まない (保存先の transcript.jsonl は親だけ)
  * - 中央値は秒に直してから取る。INTERVAL の median は離散 (下側) の値を返し、2 件なら短い方になる
  *
@@ -67,7 +70,8 @@ ev AS (
       OR (type = 'user' AND (json->>'$.message.content[0].tool_use_id') IN (SELECT id FROM asked)) AS boundary,
     type = 'user' AND meta AND contains(coalesce(c, ''), ' kind="heartbeat"') AS heartbeat,
     type = 'user' AND (json->>'$.message.content[0].text') = '[Request interrupted by user]' AS interrupt,
-    type = 'user' AND (json->>'$.message.content[0].text') = '[Request interrupted by user for tool use]' AS interrupt_tool,
+    (json->>'toolDenialKind') = 'interrupted'
+      AND NOT starts_with(coalesce((json->>'toolUseResult'), ''), '[Tool call interrupted: the session ended') AS interrupt_tool,
     (json->>'toolDenialKind') = 'user-rejected' AS rejected,
     (json->>'toolDenialKind') = 'permission-rule' AS rule_denied,
     -- '<synthetic>' は Claude Code が合成した応答 (API エラー / 日を置いて開き直したときの "No response requested.")。AI は動いていない
@@ -108,7 +112,7 @@ paced AS (
 by_turn AS (
   SELECT (started AT TIME ZONE ${tz})::DATE AS day, count(*) AS turns,
     median(tools) AS tools_per_turn,
-    round(median(coalesce(ran, 0)) / 60, 1) AS run_min_p50,
+    round(median(ran) / 60, 1) AS run_min_p50,
     round(median(epoch(waited)) FILTER (WHERE waited <= INTERVAL 6 HOUR) / 60, 1) AS wait_min_p50
   FROM paced WHERE turn > 0 GROUP BY 1
 ),
@@ -117,11 +121,9 @@ by_queue AS (
 ),
 by_mark AS (
   SELECT (ts AT TIME ZONE ${tz})::DATE AS day,
-    count(*) FILTER (WHERE interrupt OR (interrupt_tool AND NOT EXISTS (
-      SELECT 1 FROM ev x WHERE x.rejected AND x.session_id = ev.session_id AND x.ts BETWEEN ev.ts - INTERVAL 5 SECOND AND ev.ts
-    ))) AS interrupts, count(*) FILTER (WHERE rejected) AS rejected,
+    count(*) FILTER (WHERE interrupt OR interrupt_tool) AS interrupts, count(*) FILTER (WHERE rejected) AS rejected,
     count(*) FILTER (WHERE rule_denied) AS rule_denied,
-    count(DISTINCT session_id) FILTER (WHERE prompt OR interrupt OR rejected) AS sessions,
+    count(DISTINCT session_id) FILTER (WHERE prompt OR interrupt OR interrupt_tool OR rejected) AS sessions,
     count(DISTINCT machine) AS machines
   FROM ev GROUP BY 1
 ),

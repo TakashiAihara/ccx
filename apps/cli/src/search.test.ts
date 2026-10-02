@@ -265,7 +265,8 @@ describe("search: embedded DuckDB over the store", () => {
       // tool を断ったときの付随記録は Esc ではない
       { uuid: "a12", type: "user", timestamp: at(176), message: text("[Request interrupted by user for tool use]") },
       { uuid: "a13", type: "user", timestamp: at(177), toolDenialKind: "permission-rule", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
-      { uuid: "a14", type: "user", timestamp: at(178), toolDenialKind: "interrupted", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      // session の終了で切れた tool は Esc ではない
+      { uuid: "a14", type: "user", timestamp: at(178), toolDenialKind: "interrupted", toolUseResult: "[Tool call interrupted: the session ended before this call's result was recorded]", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
       { uuid: "a15", type: "user", timestamp: at(180), message: text("[Request interrupted by user]") },
       // 前に同じ本文を打っていても、後に user 記録が無い割り込みは数える
       { type: "queue-operation", operation: "enqueue", timestamp: at(185), content: "next" },
@@ -293,8 +294,8 @@ describe("search: embedded DuckDB over the store", () => {
       { type: "queue-operation", operation: "dequeue", timestamp: at(59.5) },
       { uuid: "b3", type: "user", origin: human, timestamp: at(60), message: { content: "also Y" } },
       { uuid: "b4", type: "assistant", timestamp: at(70), message: text("ok") },
-      // 拒否を伴わない「for tool use」は tool の実行中に押した Esc
-      { uuid: "b5", type: "user", timestamp: at(75), message: text("[Request interrupted by user for tool use]") },
+      // tool の実行中に押した Esc
+      { uuid: "b5", type: "user", timestamp: at(75), toolDenialKind: "interrupted", toolUseResult: "Interrupted by user", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
     ];
     // fork: 親の記録を同じ uuid で持つ。親の分は数えない
     const fork = [a[0]!, a[1]!, { uuid: "f1", type: "user", origin: human, timestamp: at(300), message: { content: "forked" } }, { uuid: "f2", type: "assistant", timestamp: at(310), message: { content: [tool] } }];
@@ -348,7 +349,8 @@ describe("search: embedded DuckDB over the store", () => {
       sessions: 3,
       machines: 1,
     });
-    expect(day(tokyo, "2026-09-21")).toMatchObject({ prompts: 1, turns: 1, wait_min_p50: null });
+    // 応答の無い turn の自走時間は 0 分ではなく測れない
+    expect(day(tokyo, "2026-09-21")).toMatchObject({ prompts: 1, turns: 1, run_min_p50: null, wait_min_p50: null });
     expect(day(tokyo, "2026-09-22")).toEqual({
       day: "2026-09-22", prompts: 0, queued: 0, interrupts: 0, rejected: 0, rule_denied: 0, turns: 0,
       tools_per_turn: null, run_min_p50: null, wait_min_p50: null, sessions: 0, machines: 0,
