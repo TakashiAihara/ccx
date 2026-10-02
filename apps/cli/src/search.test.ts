@@ -237,6 +237,61 @@ describe("search: embedded DuckDB over the store", () => {
     expect(r.getRowObjects()[0]).toEqual({ rows: n, sessions: n });
   }, 20_000);
 
+  test("stats: typed inputs, queued inputs, interrupts and refusals per day; non-human records are not counted", async () => {
+    const at = (s: number) => new Date(Date.parse("2026-09-20T00:00:00Z") + s * 1000).toISOString();
+    const tool = { type: "tool_use", id: "t", name: "Bash", input: {} };
+    const recs = [
+      { type: "user", timestamp: at(0), message: { content: "do X" } },
+      { type: "assistant", timestamp: at(10), message: { content: [tool, tool] } },
+      { type: "user", timestamp: at(20), message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { type: "assistant", timestamp: at(30), message: { content: [{ type: "text", text: "ok" }] } },
+      { type: "queue-operation", operation: "enqueue", timestamp: at(40), content: "also Y" },
+      { type: "queue-operation", operation: "enqueue", timestamp: at(45), content: "<task-notification>x</task-notification>" },
+      { type: "user", timestamp: at(90), message: { content: "<task-notification>x</task-notification>" } },
+      { type: "assistant", timestamp: at(100), message: { content: [{ type: "text", text: "noted" }] } },
+      { type: "user", timestamp: at(160), message: { content: "next" } },
+      { type: "assistant", timestamp: at(170), message: { content: [tool] } },
+      { type: "user", timestamp: at(175), toolDenialKind: "user-rejected", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { type: "user", timestamp: at(176), toolDenialKind: "permission-rule", message: { content: [{ type: "tool_result", tool_use_id: "t" }] } },
+      { type: "user", timestamp: at(180), message: { content: [{ type: "text", text: "[Request interrupted by user]" }] } },
+      { type: "queue-operation", operation: "enqueue", timestamp: at(190), content: "next2" },
+      { type: "user", timestamp: at(200), message: { content: "next2" } },
+      { type: "assistant", timestamp: at(210), message: { content: [{ type: "text", text: "done" }] } },
+      { type: "user", timestamp: at(220), isSidechain: true, message: { content: "subagent prompt" } },
+      { type: "user", timestamp: at(230), isMeta: true, message: { content: "injected" } },
+      // 16:00Z は東京では翌日、UTC では同じ日
+      { type: "user", timestamp: "2026-09-20T16:00:00Z", message: { content: "late" } },
+    ];
+    const dir = join(root, "ccx", "pre", "transcripts", "machine=host-b", "user=u", "session_id=stats-1");
+    await Bun.write(join(dir, "transcript.jsonl"), recs.map(line).join(""));
+
+    const { interactionSql } = await import("./stats.ts");
+    const c = await openDuckDB(store);
+    const tokyo = (await c.runAndReadAll(interactionSql("Asia/Tokyo"))).getRowObjectsJson();
+    expect(tokyo.find((r) => r.day === "2026-09-20")).toEqual({
+      day: "2026-09-20",
+      // 人の turn 3 (do X / next / next2) + user 記録にならなかった割り込み 1 (also Y)
+      prompts: "4",
+      queued: "2",
+      interrupts: "1",
+      rejected: "1",
+      gated: "1",
+      sessions: "1",
+      // tool_use 3 / 人の turn 3
+      tools_per_prompt: 1,
+      // 自走 30s / 10s / 10s の中央値
+      run_min_p50: 0.2,
+      // 待ち 60s (通知の応答 100s → next 160s) / 30s の中央値
+      wait_min_p50: 0.8,
+    });
+    expect(tokyo.find((r) => r.day === "2026-09-21")?.prompts).toBe("1");
+    expect(tokyo.find((r) => r.day === "2026-09-19")?.prompts).toBe("2");
+
+    const utc = (await c.runAndReadAll(interactionSql("UTC"))).getRowObjectsJson();
+    expect(utc.find((r) => r.day === "2026-09-20")?.prompts).toBe("5");
+    expect(utc.find((r) => r.day === "2026-09-21")).toBeUndefined();
+  });
+
   test("an empty store says so instead of a DuckDB IO error", async () => {
     await rm(join(root, "ccx"), { recursive: true, force: true });
     const r = await ccx("anything");

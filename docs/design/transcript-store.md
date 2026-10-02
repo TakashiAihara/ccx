@@ -57,6 +57,7 @@ so the center's events and the store name a machine the same way and a DuckDB jo
 | `ls [-m machine]` | every `session.json`, newest push first, with its flags and label and who last pulled it | — |
 | `prune [id...] \| --ended \| --archived` | delete the local transcript, tool-results, subagents and workflows (nothing else under `<id>/`); record `prune` | the session is running; no copy in the store has the same transcript, tool-results, subagents and workflows (a copy pushed before subagents or workflows were carried has no list for them, so push again); the matching copy, **read back and hashed**, differs from the local files |
 | `search <text> \| --sql` | DuckDB (embedded) over `transcripts/**/transcript.jsonl` and `state.json`; `transcripts`, `history` and `sessions` views | — |
+| `stats [--tz] [--json]` | the same DuckDB, one row per day: prompts a person typed (mid-turn ones included), mid-turn inputs, Esc interrupts, tools refused by a person / by a hook, and per prompt the tool calls, the time the AI ran on its own and the time it waited for the person. How each is counted is in `apps/cli/src/stats.ts` | — |
 
 Several machines may hold a copy of the same session (each pushes under its own `machine=`); `find`
 takes the newest `pushedAt`, and `prune` accepts any copy that matches. A session id given as an
