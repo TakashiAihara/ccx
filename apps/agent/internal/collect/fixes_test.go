@@ -225,7 +225,7 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A hook dropped a fallback event while ccx-agent was down.
-	if err := writeIncoming(spool.IncomingDir(), []byte(`{"pending":1}`)); err != nil {
+	if err := writeIncoming(spool.IncomingDir(), newUUIDv7(), []byte(`{"pending":1}`)); err != nil {
 		t.Fatal(err)
 	}
 

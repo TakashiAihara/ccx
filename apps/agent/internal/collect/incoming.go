@@ -14,10 +14,12 @@ import (
 // thin (#18) — it drops one file and exits, and must not initialise the seq
 // counter or scan the queue the way OpenSpool does.
 //
-// The name leads with a UUIDv7, which is time-ordered, so a lexical sort of the
-// directory is roughly chronological — that is the order ccx-agent drains them in.
-// UUIDv7 also makes the name collision-free across concurrent hooks without a
-// pid or a lock.
+// The name is the event's id, so the drain envelopes the payload under the id the
+// socket path would have carried: the two copies a lost ack produces are then one
+// event to the center's dedup, not two it cannot tell apart. The id is a UUIDv7,
+// which is time-ordered, so a lexical sort of the directory is roughly
+// chronological — that is the order ccx-agent drains them in — and it is
+// collision-free across concurrent hooks without a pid or a lock.
 //
 // It writes with durable=false, so no fsync at all. fsync can block for tens of
 // seconds on a disk in IO wait, and the blocked thread sits in D state where no
@@ -28,15 +30,11 @@ import (
 // the disk is already backed up — the same condition this exists for. A power
 // loss can also leave a zero-length .raw under its real name, which the next
 // drain then wraps as an empty event. A hung session is the worse failure.
-func writeIncoming(incomingDir string, payload []byte) error {
+func writeIncoming(incomingDir, id string, payload []byte) error {
 	if err := os.MkdirAll(incomingDir, 0o700); err != nil {
 		return err
 	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		return err
-	}
-	return atomicWrite(filepath.Join(incomingDir, id.String()+".raw"), payload, false)
+	return atomicWrite(filepath.Join(incomingDir, id+incomingExt), payload, false)
 }
 
 func newUUIDv7() string {

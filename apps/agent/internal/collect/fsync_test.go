@@ -34,7 +34,7 @@ func TestWriteIncoming_DoesNotFsync(t *testing.T) {
 	synced := recordFsync(t)
 	dir := t.TempDir()
 
-	if err := writeIncoming(dir, []byte(`{"fallback":1}`)); err != nil {
+	if err := writeIncoming(dir, newUUIDv7(), []byte(`{"fallback":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	if len(*synced) != 0 {

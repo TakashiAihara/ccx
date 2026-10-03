@@ -147,7 +147,7 @@ func TestDrainIncoming_MovesRawIntoQueueInOrder(t *testing.T) {
 
 	// Simulate hooks having dropped raw payloads while ccx-agent was down.
 	for _, p := range []string{"one", "two", "three"} {
-		if err := writeIncoming(s.IncomingDir(), []byte(p)); err != nil {
+		if err := writeIncoming(s.IncomingDir(), newUUIDv7(), []byte(p)); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond) // ensure distinct UUIDv7 timestamps

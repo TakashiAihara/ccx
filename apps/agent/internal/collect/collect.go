@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -202,13 +203,14 @@ func (s *Collect) acceptLoop(ctx context.Context, ln net.Listener) error {
 }
 
 // handle receives one framed payload, spools it, and acks. It does not inspect
-// the payload — it envelopes and stores the bytes. The producer is set from the
-// fact that this arrived on the hook socket, not from anything inside the bytes.
+// the payload — it envelopes and stores the bytes, under the event_id the hook
+// minted. The producer is set from the fact that this arrived on the hook socket,
+// not from anything inside the bytes.
 func (s *Collect) handle(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(hookExchangeTimeout))
 
-	payload, err := readFrame(conn)
+	id, payload, err := readHookFrame(conn)
 	if err != nil {
 		if err != io.EOF {
 			s.log("read frame error: %v", err)
@@ -216,11 +218,17 @@ func (s *Collect) handle(conn net.Conn) {
 		return
 	}
 
-	if _, err := s.spool.Append(payload); err != nil {
+	ev, err := s.spool.AppendID(id, payload)
+	if err != nil {
 		// Could not durably store it. Do NOT ack — the hook will fall back to
 		// incoming/, so the event is still not lost.
 		s.log("spool append error: %v", err)
 		return
+	}
+	// A hook that sent an id the spool would not take loses dedup for the copy a
+	// lost ack sends through incoming/. Say so, or the duplicates come back silently.
+	if id != "" && !strings.EqualFold(ev.GetEventId(), id) {
+		s.log("hook sent event_id %q, not a UUIDv7; spooled as %s", id, ev.GetEventId())
 	}
 
 	// Durably spooled. Ack so the hook knows, and nudge the drain loop.
