@@ -166,15 +166,16 @@ func (s *Spool) AppendID(id string, payload []byte) (*ccxv1.Event, error) {
 // eventID is the id the envelope carries: the caller's when it is a UUIDv7 in the
 // 36-byte form the hook writes, a freshly minted one otherwise. It is stored in the
 // lowercase form uuid prints, because the center's key is case-sensitive and the
-// copy of the same event that went the other path is spelled that way. A non-v7 id
-// (nil, a name some other tool chose) is not trusted: the center drops the second
-// event under a reused id, so a collision there is a lost event.
+// copy of the same event that went the other path is spelled that way. Only the
+// hook's own ids are trusted as dedup keys; anything else (nil, a name another
+// tool chose) is someone else's naming, and a fixed one reused would make the
+// center drop every later event under it.
 func (s *Spool) eventID(id string) string {
 	if len(id) != hookIDLen {
 		return s.newID()
 	}
 	u, err := uuid.Parse(id)
-	if err != nil || u.Version() != 7 {
+	if err != nil || u.Version() != 7 || u.Variant() != uuid.RFC4122 {
 		return s.newID()
 	}
 	return u.String()
@@ -269,7 +270,8 @@ func (s *Spool) DrainIncoming() (int, error) {
 		// The name is the id the hook minted, so the fallback copy is enveloped
 		// under the same event_id the socket path carried. A name that is not one
 		// gets an id minted for it rather than dropped: the event is worth more
-		// than the id it arrived with.
+		// than the id it arrived with. Unlike handle this is not logged, since only
+		// the hook writes here and it names every file by a v7.
 		if _, err := s.AppendID(strings.TrimSuffix(name, incomingExt), payload); err != nil {
 			return n, err
 		}

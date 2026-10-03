@@ -19,7 +19,8 @@ import (
 // flag existed caps the header at maxFrame, reads a flagged header as a length far
 // past the cap, and refuses the frame as too large instead of spooling 36 bytes of
 // id as the head of a truncated payload. It acks nothing, so the hook falls back
-// and the event reaches the center once, through incoming/.
+// and the event reaches the center once, through incoming/ at the agent's next
+// start.
 //
 // The ack is the receipt. The hook treats "I got ackOK" as "ccx-agent has this on
 // disk" and only then considers the socket path a success. Anything else —

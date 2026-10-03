@@ -46,9 +46,10 @@ func drainAll(t *testing.T, s *Spool) []string {
 
 // The ack-lost race: the socket path spools the event, the hook falls back and
 // writes it to incoming/ as well, and the drain spools it a second time. Both
-// copies must carry the same event_id, so the center stores each event once.
-// Two events, so an id that never changed between hooks would fail too.
-func TestAckLost_CenterStoresEachEventOnce(t *testing.T) {
+// copies must carry the same event_id, so a center that drops duplicates by
+// event_id (testcenter, like the hub's primary key) stores each event once. Two
+// events, so an id that never changed between hooks would fail too.
+func TestAckLost_DedupingCenterStoresEachEventOnce(t *testing.T) {
 	dir := t.TempDir()
 	sock := dir + "/a.sock"
 	spoolDir := dir + "/spool"
@@ -88,7 +89,7 @@ func TestAckLost_CenterStoresEachEventOnce(t *testing.T) {
 	center, url := testcenter.Start()
 	defer center.Close()
 	fwd := NewForwarder(url, "")
-	var ids []string
+	var ids, copies []string
 	for {
 		e, err := spool.Oldest()
 		if err != nil {
@@ -98,6 +99,7 @@ func TestAckLost_CenterStoresEachEventOnce(t *testing.T) {
 			break
 		}
 		ids = append(ids, e.Event.GetEventId())
+		copies = append(copies, string(e.Event.GetPayload()))
 		if err := fwd.Forward(context.Background(), e.Event); err != nil {
 			t.Fatal(err)
 		}
@@ -109,6 +111,9 @@ func TestAckLost_CenterStoresEachEventOnce(t *testing.T) {
 	// Spool order: both socket copies, then both fallback copies.
 	if len(ids) != 4 || ids[0] != ids[2] || ids[1] != ids[3] || ids[0] == ids[1] {
 		t.Fatalf("event_ids %v: want [a b a b] with a != b", ids)
+	}
+	if want := append(append([]string{}, payloads...), payloads...); strings.Join(copies, "|") != strings.Join(want, "|") {
+		t.Fatalf("spooled payloads %v, want %v", copies, want)
 	}
 	got := center.Payloads()
 	if len(got) != 2 || got[0] != payloads[0] || got[1] != payloads[1] {
@@ -266,6 +271,7 @@ func TestAppendID_RejectsNonUUID(t *testing.T) {
 		{strings.ToUpper(good), good},
 		{uuid.NewString(), "id-005"},
 		{uuid.Nil.String(), "id-006"},
+		{"00000000-0000-7000-0000-000000000000", "id-007"},
 	} {
 		ev, err := s.AppendID(tc.in, []byte("p"))
 		if err != nil {
@@ -291,7 +297,7 @@ func TestHandle_LogsARejectedHookID(t *testing.T) {
 	}
 	srv := newCollect(dir+"/a.sock", spool, nil, logf)
 
-	for _, id := range []string{newUUIDv7(), "", uuid.NewString()} {
+	for _, id := range []string{newUUIDv7(), "", strings.ToUpper(newUUIDv7()), uuid.NewString()} {
 		a, b := net.Pipe()
 		go srv.handle(a)
 		_ = b.SetDeadline(time.Now().Add(2 * time.Second))
@@ -309,5 +315,50 @@ func TestHandle_LogsARejectedHookID(t *testing.T) {
 	defer mu.Unlock()
 	if len(logged) != 1 || !strings.Contains(logged[0], "not a UUIDv7") {
 		t.Fatalf("logged %q, want one line for the v4 id only (not for the idless frame)", logged)
+	}
+}
+
+// Against an agent from before #101, a real hook exchange ends in incoming/: the
+// old agent refuses the frame and acks nothing, and the hook's fallback keeps the
+// payload under the id it minted.
+func TestHook_OldAgentRefuses_EventLandsInIncoming(t *testing.T) {
+	dir := t.TempDir()
+	sock := dir + "/a.sock"
+	spoolDir := dir + "/spool"
+
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	refused := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			refused <- err
+			return
+		}
+		defer c.Close()
+		_, err = legacyReadFrame(c)
+		refused <- err
+	}()
+
+	if code := Hook(sock, spoolDir, strings.NewReader(`{"old":"agent"}`)); code != 0 {
+		t.Fatalf("hook exit %d", code)
+	}
+	if err := <-refused; err == nil || !strings.Contains(err.Error(), "frame too large") {
+		t.Fatalf("old agent: %v, want it to refuse the frame as too large", err)
+	}
+
+	ents, err := os.ReadDir(incomingPath(spoolDir))
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("incoming/: %d entries, err %v", len(ents), err)
+	}
+	b, err := os.ReadFile(filepath.Join(incomingPath(spoolDir), ents[0].Name()))
+	if err != nil || string(b) != `{"old":"agent"}` {
+		t.Fatalf("fallback holds %q (err %v)", b, err)
+	}
+	if _, err := uuid.Parse(strings.TrimSuffix(ents[0].Name(), ".raw")); err != nil {
+		t.Errorf("fallback name %q is not the hook's UUID", ents[0].Name())
 	}
 }
