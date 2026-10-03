@@ -13,10 +13,11 @@ Questions that need an answer are in the session's judgment queue, not here.
 
 - The center can show what every running session is doing, across machines, without waiting for
   the session to end (the view itself is #46).
-- Usage, model and effort reach the center for headless sessions too: hooks fire under `claude -p`,
-  the statusline does not.
+- The records that carry usage, model and effort reach the store for headless sessions too: hooks
+  fire under `claude -p`, the statusline does not. Deriving them is the reader's job (#46).
 - The store's copy stops lagging. A machine that dies mid-session leaves its conversation in the
-  store up to the last hook, and `push` at the end has nothing left to carry for the transcript.
+  store up to the last hook. `search` reads it; `ls` / `pull` still need a `session.json`, which
+  only `push` writes (#208).
 
 ## The path
 
@@ -44,12 +45,15 @@ second on a busy disk (#194) must not also read a transcript.
 
 `ingest.proto` says ccx-agent never parses a hook payload. This keeps that rule for the payload's
 content and narrows it for its address: ccx-agent reads `session_id` and `transcript_path`, and
-nothing else, and branches on neither's meaning. The event is still forwarded byte for byte; a
-payload whose two fields do not parse is forwarded as before and simply triggers no read.
+nothing else — not even which hook fired — and branches on neither's meaning. The event is still
+forwarded byte for byte; a payload whose two fields do not parse is forwarded as before and simply
+triggers no read.
 
 `transcript_path` comes from a file other processes of the same user can write, so it is taken only
 when the file name is `<session_id>.jsonl`, the id has Claude Code's shape, and the path sits in a
-`projects/` directory. Anything else is ignored, not followed.
+`projects/` directory. The open refuses a symlink in the file's place and anything that is not a
+regular file. A later payload naming another such path (a resume in another project directory)
+moves the session there.
 
 ## The center appends
 
@@ -60,9 +64,10 @@ size. That one rule gives:
 
 - Duplicates and reordering cannot corrupt the object: a resend of bytes already there is refused
   with a size the sender is already past.
-- ccx-agent keeps offsets in memory only. After a restart it sends from 0, is told the real size, and
-  continues from there. Nothing is spooled: the transcript file is the durable source, and it stays
-  on disk until someone prunes it after a verified copy.
+- ccx-agent keeps offsets in memory only. A session it has not seen yet (after a restart, or after it
+  forgot an idle one) starts with an empty append at offset 0, which appends nothing and is answered
+  with the real size; it sends from there. Nothing is spooled: the transcript file is the durable
+  source, and it stays on disk until someone prunes it after a verified copy.
 - A gap is impossible to write. If the agent's offset is ahead of the center (the object was deleted),
   it is told the size and starts over from it.
 
@@ -71,15 +76,27 @@ not interleave. `push` keeps replacing the whole object; when it carries the sam
 changes, and when the local file differs (see below), the push is what makes the store right again.
 
 A reader must not see half an append. The object store serves a live object only up to the length of
-the last completed append, so a DuckDB query running during an append sees whole lines.
+the last completed append (GET's length and body come from one snapshot), so a DuckDB query running
+during an append sees whole lines. A failed append is cut back to its old length. A center that dies
+in the middle of one can leave part of a line; the agent's next append is refused with the longer
+size, and it sends the rest of that line from there, so the object is whole again at the next read.
+
+A `DELETE` of the object waits for an append in progress, like a `push` does.
+
+A center refusal that retrying cannot fix stops live sync instead of retrying it: a center without
+`TranscriptService` or a refused token stops it for every session, a request the center calls
+invalid stops it for that session. Anything else (the center down, a timeout) is retried with a
+doubling delay, and the log says so once when it starts failing and once when it recovers.
 
 ## When it reads
 
 - Every hook event of a session is a trigger. Reading is coalesced per session: at most one read per
   interval, plus one trailing read after the interval, so the last trigger in a burst is never
   dropped — only merged into the next read.
-- Claude Code writes the transcript asynchronously; at `Stop` the turn's last lines may not be on
-  disk yet. `Stop`, `SubagentStop` and `SessionEnd` schedule one more read shortly after.
+- Claude Code writes the transcript asynchronously; when a hook fires, the lines it is about may not
+  be on disk yet, and after the last hook of a turn nothing else would read them. So every trigger
+  also asks for one more read shortly after the last trigger. If that read finds a line still being
+  written, it asks again, a bounded number of times.
 - Only whole lines are sent: the read stops at the last newline, and a line still being written waits
   for the next read. A single append carries at most a fixed cap; the rest follows at once. A single
   line longer than the cap is sent alone.
@@ -90,7 +107,7 @@ the last completed append, so a DuckDB query running during an append sees whole
 
 The design assumes Claude Code only appends to a transcript. If the local file becomes shorter than
 the center's copy (a truncation, e.g. by a tool that cuts a session to make it resumable), the agent
-stops appending for that session and says so in its log and status. It does not try to repair: the
+stops appending for that session and says so in its log. It does not try to repair: the
 next `push` replaces the object with the local file. A restarted agent learns the center's size,
 finds the file shorter than it, and stops the session again. A rewrite that keeps the same length is not
 detected here; `push` compares the sha256 and catches it at the end.
@@ -105,9 +122,14 @@ why in its log; `push` works as before. Live sync can also be turned off (`CCX_T
 
 ## What `push` still does
 
-The transcript itself arrives live, so `push --ended` (and #129, which automates it) is left with
-the files the JSONL refers to — `tool-results/`, `subagents/`, `workflows/` — plus `session.json`,
-`state.json`, and the final check that the store's copy matches the local file.
+`push --ended` (and #129, which automates it) still carries the files the JSONL refers to —
+`tool-results/`, `subagents/`, `workflows/` — plus `session.json` and `state.json`. It also still
+uploads the transcript whenever the local file differs from what the last `push` recorded, which
+after live sync is every time: the bytes it writes are the ones the object already holds, so it costs
+transfer, not correctness.
+
+`pull` checks the download against `session.json`. A copy that live sync grew after the push is
+accepted when the bytes the push hashed are its prefix and it ends with a newline.
 
 ## Not here
 
@@ -119,9 +141,11 @@ the files the JSONL refers to — `tool-results/`, `subagents/`, `workflows/` �
 
 ## Acceptance
 
-- A headless session's model and token usage reach the center while it runs.
+- A headless session's records (model and token usage among them) reach the store while it runs.
 - Each read costs the new bytes, not the file's size.
-- A partly written line is never sent, and a refused append never leaves a partial line in the store.
+- A partly written line is never sent, and a refused or failed append never leaves a partial line in
+  the store (a center that dies mid-append can, until the agent's next read).
+- A refusal that retrying cannot fix stops live sync; an outage is retried with backoff.
 - Restarting ccx-agent mid-session neither duplicates nor skips bytes.
 - With the center down, hooks take no longer than before, and the store catches up when it returns.
 - A truncated local file stops the session's live sync without writing to the store.

@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
+import { transcriptKey } from "@ccx/hub/src/transcript.ts";
 
 import {
   AmbiguousSessionId,
@@ -319,6 +320,38 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(metaKey, JSON.stringify({ ...meta, workflows: [{ name: "../../escape.jsonl", sha256: "x" }] }));
     await expect(B.pull(SID, homeB)).rejects.toThrow(/refusing to install/);
     expect(await Bun.file(outside).text()).toBe("must stay");
+    expect(await Bun.file(path).exists()).toBe(false);
+  });
+
+  test("the center's live append writes the object push and pull use (#120)", async () => {
+    // center (transcript.ts) と CLI (keyPrefix) は同じ key を別々に組む。ずれると live 同期が
+    // 誰も読まない object を育てる
+    expect(transcriptKey("p/", "host-a", "alice", SID)).toBe(`${A.keyPrefix(SID)}transcript.jsonl`);
+  });
+
+  test("pull takes a copy that grew by live appends after the push: what the push hashed is its prefix (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    // ccx-agent の live 同期が push の後に足した行 (center が object の末尾に足す)
+    const grown = transcriptBody + line({ type: "assistant", message: "LIVE-APPENDED" });
+    await Bun.write(storedA(), grown);
+
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(await Bun.file(r.path!).text()).toBe(grown);
+  });
+
+  test("pull still refuses a grown copy whose pushed part changed, or that ends mid-line (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    await Bun.write(storedA(), transcriptBody.replace("PORTABILITY-TEST-1", "PORTABILITY-TEST-X") + line({ more: 1 }));
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/does not match/);
+    expect(await Bun.file(path).exists()).toBe(false);
+
+    await Bun.write(storedA(), `${transcriptBody}{"half":`);
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/does not match/);
     expect(await Bun.file(path).exists()).toBe(false);
   });
 

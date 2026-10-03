@@ -53,13 +53,28 @@ func (c *Client) Append(ctx context.Context, session string, offset uint64, data
 	return res.Msg.GetSize(), nil
 }
 
-// refusal reads the center's refusal as *Mismatch. Only a FailedPrecondition that
-// carries an AppendResponse is one: any other code is a real failure (the center
-// down, the request refused outright), and a FailedPrecondition without the size
-// says nothing about where to continue, so it stays an error to retry.
+// refusal sorts what the center answered:
+//   - a FailedPrecondition carrying an AppendResponse is *Mismatch (continue from
+//     its size); one without the size says nothing about where to continue, so it
+//     stays an error to retry
+//   - Unimplemented (a center older than TranscriptService), Unauthenticated and
+//     PermissionDenied (the token) are the same for every session: *Permanent
+//     with Global, so live sync stops instead of re-sending every 5s forever
+//   - InvalidArgument is this request's key (a machine name with '/'): *Permanent
+//     for this session
+//   - anything else (down, timeout, internal) is transient
 func refusal(err error) error {
 	var cerr *connect.Error
-	if !errors.As(err, &cerr) || cerr.Code() != connect.CodeFailedPrecondition {
+	if !errors.As(err, &cerr) {
+		return err
+	}
+	switch cerr.Code() {
+	case connect.CodeUnimplemented, connect.CodeUnauthenticated, connect.CodePermissionDenied:
+		return &Permanent{Err: err, Global: true}
+	case connect.CodeInvalidArgument:
+		return &Permanent{Err: err}
+	case connect.CodeFailedPrecondition:
+	default:
 		return err
 	}
 	for _, d := range cerr.Details() {

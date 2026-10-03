@@ -89,3 +89,30 @@ func TestClientDoesNotMistakeOtherErrorsForMismatch(t *testing.T) {
 		}
 	}
 }
+
+func TestClientSortsRefusalsThatRetryingCannotFix(t *testing.T) {
+	cases := []struct {
+		code   connect.Code
+		global bool
+	}{
+		{connect.CodeUnimplemented, true},
+		{connect.CodeUnauthenticated, true},
+		{connect.CodePermissionDenied, true},
+		{connect.CodeInvalidArgument, false},
+	}
+	for _, tc := range cases {
+		c := NewClient(serve(t, &handler{err: connect.NewError(tc.code, errors.New("no"))}), "", &ccxv1.Origin{Machine: "m1", User: "dev"}, "ccx", "")
+		_, err := c.Append(context.Background(), sid, 0, []byte("x\n"))
+		var p *Permanent
+		if !errors.As(err, &p) || p.Global != tc.global {
+			t.Fatalf("%v came back as %#v, want *Permanent{Global: %v}", tc.code, err, tc.global)
+		}
+	}
+	// a center that is down is not permanent
+	c := NewClient(serve(t, &handler{err: connect.NewError(connect.CodeUnavailable, errors.New("down"))}), "", &ccxv1.Origin{Machine: "m1", User: "dev"}, "ccx", "")
+	_, err := c.Append(context.Background(), sid, 0, []byte("x\n"))
+	var p *Permanent
+	if errors.As(err, &p) {
+		t.Fatalf("Unavailable came back as permanent: %v", err)
+	}
+}

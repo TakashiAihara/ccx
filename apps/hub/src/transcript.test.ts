@@ -182,12 +182,12 @@ describe("ObjectStore.append", () => {
     const pending = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
     await Bun.sleep(20);
 
-    expect(await store.readCommitted("ccx", KEY)).toBe("one\n");
+    expect(await (await store.snapshot("ccx", KEY))?.body.text()).toBe("one\n");
     expect((await store.head("ccx", KEY))?.size).toBe(4);
 
     release();
     expect(await pending).toEqual({ ok: true, size: 8n });
-    expect(await store.readCommitted("ccx", KEY)).toBe("one\ntwo\n");
+    expect(await (await store.snapshot("ccx", KEY))?.body.text()).toBe("one\ntwo\n");
     expect((await store.head("ccx", KEY))?.size).toBe(8);
   });
 
@@ -246,5 +246,67 @@ describe("ObjectStore.snapshot", () => {
 
   test("無い object は null", async () => {
     expect(await new ObjectStore(root).snapshot("ccx", KEY)).toBeNull();
+  });
+});
+
+describe("ObjectStore: 同じ key への書き込みの並び", () => {
+  test("追記の途中に来た DELETE は追記が終わってから消す (追記が空のファイルを作り直さない)", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const appending = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+
+    const deleting = store.delete("ccx", KEY);
+    await Bun.sleep(20);
+    expect(await exists()).toBe(true);
+
+    release();
+    expect(await appending).toEqual({ ok: true, size: 8n });
+    await deleting;
+    expect(await exists()).toBe(false);
+    // 消えた後の追記は size 0 を返して断る (欠けを作らない)
+    expect(await store.append("ccx", KEY, 8n, enc("three\n"))).toEqual({ ok: false, size: 0n });
+  });
+
+  test("put の途中に来た append は put の後の size で判定する", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const body = new ReadableStream<Uint8Array>({
+      async start(c) {
+        c.enqueue(enc("one\ntwo\n"));
+        await gate;
+        c.enqueue(enc("three\n"));
+        c.close();
+      },
+    });
+    const putting = store.put("ccx", KEY, body);
+    await Bun.sleep(20);
+
+    // put が終わる前に、put 前の size (4) へ足そうとする
+    const appending = store.append("ccx", KEY, 4n, enc("late\n"));
+    await Bun.sleep(20);
+    release();
+    await putting;
+    expect(await appending).toEqual({ ok: false, size: 14n });
+    expect(await stored()).toBe("one\ntwo\nthree\n");
+  });
+
+  test("追記に失敗したら、追記前の長さに切り戻して投げる", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    await expect(
+      store.append("ccx", KEY, 4n, enc("two\n"), {
+        beforeCommit: async () => {
+          throw new Error("disk went away");
+        },
+      }),
+    ).rejects.toThrow("disk went away");
+    expect(await stored()).toBe("one\n");
+    expect((await store.head("ccx", KEY))?.size).toBe(4);
   });
 });

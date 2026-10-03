@@ -251,6 +251,21 @@ export async function sha256(path: string): Promise<string> {
   return h.digest("hex");
 }
 
+/**
+ * 取得した transcript が push の写しか、その後ろに live 同期 (#120) が行を足したものか。
+ * live 同期は center の object の末尾に足すだけなので、push が hash した bytes はそのまま
+ * 先頭に残る。足した部分は改行で終わる行だけ (center が書きかけを受け取らない)。
+ */
+async function matchesPushedPrefix(path: string, meta: { sha256: string; size: number }): Promise<boolean> {
+  const f = Bun.file(path);
+  if (f.size <= meta.size) return false;
+  const last = new Uint8Array(await f.slice(f.size - 1).arrayBuffer());
+  if (last[0] !== 0x0a) return false;
+  const h = new Bun.CryptoHasher("sha256");
+  for await (const chunk of f.slice(0, meta.size).stream()) h.update(chunk);
+  return h.digest("hex") === meta.sha256;
+}
+
 const isDir = (p: string) => stat(p).then((x) => x.isDirectory()).catch(() => false);
 
 /** dir の下の全ファイルの相対パスと sha256。無ければ空。subagents は workflows/wf_<id>/ の入れ子を持つ */
@@ -682,7 +697,7 @@ export class TranscriptClient {
     const tmp = `${path}.pull-tmp`;
     try {
       await Bun.write(tmp, this.s3.file(`${prefix}transcript.jsonl`));
-      if ((await sha256(tmp)) !== meta.sha256) {
+      if ((await sha256(tmp)) !== meta.sha256 && !(await matchesPushedPrefix(tmp, meta))) {
         throw new Error(`downloaded transcript for ${sessionId} does not match session.json sha256; not installed`);
       }
       if (replaced) await rename(path, replaced);

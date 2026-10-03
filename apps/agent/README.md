@@ -10,7 +10,7 @@ Observing repodirs, starting sessions, delivering channels, threshold
 warnings — all of that sits on top of this and is out of scope here (#7, #20,
 #23, #83).
 
-## One process, four concerns (ADR 0002)
+## One process, five concerns (ADR 0002)
 
 ccx-agent is a modular monolith: one binary, but its jobs are separate internal
 modules behind an interface, each independently toggled in config.
@@ -21,6 +21,7 @@ modules behind an interface, each independently toggled in config.
 | **carry** | broker → session | off (inert without a broker) | later (#23) |
 | **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
 | **heartbeat** | keep idle sessions' prompt caches warm | on (inert until a session loads the channel) | built (#142) |
+| **livetranscript** | append running sessions' transcripts to the store | on (only with collect, and when the store is the center) | built (#120) |
 
 Persistence is off by default because it is the only *active* verb — it spawns
 and restarts sessions (START), so it is never on by surprise. `collect` and
@@ -29,9 +30,8 @@ same way when built. `internal/concern` is the interface; `internal/collect` and
 `internal/heartbeat` are modules.
 A ccx-agent with every concern off is a valid state.
 
-Live transcript (`livetranscript`) is a fifth concern with no toggle of its own:
-it rides along with collect, whose hook events say which sessions are running,
-and the configuration table below is what turns it on or off.
+Live transcript (`livetranscript`) needs collect: collect's hook events are what
+say which sessions are running. Its toggle is in the configuration table below.
 
 ## The two commands
 

@@ -112,7 +112,7 @@ export class ObjectStore {
 
   /**
    * append の書き込みが済んでから長さが確定するまでの間だけ入る、その key で確定して
-   * いる長さ。これがある間、reader (head / file / GET / readCommitted) はファイルが
+   * いる長さ。これがある間、reader (head / file / snapshot / 一覧) はファイルが
    * 持っている長さではなくこの長さまでしか見ない (追記の途中で走った検索が、
    * 書きかけの行を読まないようにするため)。
    */
@@ -229,7 +229,12 @@ export class ObjectStore {
         this.pending.delete(id);
         // 途中まで書けた object を残すと、reader には次の append まで壊れた長さの
         // object が見えてしまう。確定前に戻した長さに切り戻す
-        if (data.length > 0) await truncate(path, Number(size)).catch(() => {});
+        if (data.length > 0) {
+          await truncate(path, Number(size)).catch((te) => {
+            // 切り戻せなかった。reader には書きかけが見える。黙らない
+            console.error(`ccx-center: could not roll back a failed append to ${bucket}/${key}: ${te}`);
+          });
+        }
         throw e;
       }
       this.pending.delete(id);
@@ -290,18 +295,18 @@ export class ObjectStore {
     return limit === undefined ? Bun.file(path) : Bun.file(path).slice(0, limit);
   }
 
-  /** 本文を確定長まで読んで文字列で返す (DuckDB へ渡す前などに使う) */
-  async readCommitted(bucket: string, key: string): Promise<string> {
-    return this.file(bucket, key).text();
-  }
 
   /** S3 と同じく、無い key の DELETE も成功として返す。無い以外の失敗は投げる */
   async delete(bucket: string, key: string): Promise<void> {
-    try {
-      await unlink(this.objectPath(bucket, key));
-    } catch (e) {
-      if (!isEnoent(e)) throw e;
-    }
+    // append と同じ鎖に並ぶ。append の size 判定と追記の間に消されると、追記が
+    // 空のファイルを作り直して「足した」と答える
+    await this.locked(bucket, key, async () => {
+      try {
+        await unlink(this.objectPath(bucket, key));
+      } catch (e) {
+        if (!isEnoent(e)) throw e;
+      }
+    });
   }
 
   /**

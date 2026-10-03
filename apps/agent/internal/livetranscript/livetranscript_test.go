@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -285,7 +286,7 @@ func TestCoalescesABurstOfHooks(t *testing.T) {
 	}
 	want, _ := os.ReadFile(p)
 	eventually(t, "the burst stored", storedIs(c, string(want)))
-	if _, calls := c.snapshot(); len(calls) > 4 {
+	if _, calls := c.snapshot(); nonEmpty(calls) > 4 {
 		t.Fatalf("%d appends for one burst of 50 hooks; reads were not coalesced", len(calls))
 	}
 }
@@ -304,7 +305,9 @@ func TestStopReadsAgainForLinesWrittenAfterTheHook(t *testing.T) {
 	eventually(t, "the late line picked up without another hook", storedIs(c, "{\"prompt\":1}\n{\"answer\":1}\n"))
 }
 
-func TestOrdinaryHookDoesNotScheduleALateRead(t *testing.T) {
+func TestAnyHookReadsOnceMoreAfterItQuietsDown(t *testing.T) {
+	// Which hook fired is not read (the agent reads two fields of the payload):
+	// every trigger asks for one more read SettleDelay after the last one.
 	c := &fakeCenter{}
 	s := start(t, c, fast)
 	p := transcript(t, "a\n")
@@ -312,10 +315,17 @@ func TestOrdinaryHookDoesNotScheduleALateRead(t *testing.T) {
 	s.Notify(hook("PostToolUse", sid, p))
 	eventually(t, "the first line stored", storedIs(c, "a\n"))
 	appendFile(t, p, "b\n")
-	time.Sleep(4 * fast.SettleDelay)
-	if st, _ := c.snapshot(); string(st) != "a\n" {
-		t.Fatalf("stored %q: a non-terminal hook read again without a trigger", st)
-	}
+	eventually(t, "the line written after the hook picked up by the settled read", storedIs(c, "a\nb\n"))
+}
+
+func TestDoesNotReadWhichHookFired(t *testing.T) {
+	// A payload without hook_event_name is as good a trigger as any.
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "a\n")
+	b, _ := json.Marshal(map[string]any{"session_id": sid, "transcript_path": p})
+	s.Notify(b)
+	eventually(t, "stored", storedIs(c, "a\n"))
 }
 
 func TestStopsASessionWhoseFileShrank(t *testing.T) {
@@ -488,7 +498,223 @@ func TestDoesNotFollowASymlinkNamedLikeTheTranscript(t *testing.T) {
 
 	s.Notify(hook("PostToolUse", sid, real))
 	time.Sleep(4 * fast.SettleDelay)
-	if _, calls := c.snapshot(); len(calls) != 0 {
-		t.Fatalf("Append was called through a symlink: %+v", calls)
+	if _, calls := c.snapshot(); nonEmpty(calls) != 0 {
+		t.Fatalf("bytes were sent through a symlink: %+v", calls)
 	}
+}
+
+func nonEmpty(calls []call) int {
+	n := 0
+	for _, c := range calls {
+		if len(c.data) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func TestAsksTheCenterForItsSizeBeforeSending(t *testing.T) {
+	// An agent that restarted (or never saw this session) must not upload bytes the
+	// center already holds just to learn its size.
+	c := &fakeCenter{stored: []byte("one\ntwo\n")}
+	s := start(t, c, fast)
+	p := transcript(t, "one\ntwo\nthree\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the missing line appended", storedIs(c, "one\ntwo\nthree\n"))
+	_, calls := c.snapshot()
+	sent := 0
+	for _, cl := range calls {
+		sent += len(cl.data)
+	}
+	if sent != len("three\n") {
+		t.Fatalf("sent %d bytes in %d calls, want only the %d new ones", sent, len(calls), len("three\n"))
+	}
+}
+
+// hangingCenter never answers its first n calls (until ctx is done), then behaves.
+type hangingCenter struct {
+	fakeCenter
+	hang int
+}
+
+func (h *hangingCenter) Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error) {
+	h.mu.Lock()
+	hang := h.hang > 0
+	if hang {
+		h.hang--
+	}
+	h.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return h.fakeCenter.Append(ctx, session, offset, data)
+}
+
+func TestAnAppendThatNeverAnswersTimesOutAndIsRetried(t *testing.T) {
+	c := &hangingCenter{hang: 1}
+	opts := fast
+	opts.AppendTimeout = 50 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored after the hung call timed out", storedIs(&c.fakeCenter, "one\n"))
+}
+
+// refusing answers every call with err.
+type refusing struct {
+	mu    sync.Mutex
+	err   error
+	calls int
+}
+
+func (r *refusing) Append(context.Context, string, uint64, []byte) (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	return 0, r.err
+}
+
+func (r *refusing) n() int { r.mu.Lock(); defer r.mu.Unlock(); return r.calls }
+
+func TestAPermanentRefusalStopsTheSessionInsteadOfRetrying(t *testing.T) {
+	c := &refusing{err: &Permanent{Err: errors.New("bad key")}}
+	s := start(t, c, fast)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the session stopped", func() bool { return s.Stopped()[sid] != "" })
+	n := c.n()
+	s.Notify(hook("PostToolUse", sid, p))
+	time.Sleep(10 * fast.RetryDelay)
+	if c.n() != n {
+		t.Fatalf("%d more calls after a permanent refusal", c.n()-n)
+	}
+}
+
+func TestAGlobalRefusalStopsEverySession(t *testing.T) {
+	c := &refusing{err: &Permanent{Err: errors.New("unimplemented"), Global: true}}
+	s := start(t, c, fast)
+	p := transcript(t, "one\n")
+	other := "1d5ad3c1-5b6e-4c1f-9a3e-1f2b3c4d5e6f"
+	p2 := filepath.Join(filepath.Dir(p), other+".jsonl")
+	if err := os.WriteFile(p2, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "halted", func() bool { return s.Halted() != "" })
+	n := c.n()
+	s.Notify(hook("PostToolUse", other, p2))
+	time.Sleep(10 * fast.RetryDelay)
+	if c.n() != n {
+		t.Fatalf("another session called the center %d time(s) after a global refusal", c.n()-n)
+	}
+}
+
+func TestTransientFailuresBackOff(t *testing.T) {
+	c := &refusing{err: errors.New("down")}
+	opts := fast
+	opts.RetryDelay = 10 * time.Millisecond
+	opts.MaxRetryDelay = time.Second
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	time.Sleep(400 * time.Millisecond)
+	// without backoff: 400ms / 10ms = 40 calls; doubling from 10ms: about 6
+	if n := c.n(); n > 10 || n < 2 {
+		t.Fatalf("%d calls in 400ms with a 10ms first retry", n)
+	}
+}
+
+func TestARefusalAtTheSameSizeDoesNotSpin(t *testing.T) {
+	c := &refusing{err: &Mismatch{Size: 0}}
+	opts := fast
+	opts.RetryDelay = 20 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	time.Sleep(200 * time.Millisecond)
+	if n := c.n(); n > 20 {
+		t.Fatalf("%d calls in 200ms: a refusal at the offset sent from loops without delay", n)
+	}
+}
+
+func TestFollowsTheSessionToANewPath(t *testing.T) {
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "one\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored", storedIs(c, "one\n"))
+
+	// resumed elsewhere: the same session's file under another project directory
+	moved := filepath.Join(filepath.Dir(filepath.Dir(p)), "-root-elsewhere", sid+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(moved), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(p, moved); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, moved, "two\n")
+	s.Notify(hook("PostToolUse", sid, moved))
+	eventually(t, "the new path read", storedIs(c, "one\ntwo\n"))
+}
+
+func TestForgetsAnIdleSessionAndPicksItUpAgain(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.IdleDrop = 100 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored", storedIs(c, "one\n"))
+
+	eventually(t, "the idle session forgotten", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.sessions) == 0
+	})
+	appendFile(t, p, "two\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "picked up again from the center's size", storedIs(c, "one\ntwo\n"))
+}
+
+func TestASettledReadWaitsForALineStillBeingWritten(t *testing.T) {
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "one\n{\"half\":")
+
+	s.Notify(hook("Stop", sid, p))
+	eventually(t, "the complete line stored", storedIs(c, "one\n"))
+	time.Sleep(2 * fast.SettleDelay)
+	// the rest of the line lands later, with no hook after it
+	appendFile(t, p, "1}\n")
+	eventually(t, "the finished line stored by a re-armed settled read", storedIs(c, "one\n{\"half\":1}\n"))
+}
+
+func TestAFIFOInTheTranscriptsPlaceDoesNotHang(t *testing.T) {
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	s.Notify(hook("PostToolUse", sid, p))
+	time.Sleep(4 * fast.SettleDelay)
+	// The loop must still be serving: replace the FIFO with a file and it is read.
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored once the FIFO is a file again", storedIs(c, "one\n"))
 }
