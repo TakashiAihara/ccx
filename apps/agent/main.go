@@ -33,6 +33,7 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/livetranscript"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
@@ -112,6 +113,13 @@ func cmdServe() int {
 		}
 		concerns = append(concerns, c)
 		srv.Collect = c
+		// The live transcript (#120, docs/design/live-transcript.md) appends each
+		// running session's transcript.jsonl to the store through the center.
+		// collect hands it the hook payloads after the ack, so the hook's own path
+		// is unchanged.
+		if lt := startLiveTranscript(cfg, c, logger); lt != nil {
+			concerns = append(concerns, lt)
+		}
 	}
 	if cfg.Heartbeat.Err != nil {
 		logger("heartbeat off: %v", cfg.Heartbeat.Err)
@@ -135,6 +143,34 @@ func cmdServe() int {
 		return 1
 	}
 	return 0
+}
+
+// startLiveTranscript builds the live transcript concern (#120,
+// docs/design/live-transcript.md): it appends each running session's
+// transcript.jsonl to the store through the center, so the center holds the
+// conversation while it runs and a session that dies leaves what it had.
+//
+// It needs collect — the hook events are what say which sessions are running —
+// and the store has to be the center's own object API, because S3 has no append.
+// Returns nil, having said why, when either is missing.
+func startLiveTranscript(cfg config.Config, c *collect.Collect, logger func(string, ...any)) *livetranscript.Sync {
+	switch {
+	case !cfg.Transcript.Live:
+		return nil
+	case cfg.HubURL == "":
+		return nil
+	case !cfg.Transcript.ToCenter:
+		logger("live transcript off: the transcript store is not the center's object API (an S3 elsewhere, or a hub that is not http), so a running session's transcript cannot be appended; it arrives with `ccx transcript push` when the session ends")
+		return nil
+	}
+	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
+	lt := livetranscript.New(
+		livetranscript.NewClient(cfg.HubURL, cfg.HubToken, origin, cfg.Transcript.Bucket, cfg.Transcript.Prefix),
+		livetranscript.Options{},
+		logger,
+	)
+	c.Observe(lt.Notify)
+	return lt
 }
 
 // cmdChannel is the per-session MCP channel server Claude Code spawns over

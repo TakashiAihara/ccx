@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+import "ccx/v1/ingest.proto";
+
+// 走っている session の transcript を、保存先 (center の object API) の
+// transcript.jsonl に足していく口 (#120、docs/design/live-transcript.md)。
+//
+// Ingest とは契約が違うので別の service にしてある。Ingest は「spool のバッチが
+// 全件耐久化されたか」を返し、こちらは「offset が今の size と一致したときだけ足す」。
+// 返すもの (件数 / size) も、失敗の意味も違う。
+service TranscriptService {
+  // offset が object の今の size と一致したときだけ data を末尾に足し、足した後の
+  // size を返す。一致しなければ何も書かず FAILED_PRECONDITION で終わり、error detail
+  // の AppendResponse に今の size を入れる。送り手はその size から送り直す。
+  //
+  // この 1 つの規則が、重複 (送り済みの bytes の再送は offset が size より小さい) と
+  // 欠け (offset が size より大きい) の両方を書かせない。送り手が offset を手元に
+  // 持たなくてよい (再起動したら 0 から送り、断られた size から続ける) のもこのため。
+  rpc Append(AppendRequest) returns (AppendResponse);
+}
+
+message AppendRequest {
+  // 誰の transcript か。Ingest の Origin と同じく、送り手 (ccx-agent) の環境から埋まる。
+  // 保存先の key の machine= / user= になる。
+  Origin origin = 1;
+
+  // Claude Code の session id。保存先の key の session_id= になる。
+  string session_id = 2;
+
+  // 保存先の transcript の、この data を置く位置 (byte)。
+  uint64 offset = 3;
+
+  // transcript の生の bytes。改行で終わる行だけを入れる (書きかけの行は次に回す)。
+  // center は中身を解釈しない。
+  bytes data = 4;
+
+  // 保存先。ccx transcript が使うのと同じ bucket / prefix (transcript-store.md)。
+  string bucket = 5;
+  string prefix = 6;
+
+  // 送り手のファイルで offset の直前にある bytes (末尾の数 KiB)。center は object の末尾が
+  // これと一致するときだけ足す。一致しなければ何も書かず DATA_LOSS で断る。
+  //
+  // offset と size が一致するだけでは、object が送り手のファイルの先頭である保証は無い
+  // (同じ session の別のマシンの写しを pull で上書きした)。そのまま足すと 2 つの写しを
+  // 継ぎ合わせた、どこにも無い transcript ができる。末尾の数 KiB を比べるのは見当で、
+  // 証明ではない: 同じ session の 2 つの写しは分かれた所から後のレコード (uuid / 時刻) が
+  // 違うので、ふつうは末尾に差が出る。分かれた後の最後の数 KiB がたまたま同じ写しと、
+  // 末尾より前だけを書き換えた同じ長さのファイルは見分けない。空なら検めない (offset 0 と、size を
+  // 聞くだけの空の Append)。data が空でも検めるので、送り手は空の Append で「object が
+  // まだ自分のファイルの先頭か」を確かめられる。
+  //
+  // この field を知らない center は黙って捨てる (検めずに足す)。center を先に上げる。
+  bytes expected_tail = 7;
+}
+
+message AppendResponse {
+  // 足した後の (断ったときは今の) object の size。
+  uint64 size = 1;
+}

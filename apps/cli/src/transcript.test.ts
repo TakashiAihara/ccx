@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { openDb } from "@ccx/hub/src/db/open.ts";
 import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
+import { transcriptKey } from "@ccx/hub/src/transcript.ts";
 
 import {
   AmbiguousSessionId,
@@ -319,6 +320,89 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(metaKey, JSON.stringify({ ...meta, workflows: [{ name: "../../escape.jsonl", sha256: "x" }] }));
     await expect(B.pull(SID, homeB)).rejects.toThrow(/refusing to install/);
     expect(await Bun.file(outside).text()).toBe("must stay");
+    expect(await Bun.file(path).exists()).toBe(false);
+  });
+
+  test("the center's live append writes the object push and pull use (#120)", async () => {
+    // center (transcript.ts) と CLI (keyPrefix) は同じ key を別々に組む。ずれると live 同期が
+    // 誰も読まない object を育てる
+    expect(transcriptKey("p/", "host-a", "alice", SID)).toBe(`${A.keyPrefix(SID)}transcript.jsonl`);
+  });
+
+  test("pull takes a copy that grew by live appends after the push: what the push hashed is its prefix (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    // ccx-agent の live 同期が push の後に足した行 (center が object の末尾に足す)
+    const grown = transcriptBody + line({ type: "assistant", message: "LIVE-APPENDED" });
+    await Bun.write(storedA(), grown);
+
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(await Bun.file(r.path!).text()).toBe(grown);
+  });
+
+  test("pull over a local copy: older prefix of the grown store copy is replaced, the grown copy itself is already here (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    // store は live 同期で伸びた。手元は push の時点の写し (= 伸びた写しの先頭)
+    const grown = transcriptBody + line({ type: "assistant", message: "LIVE-APPENDED" });
+    await Bun.write(storedA(), grown);
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    // 古い先頭でも退避は残す (比べてから置き換えるまでに手元へ足された分を失わない)
+    expect(await Bun.file(r.replaced!).text()).toBe(transcriptBody);
+    expect(await Bun.file(path).text()).toBe(grown);
+
+    // 手元が伸びた写しと同じなら、何もしない (別内容とは言わない)
+    expect((await B.pull(SID, homeB)).status).toBe("already-here");
+
+    // 手元が store の先頭でない (手元だけの続きがある) なら、従来どおり force なしでは止まる
+    await Bun.write(path, `${transcriptBody}${line({ local: "only" })}`);
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
+  });
+
+  test("push puts the object right after the local file was cut back, though session.json already matches (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    // live 同期が伸ばした object。手元はそれより短い (session.json の写し) のまま
+    await Bun.write(storedA(), transcriptBody + line({ live: "B" }));
+    const r = await A.push(t);
+    expect(r.status).not.toBe("unchanged");
+    expect(await Bun.file(storedA()).text()).toBe(transcriptBody);
+  });
+
+  test("pull with nothing new does not download the transcript; an empty local file is a prefix (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    // object を消しても、手元が session.json と同じで object を読まずに済むなら already-here
+    await rm(storedA());
+    expect((await B.pull(SID, homeB)).status).toBe("already-here");
+    await Bun.write(storedA(), transcriptBody);
+
+    // 空の手元ファイルはどの写しの先頭でもある: force なしで入る
+    await Bun.write(path, "");
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(await Bun.file(path).text()).toBe(transcriptBody);
+  });
+
+  test("pull still refuses a grown copy whose pushed part changed, or that ends mid-line (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    await Bun.write(storedA(), transcriptBody.replace("PORTABILITY-TEST-1", "PORTABILITY-TEST-X") + line({ more: 1 }));
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/does not match/);
+    expect(await Bun.file(path).exists()).toBe(false);
+
+    await Bun.write(storedA(), `${transcriptBody}{"half":`);
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/does not match/);
     expect(await Bun.file(path).exists()).toBe(false);
   });
 

@@ -28,6 +28,7 @@ type Collect struct {
 	spool      *Spool
 	loop       *forwardLoop
 	log        func(string, ...any)
+	observer   func([]byte)
 }
 
 // New builds the collect concern from resolved config. The center may be unset
@@ -79,6 +80,18 @@ func (s *Collect) Status() (Status, error) {
 
 // Name identifies the concern in logs and config (ADR 0002).
 func (s *Collect) Name() string { return "collect" }
+
+// Observe registers the one function that sees each spooled payload after it is
+// durable, so a session's transcript can be followed while the session runs
+// (#120). Set it before Run: it is called from the per-connection handler, so
+// changing it later would race with an event already on its way.
+//
+// fn runs *after* the ack, never before it: a hook that already waits a second on
+// a busy disk (#194) must not also wait for whatever the observer does with the
+// bytes. Only one observer is kept — the live transcript is the one that needs it.
+func (s *Collect) Observe(fn func([]byte)) {
+	s.observer = fn
+}
 
 // Run drains anything hooks left in incoming/ (from while ccx-agent was down), then
 // serves the socket and runs the forward loop until ctx is cancelled. It blocks.
@@ -237,5 +250,11 @@ func (s *Collect) handle(conn net.Conn) {
 	}
 	if s.loop != nil {
 		s.loop.wake()
+	}
+	// The ack is out, so the hook is on its way whatever this does. The event is
+	// durable and already on its path to the center, so this adds nothing to the
+	// delivery the forward loop guarantees.
+	if s.observer != nil {
+		s.observer(payload)
 	}
 }
