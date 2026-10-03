@@ -18,6 +18,13 @@ import (
 // directory is roughly chronological — that is the order ccx-agent drains them in.
 // UUIDv7 also makes the name collision-free across concurrent hooks without a
 // pid or a lock.
+//
+// It writes with durable=false, so no fsync at all. fsync can block for tens of
+// seconds on a disk in IO wait, and the blocked thread sits in D state where no
+// timeout can return the process — the hook would miss hookOverallBudget and hang
+// the session it is supposed to stay out of (#204). The price is that a power
+// loss right after the write can lose this one event; a hung session is the
+// worse failure.
 func writeIncoming(incomingDir string, payload []byte) error {
 	if err := os.MkdirAll(incomingDir, 0o700); err != nil {
 		return err
@@ -26,7 +33,7 @@ func writeIncoming(incomingDir string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(incomingDir, id.String()+".raw"), payload)
+	return atomicWrite(filepath.Join(incomingDir, id.String()+".raw"), payload, false)
 }
 
 func newUUIDv7() string {

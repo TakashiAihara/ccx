@@ -186,7 +186,7 @@ func TestDrainIncoming_MovesRawIntoQueueInOrder(t *testing.T) {
 // are .tmp-*), so Oldest never reads a partial.
 func TestAtomicWrite_LeavesNoPartialUnderRealName(t *testing.T) {
 	dir := t.TempDir()
-	if err := atomicWrite(filepath.Join(dir, "0000.pb"), []byte("complete")); err != nil {
+	if err := atomicWrite(filepath.Join(dir, "0000.pb"), []byte("complete"), true); err != nil {
 		t.Fatal(err)
 	}
 	ents, _ := os.ReadDir(dir)

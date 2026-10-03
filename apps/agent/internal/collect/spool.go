@@ -138,7 +138,7 @@ func (s *Spool) Append(payload []byte) (*ccxv1.Event, error) {
 		return nil, err
 	}
 
-	if err := atomicWrite(filepath.Join(s.dir, s.name(s.seq)), b); err != nil {
+	if err := atomicWrite(filepath.Join(s.dir, s.name(s.seq)), b, true); err != nil {
 		s.seq--
 		return nil, err
 	}
@@ -276,10 +276,16 @@ func (s *Spool) maxSeqOnDisk() (uint64, error) {
 	return seq, nil
 }
 
-// atomicWrite writes b to path via a temp file + rename, fsyncing the file and
-// its directory so a crash cannot leave a partially written event under a real
-// name. The temp lives in the same dir so the rename stays on one filesystem.
-func atomicWrite(path string, b []byte) error {
+// atomicWrite writes b to path via a temp file + rename. The rename is what makes
+// the write atomic: a crash mid-write leaves a .tmp, never a half event under a
+// real name. The temp lives in the same dir so the rename stays on one filesystem.
+//
+// durable adds the fsync pair (the temp file, then the directory) on top of that.
+// Atomicity holds either way; fsync is what survives a power loss or a kernel
+// panic, so only callers whose file is a durability promise pay for it. Callers
+// that must stay interruptible pass false — fsync is a blocking syscall, so a
+// thread waiting on a stalled disk cannot be rescued by a timeout.
+func atomicWrite(path string, b []byte, durable bool) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
@@ -294,10 +300,12 @@ func atomicWrite(path string, b []byte) error {
 		cleanup()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
+	if durable {
+		if err := fsync(tmp); err != nil {
+			_ = tmp.Close()
+			cleanup()
+			return err
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
@@ -307,8 +315,15 @@ func atomicWrite(path string, b []byte) error {
 		cleanup()
 		return err
 	}
+	if !durable {
+		return nil
+	}
 	return fsyncDir(dir)
 }
+
+// fsync is a package variable so a test can count the syncs and assert that the
+// hot paths do or do not make them (#204) without asserting on disk behaviour.
+var fsync = func(f *os.File) error { return f.Sync() }
 
 func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
@@ -316,5 +331,5 @@ func fsyncDir(dir string) error {
 		return err
 	}
 	defer d.Close()
-	return d.Sync()
+	return fsync(d)
 }

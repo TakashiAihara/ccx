@@ -17,10 +17,9 @@ const (
 	hookExchangeTimeout = 1 * time.Second
 	// hookOverallBudget — the hard backstop on the ENTIRE hook, socket path and
 	// fallback write together. A hook must never block the session (#18,
-	// scope.md); if even the fallback disk write stalls, the hook abandons it and
-	// returns. It is a process about to exit, so an abandoned write goroutine
-	// dies with it. Must exceed dial+exchange so the normal fallback is never cut
-	// off.
+	// scope.md), so even if some syscall wedges in a way the per-step deadlines
+	// miss, the hook gives up on it and returns. Must exceed dial+exchange so the
+	// normal fallback is never cut off.
 	hookOverallBudget = 3 * time.Second
 )
 
@@ -51,8 +50,13 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 	// Do the delivery under a hard overall budget. Both the socket exchange and
 	// the fallback disk write are bounded individually, but this is the backstop
 	// that guarantees the hook returns even if some syscall wedges in a way the
-	// per-step deadlines miss (a hung fs on the fallback write, say). We are about
-	// to exit, so abandoning the goroutine is free.
+	// per-step deadlines miss.
+	//
+	// Giving up on the goroutine is not free if it sits in a D-state syscall: the
+	// process cannot exit until that returns. fsync on a disk in IO wait did
+	// exactly that for tens of seconds (#194), so the fallback write skips fsync
+	// (#204). Its other syscalls (mkdir, create, rename) can still stall on such a
+	// disk; this budget does not cover that case.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
