@@ -199,3 +199,30 @@ describe("ObjectStore.append", () => {
     expect(await store.append("ccx", KEY, 8n, enc("three\n"))).toEqual({ ok: true, size: 14n });
   });
 });
+
+describe("ObjectStore.append の費用", () => {
+  test("size の判定に head を使わない (head は object 全体の md5 を読むので、追記のたびに全体を読むことになる)", async () => {
+    class NoHead extends ObjectStore {
+      override async head(): Promise<never> {
+        throw new Error("append read the whole object through head()");
+      }
+    }
+    const store = new NoHead(root);
+    expect(await store.append("ccx", KEY, 0n, enc("one\n"))).toEqual({ ok: true, size: 4n });
+    expect(await store.append("ccx", KEY, 0n, enc("one\n"))).toEqual({ ok: false, size: 4n });
+    expect(await store.append("ccx", KEY, 4n, enc("two\n"))).toEqual({ ok: true, size: 8n });
+  });
+
+  test("一覧の size も、追記の途中は確定した長さまで", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const pending = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+    const listed = (await store.listKeys("ccx", "transcripts/")).find((o) => o.key === KEY);
+    expect(listed?.size).toBe(4);
+    release();
+    await pending;
+  });
+});

@@ -66,6 +66,10 @@ type Options struct {
 	// MaxChunk is the most bytes one append carries. A single line longer than
 	// this goes alone rather than being cut in two.
 	MaxChunk int
+	// MaxLine is the longest single line read whole. A transcript line is one JSON
+	// record; a "line" past this is a file that is not a transcript, and the
+	// session stops rather than holding it in memory or re-reading it forever.
+	MaxLine int
 }
 
 // The values in use. MinInterval 2s suits a session busier than a person types;
@@ -76,6 +80,7 @@ const (
 	defaultSettleDelay = time.Second
 	defaultRetryDelay  = 5 * time.Second
 	defaultMaxChunk    = 4 << 20
+	defaultMaxLine     = 64 << 20
 )
 
 func (o Options) withDefaults() Options {
@@ -91,12 +96,18 @@ func (o Options) withDefaults() Options {
 	if o.MaxChunk == 0 {
 		o.MaxChunk = defaultMaxChunk
 	}
+	if o.MaxLine == 0 {
+		o.MaxLine = defaultMaxLine
+	}
 	return o
 }
 
 // errShrank marks a local transcript shorter than the offset already appended.
 // The session stops for good on it (see (*Sync).read).
 var errShrank = errors.New("the local transcript is shorter than what was appended")
+
+// errLineTooLong marks a line past MaxLine with no newline. The session stops on it.
+var errLineTooLong = errors.New("a line in the local transcript is longer than the longest line read whole")
 
 // Sync is the concern: hook payloads in, appends out. One goroutine per session
 // with something to read, so a center that stops answering holds up nobody else.
@@ -332,8 +343,15 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 		// during it leaves pending set, so the next read is scheduled after
 		// MinInterval: that is the trailing read that keeps the last trigger of a
 		// burst from being dropped.
+		// The settled read and the owed retry are served by it too. Left set, a
+		// deadline in the past stays due forever and the loop re-reads the file
+		// without pause.
 		st.mu.Lock()
 		st.pending = false
+		if !st.settle.IsZero() && !st.settle.After(time.Now()) {
+			st.settle = time.Time{}
+		}
+		st.retryAt = time.Time{}
 		st.mu.Unlock()
 
 		if err := s.read(ctx, st); err != nil {
@@ -342,11 +360,7 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 			st.mu.Lock()
 			st.retryAt = time.Now().Add(s.opts.RetryDelay)
 			st.mu.Unlock()
-			continue
 		}
-		st.mu.Lock()
-		st.retryAt = time.Time{}
-		st.mu.Unlock()
 	}
 }
 
@@ -379,14 +393,17 @@ func (s *Sync) read(ctx context.Context, st *session) error {
 		path, offset := st.path, st.offset
 		st.mu.Unlock()
 
-		chunk, err := nextChunk(path, offset, s.opts.MaxChunk)
+		chunk, err := nextChunk(path, offset, s.opts.MaxChunk, s.opts.MaxLine)
 		switch {
-		case errors.Is(err, errShrank):
+		case errors.Is(err, errShrank), errors.Is(err, errLineTooLong):
 			// The design assumes Claude Code only appends. A local file shorter
 			// than what was appended means something else rewrote it (a tool that
 			// cuts a session to make it resumable). Repairing here would race the
 			// push that replaces the object with the local file; so stop instead.
 			reason := fmt.Sprintf("the local transcript is shorter than the %d bytes already appended", offset)
+			if errors.Is(err, errLineTooLong) {
+				reason = fmt.Sprintf("the line at byte %d is longer than %d bytes", offset, s.opts.MaxLine)
+			}
 			st.mu.Lock()
 			if st.stopped == "" {
 				st.stopped = reason
@@ -447,16 +464,11 @@ func plausiblePath(path, id string) bool {
 	return filepath.Base(filepath.Dir(filepath.Dir(path))) == "projects"
 }
 
-// longLineCap bounds how far past the chunk cap one over-long line is read. A
-// transcript line is a JSON record; anything past this is a file that is not a
-// transcript, and it is left for the next read rather than held in memory.
-const longLineCap = 64 << 20
-
 // nextChunk returns the bytes to append next: from offset, whole lines only, at
 // most max bytes unless one line alone is longer (it goes alone). nil means there
 // is nothing to send — the file holds nothing past the offset, or what it holds
 // past the offset is a line still being written.
-func nextChunk(path string, offset uint64, max int) ([]byte, error) {
+func nextChunk(path string, offset uint64, max, maxLine int) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		// No transcript (the session's directory was cleaned up). Nothing to read
@@ -494,14 +506,14 @@ func nextChunk(path string, offset uint64, max int) ([]byte, error) {
 	// A whole cap with no newline in it: one line longer than the cap. It goes
 	// whole, because cutting it would put a fragment in the store as if it were a
 	// line, and no later append can complete it.
-	return longLine(f, offset, buf)
+	return longLine(f, offset, buf, maxLine)
 }
 
 // longLine finishes the line the first read did not reach, widening the buffer a
-// step at a time, up to longLineCap.
-func longLine(f *os.File, offset uint64, first []byte) ([]byte, error) {
+// step at a time, up to maxLine.
+func longLine(f *os.File, offset uint64, first []byte, maxLine int) ([]byte, error) {
 	buf, have := first, len(first)
-	for have < longLineCap {
+	for have <= maxLine {
 		if have == cap(buf) {
 			buf = grow(buf)
 		}
@@ -513,6 +525,9 @@ func longLine(f *os.File, offset uint64, first []byte) ([]byte, error) {
 			if end := bytes.IndexByte(buf[:have], '\n'); end >= 0 {
 				return buf[:end+1], nil
 			}
+			if have > maxLine {
+				return nil, errLineTooLong
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -521,7 +536,7 @@ func longLine(f *os.File, offset uint64, first []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return nil, nil
+	return nil, errLineTooLong
 }
 
 // grow widens the buffer for the next step of an over-long line, keeping what it

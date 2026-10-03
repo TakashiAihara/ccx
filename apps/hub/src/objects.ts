@@ -154,8 +154,8 @@ export class ObjectStore {
    * `.staging/` で、bucket 名は `.` で始められないので一覧に混ざらない (object の隣に
    * `.tmp` を置く形だと、`.tmp` で終わる key を一覧から隠すことになる)。
    *
-   * 同じ key の append と並べばける (append の offset 判定と、put の rename が
-   * 期間中に重なると、append が消えるか壊れる)。
+   * 同じ key の append とは 1 本に並ぶ (append の offset 判定と put の rename が
+   * 重なると、append した bytes が消えるか壊れる)。
    */
   async put(bucket: string, key: string, body: ReadableStream<Uint8Array> | Uint8Array): Promise<string> {
     return this.locked(bucket, key, () => this.write(bucket, key, body));
@@ -207,11 +207,16 @@ export class ObjectStore {
   ): Promise<{ ok: boolean; size: bigint }> {
     // 同じ key の put と append を 1 本にする。判定も書き込みもこの鎖の中
     return this.locked(bucket, key, async () => {
-      const size = BigInt((await this.head(bucket, key))?.size ?? 0);
-      if (offset !== size) return { ok: false, size };
-
       const id = lockKeyOf(bucket, key);
       const path = this.objectPath(bucket, key);
+      // size は stat で取る。head は ETag のために object 全体の md5 を読むので、使うと
+      // 追記のたびに transcript 全体を読み直すことになる
+      const size = BigInt(await stat(path).then((s) => (s.isFile() ? s.size : 0), (e) => {
+        if (isEnoent(e)) return 0;
+        throw e;
+      }));
+      if (offset !== size) return { ok: false, size };
+
       // ここから確定までは、reader に append 前の長さしか見せない
       this.pending.set(id, Number(size));
       try {
@@ -316,7 +321,9 @@ export class ObjectStore {
           // readdir と stat の間に消えたものは一覧に出さない (消えた以外は投げる)
           try {
             const s = await stat(join(base, key));
-            out.push({ key, size: s.size, mtime: s.mtime });
+            // 追記の途中なら確定した長さ (head / GET と同じ。一覧の size で範囲読みする client が書きかけを読まないように)
+            const limit = this.committedLimit(bucket, key);
+            out.push({ key, size: limit === undefined ? s.size : Math.min(s.size, limit), mtime: s.mtime });
           } catch (err) {
             if (!isEnoent(err)) throw err;
           }

@@ -416,3 +416,36 @@ func (p *perSession) stored(session string) string {
 	return string(s)
 }
 
+func TestTheLateReadAfterStopHappensOnce(t *testing.T) {
+	// The settled read is one read. After it, the session waits for a trigger like
+	// any other: a file that grows with no hook is not read (a loop that keeps
+	// re-reading would pick it up, and spin on the file while doing so).
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "{\"prompt\":1}\n")
+
+	s.Notify(hook("Stop", sid, p))
+	time.Sleep(3 * fast.SettleDelay)
+	eventually(t, "the first line stored", storedIs(c, "{\"prompt\":1}\n"))
+
+	appendFile(t, p, "{\"later\":1}\n")
+	time.Sleep(4 * fast.SettleDelay)
+	if st, _ := c.snapshot(); string(st) != "{\"prompt\":1}\n" {
+		t.Fatalf("stored %q: the session kept reading after its settled read", st)
+	}
+}
+
+func TestStopsASessionWhoseLineNeverEnds(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.MaxChunk = 16
+	opts.MaxLine = 64
+	s := start(t, c, opts)
+	p := transcript(t, "ok\n"+strings.Repeat("x", 200))
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the session stopped with a reason", func() bool { return s.Stopped()[sid] != "" })
+	if st, _ := c.snapshot(); string(st) != "ok\n" {
+		t.Fatalf("stored %q, want only the complete line before the over-long one", st)
+	}
+}

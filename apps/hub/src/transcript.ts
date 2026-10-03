@@ -8,7 +8,7 @@ import { AppendResponseSchema, TranscriptService } from "@ccx/proto/ccx/v1/trans
  *
  * 走っている session の transcript.jsonl を作っている ccx-agent が、offset を携えて
  * bytes を足してくる。center が見るのは「その key の今の size と offset が一致するか」
- * だけなので、本文の中身は中心には読まない。足す先は `ccx transcript` が pull / prune /
+ * だけなので、本文の中身は読まない。足す先は `ccx transcript` が pull / prune /
  * search で読んでいるのと同じ object なので、読む側が見えるものは変わらない。
  */
 
