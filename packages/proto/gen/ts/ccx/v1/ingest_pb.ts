@@ -220,6 +220,12 @@ export const ProducerSchema: GenEnum<Producer> = /*@__PURE__*/
  *      間違えれば、そのマシンのデータは間違った形のまま入り、後から直せない。center
  *      でパースするなら生バイトが常に残るので、パーサの誤りは後から読み直して直せる。
  *
+ * 例外は宛先の 2 フィールドだけ (#120、docs/design/live-transcript.md)。ccx-agent は
+ * payload の session_id と transcript_path を読み、その session の transcript の増分を
+ * TranscriptService に送る。読むのは「どのファイルの続きか」であって、イベントの中身
+ * ではない。この 2 つでも分岐はせず、event はここを通って今までどおり生バイトのまま
+ * 届く。2 フィールドが読めない payload は、増分を送るきっかけにならないだけ。
+ *
  * @generated from service ccx.v1.IngestService
  */
 export const IngestService: GenService<{

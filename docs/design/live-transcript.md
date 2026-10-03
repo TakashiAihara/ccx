@@ -91,15 +91,17 @@ the last completed append, so a DuckDB query running during an append sees whole
 The design assumes Claude Code only appends to a transcript. If the local file becomes shorter than
 the center's copy (a truncation, e.g. by a tool that cuts a session to make it resumable), the agent
 stops appending for that session and says so in its log and status. It does not try to repair: the
-next `push` replaces the object with the local file. A rewrite that keeps the same length is not
+next `push` replaces the object with the local file. A restarted agent learns the center's size,
+finds the file shorter than it, and stops the session again. A rewrite that keeps the same length is not
 detected here; `push` compares the sha256 and catches it at the end.
 
 ## Only when the store is the center
 
 S3 has no append. Live sync runs only when the transcript store is the center's own object API —
 the same condition under which the store uses the hub's token today (endpoint unset, or equal to the
-hub URL). With the store elsewhere (MinIO, R2, AWS), the agent does not start live sync and its
-status says why; `push` works as before.
+hub URL). With the store elsewhere (MinIO, R2, AWS), the agent does not start live sync and says
+why in its log; `push` works as before. Live sync can also be turned off (`CCX_TRANSCRIPT_LIVE` /
+`[transcript] live`, default on); it has no git config key.
 
 ## What `push` still does
 
