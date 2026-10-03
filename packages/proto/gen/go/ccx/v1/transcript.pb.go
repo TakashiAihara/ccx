@@ -34,8 +34,16 @@ type AppendRequest struct {
 	// center は中身を解釈しない。
 	Data []byte `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
 	// 保存先。ccx transcript が使うのと同じ bucket / prefix (transcript-store.md)。
-	Bucket        string `protobuf:"bytes,5,opt,name=bucket,proto3" json:"bucket,omitempty"`
-	Prefix        string `protobuf:"bytes,6,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Bucket string `protobuf:"bytes,5,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	Prefix string `protobuf:"bytes,6,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// 送り手のファイルで offset の直前にある bytes (末尾の数 KiB)。center は object の末尾が
+	// これと一致するときだけ足す。一致しなければ何も書かず DATA_LOSS で断る。
+	//
+	// offset と size が一致するだけでは、object が送り手のファイルの先頭である保証は無い
+	// (別のマシンの写しを pull で上書きした / 手元を書き換えた)。そのまま足すと 2 つの写しを
+	// 継ぎ合わせた、どこにも無い transcript ができる。空なら検めない (offset 0 と、size を
+	// 聞くだけの空の Append)。
+	ExpectedTail  []byte `protobuf:"bytes,7,opt,name=expected_tail,json=expectedTail,proto3" json:"expected_tail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -112,6 +120,13 @@ func (x *AppendRequest) GetPrefix() string {
 	return ""
 }
 
+func (x *AppendRequest) GetExpectedTail() []byte {
+	if x != nil {
+		return x.ExpectedTail
+	}
+	return nil
+}
+
 type AppendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 足した後の (断ったときは今の) object の size。
@@ -161,7 +176,7 @@ var File_ccx_v1_transcript_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_transcript_proto_rawDesc = "" +
 	"\n" +
-	"\x17ccx/v1/transcript.proto\x12\x06ccx.v1\x1a\x13ccx/v1/ingest.proto\"\xb2\x01\n" +
+	"\x17ccx/v1/transcript.proto\x12\x06ccx.v1\x1a\x13ccx/v1/ingest.proto\"\xd7\x01\n" +
 	"\rAppendRequest\x12&\n" +
 	"\x06origin\x18\x01 \x01(\v2\x0e.ccx.v1.OriginR\x06origin\x12\x1d\n" +
 	"\n" +
@@ -169,7 +184,8 @@ const file_ccx_v1_transcript_proto_rawDesc = "" +
 	"\x06offset\x18\x03 \x01(\x04R\x06offset\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12\x16\n" +
 	"\x06bucket\x18\x05 \x01(\tR\x06bucket\x12\x16\n" +
-	"\x06prefix\x18\x06 \x01(\tR\x06prefix\"$\n" +
+	"\x06prefix\x18\x06 \x01(\tR\x06prefix\x12#\n" +
+	"\rexpected_tail\x18\a \x01(\fR\fexpectedTail\"$\n" +
 	"\x0eAppendResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x04R\x04size2L\n" +
 	"\x11TranscriptService\x127\n" +

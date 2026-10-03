@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, type Stats } from "node:fs";
 import { appendFile, mkdir, readdir, rename, rm, stat, truncate, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -85,6 +85,8 @@ const lockKeyOf = (bucket: string, key: string) => `${bucket}/${key}`;
 
 /** append の 1 回分の設定。beforeCommit はテスト専用の継ぎ目。 */
 export type AppendOptions = {
+  /** 送り手のファイルで offset の直前にある bytes。object の末尾と違えば足さない */
+  expectedTail?: Uint8Array;
   /**
    * bytes を書いてから新しい長さを確定するまでの間で待たせる。確定前の長さを
    * reader に見せられることを、外から確かめるための口。
@@ -117,6 +119,16 @@ export class ObjectStore {
    * 書きかけの行を読まないようにするため)。
    */
   private pending = new Map<string, number>();
+
+  /**
+   * key ごとに、追記の開始と確定 (失敗を含む) で 1 ずつ進む番号。head が stat の前後で
+   * 比べて、間に追記の境目が挟まったかを知る
+   */
+  private generation = new Map<string, number>();
+
+  private bump(id: string): void {
+    this.generation.set(id, (this.generation.get(id) ?? 0) + 1);
+  }
 
   private objectPath(bucket: string, key: string): string {
     return join(this.root, bucket, key);
@@ -158,9 +170,13 @@ export class ObjectStore {
    * 重なると、append した bytes が消えるか壊れる)。
    */
   async put(bucket: string, key: string, body: ReadableStream<Uint8Array> | Uint8Array): Promise<string> {
-    return this.locked(bucket, key, () => this.write(bucket, key, body));
+    return this.write(bucket, key, body);
   }
 
+  /**
+   * 本文は staging に受け取り、置き換え (rename) のときだけ key の鎖に並ぶ。本文を受け
+   * 取る間ずっと並んでいると、遅い (止まった) upload がその key の追記と DELETE を止める
+   */
   private async write(
     bucket: string,
     key: string,
@@ -181,7 +197,7 @@ export class ObjectStore {
         if (!w.write(chunk)) await new Promise((r) => w.once("drain", r));
       }
       await new Promise<void>((resolve, reject) => w.end((e?: Error | null) => (e ? reject(e) : resolve())));
-      await rename(tmp, path);
+      await this.locked(bucket, key, () => rename(tmp, path));
     } catch (e) {
       // 途中で落ちた staging を残さない
       await rm(tmp, { force: true });
@@ -204,7 +220,7 @@ export class ObjectStore {
     offset: bigint,
     data: Uint8Array,
     opts: AppendOptions = {},
-  ): Promise<{ ok: boolean; size: bigint }> {
+  ): Promise<{ ok: boolean; size: bigint; diverged?: true }> {
     // 同じ key の put と append を 1 本にする。判定も書き込みもこの鎖の中
     return this.locked(bucket, key, async () => {
       const id = lockKeyOf(bucket, key);
@@ -216,9 +232,17 @@ export class ObjectStore {
         throw e;
       }));
       if (offset !== size) return { ok: false, size };
+      // object が送り手のファイルの先頭か。末尾の数 KiB だけ読んで比べる (transcript.proto の expected_tail)
+      const tail = opts.expectedTail;
+      if (tail && tail.length > 0) {
+        if (BigInt(tail.length) > size) return { ok: false, size, diverged: true };
+        const have = new Uint8Array(await Bun.file(path).slice(Number(size) - tail.length, Number(size)).arrayBuffer());
+        if (!Buffer.from(have).equals(Buffer.from(tail))) return { ok: false, size, diverged: true };
+      }
 
       // ここから確定までは、reader に append 前の長さしか見せない
       this.pending.set(id, Number(size));
+      this.bump(id);
       try {
         if (data.length > 0) {
           await mkdir(dirname(path), { recursive: true });
@@ -227,6 +251,7 @@ export class ObjectStore {
         if (opts.beforeCommit) await opts.beforeCommit();
       } catch (e) {
         this.pending.delete(id);
+      this.bump(id);
         // 途中まで書けた object を残すと、reader には次の append まで壊れた長さの
         // object が見えてしまう。確定前に戻した長さに切り戻す
         if (data.length > 0) {
@@ -238,6 +263,7 @@ export class ObjectStore {
         throw e;
       }
       this.pending.delete(id);
+      this.bump(id);
       return { ok: true, size: size + BigInt(data.length) };
     });
   }
@@ -259,18 +285,32 @@ export class ObjectStore {
   }
 
   /** 無ければ null。無い以外の失敗 (権限 / I/O) は投げる — 404 に化けると消えたように見える */
+  /** テストの継ぎ目。stat が読む瞬間を追記の途中に置くため */
+  protected async statOf(path: string): Promise<Stats> {
+    return stat(path);
+  }
+
   async head(bucket: string, key: string): Promise<{ size: number; mtime: Date; etag: string } | null> {
     const path = this.objectPath(bucket, key);
-    let s: Awaited<ReturnType<typeof stat>>;
-    try {
-      s = await stat(path);
-    } catch (e) {
-      if (isEnoent(e)) return null;
-      throw e;
+    const id = lockKeyOf(bucket, key);
+    let s!: Stats;
+    let limit: number | undefined;
+    // stat と確定長の記録は別の瞬間に読む。その間に追記が始まるか確定すると、stat は
+    // 書き込み途中の長さを読んでいるのに記録は消えている、が起こる。追記の開始と確定で
+    // 進む番号が stat を挟んで同じときだけ、2 つを同じ瞬間のものとして使う
+    for (;;) {
+      const before = this.generation.get(id) ?? 0;
+      limit = this.committedLimit(bucket, key);
+      try {
+        s = await this.statOf(path);
+      } catch (e) {
+        if (isEnoent(e)) return null;
+        throw e;
+      }
+      if ((this.generation.get(id) ?? 0) === before) break;
     }
     if (!s.isFile()) return null;
     // append が確定するまでは、書けているぶんの長さを隠す (下の file / GET と同じ)
-    const limit = this.committedLimit(bucket, key);
     const size = limit === undefined ? s.size : Math.min(s.size, limit);
     // ETag は S3 では単一 PUT なら本文の md5。読み直して計算するのは、置いた
     // ときの値を別に持たない (ファイル 1 つで完結させる) ため。読み返す長さも size に
@@ -280,7 +320,9 @@ export class ObjectStore {
 
   /**
    * head と本文を同じ長さで返す。GET は Content-Length を head から、本文を file から
-   * 作るので、別々に呼ぶと間で追記が確定したとき本文が Content-Length より長くなる
+   * 作るので、別々に呼ぶと間で追記が確定したとき本文が Content-Length より長くなる。
+   * 揃うのは追記に対してだけ: 本文は path で遅れて読むので、put / DELETE の置き換えが
+   * 読み出し中に入ると別の object の bytes になりうる (#209)
    */
   async snapshot(bucket: string, key: string): Promise<{ head: { size: number; mtime: Date; etag: string }; body: Blob } | null> {
     const head = await this.head(bucket, key);

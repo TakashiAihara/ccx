@@ -228,7 +228,7 @@ describe("ObjectStore.append の費用", () => {
 });
 
 describe("ObjectStore.snapshot", () => {
-  test("長さと本文は同じ時点のもの (head の後に追記が確定しても、本文は head の長さで切れる)", async () => {
+  test("snapshot の本文は head の長さで切れる (取った後に追記が確定しても伸びない)", async () => {
     const store = new ObjectStore(root);
     await store.append("ccx", KEY, 0n, enc("one\n"));
     let release!: () => void;
@@ -270,7 +270,7 @@ describe("ObjectStore: 同じ key への書き込みの並び", () => {
     expect(await store.append("ccx", KEY, 8n, enc("three\n"))).toEqual({ ok: false, size: 0n });
   });
 
-  test("put の途中に来た append は put の後の size で判定する", async () => {
+  test("本文を受け取り途中の put は追記を止めない。put の置き換えは追記の後に入る", async () => {
     const store = new ObjectStore(root);
     await store.append("ccx", KEY, 0n, enc("one\n"));
 
@@ -287,13 +287,13 @@ describe("ObjectStore: 同じ key への書き込みの並び", () => {
     const putting = store.put("ccx", KEY, body);
     await Bun.sleep(20);
 
-    // put が終わる前に、put 前の size (4) へ足そうとする
-    const appending = store.append("ccx", KEY, 4n, enc("late\n"));
-    await Bun.sleep(20);
+    // put が本文を待っている間に来た追記は、put を待たずに済む
+    expect(await store.append("ccx", KEY, 4n, enc("late\n"))).toEqual({ ok: true, size: 9n });
     release();
     await putting;
-    expect(await appending).toEqual({ ok: false, size: 14n });
+    // 置き換えは put の写し。送り手 (agent) は次の追記で断られ、put の size から続ける
     expect(await stored()).toBe("one\ntwo\nthree\n");
+    expect(await store.append("ccx", KEY, 9n, enc("x\n"))).toEqual({ ok: false, size: 14n });
   });
 
   test("追記に失敗したら、追記前の長さに切り戻して投げる", async () => {
@@ -308,5 +308,81 @@ describe("ObjectStore: 同じ key への書き込みの並び", () => {
     ).rejects.toThrow("disk went away");
     expect(await stored()).toBe("one\n");
     expect((await store.head("ccx", KEY))?.size).toBe(4);
+  });
+});
+
+describe("ObjectStore.head と追記の競合", () => {
+  test("追記の書き込み途中の長さを stat で読み、その後に追記が確定しても、書きかけの長さを返さない", async () => {
+    // stat が書き込みの途中 (4 + 2 bytes) を読み、head が確定長を見る前に追記が確定する。
+    // 確定長の記録はもう消えているので、stat の値をそのまま使うと行の途中で切れる
+    let release!: () => void;
+    let committed!: Promise<unknown>;
+    let first = true;
+    class MidWrite extends ObjectStore {
+      protected override async statOf(path: string) {
+        const s = await super.statOf(path);
+        if (!first) return s;
+        first = false;
+        release();
+        await committed;
+        return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { size: 6 });
+      }
+    }
+    const store = new MidWrite(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    const held = new Promise<void>((r) => (release = r));
+    committed = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+
+    const h = await store.head("ccx", KEY);
+    expect(h?.size).toBe(8);
+  });
+});
+
+describe("Append の expected_tail", () => {
+  test("object の末尾が送り手の直前の bytes と一致すれば足す", async () => {
+    await client.append(req(0, "one\ntwo\n"));
+    const res = await client.append(req(8, "three\n", { expectedTail: enc("two\n") }));
+    expect(res.size).toBe(14n);
+  });
+
+  test("一致しなければ書かずに DATA_LOSS (別の写しを継ぎ足さない)", async () => {
+    await client.append(req(0, "one\ntwo\n"));
+    const r = await refused(client.append(req(8, "three\n", { expectedTail: enc("TWO\n") })));
+    expect(r.code).toBe(Code.DataLoss);
+    expect(await stored()).toBe("one\ntwo\n");
+  });
+
+  test("object より長い expected_tail も DATA_LOSS", async () => {
+    await client.append(req(0, "x\n"));
+    const r = await refused(client.append(req(2, "y\n", { expectedTail: enc("abc\nx\n") })));
+    expect(r.code).toBe(Code.DataLoss);
+    expect(await stored()).toBe("x\n");
+  });
+
+  test("offset が size と違えば、expected_tail を見る前に size を返して断る", async () => {
+    await client.append(req(0, "one\n"));
+    const r = await refused(client.append(req(0, "one\n", { expectedTail: enc("zzz") })));
+    expect(r).toEqual({ code: Code.FailedPrecondition, size: 4n });
+  });
+});
+
+describe("ObjectStore: put の置き換えと追記の順序", () => {
+  test("追記の確定前に put の置き換えは入らない (追記の size 判定と書き込みの間で object が差し替わらない)", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const appending = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+
+    const putting = store.put("ccx", KEY, enc("new\n"));
+    await Bun.sleep(20);
+    expect(await stored()).toBe("one\ntwo\n");
+
+    release();
+    await appending;
+    await putting;
+    expect(await stored()).toBe("new\n");
   });
 });

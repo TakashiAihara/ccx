@@ -32,7 +32,7 @@ type call struct {
 	data    []byte
 }
 
-func (f *fakeCenter) Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error) {
+func (f *fakeCenter) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
 	f.mu.Lock()
 	block := f.block
 	f.mu.Unlock()
@@ -56,6 +56,9 @@ func (f *fakeCenter) Append(ctx context.Context, session string, offset uint64, 
 	}
 	if offset != uint64(len(f.stored)) {
 		return 0, &Mismatch{Size: uint64(len(f.stored))}
+	}
+	if len(tail) > len(f.stored) || string(f.stored[len(f.stored)-len(tail):]) != string(tail) {
+		return 0, &Permanent{Err: errors.New("diverged")}
 	}
 	f.stored = append(f.stored, data...)
 	return uint64(len(f.stored)), nil
@@ -143,9 +146,24 @@ func TestSendsCompleteLinesFromTheStart(t *testing.T) {
 
 	eventually(t, "the whole file stored", storedIs(c, "{\"a\":1}\n{\"b\":2}\n"))
 	_, calls := c.snapshot()
-	if calls[0].session != sid || calls[0].offset != 0 {
-		t.Fatalf("first call = %+v, want session %s offset 0", calls[0], sid)
+	if len(calls) < 2 || calls[0].offset != 0 || len(calls[0].data) != 0 {
+		t.Fatalf("calls = %+v, want an empty size probe at offset 0 first", calls)
 	}
+	if calls[1].session != sid || calls[1].offset != 0 {
+		t.Fatalf("first data call = %+v, want session %s offset 0", calls[1], sid)
+	}
+}
+
+func TestALineLongerThanMaxLineStopsEvenUnderTheChunkCap(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.MaxChunk = 1024
+	opts.MaxLine = 64
+	s := start(t, c, opts)
+	p := transcript(t, "ok\n"+strings.Repeat("x", 200))
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the session stopped with a reason", func() bool { return s.Stopped()[sid] != "" })
 }
 
 func TestHoldsBackALineStillBeingWritten(t *testing.T) {
@@ -287,7 +305,7 @@ func TestCoalescesABurstOfHooks(t *testing.T) {
 	want, _ := os.ReadFile(p)
 	eventually(t, "the burst stored", storedIs(c, string(want)))
 	if _, calls := c.snapshot(); nonEmpty(calls) > 4 {
-		t.Fatalf("%d appends for one burst of 50 hooks; reads were not coalesced", len(calls))
+		t.Fatalf("%d appends for one burst of 50 hooks; reads were not coalesced", nonEmpty(calls))
 	}
 }
 
@@ -404,7 +422,7 @@ type perSession struct {
 	m  map[string]*fakeCenter
 }
 
-func (p *perSession) Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error) {
+func (p *perSession) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
 	p.mu.Lock()
 	c := p.m[session]
 	if c == nil {
@@ -412,7 +430,7 @@ func (p *perSession) Append(ctx context.Context, session string, offset uint64, 
 		p.m[session] = c
 	}
 	p.mu.Unlock()
-	return c.Append(ctx, session, offset, data)
+	return c.Append(ctx, session, offset, data, tail)
 }
 
 func (p *perSession) stored(session string) string {
@@ -538,7 +556,7 @@ type hangingCenter struct {
 	hang int
 }
 
-func (h *hangingCenter) Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error) {
+func (h *hangingCenter) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
 	h.mu.Lock()
 	hang := h.hang > 0
 	if hang {
@@ -549,7 +567,7 @@ func (h *hangingCenter) Append(ctx context.Context, session string, offset uint6
 		<-ctx.Done()
 		return 0, ctx.Err()
 	}
-	return h.fakeCenter.Append(ctx, session, offset, data)
+	return h.fakeCenter.Append(ctx, session, offset, data, tail)
 }
 
 func TestAnAppendThatNeverAnswersTimesOutAndIsRetried(t *testing.T) {
@@ -570,7 +588,7 @@ type refusing struct {
 	calls int
 }
 
-func (r *refusing) Append(context.Context, string, uint64, []byte) (uint64, error) {
+func (r *refusing) Append(context.Context, string, uint64, []byte, []byte) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
@@ -717,4 +735,191 @@ func TestAFIFOInTheTranscriptsPlaceDoesNotHang(t *testing.T) {
 	}
 	s.Notify(hook("PostToolUse", sid, p))
 	eventually(t, "stored once the FIFO is a file again", storedIs(c, "one\n"))
+}
+
+func TestStopsInsteadOfSplicingADifferentCopy(t *testing.T) {
+	// The center holds as many bytes as the local file's first line, but not the
+	// same bytes (another machine's copy was pulled over this one). Appending the
+	// rest would join two copies into one that exists nowhere.
+	c := &fakeCenter{stored: []byte("XXX\n")}
+	s := start(t, c, fast)
+	p := transcript(t, "one\ntwo\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the session stopped", func() bool { return s.Stopped()[sid] != "" })
+	if st, _ := c.snapshot(); string(st) != "XXX\n" {
+		t.Fatalf("stored %q: a different copy was appended to", st)
+	}
+}
+
+func TestSendsTheBytesBeforeTheOffsetAsTheExpectedTail(t *testing.T) {
+	c := &tailRecorder{}
+	opts := fast
+	s := start(t, c, opts)
+	big := strings.Repeat("y", 5000) + "\n"
+	p := transcript(t, big)
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored", storedIs(&c.fakeCenter, big))
+	appendFile(t, p, "next\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored", storedIs(&c.fakeCenter, big+"next\n"))
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	last := c.tails[len(c.tails)-1]
+	if len(last) != 4096 || string(last) != big[len(big)-4096:] {
+		t.Fatalf("last tail is %d bytes, want the 4096 bytes before offset %d", len(last), len(big))
+	}
+	if len(c.tails[0]) != 0 {
+		t.Fatalf("the first data append at offset 0 carried a %d-byte tail", len(c.tails[0]))
+	}
+}
+
+type tailRecorder struct {
+	fakeCenter
+	tails [][]byte
+}
+
+func (r *tailRecorder) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
+	if len(data) > 0 {
+		r.mu.Lock()
+		r.tails = append(r.tails, append([]byte(nil), tail...))
+		r.mu.Unlock()
+	}
+	return r.fakeCenter.Append(ctx, session, offset, data, tail)
+}
+
+func TestAfterARecoveredFailureTheSessionWaitsForATrigger(t *testing.T) {
+	// The read that serves a retry clears it. Left set, a retry time in the past
+	// stays due, and the loop re-reads the file without pause (it would pick up a
+	// line written with no hook after it).
+	c := &fakeCenter{failN: 1}
+	s := start(t, c, fast)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stored after the retry", storedIs(c, "one\n"))
+	time.Sleep(4 * fast.SettleDelay)
+	appendFile(t, p, "two\n")
+	time.Sleep(4 * fast.SettleDelay)
+	if st, _ := c.snapshot(); string(st) != "one\n" {
+		t.Fatalf("stored %q: the session kept reading after it recovered", st)
+	}
+}
+
+func TestSettledReadsStopAfterMaxSettles(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.SettleDelay = 20 * time.Millisecond
+	opts.MaxSettles = 2
+	s := start(t, c, opts)
+	p := transcript(t, "one\n{\"half\":")
+
+	s.Notify(hook("Stop", sid, p))
+	eventually(t, "the complete line stored", storedIs(c, "one\n"))
+	time.Sleep(200 * time.Millisecond) // well past 2 re-armed reads
+	appendFile(t, p, "1}\n")
+	time.Sleep(200 * time.Millisecond)
+	if st, _ := c.snapshot(); string(st) != "one\n" {
+		t.Fatalf("stored %q: settled reads went on past MaxSettles", st)
+	}
+}
+
+func TestANewHookGivesTheSettledReadsANewBudget(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.SettleDelay = 30 * time.Millisecond
+	opts.MaxSettles = 1
+	s := start(t, c, opts)
+	p := transcript(t, "one\n{\"half\":")
+
+	s.Notify(hook("Stop", sid, p))
+	eventually(t, "the complete line stored", storedIs(c, "one\n"))
+	time.Sleep(200 * time.Millisecond) // the first hook's budget is spent
+
+	s.Notify(hook("Stop", sid, p))
+	time.Sleep(45 * time.Millisecond) // after this hook's settled read, before its re-arm
+	appendFile(t, p, "1}\n")
+	eventually(t, "the re-armed read of the new hook picks the line up", storedIs(c, "one\n{\"half\":1}\n"))
+}
+
+func TestAContinuousStreamOfHooksDoesNotPostponeTheRead(t *testing.T) {
+	c := &fakeCenter{}
+	opts := fast
+	opts.MinInterval = 30 * time.Millisecond
+	opts.SettleDelay = 30 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 60; i++ {
+			s.Notify(hook("PostToolUse", sid, p))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	eventually(t, "stored while the hooks keep coming", storedIs(c, "one\n"))
+	select {
+	case <-done:
+		t.Fatal("the read only happened after the stream of hooks ended")
+	default:
+	}
+	<-done
+}
+
+func TestDuringAnOutageHooksDoNotRetryFasterThanTheBackoff(t *testing.T) {
+	c := &refusing{err: errors.New("down")}
+	opts := fast
+	opts.MinInterval = 5 * time.Millisecond
+	opts.SettleDelay = 5 * time.Millisecond
+	opts.RetryDelay = 300 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	for i := 0; i < 40; i++ {
+		s.Notify(hook("PostToolUse", sid, p))
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := c.n(); n > 2 {
+		t.Fatalf("%d calls in 200ms of hooks with a 300ms backoff", n)
+	}
+}
+
+func TestAStoppedSessionStartsOverAfterIdleDrop(t *testing.T) {
+	c := &onceRefusing{fakeCenter: fakeCenter{}, err: &Permanent{Err: errors.New("diverged")}}
+	opts := fast
+	opts.IdleDrop = 100 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stopped", func() bool { return s.Stopped()[sid] != "" })
+	s.Notify(hook("PostToolUse", sid, p))
+	time.Sleep(4 * fast.SettleDelay)
+	if st, _ := c.snapshot(); len(st) != 0 {
+		t.Fatalf("stored %q right after the stop", st)
+	}
+
+	time.Sleep(opts.IdleDrop)
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the session started over", storedIs(&c.fakeCenter, "one\n"))
+}
+
+// onceRefusing answers its first call with err, then behaves.
+type onceRefusing struct {
+	fakeCenter
+	err  error
+	used bool
+}
+
+func (o *onceRefusing) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
+	o.mu.Lock()
+	first := !o.used
+	o.used = true
+	o.mu.Unlock()
+	if first {
+		return 0, o.err
+	}
+	return o.fakeCenter.Append(ctx, session, offset, data, tail)
 }

@@ -256,6 +256,12 @@ export async function sha256(path: string): Promise<string> {
  * live 同期は center の object の末尾に足すだけなので、push が hash した bytes はそのまま
  * 先頭に残る。足した部分は改行で終わる行だけ (center が書きかけを受け取らない)。
  */
+async function sha256Blob(b: Blob): Promise<string> {
+  const h = new Bun.CryptoHasher("sha256");
+  for await (const chunk of b.stream()) h.update(chunk);
+  return h.digest("hex");
+}
+
 async function matchesPushedPrefix(path: string, meta: { sha256: string; size: number }): Promise<boolean> {
   const f = Bun.file(path);
   if (f.size <= meta.size) return false;
@@ -646,7 +652,15 @@ export class TranscriptClient {
     const stamp = Date.now();
     if (await Bun.file(path).exists()) {
       const localDigest = await sha256(path);
-      if (localDigest === meta.sha256) {
+      // 比べる相手は session.json ではなく保存先の実体。live 同期 (#120) が push の後に
+      // 伸ばしているので、手元がその先頭なら「古い写し」で、黙って新しくしてよい
+      const obj = this.s3.file(`${prefix}transcript.jsonl`);
+      const objSize = (await obj.stat()).size;
+      const localSize = Bun.file(path).size;
+      const localIsPrefix = localSize <= objSize && (await sha256Blob(obj.slice(0, localSize))) === localDigest;
+      if (localIsPrefix && localSize < objSize) {
+        // 手元は保存先の先頭: 失うものは無いので退避もしない
+      } else if (localIsPrefix) {
         // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
         const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
         if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {

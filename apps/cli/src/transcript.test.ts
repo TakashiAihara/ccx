@@ -341,6 +341,28 @@ describe("transcript: push / pull / prune through the store", () => {
     expect(await Bun.file(r.path!).text()).toBe(grown);
   });
 
+  test("pull over a local copy: older prefix of the grown store copy is replaced, the grown copy itself is already here (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    // store は live 同期で伸びた。手元は push の時点の写し (= 伸びた写しの先頭)
+    const grown = transcriptBody + line({ type: "assistant", message: "LIVE-APPENDED" });
+    await Bun.write(storedA(), grown);
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(r.replaced).toBeUndefined();
+    expect(await Bun.file(path).text()).toBe(grown);
+
+    // 手元が伸びた写しと同じなら、何もしない (別内容とは言わない)
+    expect((await B.pull(SID, homeB)).status).toBe("already-here");
+
+    // 手元が store の先頭でない (手元だけの続きがある) なら、従来どおり force なしでは止まる
+    await Bun.write(path, `${transcriptBody}${line({ local: "only" })}`);
+    await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
+  });
+
   test("pull still refuses a grown copy whose pushed part changed, or that ends mid-line (#120)", async () => {
     const t = await seedA();
     await A.push(t);

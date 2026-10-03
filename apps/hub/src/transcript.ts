@@ -55,8 +55,13 @@ export function transcriptImpl(objects: ObjectStore): ServiceImpl<typeof Transcr
       }
 
       const key = transcriptKey(req.prefix, origin.machine, origin.user, req.sessionId);
-      const res = await objects.append(req.bucket, key, req.offset, req.data);
+      const res = await objects.append(req.bucket, key, req.offset, req.data, { expectedTail: req.expectedTail });
       if (res.ok) return { $typeName: "ccx.v1.AppendResponse" as const, size: res.size };
+      if (res.diverged) {
+        // offset は合っているが、object は送り手のファイルの先頭ではない。足すと 2 つの写しを
+        // 継ぎ合わせることになる。直すのは push (手元のファイルで object を置き換える)
+        throw new ConnectError(`the object is not a prefix of the sender's transcript at offset ${req.offset}`, Code.DataLoss);
+      }
 
       // 断った。size を detail に入れて返すと、送り手は自分の offset を手元に持たなくて
       // 済む (再起動したら 0 から送り、断られた size から続ける)

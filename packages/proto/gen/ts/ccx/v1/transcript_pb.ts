@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/transcript.proto.
  */
 export const file_ccx_v1_transcript: GenFile = /*@__PURE__*/
-  fileDesc("ChdjY3gvdjEvdHJhbnNjcmlwdC5wcm90bxIGY2N4LnYxIoEBCg1BcHBlbmRSZXF1ZXN0Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEgoKc2Vzc2lvbl9pZBgCIAEoCRIOCgZvZmZzZXQYAyABKAQSDAoEZGF0YRgEIAEoDBIOCgZidWNrZXQYBSABKAkSDgoGcHJlZml4GAYgASgJIh4KDkFwcGVuZFJlc3BvbnNlEgwKBHNpemUYASABKAQyTAoRVHJhbnNjcmlwdFNlcnZpY2USNwoGQXBwZW5kEhUuY2N4LnYxLkFwcGVuZFJlcXVlc3QaFi5jY3gudjEuQXBwZW5kUmVzcG9uc2ViBnByb3RvMw", [file_ccx_v1_ingest]);
+  fileDesc("ChdjY3gvdjEvdHJhbnNjcmlwdC5wcm90bxIGY2N4LnYxIpgBCg1BcHBlbmRSZXF1ZXN0Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEgoKc2Vzc2lvbl9pZBgCIAEoCRIOCgZvZmZzZXQYAyABKAQSDAoEZGF0YRgEIAEoDBIOCgZidWNrZXQYBSABKAkSDgoGcHJlZml4GAYgASgJEhUKDWV4cGVjdGVkX3RhaWwYByABKAwiHgoOQXBwZW5kUmVzcG9uc2USDAoEc2l6ZRgBIAEoBDJMChFUcmFuc2NyaXB0U2VydmljZRI3CgZBcHBlbmQSFS5jY3gudjEuQXBwZW5kUmVxdWVzdBoWLmNjeC52MS5BcHBlbmRSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_ingest]);
 
 /**
  * @generated from message ccx.v1.AppendRequest
@@ -59,6 +59,19 @@ export type AppendRequest = Message<"ccx.v1.AppendRequest"> & {
    * @generated from field: string prefix = 6;
    */
   prefix: string;
+
+  /**
+   * 送り手のファイルで offset の直前にある bytes (末尾の数 KiB)。center は object の末尾が
+   * これと一致するときだけ足す。一致しなければ何も書かず DATA_LOSS で断る。
+   *
+   * offset と size が一致するだけでは、object が送り手のファイルの先頭である保証は無い
+   * (別のマシンの写しを pull で上書きした / 手元を書き換えた)。そのまま足すと 2 つの写しを
+   * 継ぎ合わせた、どこにも無い transcript ができる。空なら検めない (offset 0 と、size を
+   * 聞くだけの空の Append)。
+   *
+   * @generated from field: bytes expected_tail = 7;
+   */
+  expectedTail: Uint8Array;
 };
 
 /**

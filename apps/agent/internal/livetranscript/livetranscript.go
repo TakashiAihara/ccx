@@ -37,9 +37,16 @@ import (
 // Appender is the center's side of that rule: append data to the session's object
 // at offset, or refuse. The returned size is the object's size afterwards (or, on
 // a refusal, the size it has now). Empty data appends nothing and answers the size.
+// tail is the local file's bytes just before offset: the center appends only when
+// its object ends with them, so a different copy that happens to have the same
+// length is not continued (a *Permanent comes back instead).
 type Appender interface {
-	Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error)
+	Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error)
 }
+
+// tailLen is how many bytes before the offset go with each append. A few KiB
+// covers the last record or two, which is where two copies of one session differ.
+const tailLen = 4096
 
 // Mismatch is a refusal: offset is not the object's size, so nothing was written.
 // Size is the center's current size — continue from it.
@@ -68,8 +75,9 @@ func (p *Permanent) Unwrap() error { return p.Err }
 // The defaults are chosen, not measured. What each one trades is written next to
 // it; change them when a measurement says otherwise.
 type Options struct {
-	// MinInterval is the shortest gap between two reads of one session. A burst of
-	// hooks (one per tool call) merges into one read.
+	// MinInterval is the shortest gap between two hook-triggered reads of one
+	// session: a burst of hooks (one per tool call) merges into one read. Settled
+	// reads and retries keep their own clocks.
 	MinInterval time.Duration
 	// SettleDelay: every trigger also asks for one more read this long after the
 	// last trigger. Claude Code writes the transcript asynchronously, so the lines
@@ -80,7 +88,9 @@ type Options struct {
 	// written asks for another, before it waits for the next hook.
 	MaxSettles int
 	// RetryDelay is the first wait after a failed append; it doubles per failure
-	// up to MaxRetryDelay. The retry needs no hook.
+	// up to MaxRetryDelay. The retry needs no hook, and while appends are failing
+	// hooks do not read earlier than it: a busy session would otherwise retry at
+	// its hook rate through an outage.
 	RetryDelay    time.Duration
 	MaxRetryDelay time.Duration
 	// AppendTimeout bounds one append. Without it a center that accepts the
@@ -185,8 +195,10 @@ type session struct {
 	// lastActive is the last trigger or read, for IdleDrop.
 	lastActive time.Time
 	// stopped is why this session is not appended again (logged, and returned by
-	// Stopped). Non-empty means no further reads at all.
-	stopped string
+	// Stopped). Non-empty means no further reads, until a hook arrives IdleDrop
+	// after stoppedAt: then the session starts over (a push may have fixed it).
+	stopped   string
+	stoppedAt time.Time
 
 	// stop closes when the session will not read again.
 	stop     chan struct{}
@@ -234,13 +246,22 @@ func (s *Sync) Notify(p []byte) {
 	if s.halted != "" {
 		return
 	}
-	st := s.sessionLocked(pl.SessionID, pl.TranscriptPath)
 	now := time.Now()
+	st := s.sessionLocked(pl.SessionID, pl.TranscriptPath)
 	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.stopped != "" {
-		return
+		forget := now.Sub(st.stoppedAt) >= s.opts.IdleDrop
+		st.mu.Unlock()
+		if !forget {
+			return
+		}
+		// Long enough ago that a push may have put the object right: start over,
+		// asking the center for its size like a session never seen.
+		delete(s.sessions, pl.SessionID)
+		st = s.sessionLocked(pl.SessionID, pl.TranscriptPath)
+		st.mu.Lock()
 	}
+	defer st.mu.Unlock()
 	// A resume can land the same session in another project directory.
 	st.path = pl.TranscriptPath
 	st.lastActive = now
@@ -335,6 +356,7 @@ func (s *Sync) stopSession(st *session, reason string) {
 	first := st.stopped == ""
 	if first {
 		st.stopped = reason
+		st.stoppedAt = time.Now()
 	}
 	st.mu.Unlock()
 	st.close()
@@ -482,6 +504,9 @@ func (st *session) due() (time.Time, bool) {
 	if st.stopped != "" {
 		return time.Time{}, false
 	}
+	if st.failures > 0 && !st.retryAt.IsZero() {
+		return st.retryAt, true
+	}
 	at := time.Time{}
 	if st.pending {
 		at = st.next
@@ -494,10 +519,10 @@ func (st *session) due() (time.Time, bool) {
 	return at, !at.IsZero()
 }
 
-func (s *Sync) append(ctx context.Context, id string, offset uint64, data []byte) (uint64, error) {
+func (s *Sync) append(ctx context.Context, id string, offset uint64, data, tail []byte) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.AppendTimeout)
 	defer cancel()
-	return s.center.Append(ctx, id, offset, data)
+	return s.center.Append(ctx, id, offset, data, tail)
 }
 
 // read appends everything new in this session's file: from the offset up to the
@@ -510,7 +535,7 @@ func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) 
 	known := st.known
 	st.mu.Unlock()
 	if !known {
-		size, err := s.append(ctx, st.id, 0, nil)
+		size, err := s.append(ctx, st.id, 0, nil, nil)
 		var m *Mismatch
 		switch {
 		case errors.As(err, &m):
@@ -528,7 +553,7 @@ func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) 
 		path, offset := st.path, st.offset
 		st.mu.Unlock()
 
-		chunk, tail, err := nextChunk(path, offset, s.opts.MaxChunk, s.opts.MaxLine)
+		chunk, prev, tail, err := nextChunk(path, offset, s.opts.MaxChunk, s.opts.MaxLine)
 		switch {
 		case errors.Is(err, errShrank):
 			// The design assumes Claude Code only appends. A local file shorter
@@ -546,7 +571,7 @@ func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) 
 			return tail, nil
 		}
 
-		size, err := s.append(ctx, st.id, offset, chunk)
+		size, err := s.append(ctx, st.id, offset, chunk, prev)
 		var m *Mismatch
 		switch {
 		case errors.As(err, &m):
@@ -600,7 +625,7 @@ func plausiblePath(path, id string) bool {
 // most max bytes unless one line alone is longer (it goes alone). An empty chunk
 // means nothing to send; tail then says whether bytes past the offset are a line
 // still being written.
-func nextChunk(path string, offset uint64, max, maxLine int) (chunk []byte, tail bool, err error) {
+func nextChunk(path string, offset uint64, max, maxLine int) (chunk, prev []byte, tail bool, err error) {
 	// O_NOFOLLOW: a symlink in the transcript's place would send whatever it
 	// points at; checked on the open itself so nothing can swap the file in
 	// between. O_NONBLOCK: a FIFO there would block the open forever.
@@ -609,25 +634,25 @@ func nextChunk(path string, offset uint64, max, maxLine int) (chunk []byte, tail
 		// Gone (cleaned up, or moved: the next hook names the new path) or a
 		// symlink: nothing to read. Anything else (EMFILE, EIO) is retried.
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
-			return nil, false, nil
+			return nil, nil, false, nil
 		}
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	size := uint64(info.Size())
 	if size < offset {
-		return nil, false, errShrank
+		return nil, nil, false, errShrank
 	}
 	if size == offset {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 
 	// One cap's worth. Reading the whole tail instead would make a read cost the
@@ -636,25 +661,44 @@ func nextChunk(path string, offset uint64, max, maxLine int) (chunk []byte, tail
 	n, err := f.ReadAt(buf, int64(offset))
 	if n == 0 {
 		if err == nil || errors.Is(err, io.EOF) {
-			return nil, false, nil
+			return nil, nil, false, nil
 		}
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	buf = buf[:n]
 	if end := bytes.LastIndexByte(buf, '\n'); end >= 0 {
-		return buf[:end+1], false, nil
+		prev, err := before(f, offset)
+		return buf[:end+1], prev, false, err
+	}
+	if len(buf) > maxLine {
+		return nil, nil, false, errLineTooLong
 	}
 	if len(buf) < max {
-		return nil, true, nil
+		return nil, nil, true, nil
 	}
 	// A whole cap with no newline in it: one line longer than the cap. It goes
 	// whole, because cutting it would put a fragment in the store as if it were a
 	// line, and no later append can complete it.
 	line, err := longLine(f, offset, buf, maxLine)
-	if err != nil {
-		return nil, false, err
+	if err != nil || line == nil {
+		return nil, nil, line == nil && err == nil, err
 	}
-	return line, line == nil, nil
+	prev, err = before(f, offset)
+	return line, prev, false, err
+}
+
+// before is the file's last tailLen bytes before offset, from the same open file
+// as the chunk, so both describe one file.
+func before(f *os.File, offset uint64) ([]byte, error) {
+	n := min(offset, tailLen)
+	if n == 0 {
+		return nil, nil
+	}
+	b := make([]byte, n)
+	if _, err := f.ReadAt(b, int64(offset-n)); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // longLine finishes the line the first read did not reach, widening the buffer a

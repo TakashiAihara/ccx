@@ -38,14 +38,15 @@ func NewClient(hubURL, token string, origin *ccxv1.Origin, bucket, prefix string
 // Append sends one chunk. A refusal (FAILED_PRECONDITION carrying the center's
 // size) comes back as *Mismatch so the caller continues from that size instead of
 // treating it as an outage.
-func (c *Client) Append(ctx context.Context, session string, offset uint64, data []byte) (uint64, error) {
+func (c *Client) Append(ctx context.Context, session string, offset uint64, data, tail []byte) (uint64, error) {
 	res, err := c.svc.Append(ctx, connect.NewRequest(&ccxv1.AppendRequest{
-		Origin:    c.origin,
-		SessionId: session,
-		Offset:    offset,
-		Data:      data,
-		Bucket:    c.bucket,
-		Prefix:    c.prefix,
+		Origin:       c.origin,
+		SessionId:    session,
+		Offset:       offset,
+		Data:         data,
+		Bucket:       c.bucket,
+		Prefix:       c.prefix,
+		ExpectedTail: tail,
 	}))
 	if err != nil {
 		return 0, refusal(err)
@@ -60,8 +61,12 @@ func (c *Client) Append(ctx context.Context, session string, offset uint64, data
 //   - Unimplemented (a center older than TranscriptService), Unauthenticated and
 //     PermissionDenied (the token) are the same for every session: *Permanent
 //     with Global, so live sync stops instead of re-sending every 5s forever
-//   - InvalidArgument is this request's key (a machine name with '/'): *Permanent
-//     for this session
+//   - InvalidArgument: what the center refuses is the key, and every part of it
+//     but the session id (machine, user, bucket, prefix) is the same for every
+//     session — the id is checked before a session exists — so *Permanent with
+//     Global too
+//   - DataLoss: the object is not a prefix of this session's local file (another
+//     copy was put in its place): *Permanent for this session; push fixes it
 //   - anything else (down, timeout, internal) is transient
 func refusal(err error) error {
 	var cerr *connect.Error
@@ -69,9 +74,9 @@ func refusal(err error) error {
 		return err
 	}
 	switch cerr.Code() {
-	case connect.CodeUnimplemented, connect.CodeUnauthenticated, connect.CodePermissionDenied:
+	case connect.CodeUnimplemented, connect.CodeUnauthenticated, connect.CodePermissionDenied, connect.CodeInvalidArgument:
 		return &Permanent{Err: err, Global: true}
-	case connect.CodeInvalidArgument:
+	case connect.CodeDataLoss:
 		return &Permanent{Err: err}
 	case connect.CodeFailedPrecondition:
 	default:

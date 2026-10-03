@@ -70,6 +70,12 @@ size. That one rule gives:
   source, and it stays on disk until someone prunes it after a verified copy.
 - A gap is impossible to write. If the agent's offset is ahead of the center (the object was deleted),
   it is told the size and starts over from it.
+- The size alone does not say the object is this file's beginning: another machine's copy of the
+  same session may have been pulled over the local file, with the same length. So every append also
+  carries the last few KiB before its offset, and the center appends only when its object ends with
+  them; otherwise it refuses with `DATA_LOSS`, and the agent stops the session rather than splice two
+  copies into one that exists nowhere. A stopped session starts over (asking for the size again) at
+  its first hook an hour or more later, by when a `push` may have put the object right.
 
 Writes to one key are serialised in the center, so an append and a `push` of the same transcript do
 not interleave. `push` keeps replacing the whole object; when it carries the same bytes, nothing
@@ -77,11 +83,13 @@ changes, and when the local file differs (see below), the push is what makes the
 
 A reader must not see half an append. The object store serves a live object only up to the length of
 the last completed append (GET's length and body come from one snapshot), so a DuckDB query running
-during an append sees whole lines. A failed append is cut back to its old length. A center that dies
+during an append sees whole lines. That snapshot holds against appends only: a `push` or a `DELETE`
+that replaces the object while a GET is streaming can still change what the body reads (#209). A failed append is cut back to its old length. A center that dies
 in the middle of one can leave part of a line; the agent's next append is refused with the longer
 size, and it sends the rest of that line from there, so the object is whole again at the next read.
 
-A `DELETE` of the object waits for an append in progress, like a `push` does.
+A `DELETE` of the object waits for an append in progress, and so does the moment a `push` replaces
+it. The push's body is received before that, outside the wait, so a slow upload holds up nobody.
 
 A center refusal that retrying cannot fix stops live sync instead of retrying it: a center without
 `TranscriptService` or a refused token stops it for every session, a request the center calls
@@ -129,7 +137,10 @@ after live sync is every time: the bytes it writes are the ones the object alrea
 transfer, not correctness.
 
 `pull` checks the download against `session.json`. A copy that live sync grew after the push is
-accepted when the bytes the push hashed are its prefix and it ends with a newline.
+accepted when the bytes the push hashed are its prefix and it ends with a newline. A local file
+that already exists is compared with the store's object, not with `session.json`: the same bytes
+are already here, a shorter local file that is the object's beginning is an older copy and is
+replaced without `--force`, and anything else still needs `--force`.
 
 ## Not here
 
