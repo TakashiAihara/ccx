@@ -100,10 +100,12 @@ again; a push that lands after a session's last hook stays as the push left it.
 The center must understand `expected_tail` before agents send it: a center that does not drops the
 field and appends without checking. Update the center first.
 
-A center refusal that retrying cannot fix stops live sync instead of retrying it: a center without
-`TranscriptService` or a refused token stops it for every session, a request the center calls
-invalid stops it for that session. Anything else (the center down, a timeout) is retried with a
-doubling delay, and the log says so once when it starts failing and once when it recovers.
+A center refusal that retrying cannot fix stops live sync instead of retrying it. A center without
+`TranscriptService`, a refused token, and a request the center calls invalid stop it for every
+session (what makes a request invalid is the key, and every part of the key but the session id is
+the same for all of them). An object that is not this file's beginning (`DATA_LOSS`) stops it for
+that session. Anything else (the center down, a timeout) is retried with a doubling delay, and the
+log says so once when it starts failing and once when it recovers.
 
 ## When it reads
 

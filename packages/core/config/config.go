@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,6 +422,14 @@ func originOf(raw string) (string, bool) {
 		return "", false
 	}
 	scheme, port := strings.ToLower(u.Scheme), u.Port()
+	// Read the port as a number, like the CLI's URL.origin: "080" is 80.
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil {
+			return "", false
+		}
+		port = strconv.Itoa(n)
+	}
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 		port = ""
 	}

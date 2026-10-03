@@ -111,3 +111,18 @@ func TestTranscript_BucketAndPrefixResolveLikeTheCLI(t *testing.T) {
 		t.Fatalf("Transcript = %+v, want git's bucket and env's prefix", tr)
 	}
 }
+
+func TestTranscript_SameOriginReadsPortsLikeTheCLI(t *testing.T) {
+	// The CLI compares with URL.origin, which reads "080" as 80 and drops the
+	// default port. The agent must decide "the store is the center" the same way,
+	// or it skips live sync for a store the CLI treats as the center.
+	for _, ep := range []string{"http://center:080/", "http://center:0080", "http://center"} {
+		tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:80", "CCX_TRANSCRIPT_ENDPOINT": ep}, noGit).Transcript
+		if !tr.ToCenter {
+			t.Errorf("endpoint %s: not the center, want the same origin as http://center:80", ep)
+		}
+	}
+	if tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791", "CCX_TRANSCRIPT_ENDPOINT": "http://center:08792"}, noGit).Transcript; tr.ToCenter {
+		t.Errorf("a different port is the same origin: %+v", tr)
+	}
+}
