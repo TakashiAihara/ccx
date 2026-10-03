@@ -65,9 +65,14 @@ export type AppendRequest = Message<"ccx.v1.AppendRequest"> & {
    * これと一致するときだけ足す。一致しなければ何も書かず DATA_LOSS で断る。
    *
    * offset と size が一致するだけでは、object が送り手のファイルの先頭である保証は無い
-   * (別のマシンの写しを pull で上書きした / 手元を書き換えた)。そのまま足すと 2 つの写しを
-   * 継ぎ合わせた、どこにも無い transcript ができる。空なら検めない (offset 0 と、size を
-   * 聞くだけの空の Append)。
+   * (同じ session の別のマシンの写しを pull で上書きした)。そのまま足すと 2 つの写しを
+   * 継ぎ合わせた、どこにも無い transcript ができる。同じ session の 2 つの写しは分かれた
+   * 所から後のレコード (uuid / 時刻) が違うので、末尾の数 KiB で見分けられる。末尾より前
+   * だけを書き換えた同じ長さのファイルは見分けない。空なら検めない (offset 0 と、size を
+   * 聞くだけの空の Append)。data が空でも検めるので、送り手は空の Append で「object が
+   * まだ自分のファイルの先頭か」を確かめられる。
+   *
+   * この field を知らない center は黙って捨てる (検めずに足す)。center を先に上げる。
    *
    * @generated from field: bytes expected_tail = 7;
    */

@@ -363,6 +363,24 @@ describe("transcript: push / pull / prune through the store", () => {
     await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
   });
 
+  test("pull with nothing new does not download the transcript; an empty local file is a prefix (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const path = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+
+    // object を消しても、手元が session.json と同じで object を読まずに済むなら already-here
+    await rm(storedA());
+    expect((await B.pull(SID, homeB)).status).toBe("already-here");
+    await Bun.write(storedA(), transcriptBody);
+
+    // 空の手元ファイルはどの写しの先頭でもある: force なしで入る
+    await Bun.write(path, "");
+    const r = await B.pull(SID, homeB);
+    expect(r.status).toBe("pulled");
+    expect(await Bun.file(path).text()).toBe(transcriptBody);
+  });
+
   test("pull still refuses a grown copy whose pushed part changed, or that ends mid-line (#120)", async () => {
     const t = await seedA();
     await A.push(t);

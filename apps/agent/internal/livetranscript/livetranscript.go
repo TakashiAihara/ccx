@@ -282,6 +282,16 @@ func (s *Sync) sessionLocked(id, path string) *session {
 	if st, ok := s.sessions[id]; ok {
 		return st
 	}
+	// Sessions stopped long enough ago to start over have no goroutine left and
+	// may never fire again: forget them here, when the map grows anyway.
+	for sid, old := range s.sessions {
+		old.mu.Lock()
+		gone := old.stopped != "" && time.Since(old.stoppedAt) >= s.opts.IdleDrop
+		old.mu.Unlock()
+		if gone {
+			delete(s.sessions, sid)
+		}
+	}
 	st := &session{
 		changed: make(chan struct{}, 1),
 		id:      id,
@@ -361,7 +371,7 @@ func (s *Sync) stopSession(st *session, reason string) {
 	st.mu.Unlock()
 	st.close()
 	if first {
-		s.log("livetranscript: session %s stopped: %s", st.id, reason)
+		s.log("livetranscript: session %s stopped: %s (a push puts the store right; live sync tries again at its first hook an hour or more later)", st.id, reason)
 	}
 }
 
@@ -447,14 +457,15 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 		if settled {
 			st.settle = time.Time{}
 		}
-		if !st.next.After(now) {
-			st.pending = false
-		}
+		// Any read serves the triggers that came before it: it reads the file as it
+		// is now. Leaving pending set because its MinInterval has not passed would
+		// only read the same file again.
+		st.pending = false
 		st.retryAt = time.Time{}
 		st.lastActive = now
 		st.mu.Unlock()
 
-		partial, err := s.read(ctx, st)
+		partial, err := s.read(ctx, st, settled)
 		if ctx.Err() != nil {
 			return
 		}
@@ -530,7 +541,7 @@ func (s *Sync) append(ctx context.Context, id string, offset uint64, data, tail 
 // still being written waits for the next read — sending half of it would leave a
 // fragment in the store that no later append can complete. partial reports such
 // a line at the end.
-func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) {
+func (s *Sync) read(ctx context.Context, st *session, settled bool) (partial bool, err error) {
 	st.mu.Lock()
 	known := st.known
 	st.mu.Unlock()
@@ -546,6 +557,17 @@ func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) 
 		st.mu.Lock()
 		st.offset, st.known = size, true
 		st.mu.Unlock()
+	}
+	// Check that the object still ends where this file does, at the size just
+	// learned and on every settled read: a push can replace the object with an
+	// older snapshot after this agent caught up, and a copy pulled from another
+	// machine can have the same length. An empty append with the tail costs a few
+	// KiB; finding either by shipping a chunk costs up to MaxChunk, and a caught-up
+	// session would otherwise never send one.
+	if !known || settled {
+		if done, err := s.verify(ctx, st); done || err != nil {
+			return false, err
+		}
 	}
 
 	for {
@@ -594,6 +616,61 @@ func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) 
 		st.offset = size
 		st.mu.Unlock()
 	}
+}
+
+// verify sends an empty append carrying the bytes before this session's offset.
+// A Mismatch moves the offset to the center's size (the read that follows sends
+// from there). done means the session was stopped and there is nothing to read.
+func (s *Sync) verify(ctx context.Context, st *session) (done bool, err error) {
+	st.mu.Lock()
+	path, offset := st.path, st.offset
+	st.mu.Unlock()
+	if offset == 0 {
+		return false, nil
+	}
+	prev, err := tailAt(path, offset)
+	switch {
+	case errors.Is(err, errShrank):
+		s.stopSession(st, fmt.Sprintf("the local transcript is shorter than the %d bytes the center holds", offset))
+		return true, nil
+	case err != nil:
+		return false, err
+	case prev == nil:
+		return false, nil // no file (moved or gone): the next hook names it
+	}
+	_, err = s.append(ctx, st.id, offset, nil, prev)
+	var m *Mismatch
+	if errors.As(err, &m) {
+		st.mu.Lock()
+		st.offset = m.Size
+		st.mu.Unlock()
+		return false, nil
+	}
+	return false, err
+}
+
+// tailAt is the tailLen bytes before offset in the file at path, opened the way
+// nextChunk opens it. nil with no error: no such file (or not a regular one).
+func tailAt(path string, offset uint64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	if uint64(info.Size()) < offset {
+		return nil, errShrank
+	}
+	return before(f, offset)
 }
 
 // sessionIDRe is Claude Code's session id — the shape that both the store's key

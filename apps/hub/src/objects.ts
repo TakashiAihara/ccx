@@ -124,6 +124,8 @@ export class ObjectStore {
    * key ごとに、追記の開始と確定 (失敗を含む) で 1 ずつ進む番号。head が stat の前後で
    * 比べて、間に追記の境目が挟まったかを知る
    */
+  // ponytail: 消さない。追記された key の数 (= session 数) だけ center の寿命の間たまる。
+  // head が読んでいる最中に消すと比較が狂うので、消すなら DELETE の鎖の中で行う
   private generation = new Map<string, number>();
 
   private bump(id: string): void {
@@ -235,7 +237,7 @@ export class ObjectStore {
       // object が送り手のファイルの先頭か。末尾の数 KiB だけ読んで比べる (transcript.proto の expected_tail)
       const tail = opts.expectedTail;
       if (tail && tail.length > 0) {
-        if (BigInt(tail.length) > size) return { ok: false, size, diverged: true };
+
         const have = new Uint8Array(await Bun.file(path).slice(Number(size) - tail.length, Number(size)).arrayBuffer());
         if (!Buffer.from(have).equals(Buffer.from(tail))) return { ok: false, size, diverged: true };
       }
@@ -250,16 +252,17 @@ export class ObjectStore {
         }
         if (opts.beforeCommit) await opts.beforeCommit();
       } catch (e) {
-        this.pending.delete(id);
-      this.bump(id);
         // 途中まで書けた object を残すと、reader には次の append まで壊れた長さの
-        // object が見えてしまう。確定前に戻した長さに切り戻す
+        // object が見えてしまう。確定前の長さに切り戻す。確定長の記録は切り戻しが
+        // 終わるまで残す (消してからだと、切り戻しの間に reader が書きかけを読む)
         if (data.length > 0) {
-          await truncate(path, Number(size)).catch((te) => {
+          await this.truncateTo(path, Number(size)).catch((te) => {
             // 切り戻せなかった。reader には書きかけが見える。黙らない
             console.error(`ccx-center: could not roll back a failed append to ${bucket}/${key}: ${te}`);
           });
         }
+        this.pending.delete(id);
+        this.bump(id);
         throw e;
       }
       this.pending.delete(id);
@@ -284,34 +287,48 @@ export class ObjectStore {
     return names.filter(validBucket).sort();
   }
 
-  /** 無ければ null。無い以外の失敗 (権限 / I/O) は投げる — 404 に化けると消えたように見える */
   /** テストの継ぎ目。stat が読む瞬間を追記の途中に置くため */
   protected async statOf(path: string): Promise<Stats> {
     return stat(path);
   }
 
-  async head(bucket: string, key: string): Promise<{ size: number; mtime: Date; etag: string } | null> {
+  /** テストの継ぎ目。切り戻しの最中に読ませるため */
+  protected async truncateTo(path: string, size: number): Promise<void> {
+    await truncate(path, size);
+  }
+
+  /**
+   * stat と、その瞬間に確定している長さ。無ければ null。
+   *
+   * stat と確定長の記録は別の瞬間に読む。その間に追記が始まるか確定すると、stat は
+   * 書き込み途中の長さを読んでいるのに記録は消えている、が起こる。追記の開始と確定で
+   * 進む番号が stat を挟んで同じときだけ、2 つを同じ瞬間のものとして使う。head と一覧が
+   * これを通る (一覧の size で範囲読みする client もいる)
+   */
+  private async committedStat(bucket: string, key: string): Promise<{ s: Stats; size: number } | null> {
     const path = this.objectPath(bucket, key);
     const id = lockKeyOf(bucket, key);
-    let s!: Stats;
-    let limit: number | undefined;
-    // stat と確定長の記録は別の瞬間に読む。その間に追記が始まるか確定すると、stat は
-    // 書き込み途中の長さを読んでいるのに記録は消えている、が起こる。追記の開始と確定で
-    // 進む番号が stat を挟んで同じときだけ、2 つを同じ瞬間のものとして使う
     for (;;) {
       const before = this.generation.get(id) ?? 0;
-      limit = this.committedLimit(bucket, key);
+      const limit = this.committedLimit(bucket, key);
+      let s: Stats;
       try {
         s = await this.statOf(path);
       } catch (e) {
         if (isEnoent(e)) return null;
         throw e;
       }
-      if ((this.generation.get(id) ?? 0) === before) break;
+      if ((this.generation.get(id) ?? 0) !== before) continue;
+      return { s, size: limit === undefined ? s.size : Math.min(s.size, limit) };
     }
-    if (!s.isFile()) return null;
-    // append が確定するまでは、書けているぶんの長さを隠す (下の file / GET と同じ)
-    const size = limit === undefined ? s.size : Math.min(s.size, limit);
+  }
+
+  /** 無ければ null。無い以外の失敗 (権限 / I/O) は投げる — 404 に化けると消えたように見える */
+  async head(bucket: string, key: string): Promise<{ size: number; mtime: Date; etag: string } | null> {
+    const path = this.objectPath(bucket, key);
+    const st = await this.committedStat(bucket, key);
+    if (!st || !st.s.isFile()) return null;
+    const { s, size } = st;
     // ETag は S3 では単一 PUT なら本文の md5。読み直して計算するのは、置いた
     // ときの値を別に持たない (ファイル 1 つで完結させる) ため。読み返す長さも size に
     // 合わせる。そうしないと S3 のように「同じ ETag で別の長さ」になる
@@ -376,14 +393,9 @@ export class ObjectStore {
           if (key.startsWith(prefix) || prefix.startsWith(`${key}/`)) await walk(key);
         } else if (e.isFile() && key.startsWith(prefix)) {
           // readdir と stat の間に消えたものは一覧に出さない (消えた以外は投げる)
-          try {
-            const s = await stat(join(base, key));
-            // 追記の途中なら確定した長さ (head / GET と同じ。一覧の size で範囲読みする client が書きかけを読まないように)
-            const limit = this.committedLimit(bucket, key);
-            out.push({ key, size: limit === undefined ? s.size : Math.min(s.size, limit), mtime: s.mtime });
-          } catch (err) {
-            if (!isEnoent(err)) throw err;
-          }
+          // 追記の途中なら確定した長さ (head と同じ判定)
+          const st = await this.committedStat(bucket, key);
+          if (st) out.push({ key, size: st.size, mtime: st.s.mtime });
         }
       }
     };

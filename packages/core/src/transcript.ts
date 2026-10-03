@@ -650,70 +650,88 @@ export class TranscriptClient {
 
     let replaced: string | undefined;
     const stamp = Date.now();
-    if (await Bun.file(path).exists()) {
-      const localDigest = await sha256(path);
-      // 比べる相手は session.json ではなく保存先の実体。live 同期 (#120) が push の後に
-      // 伸ばしているので、手元がその先頭なら「古い写し」で、黙って新しくしてよい
-      const obj = this.s3.file(`${prefix}transcript.jsonl`);
-      const objSize = (await obj.stat()).size;
-      const localSize = Bun.file(path).size;
-      const localIsPrefix = localSize <= objSize && (await sha256Blob(obj.slice(0, localSize))) === localDigest;
-      if (localIsPrefix && localSize < objSize) {
-        // 手元は保存先の先頭: 失うものは無いので退避もしない
-      } else if (localIsPrefix) {
-        // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
+    // 手元が session.json と同じで、object も session.json の長さのままなら、取らずに済む
+    // (live 同期は object を伸ばすだけで、push は session.json を書き直す)。object が無い
+    // ときも、手元が session.json の写しなら揃っている
+    if ((await Bun.file(path).exists()) && (await sha256(path)) === meta.sha256) {
+      const objSize = await this.s3
+        .file(`${prefix}transcript.jsonl`)
+        .stat()
+        .then((s) => s.size, () => null);
+      if (objSize === null || objSize === meta.size) {
         const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
         if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
-          // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
           return { status: "already-here", meta, state, ...(await this.applyState(sessionId, state, home)), path };
         }
-      } else if (!force) {
-        throw new Error(
-          `${path} exists with different content than the store's copy (local ${localDigest}, store ${meta.sha256}); pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
-        );
-      } else {
-        replaced = `${path}.replaced-${stamp}`;
       }
     }
-
-    // 付属ファイルも手元の別内容を黙って上書きしない (subagent は push 後も追記されうる)。何か書く前に全部を見る
-    const plan = [
-      ...meta.toolResults.map((r) => ({ key: `tool-results/${r.name}`, dest: under(trDir, r.name), sha256: r.sha256 })),
-      ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => ({ key: `${k}/${r.name}`, dest: under(dirOf(k), r.name), sha256: r.sha256 }))),
-    ];
-    const todo: ((typeof plan)[number] & { replace: boolean })[] = [];
-    for (const f of plan) {
-      const cur = (await Bun.file(f.dest).exists()) ? await sha256(f.dest) : null;
-      if (cur === f.sha256) continue;
-      if (cur && !force) {
-        throw new Error(
-          `${f.dest} exists with different content than the store's copy; pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
-        );
-      }
-      todo.push({ ...f, replace: cur !== null });
-    }
-
+    // transcript は最初に隣へ取り、手元との比較はその取得物に対して行う。比べてから取ると、
+    // 間に push が object を置き換えたとき、比べたものと入れるものが別になる (手元の
+    // 続きを退避せずに消しうる)
     await mkdir(projectDir, { recursive: true });
-    for (const f of todo) {
-      await mkdir(dirname(f.dest), { recursive: true });
-      // 隣に取ってから入れ替える。壊れた取得で手元の写しを消さない
-      const tmp = `${f.dest}.pull-tmp`;
-      try {
-        await Bun.write(tmp, this.s3.file(`${prefix}${f.key}`));
-        if ((await sha256(tmp)) !== f.sha256) throw new Error(`downloaded ${f.key} for ${sessionId} does not match session.json; not installed`);
-        if (f.replace) await rename(f.dest, `${f.dest}.replaced-${stamp}`);
-        await rename(tmp, f.dest);
-      } finally {
-        await rm(tmp, { force: true });
-      }
-    }
-
     const tmp = `${path}.pull-tmp`;
     try {
       await Bun.write(tmp, this.s3.file(`${prefix}transcript.jsonl`));
       if ((await sha256(tmp)) !== meta.sha256 && !(await matchesPushedPrefix(tmp, meta))) {
         throw new Error(`downloaded transcript for ${sessionId} does not match session.json sha256; not installed`);
       }
+
+      if (await Bun.file(path).exists()) {
+        const localDigest = await sha256(path);
+        // 比べる相手は session.json ではなく取得した実体。live 同期 (#120) が push の後に
+        // 伸ばしているので、手元がその先頭なら「古い写し」で、黙って新しくしてよい
+        const got = Bun.file(tmp);
+        const localSize = Bun.file(path).size;
+        const localIsPrefix = localSize <= got.size && (await sha256Blob(got.slice(0, localSize))) === localDigest;
+        if (localIsPrefix && localSize < got.size) {
+          // 手元は取得した写しの先頭: 失うものは無いので退避もしない
+        } else if (localIsPrefix) {
+          // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
+          const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
+          if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
+            // transcript は揃っている。前の pull が印を写す前に落ちていたら、ここで写し直す
+            return { status: "already-here", meta, state, ...(await this.applyState(sessionId, state, home)), path };
+          }
+        } else if (!force) {
+          throw new Error(
+            `${path} exists with different content than the store's copy (local ${localDigest} is not the beginning of the store's transcript); pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
+          );
+        } else {
+          replaced = `${path}.replaced-${stamp}`;
+        }
+      }
+
+      // 付属ファイルも手元の別内容を黙って上書きしない (subagent は push 後も追記されうる)。何か書く前に全部を見る
+      const plan = [
+        ...meta.toolResults.map((r) => ({ key: `tool-results/${r.name}`, dest: under(trDir, r.name), sha256: r.sha256 })),
+        ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => ({ key: `${k}/${r.name}`, dest: under(dirOf(k), r.name), sha256: r.sha256 }))),
+      ];
+      const todo: ((typeof plan)[number] & { replace: boolean })[] = [];
+      for (const f of plan) {
+        const cur = (await Bun.file(f.dest).exists()) ? await sha256(f.dest) : null;
+        if (cur === f.sha256) continue;
+        if (cur && !force) {
+          throw new Error(
+            `${f.dest} exists with different content than the store's copy; pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
+          );
+        }
+        todo.push({ ...f, replace: cur !== null });
+      }
+
+      for (const f of todo) {
+        await mkdir(dirname(f.dest), { recursive: true });
+        // 隣に取ってから入れ替える。壊れた取得で手元の写しを消さない
+        const ftmp = `${f.dest}.pull-tmp`;
+        try {
+          await Bun.write(ftmp, this.s3.file(`${prefix}${f.key}`));
+          if ((await sha256(ftmp)) !== f.sha256) throw new Error(`downloaded ${f.key} for ${sessionId} does not match session.json; not installed`);
+          if (f.replace) await rename(f.dest, `${f.dest}.replaced-${stamp}`);
+          await rename(ftmp, f.dest);
+        } finally {
+          await rm(ftmp, { force: true });
+        }
+      }
+
       if (replaced) await rename(path, replaced);
       await rename(tmp, path);
     } finally {

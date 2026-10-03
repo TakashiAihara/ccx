@@ -164,6 +164,9 @@ func TestALineLongerThanMaxLineStopsEvenUnderTheChunkCap(t *testing.T) {
 
 	s.Notify(hook("PostToolUse", sid, p))
 	eventually(t, "the session stopped with a reason", func() bool { return s.Stopped()[sid] != "" })
+	if st, _ := c.snapshot(); string(st) != "ok\n" {
+		t.Fatalf("stored %q, want only the complete line before the over-long one", st)
+	}
 }
 
 func TestHoldsBackALineStillBeingWritten(t *testing.T) {
@@ -231,6 +234,8 @@ func TestIgnoresPayloadsThatDoNotNameATranscript(t *testing.T) {
 		"not under a projects directory": hook("Stop", sid, notProjects),
 		"relative path":                  hook("Stop", sid, filepath.Join("projects", "-r", sid+".jsonl")),
 		"dot-dot out of projects":        hook("Stop", sid, filepath.Join(dir, "..", "..", "..", filepath.Base(filepath.Dir(other)), sid+".jsonl")),
+		"unclean path with dot-dot":      hook("Stop", sid, dir+"/../-root-repo/"+sid+".jsonl"),
+		"unclean path with a double /":   hook("Stop", sid, dir+"//"+sid+".jsonl"),
 		"directory traversal to other":   hook("Stop", sid, filepath.Join(dir, "..", "..", "projects", "..", "..", strings.TrimPrefix(other, "/"))),
 	}
 	for name, payload := range cases {
@@ -747,8 +752,55 @@ func TestStopsInsteadOfSplicingADifferentCopy(t *testing.T) {
 
 	s.Notify(hook("PostToolUse", sid, p))
 	eventually(t, "the session stopped", func() bool { return s.Stopped()[sid] != "" })
-	if st, _ := c.snapshot(); string(st) != "XXX\n" {
+	st, calls := c.snapshot()
+	if string(st) != "XXX\n" {
 		t.Fatalf("stored %q: a different copy was appended to", st)
+	}
+	// found by the empty append that checks the tail, before any chunk was shipped
+	if n := nonEmpty(calls); n != 0 {
+		t.Fatalf("%d chunk(s) shipped before the divergence was found", n)
+	}
+}
+
+func TestNoticesAnObjectAPushPutBackWithNoNewLines(t *testing.T) {
+	// The agent has caught up; then a push replaces the object with an older
+	// snapshot. The file does not grow, but the next hook's settled read checks
+	// the center and sends what the push dropped.
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "one\ntwo\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "caught up", storedIs(c, "one\ntwo\n"))
+	time.Sleep(3 * fast.SettleDelay)
+
+	c.mu.Lock()
+	c.stored = []byte("one\n")
+	c.mu.Unlock()
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the dropped line sent again", storedIs(c, "one\ntwo\n"))
+}
+
+func TestForgetsLongStoppedSessionsWhenTheMapGrows(t *testing.T) {
+	c := &refusing{err: &Permanent{Err: errors.New("diverged")}}
+	opts := fast
+	opts.IdleDrop = 50 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "one\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "stopped", func() bool { return s.Stopped()[sid] != "" })
+	time.Sleep(2 * opts.IdleDrop)
+
+	other := "1d5ad3c1-5b6e-4c1f-9a3e-1f2b3c4d5e6f"
+	p2 := filepath.Join(filepath.Dir(p), other+".jsonl")
+	if err := os.WriteFile(p2, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Notify(hook("PostToolUse", other, p2))
+	s.mu.Lock()
+	_, kept := s.sessions[sid]
+	s.mu.Unlock()
+	if kept {
+		t.Fatal("a session stopped longer ago than IdleDrop is still in the map")
 	}
 }
 
@@ -881,8 +933,8 @@ func TestDuringAnOutageHooksDoNotRetryFasterThanTheBackoff(t *testing.T) {
 		s.Notify(hook("PostToolUse", sid, p))
 		time.Sleep(5 * time.Millisecond)
 	}
-	if n := c.n(); n > 2 {
-		t.Fatalf("%d calls in 200ms of hooks with a 300ms backoff", n)
+	if n := c.n(); n > 2 || n < 1 {
+		t.Fatalf("%d calls in 200ms of hooks with a 300ms backoff (want 1 or 2)", n)
 	}
 }
 

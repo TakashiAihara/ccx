@@ -191,7 +191,7 @@ describe("ObjectStore.append", () => {
     expect((await store.head("ccx", KEY))?.size).toBe(8);
   });
 
-  test("put と append は同じ key で交互に走らない (put の後の append は put の size に対して判定する)", async () => {
+  test("put の後の append は put の size に対して判定する", async () => {
     const store = new ObjectStore(root);
     await store.append("ccx", KEY, 0n, enc("one\n"));
     await store.put("ccx", KEY, enc("one\ntwo\n"));
@@ -384,5 +384,80 @@ describe("ObjectStore: put の置き換えと追記の順序", () => {
     await appending;
     await putting;
     expect(await stored()).toBe("new\n");
+  });
+});
+
+describe("ObjectStore: 切り戻しの最中と一覧", () => {
+  test("追記の切り戻しの最中に読んでも、書きかけの長さは見えない", async () => {
+    let during: number | undefined;
+    class SlowRollback extends ObjectStore {
+      protected override async truncateTo(path: string, size: number) {
+        during = (await this.head("ccx", KEY))?.size;
+        await super.truncateTo(path, size);
+      }
+    }
+    const store = new SlowRollback(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    await expect(
+      store.append("ccx", KEY, 4n, enc("two\n"), {
+        beforeCommit: async () => {
+          throw new Error("disk went away");
+        },
+      }),
+    ).rejects.toThrow("disk went away");
+    expect(during).toBe(4);
+  });
+
+  test("一覧も、stat の後に追記が確定したとき書きかけの長さを返さない", async () => {
+    let release!: () => void;
+    let committed!: Promise<unknown>;
+    let armed = false;
+    class MidWrite extends ObjectStore {
+      protected override async statOf(path: string) {
+        const s = await super.statOf(path);
+        if (!armed) return s;
+        armed = false;
+        release();
+        await committed;
+        return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { size: 6 });
+      }
+    }
+    const store = new MidWrite(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    const held = new Promise<void>((r) => (release = r));
+    committed = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+
+    armed = true;
+    const listed = (await store.listKeys("ccx", "transcripts/")).find((o) => o.key === KEY);
+    expect(listed?.size).toBe(8);
+  });
+});
+
+describe("ObjectStore.head: 確定長を読んだ後に追記が始まる", () => {
+  test("stat が書き込み途中の長さを読んでも、それを返さない (4 か 8 で、6 ではない)", async () => {
+    let release!: () => void;
+    let appending: Promise<unknown> | undefined;
+    let armed = false;
+    class StartsDuringStat extends ObjectStore {
+      protected override async statOf(path: string) {
+        if (!armed) return super.statOf(path);
+        armed = false;
+        // head が確定長 (記録なし) を読んだ後、stat が返る前に追記が始まり、2 bytes 書けた瞬間を stat が読む
+        const held = new Promise<void>((r) => (release = r));
+        appending = this.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+        await Bun.sleep(10);
+        const s = await super.statOf(path);
+        return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { size: 6 });
+      }
+    }
+    const store = new StartsDuringStat(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+
+    armed = true;
+    const h = await store.head("ccx", KEY);
+    release();
+    await appending;
+    expect([4, 8]).toContain(h?.size ?? -1);
   });
 });

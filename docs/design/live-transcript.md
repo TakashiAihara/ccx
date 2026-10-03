@@ -76,6 +76,9 @@ size. That one rule gives:
   them; otherwise it refuses with `DATA_LOSS`, and the agent stops the session rather than splice two
   copies into one that exists nowhere. A stopped session starts over (asking for the size again) at
   its first hook an hour or more later, by when a `push` may have put the object right.
+- The same check runs with no data: right after the size is learned, and on every settled read. That
+  is how a caught-up session notices that a `push` put back an older snapshot (its file has not
+  grown, so it would send nothing) and how a different copy is found before a chunk is shipped.
 
 Writes to one key are serialised in the center, so an append and a `push` of the same transcript do
 not interleave. `push` keeps replacing the whole object; when it carries the same bytes, nothing
@@ -89,7 +92,12 @@ in the middle of one can leave part of a line; the agent's next append is refuse
 size, and it sends the rest of that line from there, so the object is whole again at the next read.
 
 A `DELETE` of the object waits for an append in progress, and so does the moment a `push` replaces
-it. The push's body is received before that, outside the wait, so a slow upload holds up nobody.
+it. The push's body is received before that, outside the wait, so a slow upload holds up nobody. The
+price: appends that land while a push uploads are replaced by the push's older snapshot; the
+session's next settled read finds the object shorter than its offset and sends them again.
+
+The center must understand `expected_tail` before agents send it: a center that does not drops the
+field and appends without checking. Update the center first.
 
 A center refusal that retrying cannot fix stops live sync instead of retrying it: a center without
 `TranscriptService` or a refused token stops it for every session, a request the center calls
@@ -138,9 +146,12 @@ transfer, not correctness.
 
 `pull` checks the download against `session.json`. A copy that live sync grew after the push is
 accepted when the bytes the push hashed are its prefix and it ends with a newline. A local file
-that already exists is compared with the store's object, not with `session.json`: the same bytes
-are already here, a shorter local file that is the object's beginning is an older copy and is
-replaced without `--force`, and anything else still needs `--force`.
+that already exists is compared with the downloaded copy, not with `session.json`: the same bytes
+are already here, a shorter local file that is the copy's beginning is an older copy and is
+replaced without `--force`, and anything else still needs `--force`. The comparison is made against
+the download itself, so a push that replaces the object mid-pull cannot make it compare one copy and
+install another. When the local file is `session.json`'s copy and the object has not grown, nothing
+is downloaded.
 
 ## Not here
 

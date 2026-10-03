@@ -61,10 +61,12 @@ func (c *Client) Append(ctx context.Context, session string, offset uint64, data
 //   - Unimplemented (a center older than TranscriptService), Unauthenticated and
 //     PermissionDenied (the token) are the same for every session: *Permanent
 //     with Global, so live sync stops instead of re-sending every 5s forever
-//   - InvalidArgument: what the center refuses is the key, and every part of it
-//     but the session id (machine, user, bucket, prefix) is the same for every
-//     session — the id is checked before a session exists — so *Permanent with
-//     Global too
+//   - InvalidArgument: the center refuses the key or the data. Every part of the
+//     key but the session id (machine, user, bucket, prefix) is the same for every
+//     session, and the id is checked before a session exists. The data refusal
+//     (not ending in a newline) is per request, but this agent never sends such
+//     data; if a bug ever did, stopping every session is the loud way to find it.
+//     So *Permanent with Global too
 //   - DataLoss: the object is not a prefix of this session's local file (another
 //     copy was put in its place): *Permanent for this session; push fixes it
 //   - anything else (down, timeout, internal) is transient
