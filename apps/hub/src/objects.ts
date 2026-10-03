@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, rename, rm, stat, unlink } from "node:fs/promises";
+import { appendFile, mkdir, readdir, rename, rm, stat, truncate, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
@@ -44,6 +44,14 @@ export function validKey(key: string): boolean {
 }
 
 /**
+ * bucket 名。S3 の規則と同じ形。mountObjects の 400 (InvalidBucketName) と、
+ * 保存先を名前で受ける TranscriptService.Append の検査が同じ判定を使う。
+ */
+export function validBucket(bucket: string): boolean {
+  return BUCKET.test(bucket);
+}
+
+/**
  * prefix は key の先頭なので、末尾以外は key と同じ規則。`a/../` のような prefix は
  * listKeys の走査を root の外に向けるので拒む。空と、`/` で終わるものは通す。
  */
@@ -56,12 +64,33 @@ export function validPrefix(prefix: string): boolean {
   return segs.every((seg) => seg !== "" && seg !== "." && seg !== "..");
 }
 
-/** 読み込みながら md5 を取る。object 全体をメモリに載せない */
-async function md5Of(path: string): Promise<string> {
+/**
+ * 読み込みながら md5 を取る。object 全体をメモリに載せない。
+ * limit があればその長さまでで切る (append の確定前を読む readers 用)。
+ */
+async function md5Of(path: string, limit?: number): Promise<string> {
   const h = createHash("md5");
-  for await (const chunk of Bun.file(path).stream()) h.update(chunk);
+  let read = 0;
+  for await (const chunk of Bun.file(path).stream()) {
+    const bytes = limit === undefined ? chunk : chunk.subarray(0, Math.min(chunk.length, limit - read));
+    read += bytes.length;
+    h.update(bytes);
+    if (limit !== undefined && read >= limit) break;
+  }
   return `"${h.digest("hex")}"`;
 }
+
+/** 1 つの object への書き込み (put と append) を直列化するのに使う識別子 */
+const lockKeyOf = (bucket: string, key: string) => `${bucket}/${key}`;
+
+/** append の 1 回分の設定。beforeCommit はテスト専用の継ぎ目。 */
+export type AppendOptions = {
+  /**
+   * bytes を書いてから新しい長さを確定するまでの間で待たせる。確定前の長さを
+   * reader に見せられることを、外から確かめるための口。
+   */
+  beforeCommit?: () => Promise<void>;
+};
 
 /** CompleteMultipartUpload の本文から PartNumber を出現順に取る */
 export function partNumbersOf(xml: string): number[] {
@@ -73,8 +102,47 @@ const isEnoent = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT"
 export class ObjectStore {
   constructor(readonly root: string) {}
 
+  /**
+   * 1 つの key への put と append の並びを 1 本にするための鎖。append は
+   * 「offset == 今の size」という判定を挟んでから書くので、同じ key に put と append
+   * が重なると size の取り合いになる (append が put の前に読んだ size へ書くと、
+   * append した bytes が put の後始末に消える)。
+   */
+  private locks = new Map<string, Promise<void>>();
+
+  /**
+   * append の書き込みが済んでから長さが確定するまでの間だけ入る、その key で確定して
+   * いる長さ。これがある間、reader (head / file / GET / readCommitted) はファイルが
+   * 持っている長さではなくこの長さまでしか見ない (追記の途中で走った検索が、
+   * 書きかけの行を読まないようにするため)。
+   */
+  private pending = new Map<string, number>();
+
   private objectPath(bucket: string, key: string): string {
     return join(this.root, bucket, key);
+  }
+
+  /** 確定前の長さの制限。記録が無ければ「制限なし」。 */
+  private committedLimit(bucket: string, key: string): number | undefined {
+    return this.pending.get(lockKeyOf(bucket, key));
+  }
+
+  /** 同じ key への書き込みを通しで 1 本にする。fn が失敗しても次の人は進める。 */
+  private async locked<T>(bucket: string, key: string, fn: () => Promise<T>): Promise<T> {
+    const id = lockKeyOf(bucket, key);
+    const prev = this.locks.get(id) ?? Promise.resolve();
+    const run = prev.then(fn);
+    // 鎖として渡すのは失敗しない promise。前の呼び出しが失敗しても次の人は進める
+    const mine = run.then(
+      () => {},
+      () => {},
+    );
+    this.locks.set(id, mine);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(id) === mine) this.locks.delete(id);
+    }
   }
 
   private uploadDir(uploadId: string): string {
@@ -84,9 +152,20 @@ export class ObjectStore {
   /**
    * 書きかけを読まれないよう、staging に書いてから rename する。staging は root 直下の
    * `.staging/` で、bucket 名は `.` で始められないので一覧に混ざらない (object の隣に
-   * `.tmp` を置く形だと、`.tmp` で終わる key を一覧から隠すことになる)
+   * `.tmp` を置く形だと、`.tmp` で終わる key を一覧から隠すことになる)。
+   *
+   * 同じ key の append と並べばける (append の offset 判定と、put の rename が
+   * 期間中に重なると、append が消えるか壊れる)。
    */
   async put(bucket: string, key: string, body: ReadableStream<Uint8Array> | Uint8Array): Promise<string> {
+    return this.locked(bucket, key, () => this.write(bucket, key, body));
+  }
+
+  private async write(
+    bucket: string,
+    key: string,
+    body: ReadableStream<Uint8Array> | Uint8Array,
+  ): Promise<string> {
     const path = this.objectPath(bucket, key);
     await mkdir(dirname(path), { recursive: true });
     await mkdir(join(this.root, ".staging"), { recursive: true });
@@ -111,6 +190,48 @@ export class ObjectStore {
     return `"${h.digest("hex")}"`;
   }
 
+  /**
+   * offset が今の size と一致したときだけ data を末尾に足し、{ ok, size } を返す。
+   * 一致しなければ何も書かず { ok: false, 今の size } で終わる (object が無い size は 0)。
+   *
+   * 「offset == size」しか許さないことが、重複 (送り済みの bytes の再送は offset が size
+   * より小さい) と欠け (offset が size より大きい) を両方書かせない唯一の手順 (#120)。
+   * data が空なら size が一致しただけで成功として、何も書かない。
+   */
+  async append(
+    bucket: string,
+    key: string,
+    offset: bigint,
+    data: Uint8Array,
+    opts: AppendOptions = {},
+  ): Promise<{ ok: boolean; size: bigint }> {
+    // 同じ key の put と append を 1 本にする。判定も書き込みもこの鎖の中
+    return this.locked(bucket, key, async () => {
+      const size = BigInt((await this.head(bucket, key))?.size ?? 0);
+      if (offset !== size) return { ok: false, size };
+
+      const id = lockKeyOf(bucket, key);
+      const path = this.objectPath(bucket, key);
+      // ここから確定までは、reader に append 前の長さしか見せない
+      this.pending.set(id, Number(size));
+      try {
+        if (data.length > 0) {
+          await mkdir(dirname(path), { recursive: true });
+          await appendFile(path, data);
+        }
+        if (opts.beforeCommit) await opts.beforeCommit();
+      } catch (e) {
+        this.pending.delete(id);
+        // 途中まで書けた object を残すと、reader には次の append まで壊れた長さの
+        // object が見えてしまう。確定前に戻した長さに切り戻す
+        if (data.length > 0) await truncate(path, Number(size)).catch(() => {});
+        throw e;
+      }
+      this.pending.delete(id);
+      return { ok: true, size: size + BigInt(data.length) };
+    });
+  }
+
   /** bucket を用意する。既にあっても成功 (S3 の CreateBucket と同じ) */
   async createBucket(bucket: string): Promise<void> {
     await mkdir(join(this.root, bucket), { recursive: true });
@@ -124,7 +245,7 @@ export class ObjectStore {
       if (isEnoent(e)) return [];
       throw e;
     }
-    return names.filter((n) => BUCKET.test(n)).sort();
+    return names.filter(validBucket).sort();
   }
 
   /** 無ければ null。無い以外の失敗 (権限 / I/O) は投げる — 404 に化けると消えたように見える */
@@ -138,13 +259,25 @@ export class ObjectStore {
       throw e;
     }
     if (!s.isFile()) return null;
+    // append が確定するまでは、書けているぶんの長さを隠す (下の file / GET と同じ)
+    const limit = this.committedLimit(bucket, key);
+    const size = limit === undefined ? s.size : Math.min(s.size, limit);
     // ETag は S3 では単一 PUT なら本文の md5。読み直して計算するのは、置いた
-    // ときの値を別に持たない (ファイル 1 つで完結させる) ため
-    return { size: s.size, mtime: s.mtime, etag: await md5Of(path) };
+    // ときの値を別に持たない (ファイル 1 つで完結させる) ため。読み返す長さも size に
+    // 合わせる。そうしないと S3 のように「同じ ETag で別の長さ」になる
+    return { size, mtime: s.mtime, etag: await md5Of(path, size === s.size ? undefined : size) };
   }
 
-  file(bucket: string, key: string) {
-    return Bun.file(this.objectPath(bucket, key));
+  /** 本文。append の途中なら確定した長さまでしか返さない Blob。 */
+  file(bucket: string, key: string): Blob {
+    const path = this.objectPath(bucket, key);
+    const limit = this.committedLimit(bucket, key);
+    return limit === undefined ? Bun.file(path) : Bun.file(path).slice(0, limit);
+  }
+
+  /** 本文を確定長まで読んで文字列で返す (DuckDB へ渡す前などに使う) */
+  async readCommitted(bucket: string, key: string): Promise<string> {
+    return this.file(bucket, key).text();
   }
 
   /** S3 と同じく、無い key の DELETE も成功として返す。無い以外の失敗は投げる */
@@ -355,7 +488,7 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
   // bucket は暗黙に存在するので、どれも「作った / ある」としか答えない
   app.on(["GET", "PUT", "HEAD"], "/:bucket", async (c) => {
     const bucket = c.req.param("bucket");
-    if (!BUCKET.test(bucket)) return xmlError(400, "InvalidBucketName", bucket);
+    if (!validBucket(bucket)) return xmlError(400, "InvalidBucketName", bucket);
     if (c.req.method === "GET") return list(c, bucket);
     if (c.req.method === "PUT") await store.createBucket(bucket);
     return c.body(null, 200);
@@ -363,7 +496,7 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
 
   app.on(["GET", "HEAD", "PUT", "POST", "DELETE"], "/:bucket/*", async (c) => {
     const bucket = c.req.param("bucket");
-    if (!BUCKET.test(bucket)) return xmlError(400, "InvalidBucketName", bucket);
+    if (!validBucket(bucket)) return xmlError(400, "InvalidBucketName", bucket);
     let key: string;
     try {
       // `new URL().pathname` は `%2e%2e` を `..` と読んで畳む (WHATWG)。畳まれた後の

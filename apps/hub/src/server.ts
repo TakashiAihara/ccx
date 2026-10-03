@@ -7,7 +7,9 @@ import type { Db } from "./db/open.ts";
 import { mountObjects, type ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+import { TranscriptService } from "@ccx/proto/ccx/v1/transcript_pb.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
+import { transcriptImpl } from "./transcript.ts";
 
 /**
  * Hono の上に Connect の handler を貼る。
@@ -20,6 +22,7 @@ export function createApp(db: Db, objects: ObjectStore, opts: { token?: string }
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db));
   router.service(FleetService, fleetImpl(db));
+  router.service(TranscriptService, transcriptImpl(objects));
 
   const app = new Hono();
 

@@ -18,6 +18,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -94,6 +95,33 @@ type Config struct {
 	// listener must not stop collect or the heartbeat (the same rule as
 	// Heartbeat.Err).
 	APITokenErr error
+
+	// Transcript is the live transcript's settings (#120,
+	// docs/design/live-transcript.md): the store ccx-agent appends a running
+	// session's transcript.jsonl to, and whether that store is the center.
+	Transcript Transcript
+}
+
+// Transcript resolves the same store `ccx transcript` does
+// (packages/core/src/config.ts), reduced to what live sync asks: which bucket
+// and prefix the object lives under, and whether it is the center's own object
+// API. The endpoint itself is not carried: ToCenter says the one thing that
+// decides whether Append can be used at all.
+type Transcript struct {
+	// Live turns the live append on. Default ON: without it a session's
+	// conversation only reaches the store when it ends, which is the whole
+	// problem (#120). It is inert unless ToCenter, so on-by-default is safe.
+	Live bool
+	// ToCenter is true when the resolved store is the center's own object API —
+	// the same condition the CLI uses to send the center's token there (the
+	// endpoint unset, or the same origin as the hub). S3 has no append, so
+	// anything else (MinIO, R2, AWS) means live sync cannot run and the agent
+	// says so instead of failing every append.
+	ToCenter bool
+	// Bucket and Prefix are where the object is, same defaults as the CLI
+	// ("ccx", no prefix).
+	Bucket string
+	Prefix string
 }
 
 // Heartbeat is the heartbeat concern's settings.
@@ -157,6 +185,15 @@ type fileShape struct {
 		Interval string `toml:"interval"`
 		MaxIdle  string `toml:"maxIdle"`
 	} `toml:"heartbeat"`
+	// [transcript] is the same store `ccx transcript` uses (endpoint, bucket,
+	// prefix). `live` is the switch that stops reading transcripts per hook,
+	// and it exists nowhere else (#120).
+	Transcript struct {
+		Endpoint string `toml:"endpoint"`
+		Bucket   string `toml:"bucket"`
+		Prefix   string `toml:"prefix"`
+		Live     *bool  `toml:"live"`
+	} `toml:"transcript"`
 }
 
 // Load resolves the config from the real environment.
@@ -226,6 +263,26 @@ func load(
 		hbErr = err
 	}
 
+	// The transcript store, resolved exactly as the CLI resolves it
+	// (packages/core/src/config.ts) — same defaults, same prefix normalisation.
+	// If ccx-agent appended to a different object than `ccx transcript` reads,
+	// the conversation would exist twice.
+	tEndpoint := pick(getenv("CCX_TRANSCRIPT_ENDPOINT"), gitcfg("ccx.transcriptEndpoint"), file.Transcript.Endpoint)
+	tBucket := pick(getenv("CCX_TRANSCRIPT_BUCKET"), gitcfg("ccx.transcriptBucket"), file.Transcript.Bucket)
+	if tBucket == "" {
+		tBucket = "ccx"
+	}
+	tPrefix := normalizePrefix(pick(getenv("CCX_TRANSCRIPT_PREFIX"), gitcfg("ccx.transcriptPrefix"), file.Transcript.Prefix))
+	// The center's object API is HTTP, so a hub that is not http(s) is not a
+	// store at all. An endpoint named outright is one somewhere else unless it
+	// is the hub's own origin — the same condition the CLI uses before it hands
+	// the center's token to a store, and S3 has no append.
+	hubHTTP := ""
+	if isHTTP(hub) {
+		hubHTTP = hub
+	}
+	toCenter := hubHTTP != "" && (tEndpoint == "" || sameOrigin(tEndpoint, hubHTTP))
+
 	return Config{
 		HubURL:     hub,
 		HubToken:   token,
@@ -252,6 +309,14 @@ func load(
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
 		APIToken:          apiToken,
 		APITokenErr:       apiTokenErr,
+		Transcript: Transcript{
+			// git config is being taken out of the resolution (kaneo
+			// ccx#24), so a new switch does not start there. Env or the file stops it.
+			Live:     fileToggle(getenv, "CCX_TRANSCRIPT_LIVE", file.Transcript.Live, true),
+			ToCenter: toCenter,
+			Bucket:   tBucket,
+			Prefix:   tPrefix,
+		},
 	}, nil
 }
 
@@ -306,6 +371,60 @@ func parseBool(v string) (value, ok bool) {
 	default:
 		return false, false
 	}
+}
+
+// fileToggle is toggle without the git step, for a setting git config is not a
+// source of. It keeps the same "a typo falls through" rule, so a misspelt env
+// value reaches the file instead of resolving to the built-in default.
+func fileToggle(getenv func(string) string, envKey string, fileVal *bool, def bool) bool {
+	if b, ok := parseBool(getenv(envKey)); ok {
+		return b
+	}
+	if fileVal != nil {
+		return *fileVal
+	}
+	return def
+}
+
+// normalizePrefix is the CLI's normalizePrefix: drop a leading `/` and add a
+// trailing one, so `a` and `a/` are not two places. Empty stays empty (nothing
+// goes in front of the key then).
+func normalizePrefix(raw string) string {
+	p := strings.TrimLeft(raw, "/")
+	if p != "" && !strings.HasSuffix(p, "/") {
+		return p + "/"
+	}
+	return p
+}
+
+// isHTTP is whether the URL has an object API behind it. The center's own is
+// HTTP; a nats broker or anything else is not a store.
+func isHTTP(raw string) bool {
+	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
+}
+
+// sameOrigin compares two URLs by scheme, host and port, ignoring the path and
+// the default port (https://c == https://c:443). An unparsable URL is never the
+// same as anything.
+func sameOrigin(a, b string) bool {
+	oa, ok := originOf(a)
+	if !ok {
+		return false
+	}
+	ob, ok := originOf(b)
+	return ok && oa == ob
+}
+
+func originOf(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	scheme, port := strings.ToLower(u.Scheme), u.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
 }
 
 // pick returns the first non-empty value, in precedence order.

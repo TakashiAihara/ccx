@@ -29,6 +29,10 @@ same way when built. `internal/concern` is the interface; `internal/collect` and
 `internal/heartbeat` are modules.
 A ccx-agent with every concern off is a valid state.
 
+Live transcript (`livetranscript`) is a fifth concern with no toggle of its own:
+it rides along with collect, whose hook events say which sessions are running,
+and the configuration table below is what turns it on or off.
+
 ## The two commands
 
 ```text
@@ -171,8 +175,20 @@ it simply has no center to forward to.
 | status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
 | status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the API token) |
 | status API token (TCP) | `CCX_API_TOKEN` | — | — (file `api-token` next to config.toml, 0600) | none |
+| live transcript on/off | `CCX_TRANSCRIPT_LIVE` | — | `[transcript] live` | on (only when the store is the center) |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
+
+The live transcript appends a running session's `transcript.jsonl` to the store
+through the center (`docs/design/live-transcript.md`), so the center holds the
+conversation as it runs instead of only after the session ends. It follows
+`[transcript]` in config.toml — the same endpoint, bucket and prefix
+`ccx transcript` uses — and runs only when that store is the center's own object
+API, because S3 has no append. With the store elsewhere (MinIO, R2, AWS) serve
+logs one line saying why it is off, and `ccx transcript push` at the end of the
+session works as before. Turning it off (`CCX_TRANSCRIPT_LIVE=off`) keeps the
+agent from reading transcripts at all. It has no git config key: git config is
+being taken out of the resolution, so a new setting does not start there.
 
 The machine name defaults to the hostname but is overridable, because hostnames
 collide (cloned VMs, same-named containers) and the center keys records on it
