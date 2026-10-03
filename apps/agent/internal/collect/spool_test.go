@@ -185,19 +185,18 @@ func TestDrainIncoming_MovesRawIntoQueueInOrder(t *testing.T) {
 // least assert the invariant that only complete files carry the .pb name (temps
 // are .tmp-*), so Oldest never reads a partial.
 func TestAtomicWrite_LeavesNoPartialUnderRealName(t *testing.T) {
-	dir := t.TempDir()
-	if err := atomicWrite(filepath.Join(dir, "0000.pb"), []byte("complete"), true); err != nil {
-		t.Fatal(err)
-	}
-	ents, _ := os.ReadDir(dir)
-	for _, e := range ents {
-		if e.Name() == "0000.pb" {
-			b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
-			if string(b) != "complete" {
-				t.Errorf("real-named file must be complete, got %q", b)
-			}
-			return
+	for _, durable := range []bool{true, false} {
+		dir := t.TempDir()
+		if err := atomicWrite(filepath.Join(dir, "0000.pb"), []byte("complete"), durable); err != nil {
+			t.Fatal(err)
+		}
+		ents, _ := os.ReadDir(dir)
+		if len(ents) != 1 || ents[0].Name() != "0000.pb" {
+			t.Fatalf("durable=%v: want only 0000.pb, got %v", durable, ents)
+		}
+		b, _ := os.ReadFile(filepath.Join(dir, "0000.pb"))
+		if string(b) != "complete" {
+			t.Errorf("durable=%v: real-named file must be complete, got %q", durable, b)
 		}
 	}
-	t.Error("expected the renamed file to exist")
 }

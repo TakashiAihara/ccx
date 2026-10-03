@@ -277,14 +277,18 @@ func (s *Spool) maxSeqOnDisk() (uint64, error) {
 }
 
 // atomicWrite writes b to path via a temp file + rename. The rename is what makes
-// the write atomic: a crash mid-write leaves a .tmp, never a half event under a
-// real name. The temp lives in the same dir so the rename stays on one filesystem.
+// the write atomic for a reader looking at the same directory: what it sees under
+// the real name is either nothing or all of b, never a prefix. The temp lives in
+// the same dir so the rename stays on one filesystem.
 //
-// durable adds the fsync pair (the temp file, then the directory) on top of that.
-// Atomicity holds either way; fsync is what survives a power loss or a kernel
-// panic, so only callers whose file is a durability promise pay for it. Callers
-// that must stay interruptible pass false — fsync is a blocking syscall, so a
-// thread waiting on a stalled disk cannot be rescued by a timeout.
+// durable adds the fsync pair (the temp file, then the directory). Only that also
+// carries the atomicity across a crash: without it the data can sit in page cache
+// while the rename is already committed, so ext4 delalloc can persist the new name
+// and leave a zero-length file under it after a power loss. fsync is also what
+// survives a kernel panic, so only callers whose file is a durability promise pay
+// for it. Callers that cannot wait for an fsync pass false — it is a blocking
+// syscall, and a thread waiting on a stalled disk cannot be rescued by a timeout.
+// That buys back the fsync only; the create and rename can stall too.
 func atomicWrite(path string, b []byte, durable bool) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
