@@ -18,6 +18,16 @@ import (
 // directory is roughly chronological — that is the order ccx-agent drains them in.
 // UUIDv7 also makes the name collision-free across concurrent hooks without a
 // pid or a lock.
+//
+// It writes with durable=false, so no fsync at all. fsync can block for tens of
+// seconds on a disk in IO wait, and the blocked thread sits in D state where no
+// timeout can return the process — the hook would miss hookOverallBudget and hang
+// the session it is supposed to stay out of (#204). The price is that the payload
+// lives only in page cache until writeback: the window in which a power loss
+// loses it runs to writeback, not to the write, and it is longest exactly when
+// the disk is already backed up — the same condition this exists for. A power
+// loss can also leave a zero-length .raw under its real name, which the next
+// drain then wraps as an empty event. A hung session is the worse failure.
 func writeIncoming(incomingDir string, payload []byte) error {
 	if err := os.MkdirAll(incomingDir, 0o700); err != nil {
 		return err
@@ -26,7 +36,7 @@ func writeIncoming(incomingDir string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(incomingDir, id.String()+".raw"), payload)
+	return atomicWrite(filepath.Join(incomingDir, id.String()+".raw"), payload, false)
 }
 
 func newUUIDv7() string {

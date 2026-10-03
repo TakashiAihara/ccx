@@ -17,10 +17,10 @@ const (
 	hookExchangeTimeout = 1 * time.Second
 	// hookOverallBudget — the hard backstop on the ENTIRE hook, socket path and
 	// fallback write together. A hook must never block the session (#18,
-	// scope.md); if even the fallback disk write stalls, the hook abandons it and
-	// returns. It is a process about to exit, so an abandoned write goroutine
-	// dies with it. Must exceed dial+exchange so the normal fallback is never cut
-	// off.
+	// scope.md), so even if some syscall wedges in a way the per-step deadlines
+	// miss, the hook gives up on it and returns. Must exceed dial+exchange so the
+	// normal fallback is never cut off. A syscall sitting in D state is the one
+	// thing it cannot bound — nothing ends the process while it is in one.
 	hookOverallBudget = 3 * time.Second
 )
 
@@ -33,10 +33,12 @@ const (
 // down would break the one thing the whole design protects: the local side
 // works regardless of anything downstream (scope.md).
 //
-// Two outcomes, both durable, both exit 0:
-//   - socket reachable → ccx-agent spools it and acks → done.
+// Two outcomes, both exit 0, but only one of them is durable:
+//   - socket reachable → ccx-agent spools it durably and acks → done.
 //   - socket unreachable or unresponsive → write the payload to the fallback
-//     spool (incoming/) and exit. ccx-agent drains it when it next starts.
+//     spool (incoming/) and exit. That write is atomic but not fsynced, so a
+//     power loss before writeback can take it. ccx-agent drains whatever
+//     survived when it next starts.
 //
 // It takes the spool dir (not the incoming dir) and derives the fallback
 // location itself, so the spool layout stays owned by collect.
@@ -51,8 +53,13 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 	// Do the delivery under a hard overall budget. Both the socket exchange and
 	// the fallback disk write are bounded individually, but this is the backstop
 	// that guarantees the hook returns even if some syscall wedges in a way the
-	// per-step deadlines miss (a hung fs on the fallback write, say). We are about
-	// to exit, so abandoning the goroutine is free.
+	// per-step deadlines miss.
+	//
+	// Giving up on the goroutine is not free if it sits in a D-state syscall: the
+	// process cannot exit until that returns. fsync on a disk in IO wait did
+	// exactly that for tens of seconds (#194), so the fallback write skips fsync
+	// (#204). Its other syscalls (mkdir, create, rename) can still stall on such a
+	// disk; this budget does not cover that case.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -66,9 +73,11 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 	select {
 	case <-done:
 	case <-time.After(hookOverallBudget):
-		// Everything downstream stalled. Protect the session and return; the
-		// event may be lost in this rare case, but a blocked session is the worse
-		// failure (scope.md: local must never be held hostage to anything).
+		// Everything downstream stalled. Protect the session and return. After a
+		// successful dial ccx-agent has usually already spooled the event and only
+		// the ack was late, so the event survives; it is lost only if it never
+		// reached the socket side. A blocked session is still the worse failure
+		// (scope.md: local must never be held hostage to anything).
 	}
 	return 0
 }
