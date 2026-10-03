@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,11 +218,17 @@ func (s *Collect) handle(conn net.Conn) {
 		return
 	}
 
-	if _, err := s.spool.AppendID(id, payload); err != nil {
+	ev, err := s.spool.AppendID(id, payload)
+	if err != nil {
 		// Could not durably store it. Do NOT ack — the hook will fall back to
 		// incoming/, so the event is still not lost.
 		s.log("spool append error: %v", err)
 		return
+	}
+	// A hook that sent an id the spool would not take loses dedup for the copy a
+	// lost ack sends through incoming/. Say so, or the duplicates come back silently.
+	if id != "" && !strings.EqualFold(ev.GetEventId(), id) {
+		s.log("hook sent event_id %q, not a UUIDv7; spooled as %s", id, ev.GetEventId())
 	}
 
 	// Durably spooled. Ack so the hook knows, and nudge the drain loop.

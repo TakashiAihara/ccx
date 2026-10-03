@@ -16,11 +16,10 @@ import (
 //
 // The top bit of the length says a 36-byte event id (#101) precedes the payload.
 // No length can reach it (maxFrame is far below 2^31). A reader from before the
-// flag existed caps the header
-// at maxFrame, reads a flagged header as a length far past the cap, and refuses the
-// frame as too large instead of spooling 36 bytes of id as the head of a truncated
-// payload. It acks nothing, so the hook falls back to incoming/ and the event
-// survives — spooled once per path, under one id, which the center can drop.
+// flag existed caps the header at maxFrame, reads a flagged header as a length far
+// past the cap, and refuses the frame as too large instead of spooling 36 bytes of
+// id as the head of a truncated payload. It acks nothing, so the hook falls back
+// and the event reaches the center once, through incoming/.
 //
 // The ack is the receipt. The hook treats "I got ackOK" as "ccx-agent has this on
 // disk" and only then considers the socket path a success. Anything else —
@@ -44,13 +43,8 @@ const (
 	maxFrame = 64 << 20 // 64 MiB
 )
 
-// writeFrame writes the idless frame form, [length][payload]. It is what a hook
-// with no event id to carry sends.
-func writeFrame(w io.Writer, payload []byte) error {
-	return writeHookFrame(w, "", payload)
-}
-
-// writeHookFrame writes one frame, carrying id when the hook has one to carry.
+// writeHookFrame writes one frame. An empty id writes the idless form a hook from
+// before #101 sends.
 func writeHookFrame(w io.Writer, id string, payload []byte) error {
 	if len(payload) > maxFrame {
 		return fmt.Errorf("payload too large: %d bytes", len(payload))

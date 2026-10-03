@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,10 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
 )
 
 // failWriteConn is a conn whose ack write never reaches the hook: the agent has
@@ -42,8 +46,9 @@ func drainAll(t *testing.T, s *Spool) []string {
 
 // The ack-lost race: the socket path spools the event, the hook falls back and
 // writes it to incoming/ as well, and the drain spools it a second time. Both
-// copies must carry the same event_id, or the center keeps both.
-func TestAckLost_BothCopiesCarryTheHooksEventID(t *testing.T) {
+// copies must carry the same event_id, so the center stores each event once.
+// Two events, so an id that never changed between hooks would fail too.
+func TestAckLost_CenterStoresEachEventOnce(t *testing.T) {
 	dir := t.TempDir()
 	sock := dir + "/a.sock"
 	spoolDir := dir + "/spool"
@@ -58,34 +63,56 @@ func TestAckLost_BothCopiesCarryTheHooksEventID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	handled := make(chan struct{})
-	go func() {
-		defer close(handled)
-		c, err := ln.Accept()
-		if err != nil {
-			return
+
+	payloads := []string{`{"hook":"Stop","n":1}`, `{"hook":"Stop","n":2}`}
+	for _, p := range payloads {
+		handled := make(chan struct{})
+		go func() {
+			defer close(handled)
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			srv.handle(failWriteConn{c})
+		}()
+		if code := Hook(sock, spoolDir, strings.NewReader(p)); code != 0 {
+			t.Fatalf("hook exit %d", code)
 		}
-		srv.handle(failWriteConn{c})
-	}()
-
-	if code := Hook(sock, spoolDir, strings.NewReader(`{"hook":"Stop"}`)); code != 0 {
-		t.Fatalf("hook exit %d", code)
-	}
-	<-handled
-
-	if n, err := spool.DrainIncoming(); err != nil || n != 1 {
-		t.Fatalf("drain: n=%d err=%v, want the fallback copy", n, err)
+		<-handled
 	}
 
-	ids := drainAll(t, spool)
-	if len(ids) != 2 {
-		t.Fatalf("spool holds %d events, want 2 (socket copy + fallback copy)", len(ids))
+	if n, err := spool.DrainIncoming(); err != nil || n != 2 {
+		t.Fatalf("drain: n=%d err=%v, want both fallback copies", n, err)
 	}
-	if ids[0] == "" || ids[0] != ids[1] {
-		t.Fatalf("event_ids %q and %q: the center can only drop the duplicate if they match", ids[0], ids[1])
+
+	center, url := testcenter.Start()
+	defer center.Close()
+	fwd := NewForwarder(url, "")
+	var ids []string
+	for {
+		e, err := spool.Oldest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e == nil {
+			break
+		}
+		ids = append(ids, e.Event.GetEventId())
+		if err := fwd.Forward(context.Background(), e.Event); err != nil {
+			t.Fatal(err)
+		}
+		if err := spool.Ack(e); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := uuid.Parse(ids[0]); err != nil {
-		t.Errorf("event_id %q is not a UUID: %v", ids[0], err)
+
+	// Spool order: both socket copies, then both fallback copies.
+	if len(ids) != 4 || ids[0] != ids[2] || ids[1] != ids[3] || ids[0] == ids[1] {
+		t.Fatalf("event_ids %v: want [a b a b] with a != b", ids)
+	}
+	got := center.Payloads()
+	if len(got) != 2 || got[0] != payloads[0] || got[1] != payloads[1] {
+		t.Fatalf("center stored %v, want each event once: %v", got, payloads)
 	}
 }
 
@@ -141,7 +168,7 @@ func TestHandle_LegacyFrameWithoutID(t *testing.T) {
 	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
-	if err := writeFrame(c, []byte("legacy")); err != nil {
+	if err := writeHookFrame(c, "", []byte("legacy")); err != nil {
 		t.Fatal(err)
 	}
 	var ack [1]byte
@@ -193,8 +220,12 @@ func TestHookFrame_RefusedByAnAgentFromBefore101(t *testing.T) {
 	if err := writeHookFrame(&buf, id, []byte(`{"x":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := legacyReadFrame(&buf); err == nil {
+	p, err := legacyReadFrame(&buf)
+	if err == nil {
 		t.Fatalf("old agent read the frame as payload %q", p)
+	}
+	if !strings.Contains(err.Error(), "frame too large") {
+		t.Fatalf("old agent refused for the wrong reason: %v", err)
 	}
 }
 
@@ -232,6 +263,9 @@ func TestAppendID_RejectsNonUUID(t *testing.T) {
 		{"not-a-uuid", "id-002"},
 		{strings.ReplaceAll(good, "-", ""), "id-003"},
 		{strings.Repeat("z", 36), "id-004"},
+		{strings.ToUpper(good), good},
+		{uuid.NewString(), "id-005"},
+		{uuid.Nil.String(), "id-006"},
 	} {
 		ev, err := s.AppendID(tc.in, []byte("p"))
 		if err != nil {
@@ -240,5 +274,40 @@ func TestAppendID_RejectsNonUUID(t *testing.T) {
 		if ev.GetEventId() != tc.want {
 			t.Errorf("AppendID(%q): event_id %q, want %q", tc.in, ev.GetEventId(), tc.want)
 		}
+	}
+}
+
+// A hook id the spool will not take is logged, because the copy a lost ack sends
+// through incoming/ then becomes a duplicate the center cannot drop.
+func TestHandle_LogsARejectedHookID(t *testing.T) {
+	var logged []string
+	var mu sync.Mutex
+	logf := func(f string, a ...any) { mu.Lock(); logged = append(logged, fmt.Sprintf(f, a...)); mu.Unlock() }
+
+	dir := t.TempDir()
+	spool, err := OpenSpool(dir+"/spool", testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newCollect(dir+"/a.sock", spool, nil, logf)
+
+	for _, id := range []string{newUUIDv7(), "", uuid.NewString()} {
+		a, b := net.Pipe()
+		go srv.handle(a)
+		_ = b.SetDeadline(time.Now().Add(2 * time.Second))
+		if err := writeHookFrame(b, id, []byte("p")); err != nil {
+			t.Fatal(err)
+		}
+		var ack [1]byte
+		if _, err := io.ReadFull(b, ack[:]); err != nil || ack[0] != ackOK {
+			t.Fatalf("ack %v err %v", ack, err)
+		}
+		b.Close()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) != 1 || !strings.Contains(logged[0], "not a UUIDv7") {
+		t.Fatalf("logged %q, want one line for the v4 id only (not for the idless frame)", logged)
 	}
 }

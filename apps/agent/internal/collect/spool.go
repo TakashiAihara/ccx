@@ -163,19 +163,21 @@ func (s *Spool) AppendID(id string, payload []byte) (*ccxv1.Event, error) {
 	return ev, nil
 }
 
-// eventID is the id the envelope carries: the caller's when it is a canonical UUID
-// — the only spelling the wire and the fallback file name put an id in — and a
-// freshly minted one otherwise. The length is checked as well as the parse, because
-// a dashless 32-hex UUID parses and would otherwise be stored as a second spelling
-// of an event the center already holds under the canonical one.
+// eventID is the id the envelope carries: the caller's when it is a UUIDv7 in the
+// 36-byte form the hook writes, a freshly minted one otherwise. It is stored in the
+// lowercase form uuid prints, because the center's key is case-sensitive and the
+// copy of the same event that went the other path is spelled that way. A non-v7 id
+// (nil, a name some other tool chose) is not trusted: the center drops the second
+// event under a reused id, so a collision there is a lost event.
 func (s *Spool) eventID(id string) string {
 	if len(id) != hookIDLen {
 		return s.newID()
 	}
-	if _, err := uuid.Parse(id); err != nil {
+	u, err := uuid.Parse(id)
+	if err != nil || u.Version() != 7 {
 		return s.newID()
 	}
-	return id
+	return u.String()
 }
 
 // Entry is one spooled event and the file that holds it.
