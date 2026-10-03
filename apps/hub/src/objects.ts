@@ -114,7 +114,7 @@ export class ObjectStore {
 
   /**
    * append の書き込みが済んでから長さが確定するまでの間だけ入る、その key で確定して
-   * いる長さ。これがある間、reader (head / file / snapshot / 一覧) はファイルが
+   * いる長さ。これがある間、reader (head / snapshot / 一覧) はファイルが
    * 持っている長さではなくこの長さまでしか見ない (追記の途中で走った検索が、
    * 書きかけの行を読まないようにするため)。
    */
@@ -125,7 +125,7 @@ export class ObjectStore {
    * 比べて、間に追記の境目が挟まったかを知る
    */
   // ponytail: 消さない。追記された key の数 (= session 数) だけ center の寿命の間たまる。
-  // head が読んでいる最中に消すと比較が狂うので、消すなら DELETE の鎖の中で行う
+  // 消すと番号が 0 に戻り、読んでいる最中の head が前と同じ番号を見て境目を見逃しうる
   private generation = new Map<string, number>();
 
   private bump(id: string): void {
@@ -237,8 +237,8 @@ export class ObjectStore {
       // object が送り手のファイルの先頭か。末尾の数 KiB だけ読んで比べる (transcript.proto の expected_tail)
       const tail = opts.expectedTail;
       if (tail && tail.length > 0) {
-
-        const have = new Uint8Array(await Bun.file(path).slice(Number(size) - tail.length, Number(size)).arrayBuffer());
+        // object が tail より短ければ slice は先頭で切れて短くなり、下の比較が必ず外れる
+        const have = new Uint8Array(await Bun.file(path).slice(Math.max(0, Number(size) - tail.length), Number(size)).arrayBuffer());
         if (!Buffer.from(have).equals(Buffer.from(tail))) return { ok: false, size, diverged: true };
       }
 
@@ -347,12 +347,6 @@ export class ObjectStore {
     return { head, body: Bun.file(this.objectPath(bucket, key)).slice(0, head.size) };
   }
 
-  /** 本文。append の途中なら確定した長さまでしか返さない Blob。 */
-  file(bucket: string, key: string): Blob {
-    const path = this.objectPath(bucket, key);
-    const limit = this.committedLimit(bucket, key);
-    return limit === undefined ? Bun.file(path) : Bun.file(path).slice(0, limit);
-  }
 
 
   /** S3 と同じく、無い key の DELETE も成功として返す。無い以外の失敗は投げる */

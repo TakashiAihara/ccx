@@ -515,6 +515,16 @@ export class TranscriptClient {
     await this.s3.write(key, JSON.stringify(e));
   }
 
+  /** object の長さ。無ければ null。無い以外の失敗は投げる (無いと読み替えると、伸びた写しを見逃す) */
+  private async objectSize(key: string): Promise<number | null> {
+    try {
+      return (await this.s3.file(key).stat()).size;
+    } catch (e) {
+      if ((e as { code?: string })?.code === "NoSuchKey") return null;
+      throw e;
+    }
+  }
+
   /** 保存先の object を読み戻して sha256 を取る。session.json の値ではなく実体で比べるため */
   private async remoteSha256(key: string): Promise<string | null> {
     if (!(await this.s3.exists(key))) return null;
@@ -578,6 +588,9 @@ export class TranscriptClient {
         prev &&
         prev.sha256 === digest &&
         prev.size === size &&
+        // live 同期 (#120) は session.json を書き換えずに object を伸ばす。手元を切り詰めた
+        // 後の push は session.json と同じでも object が長いので、置き直さないと store が直らない
+        (await this.objectSize(`${prefix}transcript.jsonl`)) === size &&
         sameFiles(prev.toolResults, toolResults) &&
         sameCarried(prev, carried)
       ) {
@@ -654,10 +667,7 @@ export class TranscriptClient {
     // (live 同期は object を伸ばすだけで、push は session.json を書き直す)。object が無い
     // ときも、手元が session.json の写しなら揃っている
     if ((await Bun.file(path).exists()) && (await sha256(path)) === meta.sha256) {
-      const objSize = await this.s3
-        .file(`${prefix}transcript.jsonl`)
-        .stat()
-        .then((s) => s.size, () => null);
+      const objSize = await this.objectSize(`${prefix}transcript.jsonl`);
       if (objSize === null || objSize === meta.size) {
         const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
         if (sameFiles(tr, meta.toolResults) && sameCarried(meta, carried)) {
@@ -665,6 +675,24 @@ export class TranscriptClient {
         }
       }
     }
+    // 付属ファイルも手元の別内容を黙って上書きしない (subagent は push 後も追記されうる)。
+    // transcript を取る前に全部を見る (断るなら取る前に断る)
+    const plan = [
+      ...meta.toolResults.map((r) => ({ key: `tool-results/${r.name}`, dest: under(trDir, r.name), sha256: r.sha256 })),
+      ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => ({ key: `${k}/${r.name}`, dest: under(dirOf(k), r.name), sha256: r.sha256 }))),
+    ];
+    const todo: ((typeof plan)[number] & { replace: boolean })[] = [];
+    for (const f of plan) {
+      const cur = (await Bun.file(f.dest).exists()) ? await sha256(f.dest) : null;
+      if (cur === f.sha256) continue;
+      if (cur && !force) {
+        throw new Error(
+          `${f.dest} exists with different content than the store's copy; pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
+        );
+      }
+      todo.push({ ...f, replace: cur !== null });
+    }
+
     // transcript は最初に隣へ取り、手元との比較はその取得物に対して行う。比べてから取ると、
     // 間に push が object を置き換えたとき、比べたものと入れるものが別になる (手元の
     // 続きを退避せずに消しうる)
@@ -684,7 +712,10 @@ export class TranscriptClient {
         const localSize = Bun.file(path).size;
         const localIsPrefix = localSize <= got.size && (await sha256Blob(got.slice(0, localSize))) === localDigest;
         if (localIsPrefix && localSize < got.size) {
-          // 手元は取得した写しの先頭: 失うものは無いので退避もしない
+          // 手元は取得した写しの先頭なので force は要らない。ただ退避はする: 比べた後、
+          // 置き換えるまでの間に手元で動いている session が書き足すことがあり、退避は
+          // 置き換える瞬間のファイルを残す
+          replaced = `${path}.replaced-${stamp}`;
         } else if (localIsPrefix) {
           // transcript は同じ。tool-results と subagents / workflows まで揃っていれば何もしない
           const [tr, carried] = await Promise.all([localFiles(trDir), carriedFiles(dirOf)]);
@@ -699,23 +730,6 @@ export class TranscriptClient {
         } else {
           replaced = `${path}.replaced-${stamp}`;
         }
-      }
-
-      // 付属ファイルも手元の別内容を黙って上書きしない (subagent は push 後も追記されうる)。何か書く前に全部を見る
-      const plan = [
-        ...meta.toolResults.map((r) => ({ key: `tool-results/${r.name}`, dest: under(trDir, r.name), sha256: r.sha256 })),
-        ...CARRIED.flatMap((k) => carriedOf(meta, k).map((r) => ({ key: `${k}/${r.name}`, dest: under(dirOf(k), r.name), sha256: r.sha256 }))),
-      ];
-      const todo: ((typeof plan)[number] & { replace: boolean })[] = [];
-      for (const f of plan) {
-        const cur = (await Bun.file(f.dest).exists()) ? await sha256(f.dest) : null;
-        if (cur === f.sha256) continue;
-        if (cur && !force) {
-          throw new Error(
-            `${f.dest} exists with different content than the store's copy; pass --force to overwrite (the local file is kept next to it as .replaced-<time>)`,
-          );
-        }
-        todo.push({ ...f, replace: cur !== null });
       }
 
       for (const f of todo) {

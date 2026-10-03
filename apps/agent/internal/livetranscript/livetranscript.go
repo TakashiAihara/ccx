@@ -457,10 +457,14 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 		if settled {
 			st.settle = time.Time{}
 		}
-		// Any read serves the triggers that came before it: it reads the file as it
-		// is now. Leaving pending set because its MinInterval has not passed would
-		// only read the same file again.
-		st.pending = false
+		// A hook-triggered read whose time has not come stays: Claude Code writes
+		// asynchronously, so a settled read that comes first can find the file
+		// complete and still miss a record written a moment later. The read at the
+		// hook's own time is what picks that up (with the defaults, settle 1s comes
+		// before MinInterval 2s).
+		if !st.next.After(now) {
+			st.pending = false
+		}
 		st.retryAt = time.Time{}
 		st.lastActive = now
 		st.mu.Unlock()
@@ -620,7 +624,9 @@ func (s *Sync) read(ctx context.Context, st *session, settled bool) (partial boo
 
 // verify sends an empty append carrying the bytes before this session's offset.
 // A Mismatch moves the offset to the center's size (the read that follows sends
-// from there). done means the session was stopped and there is nothing to read.
+// from there, with the tail at that offset). When the new size is already the
+// file's end, nothing follows to check its tail: the next settled read does.
+// done means the session was stopped and there is nothing to read.
 func (s *Sync) verify(ctx context.Context, st *session) (done bool, err error) {
 	st.mu.Lock()
 	path, offset := st.path, st.offset

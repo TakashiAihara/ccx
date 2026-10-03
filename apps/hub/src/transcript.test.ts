@@ -2,7 +2,7 @@ import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-node";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -151,12 +151,15 @@ describe("Append", () => {
       ["bucket に /", { bucket: "a/b" }],
       ["prefix に ..", { prefix: "../" }],
       ["prefix が / で終わらない", { prefix: "lead" }],
+      ["組んだ key が 1024 文字を超える", { prefix: "abcd/".repeat(200) }],
     ];
     for (const [name, over] of cases) {
-      test(`${name} は INVALID_ARGUMENT で、何も書かない`, async () => {
+      test(`${name} は INVALID_ARGUMENT で、どこにも何も書かない`, async () => {
         const r = await refused(client.append(req(0, "x\n", over)));
         expect(r.code).toBe(Code.InvalidArgument);
-        expect(await exists()).toBe(false);
+        // 既定の key だけでなく、変えた先にも書いていないこと
+        const files = (await readdir(root, { recursive: true, withFileTypes: true })).filter((e) => e.isFile());
+        expect(files.map((e) => e.name)).toEqual([]);
       });
     }
   });

@@ -93,8 +93,9 @@ size, and it sends the rest of that line from there, so the object is whole agai
 
 A `DELETE` of the object waits for an append in progress, and so does the moment a `push` replaces
 it. The push's body is received before that, outside the wait, so a slow upload holds up nobody. The
-price: appends that land while a push uploads are replaced by the push's older snapshot; the
-session's next settled read finds the object shorter than its offset and sends them again.
+price: appends that land while a push uploads are replaced by the push's older snapshot. The
+settled read after the session's next hook finds the object shorter than its offset and sends them
+again; a push that lands after a session's last hook stays as the push left it.
 
 The center must understand `expected_tail` before agents send it: a center that does not drops the
 field and appends without checking. Update the center first.
@@ -151,7 +152,8 @@ are already here, a shorter local file that is the copy's beginning is an older 
 replaced without `--force`, and anything else still needs `--force`. The comparison is made against
 the download itself, so a push that replaces the object mid-pull cannot make it compare one copy and
 install another. When the local file is `session.json`'s copy and the object has not grown, nothing
-is downloaded.
+is downloaded. A local copy that a previous pull took after live sync grew the object is not
+`session.json`'s copy, so a later pull downloads it again to find it already here.
 
 ## Not here
 

@@ -1,6 +1,6 @@
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 
-import { validBucket, validPrefix, type ObjectStore } from "./objects.ts";
+import { validBucket, validKey, validPrefix, type ObjectStore } from "./objects.ts";
 import { AppendResponseSchema, TranscriptService } from "@ccx/proto/ccx/v1/transcript_pb.ts";
 
 /**
@@ -55,6 +55,9 @@ export function transcriptImpl(objects: ObjectStore): ServiceImpl<typeof Transcr
       }
 
       const key = transcriptKey(req.prefix, origin.machine, origin.user, req.sessionId);
+      // 部品ごとに通っても、組んだ key が S3 API の規則 (長さ 1024 まで) を外れれば、
+      // 書けても GET / DELETE で読めない object になる
+      if (!validKey(key)) throw invalid(`the transcript's key is not a valid object key (${key.length} chars)`);
       const res = await objects.append(req.bucket, key, req.offset, req.data, { expectedTail: req.expectedTail });
       if (res.ok) return { $typeName: "ccx.v1.AppendResponse" as const, size: res.size };
       if (res.diverged) {

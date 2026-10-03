@@ -975,3 +975,21 @@ func (o *onceRefusing) Append(ctx context.Context, session string, offset uint64
 	}
 	return o.fakeCenter.Append(ctx, session, offset, data, tail)
 }
+
+func TestWithTheDefaultOrderARecordAfterTheSettledReadIsStillRead(t *testing.T) {
+	// Production order: the settled read (SettleDelay) comes before the
+	// hook-triggered one (MinInterval). A record written between them, with no hook
+	// after it, must still be read.
+	c := &fakeCenter{}
+	opts := fast
+	opts.SettleDelay = 20 * time.Millisecond
+	opts.MinInterval = 120 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "{\"prompt\":1}\n")
+
+	s.Notify(hook("Stop", sid, p))
+	eventually(t, "the settled read", storedIs(c, "{\"prompt\":1}\n"))
+	time.Sleep(30 * time.Millisecond) // after the settled read, before MinInterval
+	appendFile(t, p, "{\"answer\":1}\n")
+	eventually(t, "the record written after the settled read", storedIs(c, "{\"prompt\":1}\n{\"answer\":1}\n"))
+}

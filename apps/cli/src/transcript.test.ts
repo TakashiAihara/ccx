@@ -352,7 +352,8 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(storedA(), grown);
     const r = await B.pull(SID, homeB);
     expect(r.status).toBe("pulled");
-    expect(r.replaced).toBeUndefined();
+    // 古い先頭でも退避は残す (比べてから置き換えるまでに手元へ足された分を失わない)
+    expect(await Bun.file(r.replaced!).text()).toBe(transcriptBody);
     expect(await Bun.file(path).text()).toBe(grown);
 
     // 手元が伸びた写しと同じなら、何もしない (別内容とは言わない)
@@ -361,6 +362,16 @@ describe("transcript: push / pull / prune through the store", () => {
     // 手元が store の先頭でない (手元だけの続きがある) なら、従来どおり force なしでは止まる
     await Bun.write(path, `${transcriptBody}${line({ local: "only" })}`);
     await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
+  });
+
+  test("push puts the object right after the local file was cut back, though session.json already matches (#120)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    // live 同期が伸ばした object。手元はそれより短い (session.json の写し) のまま
+    await Bun.write(storedA(), transcriptBody + line({ live: "B" }));
+    const r = await A.push(t);
+    expect(r.status).not.toBe("unchanged");
+    expect(await Bun.file(storedA()).text()).toBe(transcriptBody);
   });
 
   test("pull with nothing new does not download the transcript; an empty local file is a prefix (#120)", async () => {
