@@ -50,6 +50,12 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 		return 0
 	}
 
+	// The event's identity, minted here because this is the one point that sees the
+	// event before it forks into socket-or-fallback. Both paths carry this id, so
+	// the double delivery a lost ack causes is one event the center recognises
+	// rather than two it cannot tell apart.
+	id := newUUIDv7()
+
 	// Do the delivery under a hard overall budget. Both the socket exchange and
 	// the fallback disk write are bounded individually, but this is the backstop
 	// that guarantees the hook returns even if some syscall wedges in a way the
@@ -63,11 +69,11 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if deliverToSocket(socketPath, payload) {
+		if deliverToSocket(socketPath, id, payload) {
 			return
 		}
 		// Socket path failed for any reason — fall back so the event is not lost.
-		_ = writeIncoming(incomingPath(spoolDir), payload)
+		_ = writeIncoming(incomingPath(spoolDir), id, payload)
 	}()
 
 	select {
@@ -84,7 +90,7 @@ func Hook(socketPath, spoolDir string, stdin io.Reader) int {
 
 // deliverToSocket returns true only if ccx-agent acknowledged durable receipt. Any
 // error, timeout, or unexpected ack is a false — the caller then falls back.
-func deliverToSocket(socketPath string, payload []byte) bool {
+func deliverToSocket(socketPath, id string, payload []byte) bool {
 	conn, err := net.DialTimeout("unix", socketPath, hookDialTimeout)
 	if err != nil {
 		return false
@@ -97,7 +103,7 @@ func deliverToSocket(socketPath string, payload []byte) bool {
 	// twice the dial timeout.
 	_ = conn.SetDeadline(time.Now().Add(hookExchangeTimeout))
 
-	if err := writeFrame(conn, payload); err != nil {
+	if err := writeHookFrame(conn, id, payload); err != nil {
 		return false
 	}
 

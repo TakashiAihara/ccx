@@ -174,7 +174,7 @@ func TestStatus_ReachAndPending(t *testing.T) {
 	}
 
 	// A hook that fell back to incoming/ has not reached the center either.
-	if err := writeIncoming(srv.spool.IncomingDir(), []byte(`{"fallback":1}`)); err != nil {
+	if err := writeIncoming(srv.spool.IncomingDir(), newUUIDv7(), []byte(`{"fallback":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := srv.Status(); st.Pending != 2 {

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -36,9 +37,16 @@ import (
 //     failure: at-least-once. Losing an event is not acceptable; sending it
 //     twice is.
 //
-// event_id is assigned when the event is written here and stored in the file,
-// NOT regenerated at send time. This is what makes the re-send after a crash a
-// true duplicate (same id) rather than a new event the center cannot recognise.
+// The hook assigns the event's identity — event_id — because it is the one point
+// that sees the event before it forks into socket-or-fallback, so both copies of a
+// lost-ack delivery carry one id and the center drops the duplicate. The agent
+// assigns the processing metadata (seq, received_at, Origin), which are facts about
+// how it handled the event. It mints an event_id only when the caller supplied none:
+// a hook with no id to send, a fallback file not named by one.
+//
+// Whichever way it was assigned, the id is stored in the file and NOT regenerated
+// at send time. That is what makes the re-send after a crash a true duplicate (same
+// id) rather than a new event the center cannot recognise.
 type Spool struct {
 	dir      string
 	incoming string
@@ -50,7 +58,10 @@ type Spool struct {
 	now    func() time.Time
 }
 
-const spoolExt = ".pb"
+const (
+	spoolExt    = ".pb"
+	incomingExt = ".raw"
+)
 
 // incomingPath is the single definition of where the fallback lives relative to
 // the spool dir. Both OpenSpool and the hook path derive it from here so the
@@ -113,16 +124,23 @@ func (s *Spool) IncomingDir() string { return s.incoming }
 // the seq counter).
 func (s *Spool) Dir() string { return s.dir }
 
-// Append envelopes a raw hook payload and writes it to the spool, returning the
-// stored event. This is the only place seq is advanced and event_id is minted.
+// Append envelopes a raw hook payload under an id the spool mints. Callers that
+// have an id to carry — the socket handler, the fallback drain — pass it to
+// AppendID.
 func (s *Spool) Append(payload []byte) (*ccxv1.Event, error) {
+	return s.AppendID("", payload)
+}
+
+// AppendID envelopes a raw hook payload under the event's id and writes it to the
+// spool, returning the stored event. This is the only place seq is advanced.
+func (s *Spool) AppendID(id string, payload []byte) (*ccxv1.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.seq++
 	ev := &ccxv1.Event{
 		Origin:     s.origin,
-		EventId:    s.newID(),
+		EventId:    s.eventID(id),
 		Seq:        s.seq,
 		ReceivedAt: timestamppb.New(s.now()),
 		// The only producer that exists in #90. It is set from HOW the event
@@ -143,6 +161,21 @@ func (s *Spool) Append(payload []byte) (*ccxv1.Event, error) {
 		return nil, err
 	}
 	return ev, nil
+}
+
+// eventID is the id the envelope carries: the caller's when it is a canonical UUID
+// — the only spelling the wire and the fallback file name put an id in — and a
+// freshly minted one otherwise. The length is checked as well as the parse, because
+// a dashless 32-hex UUID parses and would otherwise be stored as a second spelling
+// of an event the center already holds under the canonical one.
+func (s *Spool) eventID(id string) string {
+	if len(id) != hookIDLen {
+		return s.newID()
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return s.newID()
+	}
+	return id
 }
 
 // Entry is one spooled event and the file that holds it.
@@ -222,7 +255,7 @@ func (s *Spool) DrainIncoming() (int, error) {
 			names = append(names, e.Name())
 		}
 	}
-	sort.Strings(names) // filenames lead with unixnano → roughly chronological
+	sort.Strings(names) // names lead with a UUIDv7 → roughly chronological
 
 	n := 0
 	for _, name := range names {
@@ -231,7 +264,11 @@ func (s *Spool) DrainIncoming() (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if _, err := s.Append(payload); err != nil {
+		// The name is the id the hook minted, so the fallback copy is enveloped
+		// under the same event_id the socket path carried. A name that is not one
+		// gets an id minted for it rather than dropped: the event is worth more
+		// than the id it arrived with.
+		if _, err := s.AppendID(strings.TrimSuffix(name, incomingExt), payload); err != nil {
 			return n, err
 		}
 		// Enveloped and durably in the main queue now; safe to drop the raw.

@@ -43,7 +43,13 @@ export type Event = Message<"ccx.v1.Event"> & {
   origin?: Origin | undefined;
 
   /**
-   * ccx-agent が受信時に採番する UUIDv7。center 側の重複排除キー。
+   * hook が 1 回だけ採番する UUIDv7。center 側の重複排除キー。
+   *
+   * 採番するのは hook で、ccx-agent ではない。hook はここで socket と fallback (incoming/)
+   * の 2 経路に分かれ、ack を失うと同じイベントが両方を通る。分かれる手前で振らないと
+   * 2 部が別の id を持ち、center はそれを重複と見分けられない (#101)。seq / received_at /
+   * origin は ccx-agent が取り込んだときの事実なので ccx-agent が振る。id を持たないフレーム
+   * (#101 以前の hook) と UUID でない fallback ファイルに限り、ccx-agent が代わりに振る。
    *
    * 単調増加する seq ではなくこれを同一性の軸に置くのは、spool を作り直すと seq が
    * ゼロに戻るため。seq は順序を語れるが、同一性は語れない。
