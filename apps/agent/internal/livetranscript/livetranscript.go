@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -144,8 +145,8 @@ type session struct {
 	// append owes. Zero means "none".
 	settle  time.Time
 	retryAt time.Time
-	// stopped is why this session is not appended again, for the log and the
-	// status. Non-empty means no further reads at all.
+	// stopped is why this session is not appended again (logged, and returned by
+	// Stopped). Non-empty means no further reads at all.
 	stopped string
 
 	// stop closes when the session will not read again: stopped for a session, or
@@ -249,8 +250,9 @@ func (st *session) wakeLocked() {
 	}
 }
 
-// Stopped is session -> why it will not be appended again, for the log and the
-// status API. A copy: the caller is not the loop.
+// Stopped is session -> why it will not be appended again. The log says the same
+// when it happens; the agent's status API does not carry it yet. A copy: the
+// caller is not the loop.
 func (s *Sync) Stopped() map[string]string {
 	s.mu.Lock()
 	all := make([]*session, 0, len(s.sessions))
@@ -469,10 +471,13 @@ func plausiblePath(path, id string) bool {
 // is nothing to send — the file holds nothing past the offset, or what it holds
 // past the offset is a line still being written.
 func nextChunk(path string, offset uint64, max, maxLine int) ([]byte, error) {
-	f, err := os.Open(path)
+	// O_NOFOLLOW: the path came from a payload, and a symlink in the transcript's
+	// place would send whatever it points at. Checked on the open itself, not by a
+	// Lstat before it, so nothing can swap the file in between.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		// No transcript (the session's directory was cleaned up). Nothing to read
-		// is not a failure to retry: this session's next hook finds the same.
+		// No transcript (the session's directory was cleaned up), or a symlink.
+		// Nothing to read is not a failure to retry: the next hook finds the same.
 		return nil, nil
 	}
 	defer f.Close()
@@ -480,6 +485,9 @@ func nextChunk(path string, offset uint64, max, maxLine int) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
 	}
 	size := uint64(info.Size())
 	if size < offset {
@@ -512,20 +520,23 @@ func nextChunk(path string, offset uint64, max, maxLine int) ([]byte, error) {
 // longLine finishes the line the first read did not reach, widening the buffer a
 // step at a time, up to maxLine.
 func longLine(f *os.File, offset uint64, first []byte, maxLine int) ([]byte, error) {
-	buf, have := first, len(first)
-	for have <= maxLine {
-		if have == cap(buf) {
+	// len(buf) is what has been read: grow keeps exactly len, so it must track
+	// every read or the bytes past it are dropped at the next widening.
+	buf := first
+	for len(buf) <= maxLine {
+		if len(buf) == cap(buf) {
 			buf = grow(buf)
 		}
+		have := len(buf)
 		n, err := f.ReadAt(buf[have:cap(buf)], int64(offset)+int64(have))
 		if n > 0 {
-			have += n
+			buf = buf[:have+n]
 			// The first newline ends this line. Anything after it
 			// belongs to the next one, so it must not come along.
-			if end := bytes.IndexByte(buf[:have], '\n'); end >= 0 {
-				return buf[:end+1], nil
+			if end := bytes.IndexByte(buf[have:], '\n'); end >= 0 {
+				return buf[:have+end+1], nil
 			}
-			if have > maxLine {
+			if len(buf) > maxLine {
 				return nil, errLineTooLong
 			}
 		}

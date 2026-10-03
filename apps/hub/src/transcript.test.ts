@@ -226,3 +226,25 @@ describe("ObjectStore.append の費用", () => {
     await pending;
   });
 });
+
+describe("ObjectStore.snapshot", () => {
+  test("長さと本文は同じ時点のもの (head の後に追記が確定しても、本文は head の長さで切れる)", async () => {
+    const store = new ObjectStore(root);
+    await store.append("ccx", KEY, 0n, enc("one\n"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const pending = store.append("ccx", KEY, 4n, enc("two\n"), { beforeCommit: () => held });
+    await Bun.sleep(20);
+
+    const snap = await store.snapshot("ccx", KEY);
+    release();
+    await pending;
+
+    expect(snap?.head.size).toBe(4);
+    expect(await snap?.body.text()).toBe("one\n");
+  });
+
+  test("無い object は null", async () => {
+    expect(await new ObjectStore(root).snapshot("ccx", KEY)).toBeNull();
+  });
+});

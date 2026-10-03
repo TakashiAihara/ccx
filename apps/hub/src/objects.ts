@@ -270,7 +270,17 @@ export class ObjectStore {
     // ETag は S3 では単一 PUT なら本文の md5。読み直して計算するのは、置いた
     // ときの値を別に持たない (ファイル 1 つで完結させる) ため。読み返す長さも size に
     // 合わせる。そうしないと S3 のように「同じ ETag で別の長さ」になる
-    return { size, mtime: s.mtime, etag: await md5Of(path, size === s.size ? undefined : size) };
+    return { size, mtime: s.mtime, etag: await md5Of(path, size) };
+  }
+
+  /**
+   * head と本文を同じ長さで返す。GET は Content-Length を head から、本文を file から
+   * 作るので、別々に呼ぶと間で追記が確定したとき本文が Content-Length より長くなる
+   */
+  async snapshot(bucket: string, key: string): Promise<{ head: { size: number; mtime: Date; etag: string }; body: Blob } | null> {
+    const head = await this.head(bucket, key);
+    if (!head) return null;
+    return { head, body: Bun.file(this.objectPath(bucket, key)).slice(0, head.size) };
   }
 
   /** 本文。append の途中なら確定した長さまでしか返さない Blob。 */
@@ -582,13 +592,13 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       return c.body(null, 204);
     }
 
-    const h = await store.head(bucket, key);
-    if (!h) return xmlError(404, "NoSuchKey", key);
-    if (method === "HEAD") return c.body(null, 200, headersOf(h));
+    const snap = await store.snapshot(bucket, key);
+    if (!snap) return xmlError(404, "NoSuchKey", key);
+    if (method === "HEAD") return c.body(null, 200, headersOf(snap.head));
 
     // Range (DuckDB httpfs が使う) は Bun.serve がファイルの stream に対して自分で
     // 切る (206 / Content-Range まで付く。objects.test.ts が HTTP 越しに pin している)。
     // ここで切り直すと同じことを 2 回やるだけなので持たない
-    return c.body(store.file(bucket, key).stream(), 200, headersOf(h));
+    return c.body(snap.body.stream(), 200, headersOf(snap.head));
   });
 }

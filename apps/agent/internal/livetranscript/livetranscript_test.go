@@ -449,3 +449,46 @@ func TestStopsASessionWhoseLineNeverEnds(t *testing.T) {
 		t.Fatalf("stored %q, want only the complete line before the over-long one", st)
 	}
 }
+
+func TestALineManyTimesTheChunkCapArrivesIntact(t *testing.T) {
+	// The over-long line is read a step at a time; each step must keep what the
+	// previous ones read. One step's worth of growth past the cap is not enough to
+	// show it, so the line spans several.
+	c := &fakeCenter{}
+	opts := fast
+	opts.MaxChunk = 64
+	s := start(t, c, opts)
+	var long strings.Builder
+	long.WriteString("{\"long\":\"")
+	for i := 0; long.Len() < 300<<10; i++ {
+		fmt.Fprintf(&long, "%08d", i)
+	}
+	long.WriteString("\"}\n")
+	content := "ok\n" + long.String() + "{\"after\":1}\n"
+	p := transcript(t, content)
+
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the long line stored byte for byte", storedIs(c, content))
+}
+
+func TestDoesNotFollowASymlinkNamedLikeTheTranscript(t *testing.T) {
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	real := transcript(t, "x\n")
+	if err := os.Remove(real); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("not a transcript\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, real); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Notify(hook("PostToolUse", sid, real))
+	time.Sleep(4 * fast.SettleDelay)
+	if _, calls := c.snapshot(); len(calls) != 0 {
+		t.Fatalf("Append was called through a symlink: %+v", calls)
+	}
+}
