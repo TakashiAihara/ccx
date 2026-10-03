@@ -662,8 +662,8 @@ func TestARefusalAtTheSameSizeDoesNotSpin(t *testing.T) {
 
 	s.Notify(hook("PostToolUse", sid, p))
 	time.Sleep(200 * time.Millisecond)
-	if n := c.n(); n > 20 {
-		t.Fatalf("%d calls in 200ms: a refusal at the offset sent from loops without delay", n)
+	if n := c.n(); n > 20 || n < 2 {
+		t.Fatalf("%d calls in 200ms: want a few retries with a delay, not a hot loop and not none", n)
 	}
 }
 
@@ -992,4 +992,41 @@ func TestWithTheDefaultOrderARecordAfterTheSettledReadIsStillRead(t *testing.T) 
 	time.Sleep(30 * time.Millisecond) // after the settled read, before MinInterval
 	appendFile(t, p, "{\"answer\":1}\n")
 	eventually(t, "the record written after the settled read", storedIs(c, "{\"prompt\":1}\n{\"answer\":1}\n"))
+}
+
+func TestAPartialLineFoundByTheHookReadIsReadAgain(t *testing.T) {
+	// Production order: the settled read finds the file complete; a record starts
+	// after it; the hook-triggered read finds it half written. Its end, with no hook
+	// after it, must still be read.
+	c := &fakeCenter{}
+	opts := fast
+	opts.SettleDelay = 20 * time.Millisecond
+	opts.MinInterval = 120 * time.Millisecond
+	s := start(t, c, opts)
+	p := transcript(t, "{\"prompt\":1}\n")
+
+	s.Notify(hook("Stop", sid, p))
+	eventually(t, "the settled read", storedIs(c, "{\"prompt\":1}\n"))
+	time.Sleep(30 * time.Millisecond)
+	appendFile(t, p, "{\"answer\":")
+	time.Sleep(150 * time.Millisecond) // past the hook-triggered read, which sees half a line
+	appendFile(t, p, "1}\n")
+	eventually(t, "the finished record", storedIs(c, "{\"prompt\":1}\n{\"answer\":1}\n"))
+}
+
+func TestAVerifyThatFailedIsDoneAgainOnTheRetry(t *testing.T) {
+	c := &fakeCenter{}
+	s := start(t, c, fast)
+	p := transcript(t, "one\ntwo\n")
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "caught up", storedIs(c, "one\ntwo\n"))
+	time.Sleep(3 * fast.SettleDelay)
+
+	// a push puts back an older copy, and the settled read's check fails once
+	c.mu.Lock()
+	c.stored = []byte("one\n")
+	c.failN = 1
+	c.mu.Unlock()
+	s.Notify(hook("PostToolUse", sid, p))
+	eventually(t, "the dropped line sent once the check succeeds", storedIs(c, "one\ntwo\n"))
 }

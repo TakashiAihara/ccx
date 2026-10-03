@@ -438,7 +438,7 @@ describe("ObjectStore: 切り戻しの最中と一覧", () => {
 });
 
 describe("ObjectStore.head: 確定長を読んだ後に追記が始まる", () => {
-  test("stat が書き込み途中の長さを読んでも、それを返さない (4 か 8 で、6 ではない)", async () => {
+  test("stat が書き込み途中の長さを読んでも、それを返さない (確定前の 4 を返す)", async () => {
     let release!: () => void;
     let appending: Promise<unknown> | undefined;
     let armed = false;
@@ -461,6 +461,7 @@ describe("ObjectStore.head: 確定長を読んだ後に追記が始まる", () =
     const h = await store.head("ccx", KEY);
     release();
     await appending;
-    expect([4, 8]).toContain(h?.size ?? -1);
+    // 追記の確定 (release) は head が返った後なので、head が返せる正しい長さは 4 だけ
+    expect(h?.size).toBe(4);
   });
 });

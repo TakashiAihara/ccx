@@ -84,7 +84,7 @@ type Options struct {
 	// a hook is about are often not on disk when it fires, and after the last
 	// hook of a turn nothing else would read them.
 	SettleDelay time.Duration
-	// MaxSettles is how many times a settled read that finds a line still being
+	// MaxSettles is how many times a read that finds a line still being
 	// written asks for another, before it waits for the next hook.
 	MaxSettles int
 	// RetryDelay is the first wait after a failed append; it doubles per failure
@@ -181,6 +181,10 @@ type session struct {
 	// size with an empty append, instead of sending bytes the center may hold.
 	known  bool
 	offset uint64
+	// needVerify: a check of the object against this file is owed (asked for by a
+	// settled read). It stays owed until a check succeeds, so a check that failed
+	// is done again on the retry instead of being dropped with the deadline.
+	needVerify bool
 
 	// pending is a trigger waiting to be served, next the earliest time it may be.
 	pending bool
@@ -456,6 +460,7 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 		settled := !st.settle.IsZero() && !st.settle.After(now)
 		if settled {
 			st.settle = time.Time{}
+			st.needVerify = true
 		}
 		// A hook-triggered read whose time has not come stays: Claude Code writes
 		// asynchronously, so a settled read that comes first can find the file
@@ -469,7 +474,7 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 		st.lastActive = now
 		st.mu.Unlock()
 
-		partial, err := s.read(ctx, st, settled)
+		partial, err := s.read(ctx, st)
 		if ctx.Err() != nil {
 			return
 		}
@@ -498,9 +503,12 @@ func (s *Sync) readLoop(ctx context.Context, st *session) {
 			st.mu.Lock()
 			recovered := st.failures > 0
 			st.failures = 0
-			// A settled read that found a line still being written asks for one
-			// more, a bounded number of times: no hook may follow the last one.
-			if settled && partial && st.settles < s.opts.MaxSettles && st.settle.IsZero() {
+			// A read that found a line still being written asks for one more
+			// settled read, a bounded number of times: no hook may follow the last
+			// one. Any read, not only a settled one: with the defaults the
+			// hook-triggered read comes after the settled one and can be the first
+			// to see the half-written line.
+			if partial && st.settles < s.opts.MaxSettles && st.settle.IsZero() {
 				st.settles++
 				st.settle = time.Now().Add(s.opts.SettleDelay)
 			}
@@ -545,9 +553,9 @@ func (s *Sync) append(ctx context.Context, id string, offset uint64, data, tail 
 // still being written waits for the next read — sending half of it would leave a
 // fragment in the store that no later append can complete. partial reports such
 // a line at the end.
-func (s *Sync) read(ctx context.Context, st *session, settled bool) (partial bool, err error) {
+func (s *Sync) read(ctx context.Context, st *session) (partial bool, err error) {
 	st.mu.Lock()
-	known := st.known
+	known, owed := st.known, st.needVerify
 	st.mu.Unlock()
 	if !known {
 		size, err := s.append(ctx, st.id, 0, nil, nil)
@@ -568,10 +576,13 @@ func (s *Sync) read(ctx context.Context, st *session, settled bool) (partial boo
 	// machine can have the same length. An empty append with the tail costs a few
 	// KiB; finding either by shipping a chunk costs up to MaxChunk, and a caught-up
 	// session would otherwise never send one.
-	if !known || settled {
+	if !known || owed {
 		if done, err := s.verify(ctx, st); done || err != nil {
 			return false, err
 		}
+		st.mu.Lock()
+		st.needVerify = false
+		st.mu.Unlock()
 	}
 
 	for {
