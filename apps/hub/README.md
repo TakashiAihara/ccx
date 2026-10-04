@@ -102,9 +102,9 @@ event が二度届くのは異常ではなく正常系。
 
 ## object API (S3 互換)
 
-`ccx transcript` (#121) が session の transcript を置く先。center が「どこにでもある S3」
-の 1 つになる形にしてあるので、`ccx transcript` も DuckDB の httpfs も既製の S3
-クライアントのまま center を向ける。外部の S3 互換サービスを向けても同じ。
+`ccx transcript` (#121) が session の transcript を置く先で、保存先はここだけ (外部の S3
+に向ける設定は #210 で撤去)。S3 互換にしてあるのは、`ccx transcript` も DuckDB の
+httpfs も既製の S3 クライアントのまま center を向けるため。
 
 ```text
 GET    /                                     ListBuckets

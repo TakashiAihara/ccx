@@ -99,7 +99,6 @@ async function readHubToken(env: Record<string, string | undefined>): Promise<st
   return (await f.text()).trim() || undefined;
 }
 
-
 export function configPath(env = process.env): string {
   if (env.CCX_CONFIG) return env.CCX_CONFIG;
   const xdg = env.XDG_CONFIG_HOME || join(homedir(), ".config");

@@ -18,12 +18,10 @@ package config
 import (
 	"errors"
 	"fmt"
-
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
-
 	"strings"
 	"time"
 
@@ -378,8 +376,8 @@ func normalizePrefix(raw string) string {
 	return p
 }
 
-// IsHTTP is whether the URL has an object API behind it. The center's own is
-// HTTP; a nats broker or anything else is not a store.
+// IsHTTP is whether the hub URL can be the transcript store: the center's
+// object API is HTTP, so only an http(s) scheme qualifies; a nats broker does not.
 func IsHTTP(raw string) bool {
 	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }

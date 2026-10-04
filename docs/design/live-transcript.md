@@ -134,8 +134,9 @@ detected here; `push` compares the sha256 and catches it at the end.
 ## Only with an http(s) hub
 
 The store is always the center's object API (#210), so live sync needs only a hub that has one: an
-`http(s)://` hub URL. With no hub, or one that is not http(s), the agent does not start live sync
-and says why in its log; `push` works as before. Live sync can also be turned off
+`http(s)://` hub URL. With no hub the agent has nothing to sync to and stays quiet; with a hub that
+is not http(s) it does not start live sync and says why in its log. Without an http(s) hub there is
+no store at all, so `push` exits `3` too. Live sync can also be turned off
 (`CCX_TRANSCRIPT_LIVE` / `[transcript] live`, default on); it has no git config key.
 
 ## What `push` still does

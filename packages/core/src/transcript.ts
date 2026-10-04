@@ -318,9 +318,9 @@ export class NoTranscriptStore extends Error {
   constructor() {
     super(
       [
-        "no transcript store configured — nowhere to push to or pull from.",
+        "no transcript store — nowhere to push to or pull from.",
         "",
-        "Point ccx at a center (its object API is the store):",
+        "The store is the center's object API, so the hub URL has to be http(s):",
         "  CCX_HUB_URL=http://host:8791",
         "  ~/.config/ccx/config.toml   [hub] url = \"http://host:8791\"",
       ].join("\n"),
@@ -331,8 +331,9 @@ export class NoTranscriptStore extends Error {
 
 /**
  * S3 の access key id。保存先は center なので center の token (center は署名を検証せず
- * access key id だけを見る)。token の無い center にはダミー。手元に別用途の AWS_ACCESS_KEY_ID が
- * export されていても center には送らない。Bun.S3Client と DuckDB の両方がこれを使う
+ * access key id だけを見る)。token の無い center にはダミー。手元の AWS_ACCESS_KEY_ID は使わない。
+ * Bun.S3Client と DuckDB の両方がこれを使う。NOTE: Bun.S3Client は env の AWS_SESSION_TOKEN を
+ * 引数で止められず x-amz-security-token で送る (Bun 1.4.0 で実測、#213)
  */
 export function s3AccessKeyId(store: TranscriptStore): string {
   return store.token ?? "ccx";

@@ -108,7 +108,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
   const transcript = program
     .command("transcript")
     .alias("tr")
-    .description("Store session transcripts in an S3-compatible store and bring them back anywhere");
+    .description("Store session transcripts in ccx-center and bring them back anywhere");
 
   transcript
     .command("push")

@@ -184,9 +184,10 @@ through the center (`docs/design/live-transcript.md`), so the center holds the
 conversation as it runs instead of only after the session ends. It follows
 `[transcript]` in config.toml — the same bucket and prefix `ccx transcript`
 uses — and needs an http(s) hub, because the store is the center's object API
-(#210). Without one serve
-logs one line saying why it is off, and `ccx transcript push` at the end of the
-session works as before. Turning it off (`CCX_TRANSCRIPT_LIVE=off`) keeps the
+(#210). With a hub that is not http(s) serve logs one line saying why it is off
+(and `ccx transcript push` has no store either). With an http(s) hub and live
+sync turned off, `ccx transcript push` at the end of the session still carries
+the transcript. Turning it off (`CCX_TRANSCRIPT_LIVE=off`) keeps the
 agent from reading transcripts at all. It has no git config key: git config is
 being taken out of the resolution, so a new setting does not start there.
 
