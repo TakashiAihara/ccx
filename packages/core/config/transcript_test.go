@@ -8,8 +8,8 @@ import (
 
 // The live transcript (#120, docs/design/live-transcript.md) appends to the
 // store's transcript.jsonl through the center, so the agent has to resolve the
-// same store the CLI does (packages/core/src/config.ts) and tell whether it is
-// the center's own object API.
+// same store the CLI does (packages/core/src/config.ts). The store is always
+// the center (#210).
 
 func withFile(t *testing.T, toml string) string {
 	t.Helper()
@@ -35,32 +35,21 @@ func loadT(t *testing.T, e map[string]string, git func(string) string) Config {
 func TestTranscript_DefaultsToTheCenterWithLiveOn(t *testing.T) {
 	c := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791"}, noGit)
 	tr := c.Transcript
-	if !tr.Live || !tr.ToCenter || tr.Bucket != "ccx" || tr.Prefix != "" {
-		t.Fatalf("Transcript = %+v, want live on, to the center, bucket ccx, no prefix", tr)
+	if !tr.Live || tr.Bucket != "ccx" || tr.Prefix != "" {
+		t.Fatalf("Transcript = %+v, want live on, bucket ccx, no prefix", tr)
 	}
 }
 
-func TestTranscript_NoHubIsNotTheCenter(t *testing.T) {
-	if tr := loadT(t, map[string]string{}, noGit).Transcript; tr.ToCenter {
-		t.Fatalf("Transcript = %+v: with no hub there is no center to append to", tr)
+func TestIsHTTP_OnlyAnHTTPHubHasAnObjectAPI(t *testing.T) {
+	for _, u := range []string{"http://center:8791", "https://center"} {
+		if !IsHTTP(u) {
+			t.Errorf("IsHTTP(%q) = false", u)
+		}
 	}
-	// A hub that is not HTTP has no object API either (the CLI does not fall back to it).
-	if tr := loadT(t, map[string]string{"CCX_HUB_URL": "nats://broker:4222"}, noGit).Transcript; tr.ToCenter {
-		t.Fatalf("Transcript = %+v: a nats hub is not an object API", tr)
-	}
-}
-
-func TestTranscript_AnotherEndpointIsNotTheCenter(t *testing.T) {
-	tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791", "CCX_TRANSCRIPT_ENDPOINT": "https://s3.example.com"}, noGit).Transcript
-	if tr.ToCenter {
-		t.Fatalf("Transcript = %+v: an S3 elsewhere cannot be appended to", tr)
-	}
-}
-
-func TestTranscript_AnExplicitEndpointThatIsTheCenterIsTheCenter(t *testing.T) {
-	tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791", "CCX_TRANSCRIPT_ENDPOINT": "http://center:8791/"}, noGit).Transcript
-	if !tr.ToCenter {
-		t.Fatalf("Transcript = %+v: same origin as the hub", tr)
+	for _, u := range []string{"", "nats://broker:4222"} {
+		if IsHTTP(u) {
+			t.Errorf("IsHTTP(%q) = true: nothing to append to", u)
+		}
 	}
 }
 
@@ -109,20 +98,5 @@ func TestTranscript_BucketAndPrefixResolveLikeTheCLI(t *testing.T) {
 	tr = loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791", "CCX_CONFIG": p, "CCX_TRANSCRIPT_PREFIX": "p"}, git).Transcript
 	if tr.Bucket != "git-bucket" || tr.Prefix != "p/" {
 		t.Fatalf("Transcript = %+v, want git's bucket and env's prefix", tr)
-	}
-}
-
-func TestTranscript_SameOriginReadsPortsLikeTheCLI(t *testing.T) {
-	// The CLI compares with URL.origin, which reads "080" as 80 and drops the
-	// default port. The agent must decide "the store is the center" the same way,
-	// or it skips live sync for a store the CLI treats as the center.
-	for _, ep := range []string{"http://center:080/", "http://center:0080", "http://center"} {
-		tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:80", "CCX_TRANSCRIPT_ENDPOINT": ep}, noGit).Transcript
-		if !tr.ToCenter {
-			t.Errorf("endpoint %s: not the center, want the same origin as http://center:80", ep)
-		}
-	}
-	if tr := loadT(t, map[string]string{"CCX_HUB_URL": "http://center:8791", "CCX_TRANSCRIPT_ENDPOINT": "http://center:08792"}, noGit).Transcript; tr.ToCenter {
-		t.Errorf("a different port is the same origin: %+v", tr)
 	}
 }

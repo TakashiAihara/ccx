@@ -311,7 +311,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", CCX_TRANSCRIPT_ENDPOINT: "", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -411,7 +411,7 @@ describe("ccx session with a center: marks are reported as events, and session l
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_MACHINE: "host-a", ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -530,7 +530,7 @@ describe("ccx session with a center: marks are reported as events, and session l
     try {
       const started = Date.now();
       const p = Bun.spawn(["bun", "run", cli, "session", "mark", "archived", SID], {
-        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${silent.port}`, CCX_TRANSCRIPT_ENDPOINT: "", CCX_MACHINE: "host-a" },
+        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${silent.port}`, CCX_MACHINE: "host-a" },
         stdout: "pipe",
         stderr: "pipe",
       });

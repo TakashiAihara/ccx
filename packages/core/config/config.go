@@ -18,12 +18,10 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -99,26 +97,18 @@ type Config struct {
 
 	// Transcript is the live transcript's settings (#120,
 	// docs/design/live-transcript.md): the store ccx-agent appends a running
-	// session's transcript.jsonl to, and whether that store is the center.
+	// session's transcript.jsonl to.
 	Transcript Transcript
 }
 
 // Transcript resolves the same store `ccx transcript` does
-// (packages/core/src/config.ts), reduced to what live sync asks: which bucket
-// and prefix the object lives under, and whether it is the center's own object
-// API. The endpoint itself is not carried: ToCenter says the one thing that
-// decides whether Append can be used at all.
+// (packages/core/src/config.ts). The store is always the center's own object
+// API (#210), so what is left is where in it the object lives.
 type Transcript struct {
 	// Live turns the live append on. Default ON: without it a session's
 	// conversation only reaches the store when it ends, which is the whole
-	// problem (#120). It is inert unless ToCenter, so on-by-default is safe.
+	// problem (#120). It is inert without an http(s) hub, so on-by-default is safe.
 	Live bool
-	// ToCenter is true when the resolved store is the center's own object API —
-	// the same condition the CLI uses to send the center's token there (the
-	// endpoint unset, or the same origin as the hub). S3 has no append, so
-	// anything else (MinIO, R2, AWS) means live sync cannot run and the agent
-	// says so instead of failing every append.
-	ToCenter bool
 	// Bucket and Prefix are where the object is, same defaults as the CLI
 	// ("ccx", no prefix).
 	Bucket string
@@ -186,14 +176,13 @@ type fileShape struct {
 		Interval string `toml:"interval"`
 		MaxIdle  string `toml:"maxIdle"`
 	} `toml:"heartbeat"`
-	// [transcript] is the same store `ccx transcript` uses (endpoint, bucket,
-	// prefix). `live` is the switch that stops reading transcripts per hook,
-	// and it exists nowhere else (#120).
+	// [transcript] is where in the center `ccx transcript` keeps transcripts
+	// (bucket, prefix). `live` is the switch that stops reading transcripts per
+	// hook, and it exists nowhere else (#120).
 	Transcript struct {
-		Endpoint string `toml:"endpoint"`
-		Bucket   string `toml:"bucket"`
-		Prefix   string `toml:"prefix"`
-		Live     *bool  `toml:"live"`
+		Bucket string `toml:"bucket"`
+		Prefix string `toml:"prefix"`
+		Live   *bool  `toml:"live"`
 	} `toml:"transcript"`
 }
 
@@ -268,21 +257,11 @@ func load(
 	// (packages/core/src/config.ts) — same defaults, same prefix normalisation.
 	// If ccx-agent appended to a different object than `ccx transcript` reads,
 	// the conversation would exist twice.
-	tEndpoint := pick(getenv("CCX_TRANSCRIPT_ENDPOINT"), gitcfg("ccx.transcriptEndpoint"), file.Transcript.Endpoint)
 	tBucket := pick(getenv("CCX_TRANSCRIPT_BUCKET"), gitcfg("ccx.transcriptBucket"), file.Transcript.Bucket)
 	if tBucket == "" {
 		tBucket = "ccx"
 	}
 	tPrefix := normalizePrefix(pick(getenv("CCX_TRANSCRIPT_PREFIX"), gitcfg("ccx.transcriptPrefix"), file.Transcript.Prefix))
-	// The center's object API is HTTP, so a hub that is not http(s) is not a
-	// store at all. An endpoint named outright is one somewhere else unless it
-	// is the hub's own origin — the same condition the CLI uses before it hands
-	// the center's token to a store, and S3 has no append.
-	hubHTTP := ""
-	if isHTTP(hub) {
-		hubHTTP = hub
-	}
-	toCenter := hubHTTP != "" && (tEndpoint == "" || sameOrigin(tEndpoint, hubHTTP))
 
 	return Config{
 		HubURL:     hub,
@@ -313,10 +292,9 @@ func load(
 		Transcript: Transcript{
 			// git config is being taken out of the resolution (kaneo
 			// ccx#24), so a new switch does not start there. Env or the file stops it.
-			Live:     fileToggle(getenv, "CCX_TRANSCRIPT_LIVE", file.Transcript.Live, true),
-			ToCenter: toCenter,
-			Bucket:   tBucket,
-			Prefix:   tPrefix,
+			Live:   fileToggle(getenv, "CCX_TRANSCRIPT_LIVE", file.Transcript.Live, true),
+			Bucket: tBucket,
+			Prefix: tPrefix,
 		},
 	}, nil
 }
@@ -398,42 +376,10 @@ func normalizePrefix(raw string) string {
 	return p
 }
 
-// isHTTP is whether the URL has an object API behind it. The center's own is
-// HTTP; a nats broker or anything else is not a store.
-func isHTTP(raw string) bool {
+// IsHTTP is whether the hub URL can be the transcript store: the center's
+// object API is HTTP, so only an http(s) scheme qualifies; a nats broker does not.
+func IsHTTP(raw string) bool {
 	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
-}
-
-// sameOrigin compares two URLs by scheme, host and port, ignoring the path and
-// the default port (https://c == https://c:443). An unparsable URL is never the
-// same as anything.
-func sameOrigin(a, b string) bool {
-	oa, ok := originOf(a)
-	if !ok {
-		return false
-	}
-	ob, ok := originOf(b)
-	return ok && oa == ob
-}
-
-func originOf(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", false
-	}
-	scheme, port := strings.ToLower(u.Scheme), u.Port()
-	// Read the port as a number, like the CLI's URL.origin: "080" is 80.
-	if port != "" {
-		n, err := strconv.Atoi(port)
-		if err != nil {
-			return "", false
-		}
-		port = strconv.Itoa(n)
-	}
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
-		port = ""
-	}
-	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
 }
 
 // pick returns the first non-empty value, in precedence order.

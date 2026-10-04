@@ -45,11 +45,10 @@ export type Config = {
    */
   hub?: { url: string; token?: string };
   /**
-   * transcript の保存先 (S3 互換)。未設定なら `ccx transcript` だけが使えない。
-   * endpoint を書かなければ hub.url (center の object API) が保存先になる。token を持つのは
-   * 保存先が center のとき (無指定か、hub.url と同じ origin) だけ。外部の S3 に center の token を送らない
+   * transcript の保存先。常に center の object API (S3 互換、#210) で、endpoint は hub.url。
+   * hub.url が無いか http(s) でなければ未設定で、`ccx transcript` だけが使えない
    */
-  transcript?: { endpoint: string; bucket: string; prefix: string; region?: string; token?: string };
+  transcript?: { endpoint: string; bucket: string; prefix: string; token?: string };
 };
 
 const DEFAULT_MIRROR_MAX_AGE_MS = 10 * 60 * 1000;
@@ -98,16 +97,6 @@ async function readHubToken(env: Record<string, string | undefined>): Promise<st
     throw new Error(`${path} is readable by other users; chmod 600 it (it holds the center's token)`);
   }
   return (await f.text()).trim() || undefined;
-}
-
-/** transcript の endpoint を明示していても、それが center 自身なら center の token を渡す */
-function sameOrigin(a: string, b: string | undefined): boolean {
-  if (!b) return false;
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
 }
 
 export function configPath(env = process.env): string {
@@ -201,15 +190,12 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
   const hubUrl = env.CCX_HUB_URL ?? (await readGit("ccx.hubUrl")) ?? (fileHub?.url as string | undefined);
   const hubToken = await readHubToken(env);
 
-  // [transcript] テーブルは同じ 3 段で引く。endpoint だけは hub.url に落ちる。
-  // ただし center の object API は HTTP なので、hub.url が http(s) でなければ落とさない
+  // [transcript] テーブルは同じ 3 段で引く。保存先は center の object API (HTTP) なので、
+  // hub.url が http(s) でなければ保存先は無い
   const t: Sources = { ...s, file: (file.transcript ?? {}) as Record<string, unknown> };
   const hubHttp = hubUrl && /^https?:\/\//.test(hubUrl) ? hubUrl : undefined;
-  const tExplicit = await pick(t, "CCX_TRANSCRIPT_ENDPOINT", "ccx.transcriptEndpoint", "endpoint");
-  const tEndpoint = tExplicit ?? hubHttp;
   const tBucket = (await pick(t, "CCX_TRANSCRIPT_BUCKET", "ccx.transcriptBucket", "bucket")) ?? "ccx";
   const tPrefixRaw = (await pick(t, "CCX_TRANSCRIPT_PREFIX", "ccx.transcriptPrefix", "prefix")) ?? "";
-  const tRegion = await pick(t, "CCX_TRANSCRIPT_REGION", "ccx.transcriptRegion", "region");
 
   return {
     root,
@@ -224,13 +210,12 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
     },
     machine: (await pick(s, "CCX_MACHINE", "ccx.machine", "machine")) ?? hostname(),
     hub: hubUrl ? { url: String(hubUrl), ...(hubToken ? { token: hubToken } : {}) } : undefined,
-    transcript: tEndpoint
+    transcript: hubHttp
       ? {
-          endpoint: String(tEndpoint),
+          endpoint: hubHttp,
           bucket: String(tBucket),
           prefix: normalizePrefix(tPrefixRaw),
-          region: tRegion || undefined,
-          ...(hubToken && (tExplicit === null || sameOrigin(tExplicit, hubHttp)) ? { token: hubToken } : {}),
+          ...(hubToken ? { token: hubToken } : {}),
         }
       : undefined,
   };

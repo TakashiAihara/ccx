@@ -318,13 +318,11 @@ export class NoTranscriptStore extends Error {
   constructor() {
     super(
       [
-        "no transcript store configured — nowhere to push to or pull from.",
+        "no transcript store — nowhere to push to or pull from.",
         "",
-        "Point ccx at a center (its object API is the default store):",
+        "The store is the center's object API, so the hub URL has to be http(s):",
         "  CCX_HUB_URL=http://host:8791",
-        "or at any S3-compatible endpoint:",
-        "  CCX_TRANSCRIPT_ENDPOINT=https://s3.example  CCX_TRANSCRIPT_BUCKET=ccx",
-        "  ~/.config/ccx/config.toml   [transcript] endpoint = \"...\"  bucket = \"ccx\"",
+        "  ~/.config/ccx/config.toml   [hub] url = \"http://host:8791\"",
       ].join("\n"),
     );
     this.name = "NoTranscriptStore";
@@ -332,25 +330,25 @@ export class NoTranscriptStore extends Error {
 }
 
 /**
- * S3 の access key id。保存先が center なら center の token が最優先 (center は署名を検証せず
- * access key id だけを見る)。手元に別用途の AWS_ACCESS_KEY_ID が export されていても、それを
- * center に送って 401 にしない。center でなければ S3 クライアントの標準の env、どれも無ければダミー
- * (外部の S3 に資格情報無しで行けば、そちらが AccessDenied で名指しする)。
- * Bun.S3Client と DuckDB の両方がこれを使う
+ * S3 の access key id。保存先は center なので center の token (center は署名を検証せず
+ * access key id だけを見る)。token の無い center にはダミー。手元の AWS_ACCESS_KEY_ID は使わない。
+ * Bun.S3Client と DuckDB の両方がこれを使う。NOTE: Bun.S3Client は env の AWS_SESSION_TOKEN を
+ * 引数で止められず x-amz-security-token で送る (Bun 1.4.0 で実測、#213)
  */
-export function s3AccessKeyId(store: TranscriptStore, env: Record<string, string | undefined> = process.env): string {
-  return store.token ?? env.AWS_ACCESS_KEY_ID ?? env.S3_ACCESS_KEY_ID ?? "ccx";
+export function s3AccessKeyId(store: TranscriptStore): string {
+  return store.token ?? "ccx";
 }
 
-/** 資格情報は s3AccessKeyId と S3 クライアントの標準の env (AWS_* / S3_*) から */
+/** center は region を見ないが、S3 クライアントは署名に要る */
+export const S3_REGION = "us-east-1";
+
 function makeS3(store: TranscriptStore): Bun.S3Client {
-  const env = process.env;
   return new Bun.S3Client({
     endpoint: store.endpoint,
     bucket: store.bucket,
-    region: store.region ?? "us-east-1",
-    accessKeyId: s3AccessKeyId(store, env),
-    secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx",
+    region: S3_REGION,
+    accessKeyId: s3AccessKeyId(store),
+    secretAccessKey: "ccx",
   });
 }
 

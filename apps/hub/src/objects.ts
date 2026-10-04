@@ -9,10 +9,9 @@ import type { Context, Hono } from "hono";
 /**
  * S3 互換の object API。center が transcript の保存先そのものになるためのもの (#121)。
  *
- * S3 の API 表面に合わせるのは、読む側を center に縛らないため。`ccx transcript` も
- * DuckDB の httpfs も既製の S3 クライアントで、center を向けても外部の S3 互換
- * サービスを向けても同じコードで動く。center は「どこにでもある S3」の 1 つに
- * 過ぎず、center が居なければ利用者は自分の bucket を指せばよい。
+ * S3 の API 表面に合わせるのは、読む側が既製の S3 クライアントだから
+ * (`ccx transcript` は Bun の S3Client、検索は DuckDB の httpfs)。保存先を外部の S3 に
+ * 向ける設定は持たない (#210)。
  *
  * 実装しているのは transcript の push / pull / 検索が実際に使う範囲だけ:
  * PUT / GET (Range) / HEAD / DELETE / ListObjectsV2 / multipart upload。

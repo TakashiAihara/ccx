@@ -46,7 +46,7 @@ async function client() {
   if (probe.status === 404) {
     throw new Error(
       `${cfg.transcript.endpoint} answers but has no S3 object API (bucket ${cfg.transcript.bucket} → 404). ` +
-        "A ccx-center older than #122? Update it, or point CCX_TRANSCRIPT_ENDPOINT at an S3-compatible service.",
+        "A ccx-center older than #122? Update it.",
     );
   }
   // machine は ccx-agent と同じ規則で決める。center の event と同じ名前で並ぶように
@@ -108,7 +108,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
   const transcript = program
     .command("transcript")
     .alias("tr")
-    .description("Store session transcripts in an S3-compatible store and bring them back anywhere");
+    .description("Store session transcripts in ccx-center and bring them back anywhere");
 
   transcript
     .command("push")

@@ -151,16 +151,17 @@ func cmdServe() int {
 // conversation while it runs and a session that dies leaves what it had.
 //
 // It needs collect — the hook events are what say which sessions are running —
-// and the store has to be the center's own object API, because S3 has no append.
-// Returns nil, having said why, when either is missing.
+// and an http(s) hub, because the store is the center's object API (#210).
+// Returns nil when either is missing; a hub that is not http(s) says why in the
+// log, no hub at all stays quiet (there is nothing to sync to).
 func startLiveTranscript(cfg config.Config, c *collect.Collect, logger func(string, ...any)) *livetranscript.Sync {
 	switch {
 	case !cfg.Transcript.Live:
 		return nil
 	case cfg.HubURL == "":
 		return nil
-	case !cfg.Transcript.ToCenter:
-		logger("live transcript off: the transcript store is not the center's object API (an S3 elsewhere, or a hub that is not http), so a running session's transcript cannot be appended; it arrives with `ccx transcript push` when the session ends")
+	case !config.IsHTTP(cfg.HubURL):
+		logger("live transcript off: the hub is not http(s), so it has no object API to keep transcripts in; neither live sync nor `ccx transcript push` has a store")
 		return nil
 	}
 	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
