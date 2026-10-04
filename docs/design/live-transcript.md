@@ -131,13 +131,12 @@ next `push` replaces the object with the local file. A restarted agent learns th
 finds the file shorter than it, and stops the session again. A rewrite that keeps the same length is not
 detected here; `push` compares the sha256 and catches it at the end.
 
-## Only when the store is the center
+## Only with an http(s) hub
 
-S3 has no append. Live sync runs only when the transcript store is the center's own object API —
-the same condition under which the store uses the hub's token today (endpoint unset, or equal to the
-hub URL). With the store elsewhere (MinIO, R2, AWS), the agent does not start live sync and says
-why in its log; `push` works as before. Live sync can also be turned off (`CCX_TRANSCRIPT_LIVE` /
-`[transcript] live`, default on); it has no git config key.
+The store is always the center's object API (#210), so live sync needs only a hub that has one: an
+`http(s)://` hub URL. With no hub, or one that is not http(s), the agent does not start live sync
+and says why in its log; `push` works as before. Live sync can also be turned off
+(`CCX_TRANSCRIPT_LIVE` / `[transcript] live`, default on); it has no git config key.
 
 ## What `push` still does
 

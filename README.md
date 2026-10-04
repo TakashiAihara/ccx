@@ -122,7 +122,7 @@ empty.
 ### Taking a session's transcript with you
 
 A session's memory is its transcript — the JSONL that `claude --resume <id>` reads. `ccx transcript`
-(alias `tr`) copies it to an S3-compatible store and brings it back on any machine, so a finished
+(alias `tr`) copies it to the center and brings it back on any machine, so a finished
 session's transcript need not linger on the host it happened to run on, and the same conversation can
 be resumed elsewhere.
 
@@ -139,10 +139,11 @@ ccx tr search --sql "SELECT machine, count(*) FROM transcripts GROUP BY 1"
 ccx tr stats                  # per day: how often you typed, cut in, pressed Esc or refused a tool (columns: docs/design/transcript-store.md)
 ```
 
-The store is the center's own object API by default (an `http(s)://` `CCX_HUB_URL` is enough — to
-reach it from another machine the center must be bound beyond loopback, see `apps/hub/README.md`), or
-any S3-compatible endpoint via `CCX_TRANSCRIPT_ENDPOINT` / `CCX_TRANSCRIPT_BUCKET` / `[transcript]`
-in the config file. Nothing is set → `ccx transcript` exits `3` like `ccx session` does, and says so;
+The store is the center's own object API (an `http(s)://` `CCX_HUB_URL` is enough — to reach it from
+another machine the center must be bound beyond loopback, see `apps/hub/README.md`); there is no
+setting for another S3. Where inside it the objects go is `CCX_TRANSCRIPT_BUCKET` /
+`CCX_TRANSCRIPT_PREFIX` / `[transcript]` in the config file. No hub → `ccx transcript` exits `3` like
+`ccx session` does, and says so;
 every other verb is unaffected.
 
 The layout is Hive-partitioned so DuckDB reads it without a manifest

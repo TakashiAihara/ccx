@@ -87,26 +87,24 @@ describe("設定の解決", () => {
     expect(cfg.protocol).toBe("ssh");
     expect(cfg.defaults.agent).toBe("file-agent");
     expect(cfg.hub?.url).toBe("nats://file.example:4222");
-    // prefix は `/` 終わりに揃う
-    expect(cfg.transcript).toEqual({
-      endpoint: "http://file-store:9000",
-      bucket: "file-bucket",
-      prefix: "file-prefix/",
-      region: undefined,
-    });
+    // hub が nats なので保存先は無い。[transcript] endpoint は外部 S3 用の旧い口で、読まない (#210)
+    expect(cfg.transcript).toBeUndefined();
   });
 
-  test("transcript store: env > git > file、endpoint 無指定なら hub.url、bucket の既定は ccx", async () => {
+  test("transcript store: 保存先は hub.url。bucket / prefix は env > git > file、bucket の既定は ccx", async () => {
+    const fromFile = await loadConfig({ env: { CCX_CONFIG: cfgFile, CCX_HUB_URL: "http://center:8791" }, git: noGit });
+    // prefix は `/` 終わりに揃う
+    expect(fromFile.transcript).toEqual({ endpoint: "http://center:8791", bucket: "file-bucket", prefix: "file-prefix/" });
     const fromEnv = await loadConfig({
-      env: { CCX_CONFIG: cfgFile, CCX_TRANSCRIPT_ENDPOINT: "http://env-store", CCX_TRANSCRIPT_PREFIX: "p/" },
-      git: gitStub({ "ccx.transcriptBucket": "git-bucket", "ccx.transcriptRegion": "ap-northeast-1" }),
+      env: { CCX_CONFIG: cfgFile, CCX_HUB_URL: "http://center:8791", CCX_TRANSCRIPT_ENDPOINT: "http://env-store", CCX_TRANSCRIPT_PREFIX: "p/" },
+      git: gitStub({ "ccx.transcriptBucket": "git-bucket", "ccx.transcriptEndpoint": "http://git-store" }),
     });
-    expect(fromEnv.transcript).toEqual({ endpoint: "http://env-store", bucket: "git-bucket", prefix: "p/", region: "ap-northeast-1" });
+    expect(fromEnv.transcript).toEqual({ endpoint: "http://center:8791", bucket: "git-bucket", prefix: "p/" });
     const slashPrefix = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_TRANSCRIPT_PREFIX: "/lead/ing" }, git: noGit });
     expect(slashPrefix.transcript?.prefix).toBe("lead/ing/");
 
     const hubOnly = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://center:8791" }, git: noGit });
-    expect(hubOnly.transcript).toEqual({ endpoint: "http://center:8791", bucket: "ccx", prefix: "", region: undefined });
+    expect(hubOnly.transcript).toEqual({ endpoint: "http://center:8791", bucket: "ccx", prefix: "" });
 
     // http でない hub.url (nats 等) は S3 の endpoint にならない
     const natsHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "nats://center:4222" }, git: noGit });
@@ -131,21 +129,9 @@ describe("設定の解決", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  test("transcript が hub の token を持つのは、保存先が center (endpoint 無指定) のときだけ", async () => {
+  test("transcript は hub の token を持つ (保存先は常に center)", async () => {
     const onHub = await loadConfig({ env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_HUB_TOKEN: "t" }, git: noGit });
     expect(onHub.transcript?.token).toBe("t");
-    // 外部の S3 に center の token を送らない
-    const external = await loadConfig({
-      env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c", CCX_HUB_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://s3" },
-      git: noGit,
-    });
-    expect(external.transcript?.token).toBeUndefined();
-    // endpoint を明示していても、それが center 自身なら token を渡す
-    const explicitCenter = await loadConfig({
-      env: { XDG_CONFIG_HOME: emptyConfigHome, CCX_HUB_URL: "http://c:8791", CCX_HUB_TOKEN: "t", CCX_TRANSCRIPT_ENDPOINT: "http://c:8791/" },
-      git: noGit,
-    });
-    expect(explicitCenter.transcript?.token).toBe("t");
   });
 
   test("他人に読める hub-token は黙って使わず、止める", async () => {

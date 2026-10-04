@@ -52,7 +52,7 @@ believed.
   (`~/.claude/sessions/<id>/task`).
 - **role** — what a session is, e.g. `worker` or `pm` (`~/.claude/sessions/<id>/role`). One free-text
   value; ccx gives no value a meaning. Not the `label` (its name) (`docs/design/session-state.md`, "Role").
-- **store** — the S3-compatible object store `ccx transcript` pushes to (`docs/design/transcript-store.md`).
+- **store** — the center's S3-compatible object API, where `ccx transcript` pushes to (`docs/design/transcript-store.md`).
 - **center** — `ccx-center` (`apps/hub`), which collects hook events and, by default, serves the store.
   Formerly called the hub.
 - **broker** — the planned carrier of messages to ccx-agent (`docs/design/transport.md`). Not built.

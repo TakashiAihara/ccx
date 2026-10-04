@@ -4,7 +4,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { normalizePrefix, s3AccessKeyId, type TranscriptStore } from "@ccx/core";
+import { normalizePrefix, S3_REGION, s3AccessKeyId, type TranscriptStore } from "@ccx/core";
 
 import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
 
@@ -52,13 +52,9 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   }
   const endpoint = u.port ? `${u.hostname}:${u.port}` : u.hostname;
   const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
-  const env = process.env;
-  const token = env.AWS_SESSION_TOKEN ?? env.S3_SESSION_TOKEN;
   await c.run(
-    `CREATE SECRET store (TYPE s3, KEY_ID ${q(s3AccessKeyId(store, env))}, ` +
-      `SECRET ${q(env.AWS_SECRET_ACCESS_KEY ?? env.S3_SECRET_ACCESS_KEY ?? "ccx")}, ` +
-      (token ? `SESSION_TOKEN ${q(token)}, ` : "") +
-      `ENDPOINT ${q(endpoint)}, URL_STYLE 'path', USE_SSL ${u.protocol === "https:"}, REGION ${q(store.region ?? "us-east-1")})`,
+    `CREATE SECRET store (TYPE s3, KEY_ID ${q(s3AccessKeyId(store))}, SECRET 'ccx', ` +
+      `ENDPOINT ${q(endpoint)}, URL_STYLE 'path', USE_SSL ${u.protocol === "https:"}, REGION ${q(S3_REGION)})`,
   );
   const base = `s3://${store.bucket}/${normalizePrefix(store.prefix)}transcripts`;
   // session を渡されたら glob で絞る。read_json は glob に当たったファイルしか取りに行かない

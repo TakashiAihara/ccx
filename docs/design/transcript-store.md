@@ -2,8 +2,8 @@
 
 A session's memory is its transcript: `~/.claude/projects/<encoded cwd>/<session id>.jsonl`, which
 `claude --resume <id>` reads. Everything else about the session (the repodir, the branch, the
-working tree) can be rebuilt; the transcript cannot. `ccx transcript` puts it in an S3-compatible
-store and brings it back on any machine. (#121)
+working tree) can be rebuilt; the transcript cannot. `ccx transcript` puts it in `ccx-center` and
+brings it back on any machine. (#121)
 
 ## What it is for
 
@@ -13,11 +13,14 @@ store and brings it back on any machine. (#121)
 - Every transcript in one place, in a layout DuckDB reads directly, so the fleet's history is
   searchable without a second copy.
 
-## The store is S3, whoever serves it
+## The store is the center
 
-The client speaks S3 and nothing else. By default that is `ccx-center`'s object API
-(`apps/hub/README.md`), so a center is all you need; point `CCX_TRANSCRIPT_ENDPOINT` elsewhere and
-it is MinIO, R2, Garage or AWS instead. DuckDB's `httpfs` reads the same layout from either.
+The store is `ccx-center`'s object API (`apps/hub/README.md`) and nothing else: the endpoint is the
+hub URL, and there is no setting to point it at another S3 (MinIO, R2, AWS). That setting existed
+until #210 and was removed: ccx is built around the center, and live sync (`live-transcript.md`)
+needs an append S3 does not have. The object API still speaks S3, because the clients reading it —
+Bun's S3 client for push / pull and DuckDB's `httpfs` for search — are S3 clients. `bucket` and
+`prefix` stay as settings: they say where inside the center the objects go.
 
 This is the usual invariant (`scope.md`): the centre adds reach, it is never a dependency for acting
 locally. With no store configured, `ccx transcript` says so and exits `3` (the same code `ccx session`

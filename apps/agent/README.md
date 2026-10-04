@@ -21,7 +21,7 @@ modules behind an interface, each independently toggled in config.
 | **carry** | broker → session | off (inert without a broker) | later (#23) |
 | **persistence** | keep a `desired: running` session alive | **off, opt-in** | later (#20) |
 | **heartbeat** | keep idle sessions' prompt caches warm | on (inert until a session loads the channel) | built (#142) |
-| **livetranscript** | append running sessions' transcripts to the store | on (only with collect, and when the store is the center) | built (#120) |
+| **livetranscript** | append running sessions' transcripts to the store | on (only with collect and an http(s) hub) | built (#120) |
 
 Persistence is off by default because it is the only *active* verb — it spawns
 and restarts sessions (START), so it is never on by surprise. `collect` and
@@ -175,16 +175,16 @@ it simply has no center to forward to.
 | status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
 | status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the API token) |
 | status API token (TCP) | `CCX_API_TOKEN` | — | — (file `api-token` next to config.toml, 0600) | none |
-| live transcript on/off | `CCX_TRANSCRIPT_LIVE` | — | `[transcript] live` | on (only when the store is the center) |
+| live transcript on/off | `CCX_TRANSCRIPT_LIVE` | — | `[transcript] live` | on (only with an http(s) hub) |
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 
 The live transcript appends a running session's `transcript.jsonl` to the store
 through the center (`docs/design/live-transcript.md`), so the center holds the
 conversation as it runs instead of only after the session ends. It follows
-`[transcript]` in config.toml — the same endpoint, bucket and prefix
-`ccx transcript` uses — and runs only when that store is the center's own object
-API, because S3 has no append. With the store elsewhere (MinIO, R2, AWS) serve
+`[transcript]` in config.toml — the same bucket and prefix `ccx transcript`
+uses — and needs an http(s) hub, because the store is the center's object API
+(#210). Without one serve
 logs one line saying why it is off, and `ccx transcript push` at the end of the
 session works as before. Turning it off (`CCX_TRANSCRIPT_LIVE=off`) keeps the
 agent from reading transcripts at all. It has no git config key: git config is
