@@ -370,8 +370,9 @@ function makeS3(store: TranscriptStore): Bun.S3Client {
     secretAccessKey: "ccx",
     // 手元の AWS の一時資格情報 (起動時の env の AWS_SESSION_TOKEN / S3_SESSION_TOKEN) を center に
     // 送らない (#213)。Bun は null / undefined / "" を「未指定」として env の値を
-    // x-amz-security-token で送る。空白 1 つなら空のヘッダになる (Bun 1.4.2 で実測)。
-    // shortcut: Bun の挙動頼み。sessionToken で env を止められる版が出たら "" に戻す
+    // x-amz-security-token で送る。空白 1 つなら、ヘッダは毎回付くが値は空になる (Bun 1.4.2 / 1.4.3 で実測)。
+    // 署名は " " で計算されるので、署名を検証する相手 (実 S3 / MinIO) には通らない。center は検証しない。
+    // shortcut: Bun の挙動頼み。明示の "" を「トークン無し」と扱う Bun が出たら "" にする
     sessionToken: " ",
   });
 }

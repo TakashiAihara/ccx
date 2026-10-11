@@ -35,7 +35,16 @@ beforeEach(async () => {
   cacheHome = await mkdtemp(join(tmpdir(), "ccx-search-cache-"));
   process.env.XDG_CACHE_HOME = cacheHome;
   db = openDb(":memory:");
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db, new ObjectStore(root)).fetch });
+  const app = createApp(db, new ObjectStore(root));
+  tokens = [];
+  server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (req, srv) => {
+      tokens.push(req.headers.get("x-amz-security-token"));
+      return app.fetch(req, srv);
+    },
+  });
   store = { endpoint: `http://127.0.0.1:${server.port}`, bucket: "ccx", prefix: "pre/" };
 
   const projectDir = join(home, "projects", encodeCwd("/w"));
@@ -59,6 +68,9 @@ beforeEach(async () => {
 });
 
 /** 本物のコマンドを、この store を向けて走らせる */
+/** center 役が受けた x-amz-security-token (#213) */
+let tokens: (string | null)[] = [];
+
 async function ccx(...args: string[]): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", ...args], {
     env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
@@ -184,6 +196,18 @@ describe("search: embedded DuckDB over the store", () => {
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
+
+  test("search does not send the env's AWS session token to the center (#213)", async () => {
+    tokens = [];
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", "needle-alpha", "--json"], {
+      env: { ...process.env, AWS_SESSION_TOKEN: "LEAKED-TOKEN", CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await p.exited).toBe(0);
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.filter((v) => v?.includes("LEAKED-TOKEN"))).toEqual([]);
+  });
 
   test("a history file that is not JSON, not an object, or lacks a string op / machine / user / at drops only itself, in --sql and in tr ls; no history at all is 0 rows (#172)", async () => {
     const histDir = join(root, "ccx", "pre", "transcripts", "machine=host-a", "user=alice", `session_id=${SID}`, "history");
