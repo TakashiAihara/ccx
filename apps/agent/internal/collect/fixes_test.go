@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
+	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
 )
@@ -342,5 +343,26 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	}
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Errorf("the temp is still in incoming/: %v", err)
+	}
+}
+
+// An event without machine or user is rejected by the center and would be retried
+// forever, holding back the rest (#126): collect does not start without both.
+func TestNew_RequiresMachineAndUser(t *testing.T) {
+	base := config.Config{Machine: "m", User: "u", SpoolDir: filepath.Join(t.TempDir(), "spool")}
+	if _, err := New(base, quietLog); err != nil {
+		t.Fatalf("with both: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{"machine", config.Config{User: "u", SpoolDir: base.SpoolDir}, "CCX_MACHINE"},
+		{"user", config.Config{Machine: "m", SpoolDir: base.SpoolDir}, "no user name"},
+	} {
+		if _, err := New(c.cfg, quietLog); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("without %s: err = %v, want one naming %q", c.name, err, c.want)
+		}
 	}
 }
