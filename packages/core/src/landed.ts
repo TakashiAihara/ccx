@@ -29,7 +29,18 @@ async function candidates(path: string, baseBranch?: string): Promise<string[]> 
   return exists.filter((r) => r !== "");
 }
 
-export async function unpushedLanded(path: string, baseBranch?: string): Promise<Landed> {
+export type LandedOptions = {
+  /** repodir を作った起点ブランチ (ccx.json の baseBranch) */
+  baseBranch?: string;
+  /**
+   * repodir の bare mirror と、その default branch。repodir の origin/* は clone した時点のままなので、
+   * その後に入った squash merge は mirror の方にしか無い。中身 (blob) の照合にだけ使う
+   */
+  mirror?: { path: string; branch: string };
+};
+
+export async function unpushedLanded(path: string, opts: LandedOptions = {}): Promise<Landed> {
+  const { baseBranch, mirror } = opts;
   // origin/HEAD は別名なので名前に使わない
   const at = lines(await git(["for-each-ref", "--points-at", "HEAD", "--format=%(refname)", "refs/remotes"], path))
     .filter((r) => !r.endsWith("/HEAD"))
@@ -37,7 +48,7 @@ export async function unpushedLanded(path: string, baseBranch?: string): Promise
   if (at.length > 0) return { landed: true, how: `${at[0]} is at HEAD` };
 
   const refs = await candidates(path, baseBranch);
-  if (refs.length === 0) return { landed: false, how: "no remote branch to compare with", missing: [] };
+  if (refs.length === 0 && !mirror) return { landed: false, how: "no remote branch to compare with", missing: [] };
 
   for (const ref of refs) {
     const unique = lines(await git(["cherry", ref, "HEAD"], path)).filter((l) => l.startsWith("+"));
@@ -45,25 +56,28 @@ export async function unpushedLanded(path: string, baseBranch?: string): Promise
   }
 
   const files = [...new Set(lines(await git(["log", "--format=", "--name-only", "HEAD", "--not", "--remotes"], path)))];
-  let best: { ref: string; missing: string[] } | null = null;
-  for (const ref of refs) {
+  const targets = refs.map((ref) => ({ cwd: path, ref, name: ref }));
+  if (mirror) targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}` });
+  const blobs = await Promise.all(files.map((f) => git(["rev-parse", "--verify", "--quiet", `HEAD:${f}`], path).catch(() => "")));
+  let best: { name: string; missing: string[] } | null = null;
+  for (const t of targets) {
     const missing: string[] = [];
-    for (const f of files) {
-      const blob = await git(["rev-parse", "--verify", "--quiet", `HEAD:${f}`], path).catch(() => "");
+    for (const [i, f] of files.entries()) {
+      const blob = blobs[i];
       if (!blob) {
         // 手元で消したファイル: ref の先にも無ければ入っている
-        const there = await git(["cat-file", "-e", `${ref}:${f}`], path).then(
+        const there = await git(["cat-file", "-e", `${t.ref}:${f}`], t.cwd).then(
           () => true,
           () => false,
         );
         if (there) missing.push(f);
         continue;
       }
-      const seen = await git(["log", ref, "-1", "--format=%H", `--find-object=${blob}`], path);
+      const seen = await git(["log", t.ref, "-1", "--format=%H", `--find-object=${blob}`], t.cwd);
       if (!seen) missing.push(f);
     }
-    if (missing.length === 0) return { landed: true, how: `every changed file's content is in ${ref}'s history` };
-    if (!best || missing.length < best.missing.length) best = { ref, missing };
+    if (missing.length === 0) return { landed: true, how: `every changed file's content is in ${t.name}'s history` };
+    if (!best || missing.length < best.missing.length) best = { name: t.name, missing };
   }
-  return { landed: false, how: `not in ${best!.ref}`, missing: best!.missing };
+  return { landed: false, how: `not in ${best!.name}`, missing: best!.missing };
 }

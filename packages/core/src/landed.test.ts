@@ -88,6 +88,20 @@ describe("unpushedLanded (#220)", () => {
     expect(r.landed ? [] : [...r.missing].sort()).toEqual(["a.txt", "l.txt"]);
   });
 
+  test("content that landed after the repodir last fetched is found in the mirror (#220)", async () => {
+    const w = await clone("stale");
+    await git(["switch", "--quiet", "-c", "feat"], w);
+    await commit(w, { "m.txt": "mirror one\n" }, "first");
+    await commit(w, { "m.txt": "mirror one\nmirror two\n" }, "second");
+    await landOnMain({ "m.txt": "mirror one\nmirror two\n" });
+    // repodir の origin/main は古いまま: それだけでは入っていないと見える
+    expect((await unpushedLanded(w)).landed).toBe(false);
+    expect(await unpushedLanded(w, { mirror: { path: remote, branch: "main" } })).toEqual({
+      landed: true,
+      how: "every changed file's content is in the mirror's main's history",
+    });
+  });
+
   test("with nothing to compare with, it says so instead of guessing", async () => {
     const w = await clone("no-ref");
     await git(["switch", "--quiet", "-c", "feat"], w);

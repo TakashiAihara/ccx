@@ -16,6 +16,8 @@ import {
   reclaim,
   scanRepodirs,
   unpushedLanded,
+  mirrorPath,
+  defaultBranch,
   type Landed,
   specToSlug,
   summarizeProblems,
@@ -222,7 +224,12 @@ repodir
         p.keep
           .filter((c) => (c.info.git.unpushed ?? 0) > 0)
           .map(async (c) => {
-            const l: Landed = await unpushedLanded(c.info.path, c.info.meta?.baseBranch).catch((e: unknown) => ({
+            const mirror = mirrorPath(cfg, c.info.spec);
+            const branch = await defaultBranch(mirror).catch(() => "");
+            const l: Landed = await unpushedLanded(c.info.path, {
+              baseBranch: c.info.meta?.baseBranch,
+              mirror: branch ? { path: mirror, branch } : undefined,
+            }).catch((e: unknown) => ({
               landed: false as const,
               how: `could not check: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`,
               missing: [],
