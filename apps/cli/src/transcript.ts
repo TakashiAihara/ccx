@@ -235,7 +235,8 @@ export function registerTranscript(program: Command, VERSION: string): void {
               return null;
             }),
           ]);
-          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state, ...(stateError ? { stateError } : {}) };
+          // JSON.stringify は undefined の鍵を出さないので、stateError は読めなかった行にだけ載る
+          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state, stateError };
         }),
       ).catch((e: unknown) => {
         // --session では見つけた後に読めなかったのも 2 (1 は「無い」だけ)
@@ -255,7 +256,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
         shortId(m.sessionId),
         m.machine,
         m.user,
-        m.stateError ? "?" : m.state ? flagsOf(m.state).join(",") : "",
+        m.stateError !== undefined ? "?" : m.state ? flagsOf(m.state).join(",") : "",
         human(m.size),
         `${humanSince(Date.parse(m.pushedAt))} ago`,
         m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
