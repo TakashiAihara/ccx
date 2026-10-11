@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -90,7 +91,8 @@ func OpenSpool(dir string, origin *ccxv1.Origin) (*Spool, error) {
 	// read (only .pb / .raw names are), but without a reaper they accumulate
 	// across crash cycles. Best-effort — a failure here is not fatal.
 	reapTemps(dir)
-	reapTemps(incoming)
+	// incoming/ is not reaped here: its temps can be whole events, and touching
+	// it before Run holds the lock would race a second ccx-agent (#218).
 
 	max, err := s.maxSeqOnDisk()
 	if err != nil {
@@ -114,6 +116,84 @@ func reapTemps(dir string) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// tempAge is how old a temp file in incoming/ must be before it is touched: the
+// hook gives up after hookOverallBudget, so an older one is not being written.
+const tempAge = time.Minute
+
+// tempPattern is atomicWrite's os.CreateTemp pattern: the final name follows
+// ".tmp-", then "-" and the random part.
+func tempPattern(path string) string { return ".tmp-" + filepath.Base(path) + "-*" }
+
+// createTemp is os.CreateTemp; a test swaps it to see the pattern atomicWrite uses.
+var createTemp = os.CreateTemp
+
+// recoverIncomingTemps renames each settled ".tmp-*" in incoming/ that holds
+// complete JSON (a hook payload) to a .raw the drain then takes in, and removes
+// the empty or partial ones. A temp named after its event keeps that id, so a copy
+// that also reached the socket (a lost ack) is deduped by the center as usual; a
+// temp from before the id was in its name gets an id the drain mints. A file that
+// cannot be read now is left for the next start. tempAge does not cover a hook
+// stuck in a syscall for longer than it; that hook's event is then lost. young
+// counts the temps left alone for being newer than tempAge.
+func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young int) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) < tempAge {
+			young++
+			continue
+		}
+		p := filepath.Join(dir, name)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			// Unreadable now is not partial: leave it for the next start.
+			continue
+		}
+		if !json.Valid(b) {
+			if os.Remove(p) == nil {
+				dropped++
+			}
+			continue
+		}
+		// ".tmp-<id>.raw-<random>" carries the hook's event id: recover under it, so
+		// a copy that also reached the socket is the same event to the center. An
+		// older temp (".tmp-<random>") has none; the drain mints one.
+		final := "recovered" + name + incomingExt
+		if base := strings.TrimPrefix(name, ".tmp-"); strings.Contains(base, incomingExt+"-") {
+			final = base[:strings.LastIndex(base, incomingExt+"-")+len(incomingExt)]
+		}
+		target := filepath.Join(dir, final)
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			// Something already has that name (only a second writer of one id could
+			// leave it). Do not compare: take this one in under a minted id; a
+			// duplicate is better than a lost event. An old-style temp's fallback is
+			// that same name, so a leftover recovered file of the same name would be
+			// replaced; the random part makes that unlikely, not impossible (#249).
+			target = filepath.Join(dir, "recovered"+name+incomingExt)
+		}
+		if os.Rename(p, target) == nil {
+			recovered++
+		}
+	}
+	return recovered, dropped, young
+}
+
+// recoverTemps runs recoverIncomingTemps on incoming/. Call it only while holding
+// the spool lock.
+func (s *Spool) recoverTemps(now time.Time) (recovered, dropped, young int) {
+	return recoverIncomingTemps(s.incoming, now)
 }
 
 // IncomingDir is where the hook drops events when the socket is unreachable.
@@ -289,8 +369,8 @@ func (s *Spool) DrainIncoming() (int, error) {
 		// The name is the id the hook minted, so the fallback copy is enveloped
 		// under the same event_id the socket path carried. A name that is not one
 		// gets an id minted for it rather than dropped: the event is worth more
-		// than the id it arrived with. Unlike handle this is not logged, since only
-		// the hook writes here and it names every file by a v7.
+		// than the id it arrived with. Unlike handle this is not logged: the only
+		// such names are temps recovered from before the id was in their name.
 		if _, err := s.AppendID(strings.TrimSuffix(name, incomingExt), payload); err != nil {
 			return n, err
 		}
@@ -351,7 +431,9 @@ func (s *Spool) maxSeqOnDisk() (uint64, error) {
 // That buys back the fsync only; the create and rename can stall too.
 func atomicWrite(path string, b []byte, durable bool) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	// The final name rides in the temp name, so a temp the hook could not rename
+	// still says which event it is (recoverIncomingTemps, #218).
+	tmp, err := createTemp(dir, tempPattern(path))
 	if err != nil {
 		return err
 	}

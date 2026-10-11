@@ -29,6 +29,10 @@ type Collect struct {
 	loop       *forwardLoop
 	log        func(string, ...any)
 	observer   func([]byte)
+	// clock and resweepAfter time the second look at incoming/ temps that were
+	// too young at startup; tests shorten them.
+	clock        func() time.Time
+	resweepAfter time.Duration
 }
 
 // New builds the collect concern from resolved config. The center may be unset
@@ -47,7 +51,7 @@ func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
 // newCollect is the lower-level constructor with the spool and forwarder
 // injected, so tests can drive collect against a stub center and a temp spool.
 func newCollect(socketPath string, spool *Spool, forwarder Forwarder, log func(string, ...any)) *Collect {
-	c := &Collect{socketPath: socketPath, spool: spool, log: log}
+	c := &Collect{socketPath: socketPath, spool: spool, log: log, clock: time.Now, resweepAfter: tempAge}
 	if forwarder != nil {
 		c.loop = newForwardLoop(spool, forwarder, log)
 	}
@@ -111,11 +115,7 @@ func (s *Collect) Run(ctx context.Context) error {
 	// Startup drain: events hooks wrote to the fallback while ccx-agent was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
-	if n, err := s.spool.DrainIncoming(); err != nil {
-		s.log("startup drain error: %v", err)
-	} else if n > 0 {
-		s.log("drained %d event(s) from the fallback spool on startup", n)
-	}
+	young := s.takeInIncoming("on startup")
 	// Only the hook writes there and it writes .raw; anything else is left alone,
 	// so say so instead of ignoring it forever (#186).
 	if others, err := s.spool.OtherIncoming(); err != nil {
@@ -145,6 +145,32 @@ func (s *Collect) Run(ctx context.Context) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
+
+	// A temp too young to judge at startup is otherwise never looked at again: the
+	// hook that left it is gone once the socket is back. Look again while any is
+	// young (a wall clock stepped back keeps it young). Such a look also takes in
+	// .raw a hook dropped during the startup drain, and queues what it takes in
+	// after socket events that came meanwhile (the id is kept, so the center
+	// still dedupes).
+	if young > 0 {
+		s.log("incoming/: %d temp(s) too new to judge; looking again in %s", young, s.resweepAfter)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for y := young; y > 0; {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(s.resweepAfter):
+					// say so each time: a temp that stays young (an mtime ahead of the
+					// clock) keeps this looking, and Status does not count temps
+					if y = s.takeInIncoming("after the young temps settled"); y > 0 {
+						s.log("incoming/: %d temp(s) still too new to judge (an mtime ahead of the clock?); looking again in %s", y, s.resweepAfter)
+					}
+				}
+			}
+		}()
+	}
 
 	if s.loop != nil {
 		wg.Add(1)
@@ -269,4 +295,24 @@ func (s *Collect) handle(conn net.Conn) {
 	if s.observer != nil {
 		s.observer(payload)
 	}
+}
+
+// takeInIncoming recovers settled hook temps in incoming/ and drains incoming/ into
+// the main queue, logging what it did. It returns how many temps were too young to
+// judge. The spool lock must be held.
+func (s *Collect) takeInIncoming(when string) (young int) {
+	r, d, young := s.spool.recoverTemps(s.clock())
+	if r+d > 0 {
+		s.log("incoming/ %s: took in %d event(s) a hook wrote but did not finish naming, removed %d that were not complete", when, r, d)
+	}
+	if n, err := s.spool.DrainIncoming(); err != nil {
+		s.log("drain of incoming/ %s: %v", when, err)
+	} else if n > 0 {
+		s.log("drained %d event(s) from the fallback spool %s", n, when)
+		// as handle does; at startup the loop has not started and reads the queue first
+		if s.loop != nil {
+			s.loop.wake()
+		}
+	}
+	return young
 }

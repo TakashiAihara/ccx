@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,8 +63,8 @@ func TestSingleInstanceLock_RefusesSecond(t *testing.T) {
 	second.release()
 }
 
-// Stray temp files from a crash mid-write are reaped on open, not accumulated.
-// Fix for the review's Low#7.
+// Stray temp files from a crash mid-write are reaped, not accumulated: the spool's
+// on open, incoming/'s once the lock is held (#218). Fix for the review's Low#7.
 func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "incoming"), 0o700); err != nil {
@@ -76,12 +78,24 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	if err := os.WriteFile(strayIn, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// In incoming/ only a settled temp file is looked at (#218).
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(strayIn, old, old); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"}); err != nil {
+	s, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stray); !os.IsNotExist(err) {
 		t.Error("stray temp in spool dir should have been reaped")
+	}
+	if _, err := os.Stat(strayIn); err != nil {
+		t.Errorf("incoming/ must not be touched before the lock: %v", err)
+	}
+	if _, d, _ := s.recoverTemps(time.Now()); d != 1 {
+		t.Errorf("dropped %d, want the partial temp", d)
 	}
 	if _, err := os.Stat(strayIn); !os.IsNotExist(err) {
 		t.Error("stray temp in incoming dir should have been reaped")
@@ -230,6 +244,17 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// ...and a settled temp it could not rename (#218): recovering it is a change to
+	// incoming/ too, so it must also wait for the lock.
+	settled := filepath.Join(spool.IncomingDir(), ".tmp-01a050e6-8722-7c8a-9041-f38193f5a473.raw-1")
+	if err := os.WriteFile(settled, []byte(`{"pending":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * tempAge)
+	if err := os.Chtimes(settled, old, old); err != nil {
+		t.Fatal(err)
+	}
+
 	// Another ccx-agent already holds the spool lock.
 	held, err := acquireLock(dir)
 	if err != nil {
@@ -251,5 +276,71 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	pending, _ := spool.Pending()
 	if pending != 0 {
 		t.Errorf("nothing should have been drained into the main spool, found %d", pending)
+	}
+	if _, err := os.Stat(settled); err != nil {
+		t.Errorf("the settled temp should be untouched when Run fails on the lock: %v", err)
+	}
+}
+
+// A temp too young to judge at startup (the agent came back seconds after the hook
+// was cut off) is looked at again once it has settled, not left forever (#218).
+func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a472"
+	tmp := filepath.Join(spool.IncomingDir(), ".tmp-"+id+".raw-1")
+	if err := os.WriteFile(tmp, []byte(`{"late":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fwd := &stubForwarder{}
+	var logMu sync.Mutex
+	var logs []string
+	c := newCollect(testsock.Path(t, "s.sock"), spool, fwd, func(f string, a ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+	})
+	// what the later look takes in must wake the idle loop, not wait for its poll
+	c.loop.idlePoll = time.Hour
+	// the startup look and the next see the temp as new (a clock stepped back); the
+	// third, as settled
+	var looks atomic.Int32
+	c.clock = func() time.Time {
+		if looks.Add(1) <= 2 {
+			return time.Now()
+		}
+		return time.Now().Add(2 * tempAge)
+	}
+	c.resweepAfter = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if p := fwd.payloads(); len(p) == 1 && p[0] == `{"late":true}` {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("the young temp was not taken in after it settled (looks: %d)", looks.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	logMu.Lock()
+	joined := strings.Join(logs, "\n")
+	logMu.Unlock()
+	if !strings.Contains(joined, "1 temp(s) still too new to judge") {
+		t.Errorf("a look that still finds a young temp must say so; logs:\n%s", joined)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("the temp is still in incoming/: %v", err)
 	}
 }

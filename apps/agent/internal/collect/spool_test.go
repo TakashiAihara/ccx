@@ -230,3 +230,107 @@ func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
 		t.Errorf("OtherIncoming = %v, %v", got, err)
 	}
 }
+
+// A temp file the hook left in incoming/ after its time budget is often a whole
+// event: a settled one with complete JSON is taken in, an empty or partial one is
+// removed, and one still young (maybe being written) is left alone (#218).
+func TestRecoverTemps_TakesInCompleteIncomingTemps(t *testing.T) {
+	dir := t.TempDir()
+	incoming := filepath.Join(dir, "incoming")
+	if err := os.MkdirAll(incoming, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a46f"
+	const doneID = "01a050e6-8722-7c8a-9041-f38193f5a470"
+	if err := os.WriteFile(filepath.Join(incoming, doneID+".raw"), []byte(`{"done":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		".tmp-" + id + ".raw-111":     `{"hook_event_name":"Stop"}`,
+		".tmp-" + doneID + ".raw-222": `{"done":"again"}`,
+		".tmp-2":                      "",
+		".tmp-3":                      `{"hook_event_na`,
+		".tmp-4":                      `{"young":true}`,
+		".tmp-5":                      `{"old_style":true}`,
+	} {
+		p := filepath.Join(incoming, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if name != ".tmp-4" {
+			if err := os.Chtimes(p, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	s := openTestSpool(t, dir)
+	if left, _ := filepath.Glob(filepath.Join(incoming, ".tmp-*")); len(left) != 6 {
+		t.Fatalf("OpenSpool touched incoming/ temps before the lock: %d left, want 6", len(left))
+	}
+	// recovered: the id-named temp, the old-style one, and the one whose name is
+	// taken (under a minted id, not overwriting); dropped: the empty and the partial
+	if r, d, y := s.recoverTemps(time.Now()); r != 3 || d != 2 || y != 1 {
+		t.Fatalf("recovered %d dropped %d young %d, want 3, 2 and 1", r, d, y)
+	}
+	for _, gone := range []string{".tmp-2", ".tmp-3"} {
+		if _, err := os.Stat(filepath.Join(incoming, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s was counted as dropped but is still there: %v", gone, err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(incoming, doneID+".raw")); err != nil || string(b) != `{"done":true}` {
+		t.Errorf("the existing .raw was touched: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(incoming, "recovered.tmp-"+doneID+".raw-222.raw")); err != nil || string(b) != `{"done":"again"}` {
+		t.Errorf("the temp whose name was taken is not under a name of its own: %q %v", b, err)
+	}
+	if n, err := s.DrainIncoming(); err != nil || n != 4 {
+		t.Fatalf("DrainIncoming = %d, %v; want the three recovered events and the existing one", n, err)
+	}
+	// a temp named the way atomicWrite names it is recovered under its event id
+	tmp, err := os.CreateTemp(incoming, tempPattern(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tmp.WriteString(`{"via":"atomicWrite"}`)
+	tmp.Close()
+	if err := os.Chtimes(tmp.Name(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if r, d, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 || d != 0 {
+		t.Fatalf("recovered %d of the atomicWrite-named temp", r)
+	}
+	if _, err := os.Stat(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")); err != nil {
+		t.Errorf("the atomicWrite-named temp was not recovered under its id: %v", err)
+	}
+
+	ids := drainAll(t, s)
+	found := false
+	for _, got := range ids {
+		found = found || got == id
+	}
+	if !found {
+		t.Errorf("drained ids %v, want the hook's id %s kept", ids, id)
+	}
+	if _, err := os.Stat(filepath.Join(incoming, ".tmp-4")); err != nil {
+		t.Errorf("the young temp file was touched: %v", err)
+	}
+}
+
+// The hook's fallback write names its temp after the event, which is what lets a
+// temp it could not rename be recovered under the same id (#218).
+func TestWriteIncoming_TempNameCarriesTheEvent(t *testing.T) {
+	var patterns []string
+	createTemp = func(dir, pattern string) (*os.File, error) {
+		patterns = append(patterns, pattern)
+		return os.CreateTemp(dir, pattern)
+	}
+	t.Cleanup(func() { createTemp = os.CreateTemp })
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a46f"
+	if err := writeIncoming(t.TempDir(), id, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(patterns) != 1 || patterns[0] != ".tmp-"+id+".raw-*" {
+		t.Errorf("temp patterns %q, want the event's name in it", patterns)
+	}
+}
