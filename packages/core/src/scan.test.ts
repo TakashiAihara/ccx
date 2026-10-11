@@ -169,7 +169,7 @@ describe("session の生死", () => {
     await Bun.write(join(account, "projects", encodeCwd(inAccount.path), "s.jsonl"), "{}\n");
     await Bun.write(join(dflt, "projects", encodeCwd(inDefault.path), "s.jsonl"), "{}\n");
     const active = async (claudeHomes: string[]) =>
-      (await scanRepodirs(cfg, { claudeHomes })).filter((x) => x.path === inAccount.path || x.path === inDefault.path).map((x) => [x.path === inAccount.path ? "account" : "default", x.session.active]);
+      (await scanRepodirs(cfg, { claudeHomes })).filter((x) => x.path === inAccount.path || x.path === inDefault.path).map((x) => [x.path === inAccount.path ? "account" : "default", x.session.active] as const);
     expect(new Map(await active([account, dflt]))).toEqual(new Map([["account", true], ["default", true]]));
     expect(new Map(await active([join(tmp, "account-c"), dflt]))).toEqual(new Map([["account", false], ["default", true]]));
   });
