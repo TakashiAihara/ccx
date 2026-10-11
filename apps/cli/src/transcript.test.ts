@@ -364,6 +364,80 @@ describe("transcript: push / pull / prune through the store", () => {
     await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
   });
 
+  test("tr ls --session shows every machine's copy of one session, and exits 1 when it is not in the store (#183)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    await B.push((await localTranscripts(homeB)).find((x) => x.sessionId === SID)!);
+
+    const ls = (...args: string[]) => {
+      const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", ...args], {
+        env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    };
+    const [out, , code] = await ls("--session", SID.slice(0, 8), "--json");
+    expect(code).toBe(0);
+    expect((JSON.parse(out) as { sessionId: string; machine: string }[]).map((m) => [m.sessionId, m.machine])).toEqual([[SID, "host-b"], [SID, "host-a"]]);
+    const [one] = await ls("-s", SID, "-m", "host-a", "--json");
+    expect((JSON.parse(one) as { machine: string }[]).map((m) => m.machine)).toEqual(["host-a"]);
+
+    const [nout, nerr, ncode] = await ls("--session", "ffffffff-0000-4000-8000-000000000000", "--json");
+    expect([ncode, JSON.parse(nout), nerr]).toEqual([1, [], expect.stringContaining("is not in the store")]);
+
+    // 空の指定は全件ではない
+    const [, eerr, ecode] = await ls("-s", "", "--json");
+    expect([ecode, eerr]).toEqual([2, expect.stringContaining("needs an id")]);
+
+    // session.json や履歴の取得が失敗するのも「無い」ではない (中継が該当の GET だけを 500 にする)
+    for (const failing of ["/session.json", "/history/"]) {
+      const upstream = A.store.endpoint;
+      const proxy = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          const u = new URL(req.url);
+          if (req.method === "GET" && u.pathname.includes(failing) && !u.searchParams.has("list-type")) return new Response("boom", { status: 500 });
+          return fetch(`${upstream}${u.pathname}${u.search}`, { method: req.method, headers: req.headers, body: req.body });
+        },
+      });
+      try {
+        const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID, "--json"], {
+          env: { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [pout, pcode] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+        expect([failing, pcode, pout]).toEqual([failing, 2, ""]);
+        if (failing === "/session.json") {
+          const env = { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root };
+          // 全件の一覧は止まらず、読めなかったものを stderr に出す
+          const all = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "--json"], { env, stdout: "pipe", stderr: "pipe" });
+          const [aout, aerr, acode] = await Promise.all([new Response(all.stdout).text(), new Response(all.stderr).text(), all.exited]);
+          expect([acode, JSON.parse(aout), aerr]).toEqual([0, [], expect.stringContaining("could not read")]);
+          // push はその session を failed にして exit 1 (一括を途中で止めない)
+          const push = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "push", SID, "--json"], { env: { ...env, CLAUDE_CONFIG_DIR: homeA }, stdout: "pipe", stderr: "pipe" });
+          const [push_out, push_code] = await Promise.all([new Response(push.stdout).text(), push.exited]);
+          expect([push_code, (JSON.parse(push_out) as { status: string }[]).map((r) => r.status)]).toEqual([1, ["failed"]]);
+        }
+      } finally {
+        proxy.stop(true);
+      }
+    }
+
+    // 保存先が答えないのは「無い」ではない
+    const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
+      env: { ...process.env, CCX_HUB_URL: "http://127.0.0.1:1", CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await down.exited).toBe(2);
+  });
+
   test("push puts the object right after the local file was cut back, though session.json already matches (#120)", async () => {
     const t = await seedA();
     await A.push(t);

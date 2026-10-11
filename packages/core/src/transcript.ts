@@ -446,9 +446,12 @@ export class TranscriptClient {
   private async readMeta(key: string): Promise<SessionMeta | null> {
     try {
       return (await this.s3.file(key).json()) as SessionMeta;
-    } catch {
-      // 置きかけ (transcript はあるが session.json がまだ無い) は無いものとして扱う
-      return null;
+    } catch (e) {
+      // 置きかけ (transcript はあるが session.json がまだ無い) と読めない JSON は無いものとして扱う。
+      // 保存先が答えない (5xx / 切断) は投げる: 「無い」と読むと tr ls -s が exit 1 を返し、push が
+      // 前回の写しを見落とす (#183)
+      if ((e as { code?: string })?.code === "NoSuchKey" || e instanceof SyntaxError) return null;
+      throw e;
     }
   }
 
@@ -484,7 +487,16 @@ export class TranscriptClient {
         for (const s of await this.children(`${this.root()}${m}/${u}/`)) keys.push(`${this.root()}${m}/${u}/${s}/session.json`);
       }
     }
-    const metas = (await Promise.all(keys.map((k) => this.readMeta(k)))).filter((m): m is SessionMeta => m !== null);
+    // 1 件が読めなくても一覧は止めない。読めなかったことは黙らず stderr に出す
+    const read = async (k: string) => {
+      try {
+        return await this.readMeta(k);
+      } catch (e) {
+        console.error(`(could not read ${k}: ${e instanceof Error ? e.message : String(e)})`);
+        return null;
+      }
+    };
+    const metas = (await Promise.all(keys.map(read))).filter((m): m is SessionMeta => m !== null);
     return metas.sort((a, b) => byString(b.pushedAt, a.pushedAt));
   }
 

@@ -124,7 +124,17 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const { picked } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) });
       const results = [];
       for (const t of picked) {
-        const r = await c.push(t, claudeHome(), { force: Boolean(o.force), dryRun: Boolean(o.dryRun) });
+        // 1 件の失敗 (保存先が答えない等) で残りを止めない
+        let r: Awaited<ReturnType<typeof c.push>>;
+        try {
+          r = await c.push(t, claudeHome(), { force: Boolean(o.force), dryRun: Boolean(o.dryRun) });
+        } catch (e) {
+          const error = e instanceof Error ? e.message : String(e);
+          console.error(`(${t.sessionId}: not pushed: ${error})`);
+          results.push({ sessionId: t.sessionId, status: "failed", error });
+          process.exitCode = 1;
+          continue;
+        }
         results.push({ sessionId: t.sessionId, ...r, ...(o.dryRun ? { dryRun: true } : {}) });
         if (r.status === "refused") {
           console.error(`(${t.sessionId}: not pushed: ${r.reason}; --force makes this copy the one pull picks)`);
@@ -180,17 +190,47 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("ls")
     .description("List sessions in the store, newest push first")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous")
     .option("--json", "print as JSON")
     .action(async (o) => {
-      const c = await client();
-      const metas = await c.list(o.machine);
+      // --session では保存先が答えないのも「引けなかった」(2)。未設定 (3) は他のコマンドと同じ
+      const c = await client().catch((e: unknown) => {
+        if (o.session === undefined || e instanceof NoTranscriptStore) throw e;
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      });
+      // 1 件を見るために全件を読ませない (#183)。無いことを exit 1 で返すので、`if ccx tr ls -s "$id"` で書ける
+      let metas: Awaited<ReturnType<typeof c.list>>;
+      if (o.session !== undefined) {
+        // 「無い」(1) と「引けなかった」(2: 保存先が答えない / prefix が曖昧) を分ける。meta get と同じ
+        try {
+          // 空の指定は全件に当たる prefix になるので、何も指していないものとして断る
+          if (String(o.session).trim() === "") throw new Error("--session needs an id or a prefix");
+          const id = await c.resolve(String(o.session).toLowerCase());
+          metas = id ? (await c.findAll(id)).filter((m) => !o.machine || m.machine === o.machine) : [];
+        } catch (e) {
+          console.error(e instanceof Error ? e.message : String(e));
+          process.exit(2);
+        }
+        if (metas.length === 0) {
+          console.error(`${o.session} is not in the store${o.machine ? ` from ${o.machine}` : ""}`);
+          process.exitCode = 1;
+          if (o.json) console.log("[]");
+          return;
+        }
+      } else metas = await c.list(o.machine);
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
           const [h, state] = await Promise.all([c.history(m), c.readRemoteDeclared(m.sessionId, m)]);
           return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state };
         }),
-      );
+      ).catch((e: unknown) => {
+        // --session では見つけた後に読めなかったのも 2 (1 は「無い」だけ)
+        if (o.session === undefined) throw e;
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      });
       if (o.json) {
         console.log(JSON.stringify(withPull, null, 2));
         return;
@@ -313,7 +353,17 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const results = [];
       let refused = 0;
       for (const t of picked) {
-        const r = await c.prune(t, running);
+        let r: Awaited<ReturnType<typeof c.prune>>;
+        try {
+          r = await c.prune(t, running);
+        } catch (e) {
+          // 消すかどうかを決められなかったものは消していない。残りは続ける
+          const error = e instanceof Error ? e.message : String(e);
+          console.error(`(${t.sessionId}: not pruned: ${error})`);
+          results.push({ sessionId: t.sessionId, status: "failed", error });
+          refused += 1;
+          continue;
+        }
         results.push({ sessionId: t.sessionId, ...r });
         if (r.status === "refused") refused += 1;
         if (!o.json) console.log(`${r.status.padEnd(7)} ${t.sessionId}  ${r.reason ?? t.path}`);
