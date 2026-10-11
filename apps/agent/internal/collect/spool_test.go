@@ -265,13 +265,16 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 		}
 	}
 	s := openTestSpool(t, dir)
-	// recovered: the id-named temp and the old-style one; dropped: the empty, the
-	// partial, and the temp whose event was renamed after all
-	if s.RecoveredTemps != 2 || s.DroppedTemps != 3 {
-		t.Fatalf("recovered %d dropped %d, want 2 and 3", s.RecoveredTemps, s.DroppedTemps)
+	// recovered: the id-named temp, the old-style one, and the one whose name is
+	// taken (under a minted id, not overwriting); dropped: the empty and the partial
+	if s.RecoveredTemps != 3 || s.DroppedTemps != 2 {
+		t.Fatalf("recovered %d dropped %d, want 3 and 2", s.RecoveredTemps, s.DroppedTemps)
 	}
-	if n, err := s.DrainIncoming(); err != nil || n != 3 {
-		t.Fatalf("DrainIncoming = %d, %v; want the two recovered events and the renamed one", n, err)
+	if b, err := os.ReadFile(filepath.Join(incoming, doneID+".raw")); err != nil || string(b) != `{"done":true}` {
+		t.Errorf("the existing .raw was touched: %q %v", b, err)
+	}
+	if n, err := s.DrainIncoming(); err != nil || n != 4 {
+		t.Fatalf("DrainIncoming = %d, %v; want the three recovered events and the existing one", n, err)
 	}
 	// a temp named the way atomicWrite names it is recovered under its event id
 	tmp, err := os.CreateTemp(incoming, tempPattern(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")))
@@ -300,5 +303,23 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(incoming, ".tmp-4")); err != nil {
 		t.Errorf("the young temp file was touched: %v", err)
+	}
+}
+
+// The hook's fallback write names its temp after the event, which is what lets a
+// temp it could not rename be recovered under the same id (#218).
+func TestWriteIncoming_TempNameCarriesTheEvent(t *testing.T) {
+	var patterns []string
+	createTemp = func(dir, pattern string) (*os.File, error) {
+		patterns = append(patterns, pattern)
+		return os.CreateTemp(dir, pattern)
+	}
+	t.Cleanup(func() { createTemp = os.CreateTemp })
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a46f"
+	if err := writeIncoming(t.TempDir(), id, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(patterns) != 1 || patterns[0] != ".tmp-"+id+".raw-*" {
+		t.Errorf("temp patterns %q, want the event's name in it", patterns)
 	}
 }

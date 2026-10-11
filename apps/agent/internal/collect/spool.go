@@ -132,6 +132,9 @@ const tempAge = time.Minute
 // ".tmp-", then "-" and the random part.
 func tempPattern(path string) string { return ".tmp-" + filepath.Base(path) + "-*" }
 
+// createTemp is os.CreateTemp; a test swaps it to see the pattern atomicWrite uses.
+var createTemp = os.CreateTemp
+
 // recoverIncomingTemps renames each settled ".tmp-*" in incoming/ that holds
 // complete JSON (a hook payload) to a .raw the drain then takes in, and removes
 // the empty or partial ones. A temp named after its event keeps that id, so a copy
@@ -173,12 +176,11 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped int) {
 			final = base[:strings.LastIndex(base, incomingExt+"-")+len(incomingExt)]
 		}
 		target := filepath.Join(dir, final)
-		if _, err := os.Stat(target); err == nil {
-			// The rename did happen for this event after all; this temp is a leftover.
-			if os.Remove(p) == nil {
-				dropped++
-			}
-			continue
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			// Something already has that name (only a second writer of one id could
+			// leave it). Do not overwrite or compare: take this one in under a
+			// minted id; a duplicate is better than a lost event.
+			target = filepath.Join(dir, "recovered"+name+incomingExt)
 		}
 		if os.Rename(p, target) == nil {
 			recovered++
@@ -424,7 +426,7 @@ func atomicWrite(path string, b []byte, durable bool) error {
 	dir := filepath.Dir(path)
 	// The final name rides in the temp name, so a temp the hook could not rename
 	// still says which event it is (recoverIncomingTemps, #218).
-	tmp, err := os.CreateTemp(dir, tempPattern(path))
+	tmp, err := createTemp(dir, tempPattern(path))
 	if err != nil {
 		return err
 	}

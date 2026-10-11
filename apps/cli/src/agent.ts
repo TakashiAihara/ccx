@@ -69,7 +69,7 @@ const SPOOL_EXT = ".pb";
 const INCOMING_EXT = ".raw";
 
 // incoming は ccx-agent の isIncoming と同じ規則: .tmp- でない .raw のファイル (#186)。書きかけは
-// .tmp-<数字> の名前で .raw にならないが、同じ形で書いておく
+// .tmp-<id>.raw-<数字> の名前 (#218) で、.raw では終わらないが同じ形で除いておく
 async function countFiles(dir: string, suffix: string): Promise<number> {
   try {
     const ents = await readdir(dir, { withFileTypes: true });
