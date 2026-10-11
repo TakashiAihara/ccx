@@ -118,8 +118,14 @@ func (s *Collect) Run(ctx context.Context) error {
 	}
 	// Only the hook writes there and it writes .raw; anything else is left alone,
 	// so say so instead of ignoring it forever (#186).
-	if others := s.spool.OtherIncoming(); len(others) > 0 {
-		s.log("left %d file(s) in %s that are not events: %s", len(others), s.spool.IncomingDir(), strings.Join(others, ", "))
+	if others, err := s.spool.OtherIncoming(); err != nil {
+		s.log("could not list %s: %v", s.spool.IncomingDir(), err)
+	} else if len(others) > 0 {
+		shown := others
+		if len(shown) > 10 {
+			shown = append(shown[:10:10], "…")
+		}
+		s.log("left %d entr(ies) in %s that are not events: %s", len(others), s.spool.IncomingDir(), strings.Join(shown, ", "))
 	}
 
 	ln, err := s.listen()

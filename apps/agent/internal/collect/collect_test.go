@@ -282,3 +282,40 @@ func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
 	}
 	ln.Close()
 }
+
+// What incoming/ holds besides events is named once at start, capped, instead
+// of being left there unseen (#186).
+func TestRun_LogsWhatIncomingHoldsBesidesEvents(t *testing.T) {
+	spool, err := OpenSpool(t.TempDir(), &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		if err := os.WriteFile(filepath.Join(spool.IncomingDir(), fmt.Sprintf("stray-%02d.txt", i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var logged []string
+	logf := func(f string, a ...any) { mu.Lock(); logged = append(logged, fmt.Sprintf(f, a...)); mu.Unlock() }
+	sock := testsock.Path(t, "s.sock")
+	srv := newCollect(sock, spool, nil, logf)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = srv.Run(ctx); close(done) }()
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	var line string
+	for _, l := range logged {
+		if strings.Contains(l, "not events") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "left 12 entr(ies)") || !strings.Contains(line, "stray-09.txt, …") || strings.Contains(line, "stray-10.txt") {
+		t.Errorf("logged %q, want 12 counted and the first 10 named", logged)
+	}
+}

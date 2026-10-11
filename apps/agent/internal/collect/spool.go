@@ -230,17 +230,20 @@ func isIncoming(e os.DirEntry) bool {
 	return !e.IsDir() && strings.HasSuffix(n, incomingExt) && !strings.HasPrefix(n, ".tmp-")
 }
 
-// OtherIncoming names the files in incoming/ that are neither events nor temp
-// files, which DrainIncoming leaves where they are. A read error is no names.
-func (s *Spool) OtherIncoming() []string {
-	ents, _ := os.ReadDir(s.incoming)
+// OtherIncoming names what incoming/ holds that is neither an event nor a temp
+// file (DrainIncoming leaves it where it is), directories included.
+func (s *Spool) OtherIncoming() ([]string, error) {
+	ents, err := os.ReadDir(s.incoming)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for _, e := range ents {
-		if !e.IsDir() && !isIncoming(e) && !strings.HasPrefix(e.Name(), ".tmp-") {
+		if !isIncoming(e) && !strings.HasPrefix(e.Name(), ".tmp-") {
 			out = append(out, e.Name())
 		}
 	}
-	return out
+	return out, nil
 }
 
 // PendingIncoming counts what hooks left in incoming/ and the next start will

@@ -223,7 +223,10 @@ func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
 		t.Fatalf("DrainIncoming = %d, %v; want 1", n, err)
 	}
 	// what was not taken is named, so it can be logged rather than ignored forever
-	if got := s.OtherIncoming(); strings.Join(got, ",") != "ccx-agent.lock,stray.pb" {
-		t.Errorf("OtherIncoming = %v", got)
+	if err := os.Mkdir(filepath.Join(s.IncomingDir(), "sub.raw"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.OtherIncoming(); err != nil || strings.Join(got, ",") != "ccx-agent.lock,stray.pb,sub.raw" {
+		t.Errorf("OtherIncoming = %v, %v", got, err)
 	}
 }
