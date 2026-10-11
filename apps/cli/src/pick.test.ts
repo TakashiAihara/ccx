@@ -228,7 +228,7 @@ test("実 pty で番号選択したあと、プロセスが速やかに終わる
   if (!python) return; // forkpty を持てない環境ではこの検証はできない
 
   const root = await mkdtemp(join(tmpdir(), "ccx-pty-root-"));
-  for (const id of ["01KXDT8ZV5E008", "01KXDT8ZV5E009"]) {
+  for (const id of ["01KXDT8ZV5E008", "01KXDT9ZV5E009"]) {
     const rd = join(root, "github.com", "o", "r", id);
     await mkdir(rd, { recursive: true });
     await Bun.spawn(["git", "init", "--quiet", rd], { stdout: "ignore", stderr: "ignore" }).exited;
@@ -238,20 +238,34 @@ test("実 pty で番号選択したあと、プロセスが速やかに終わる
   await writeFile(
     driver,
     [
-      "import os, pty, sys, time, signal",
+      "import os, pty, sys, time, signal, select",
       "bun, cli, root, empty = sys.argv[1:5]",
       "pid, fd = os.forkpty()",
       "if pid == 0:",
       "    os.environ['PATH'] = empty",  // fzf の無い PATH
       "    os.environ['CCX_ROOT'] = root",
       "    os.execv(bun, [bun, 'run', cli, 'rd', 'cd'])",
+      "out = b''",
+      "def drain():",
+      "    global out",
+      "    while select.select([fd], [], [], 0)[0]:",
+      "        try: chunk = os.read(fd, 4096)",
+      "        except OSError: return",
+      "        if not chunk: return",
+      "        out += chunk",
       "time.sleep(1.5)",
-      "os.write(fd, b'1\\n')",
+      "os.write(fd, b'2\\n')",
       "deadline = time.time() + 10",
       "while time.time() < deadline:",
+      "    drain()",
       "    p, s = os.waitpid(pid, os.WNOHANG)",
       "    if p:",
+      "        drain()",
       "        print('EXITED', os.waitstatus_to_exitcode(s))",
+      // 選んだ番号の行と、出力された path (stdout の最後の行)
+      "        lines = out.decode(errors='replace').replace('\\r', '').splitlines()",
+      "        print('MENU2', next((l for l in lines if l.strip().startswith('2)')), ''))",
+      "        print('PICKED', next((l for l in reversed(lines) if l.startswith(root)), ''))",
       "        sys.exit(0)",
       "    time.sleep(0.2)",
       "os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)",
@@ -268,8 +282,13 @@ test("実 pty で番号選択したあと、プロセスが速やかに終わる
 
   // "EXITED" だけを見ると、選んだあとに CLI が異常終了しても通ってしまう。ハングしないことと
   // 正常に終わることは別の主張なので、終了コードまで固定する。
-  expect(out.trim()).toBe("EXITED 0"); // HUNG なら /dev/tty を掴んだまま、EXITED 1 なら落ちている
+  const lines = out.trim().split("\n");
+  expect(lines[0]).toBe("EXITED 0"); // HUNG なら /dev/tty を掴んだまま、EXITED 1 なら落ちている
   expect(code).toBe(0);
+  // 打った番号 (2) の repodir、つまり新しい方が出力されている (候補は作成順。readLine が入力を
+  // 無視して固定値を返す壊れ方を捕まえる)
+  const picked = lines.find((l) => l.startsWith("PICKED "))!.slice(7);
+  expect(picked.split("/").at(-1)).toBe("01KXDT9ZV5E009");
 }, 30_000);
 
 /**

@@ -159,7 +159,7 @@ export function openTty(
   }
 
   // stream (readline) を使わず同期で読み書きする。Bun 1.4.3 では /dev/tty の stream を持った
-  // readline を閉じても、プロセスが終わらないことがある (1.4.2 は終わった。fd を自分で閉じても
+  // readline を閉じても、プロセスが終わらない (1.4.2 は終わった。fd を自分で閉じても
   // 揺れる)。番号を 1 行読むだけなので、ブロックする読み取りで足りる
   const fdIn = inFd;
   const fdOut = outFd;
@@ -174,7 +174,7 @@ export function openTty(
         bytes.push(one[0]!);
       }
     },
-    // /dev/tty を掴んだままだと、選び終わってもプロセスが終わらない。掴んだ fd はここで手放す。
+    // 自分で開いた fd は自分で閉じる (同期の読み書きなので、閉じなくてもプロセスは終わる)
     close: () => {
       close(fdIn);
       close(fdOut);
@@ -200,7 +200,7 @@ export async function pickByNumber(infos: RepodirInfo[], tty: Tty = openTty()): 
     }
     return infos[n - 1]!;
   } finally {
-    // tty の fd を閉じるまでプロセスが終わらない。選べたのにシェルが固まる、という形で出る。
+    // 開いた側 (openTty) が閉じる。注入された double は close を持たない
     tty.close?.();
   }
 }
