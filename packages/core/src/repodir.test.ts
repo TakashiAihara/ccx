@@ -413,11 +413,34 @@ describe("createRepodir の失敗", () => {
     await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/broken.git"]);
 
     const broken = parseRepoSpec("test-owner/broken", { defaultHost: "github.com" });
-    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow();
+    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow(/submodule/);
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([]);
 
     // submodule を取らなければ同じ repo でも作れる (落ちたのが clone の後だったことの確認)
     const ok = await createRepodir(cfg, broken, { recurseSubmodules: false }, "0.1.0");
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([ok.dirId]);
+  });
+});
+
+describe("createRepodir の失敗 (checkout)", () => {
+  test("clone の checkout で落ちても、git が残した作りかけを残さない (#235)", async () => {
+    // 必須の smudge filter が落ちる repo: git は "Clone succeeded, but checkout failed" で .git を残す
+    const work = join(tmp, "nocheckout-work");
+    const src = join(tmp, "nocheckout.git");
+    await git(["init", "--quiet", "--initial-branch", "main", work]);
+    await git(["config", "user.email", "t@example.com"], work);
+    await git(["config", "user.name", "t"], work);
+    await Bun.write(join(work, ".gitattributes"), "*.txt filter=ccxfail\n");
+    await Bun.write(join(work, "a.txt"), "a\n");
+    await git(["add", ".gitattributes", "a.txt"], work);
+    await git(["commit", "--quiet", "-m", "filtered"], work);
+    await git(["clone", "--quiet", "--bare", work, src]);
+    await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/nocheckout.git"]);
+    await git(["config", "--global", "filter.ccxfail.smudge", "false"]);
+    await git(["config", "--global", "filter.ccxfail.required", "true"]);
+
+    const spec = parseRepoSpec("test-owner/nocheckout", { defaultHost: "github.com" });
+    await expect(createRepodir(cfg, spec, {}, "0.1.0")).rejects.toThrow();
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "nocheckout"))).toEqual([]);
   });
 });

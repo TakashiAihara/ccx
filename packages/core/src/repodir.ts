@@ -64,18 +64,24 @@ export async function createRepodir(
 
   const branch = opts.from ?? (await defaultBranch(mirror.path));
 
-  // dir-id はマシン内で一意だが、念のため衝突時は取り直す
-  let dirId = newDirId();
-  let path = join(parent, dirId);
-  for (let i = 0; (await Bun.file(join(path, ".git", "HEAD")).exists()) && i < 5; i++) {
+  // dir-id はマシン内で一意だが、念のため衝突時は取り直す。空のディレクトリを mkdir (既にあれば EEXIST) で
+  // 先に取るので、ここから先で消すのは必ずこの呼び出しが作ったものになる (git clone は空のディレクトリに入れる)
+  let dirId = "";
+  let path = "";
+  for (let i = 0; !path; i++) {
     dirId = newDirId();
-    path = join(parent, dirId);
+    try {
+      await mkdir(join(parent, dirId));
+      path = join(parent, dirId);
+    } catch (e) {
+      if (errCode(e) !== "EEXIST" || i >= 5) throw e;
+    }
   }
 
-  // hardlink clone。--no-checkout せず branch を直接指定する。clone 自身の失敗は git が片付ける
-  // (path が既にある失敗で他人の repodir を消さないよう、消すのは clone が通った後だけ)
-  await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
   try {
+    // hardlink clone。--no-checkout せず branch を直接指定する。checkout で落ちると git は
+    // "Clone succeeded, but checkout failed" で作りかけを残すので、clone の失敗も下で片付ける
+    await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
     return await finishRepodir(cfg, opts, version, { path, dirId, branch, mirror });
   } catch (e) {
     // 作りかけを残すと、ccx.json の無い repodir が ls / gc に混ざる (#235)
@@ -128,3 +134,5 @@ async function finishRepodir(
 
   return { path, dirId, meta, mirror: { created: mirror.created, updated: mirror.updated } };
 }
+
+const errCode = (e: unknown) => (e && typeof e === "object" && "code" in e ? (e as { code: unknown }).code : undefined);
