@@ -227,7 +227,7 @@ describe("createRepodir", () => {
   });
 
   test("存在しないブランチを指定したら失敗する", async () => {
-    expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow();
+    await expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow();
   });
 });
 
@@ -313,7 +313,7 @@ describe("protocol", () => {
     const before = await Bun.file(configPath).text();
     await Bun.write(configPath, `${before}[core\n  broken\n`);
 
-    expect(createRepodir(c, spec(), { refresh: true }, "0.1.0")).rejects.toThrow();
+    await expect(createRepodir(c, spec(), { refresh: true }, "0.1.0")).rejects.toThrow();
 
     // 壊れた config は壊れたまま残る (勝手に書き直していない)
     expect(await Bun.file(configPath).text()).toContain("[core\n  broken");
