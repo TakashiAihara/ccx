@@ -27,8 +27,10 @@ import { basename, dirname, join } from "node:path";
  * 書きかけを読んで途中の値を出したり state.json に保存したりしない。名前は . で始め、meta/ の読み手
  * (META_KEY と ccx-agent の metaKey) が key として拾わない
  */
+export const atomicTempPath = (path: string) => join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+
 async function writeAtomic(path: string, content: string): Promise<void> {
-  const tmp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  const tmp = atomicTempPath(path);
   try {
     await Bun.write(tmp, content);
     await rename(tmp, path);

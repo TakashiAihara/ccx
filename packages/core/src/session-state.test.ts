@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
+  atomicTempPath,
   EMPTY_DECLARED,
+  isMetaKey,
   flagsOf,
   holdsDeclared,
   isEmptyDeclared,
@@ -190,9 +192,13 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(names.filter((_, i) => before[i] === after[i])).toEqual([]);
     const left = [...(await readdir(dir)), ...(await readdir(join(dir, "meta")))].filter((n) => n.endsWith(".tmp"));
     expect(left).toEqual([]);
-    // 書きかけの一時ファイルが残っていても key として読まない
-    await Bun.write(join(dir, "meta", ".owner.x.tmp"), "half");
-    expect((await readDeclared(SID, home)).metadata).toEqual({ owner: "bob" });
+  });
+
+  test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {
+    const p = atomicTempPath("/h/sessions/x/meta/owner");
+    expect(dirname(p)).toBe("/h/sessions/x/meta");
+    expect(basename(p)).toMatch(/^\.owner\..+\.tmp$/);
+    expect(isMetaKey(basename(p))).toBe(false);
   });
 
   test("metadata: one file per key under meta/, empty file = key with no value, null removes it", async () => {
