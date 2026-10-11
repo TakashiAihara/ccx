@@ -52,6 +52,9 @@ type Concern struct {
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
 	listening  atomic.Bool
+
+	retryAfter time.Duration // 0 is a minute; tests shorten it
+	lastErr    string
 }
 
 // Status is one session's heartbeat as the agent sees it (kaneo ccx#34).
@@ -102,13 +105,32 @@ const maxUnixPath = 104
 // Run never fails the process. The concern is on by default and inert for
 // anyone without the channel, so a socket it cannot set up (a path too long, a
 // second serve holding the lock) turns off the heartbeat alone, with the reason
-// in the log; collect keeps running.
+// in the log; collect keeps running. Like the api concern it tries again every
+// retry, so a serve that takes over from one that stopped brings the heartbeat
+// up too (#185); a reason repeated is logged once until it is up again.
 func (c *Concern) Run(ctx context.Context) error {
-	if err := c.run(ctx); err != nil {
-		c.log("heartbeat off: %v", err)
-		<-ctx.Done()
+	for {
+		err := c.run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if msg := fmt.Sprint(err); err != nil && msg != c.lastErr {
+			c.log("heartbeat off, retrying every %v: %v", c.retry(), err)
+			c.lastErr = msg
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(c.retry()):
+		}
 	}
-	return nil
+}
+
+func (c *Concern) retry() time.Duration {
+	if c.retryAfter > 0 {
+		return c.retryAfter
+	}
+	return time.Minute
 }
 
 func (c *Concern) run(ctx context.Context) error {
@@ -144,6 +166,10 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+	if c.lastErr != "" {
+		c.log("heartbeat up again on %s", c.socketPath)
+		c.lastErr = ""
+	}
 	c.listening.Store(true)
 	defer c.listening.Store(false)
 	c.accept(ctx, ln, acceptRetry)
