@@ -389,6 +389,31 @@ describe("transcript: push / pull / prune through the store", () => {
     const [nout, nerr, ncode] = await ls("--session", "ffffffff-0000-4000-8000-000000000000", "--json");
     expect([ncode, JSON.parse(nout), nerr]).toEqual([1, [], expect.stringContaining("is not in the store")]);
 
+    // session.json や履歴の取得が失敗するのも「無い」ではない (中継が該当の GET だけを 500 にする)
+    for (const failing of ["/session.json", "/history/"]) {
+      const upstream = A.store.endpoint;
+      const proxy = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          const u = new URL(req.url);
+          if (req.method === "GET" && u.pathname.includes(failing) && !u.searchParams.has("list-type")) return new Response("boom", { status: 500 });
+          return fetch(`${upstream}${u.pathname}${u.search}`, { method: req.method, headers: req.headers, body: req.body });
+        },
+      });
+      try {
+        const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID, "--json"], {
+          env: { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [pout, pcode] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+        expect([failing, pcode, pout]).toEqual([failing, 2, ""]);
+      } finally {
+        proxy.stop(true);
+      }
+    }
+
     // 保存先が答えないのは「無い」ではない
     const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
       env: { ...process.env, CCX_HUB_URL: "http://127.0.0.1:1", CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },

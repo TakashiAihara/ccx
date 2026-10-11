@@ -180,7 +180,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("ls")
     .description("List sessions in the store, newest push first")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
-    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous")
     .option("--json", "print as JSON")
     .action(async (o) => {
       // --session では保存先が答えないのも「引けなかった」(2)。未設定 (3) は他のコマンドと同じ
@@ -213,7 +213,12 @@ export function registerTranscript(program: Command, VERSION: string): void {
           const [h, state] = await Promise.all([c.history(m), c.readRemoteDeclared(m.sessionId, m)]);
           return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state };
         }),
-      );
+      ).catch((e: unknown) => {
+        // --session では見つけた後に読めなかったのも 2 (1 は「無い」だけ)
+        if (!o.session) throw e;
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      });
       if (o.json) {
         console.log(JSON.stringify(withPull, null, 2));
         return;
