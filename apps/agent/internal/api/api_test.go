@@ -271,6 +271,8 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	write(t, filepath.Join(home, "sessions", sid, "heartbeat"), "on\n")
 
 	cfg := config.Config{
+		Machine:           "m",
+		User:              "u",
 		SpoolDir:          filepath.Join(work, "spool"),
 		SocketPath:        filepath.Join(work, "h.sock"),
 		ChannelSocketPath: filepath.Join(work, "c.sock"),
@@ -422,7 +424,7 @@ func TestClaudeHomeChoice(t *testing.T) {
 // A spool that cannot be read is reported in collect, not as a failed call.
 func TestSpoolErrorKeepsTheAnswer(t *testing.T) {
 	work := shortDir(t)
-	cfg := config.Config{SpoolDir: filepath.Join(work, "spool")}
+	cfg := config.Config{Machine: "m", User: "u", SpoolDir: filepath.Join(work, "spool")}
 	col, err := collect.New(cfg, t.Logf)
 	if err != nil {
 		t.Fatal(err)
