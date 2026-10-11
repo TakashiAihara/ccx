@@ -15,6 +15,8 @@ import {
   plan,
   reclaim,
   scanRepodirs,
+  unpushedLanded,
+  type Landed,
   specToSlug,
   summarizeProblems,
   type Goal,
@@ -214,13 +216,32 @@ repodir
       minAgeMs: o.minAge ? parseDuration(o.minAge) : undefined,
     });
 
+    // 未 push で止めたものは、中身が上流に入っているかを添える (#220)。消すかは決めない
+    const landed = new Map(
+      await Promise.all(
+        p.keep
+          .filter((c) => (c.info.git.unpushed ?? 0) > 0)
+          .map(async (c) => {
+            const l: Landed = await unpushedLanded(c.info.path, c.info.meta?.baseBranch).catch((e: unknown) => ({
+              landed: false as const,
+              how: `could not check: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`,
+              missing: [],
+            }));
+            return [c.info.dirId, l] as const;
+          }),
+      ),
+    );
+
     if (o.json && !o.yes) {
-      console.log(JSON.stringify(p, null, 2));
+      const keep = p.keep.map((c) => (landed.has(c.info.dirId) ? { ...c, landed: landed.get(c.info.dirId) } : c));
+      console.log(JSON.stringify({ ...p, keep }, null, 2));
       return;
     }
 
     for (const c of p.keep) {
-      console.error(`keep    ${c.info.dirId}  ${c.blockers.join("; ")}`);
+      const l = landed.get(c.info.dirId);
+      const note = !l ? "" : l.landed ? ` (content landed: ${l.how})` : ` (not landed: ${l.how}${l.missing.length ? `; ${l.missing.join(", ")}` : ""})`;
+      console.error(`keep    ${c.info.dirId}  ${c.blockers.join("; ")}${note}`);
     }
     for (const c of p.remove) {
       const why = c.finished ? ` (${c.finished})` : "";
