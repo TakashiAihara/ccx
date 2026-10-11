@@ -626,3 +626,32 @@ func TestStepCountsFromTheToolResultsRequest(t *testing.T) {
 		}
 	}
 }
+
+// The heartbeat file is read as the status API and core read it (#191): JS trim
+// (a BOM is space, U+0085 is not) and nothing for a file that is not UTF-8.
+func TestWantedReadsTheFileLikeCore(t *testing.T) {
+	home := t.TempDir()
+	const id = "00000000-0000-4000-8000-0000000000dd"
+	dir := filepath.Join(home, "sessions", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		file   string
+		def    bool
+		wanted bool
+	}{
+		{"\uFEFFoff\n", true, false},
+		{"off\u0085\n", true, true},
+		{"o\xffff", true, true},
+		{" on \n", false, true},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "heartbeat"), []byte(c.file), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		h := &Heartbeat{SessionID: id, ClaudeHome: home, Default: c.def}
+		if h.wanted() != c.wanted {
+			t.Errorf("heartbeat file %q with default %v: wanted %v", c.file, c.def, !c.wanted)
+		}
+	}
+}

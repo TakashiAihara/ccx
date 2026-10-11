@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
 )
 
 // Marker is the attribute that identifies a heartbeat in the opening tag of a
@@ -189,11 +191,8 @@ func (h *Heartbeat) wanted() bool {
 	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "heartbeat"))
-	if err != nil {
-		return h.Default
-	}
-	switch strings.TrimSpace(string(b)) {
+	// The status API (api.ReadDeclared) reads the same file the same way (#191)
+	switch declared.Text(filepath.Join(dir, "heartbeat")) {
 	case "on":
 		return true
 	case "off":

@@ -46,6 +46,14 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | `metadata` | `…/meta/<key>` | one file per key; its content is the value, an empty file is a key with no value |
 | `labelHistory` | `…/labels.jsonl` | one `{"at": <ISO 8601 UTC>, "label": <text>}` line per change, oldest first; a clear is a line with `""` |
 
+Every text file above is read the same way by core and `ccx-agent` (#191; cases in
+`packages/core/testdata/text-cases.json`): a file that is not UTF-8 is absent — `label` / `task` /
+`role` / `heartbeat` read as empty, a meta key is left out — rather than carried with replacement
+characters. A push then sends it as absent, so the store (and a pull elsewhere) loses that value too;
+that is accepted, because a value nobody can read is not worth spreading. `label` / `task` / `role` /
+`heartbeat` are trimmed as JavaScript trims (a BOM is space, U+0085 is not); a meta value keeps its
+spaces and loses one leading BOM and one trailing newline.
+
 A metadata key is a file name, so it is limited to lowercase letters, digits, `_`, `.` and `-`,
 does not start with `.` or `-`, and is at most 128 characters; `=` is excluded so
 `meta set key=value` has one reading, and upper case is excluded for the same reason session ids

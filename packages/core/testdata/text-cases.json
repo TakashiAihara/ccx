@@ -1,0 +1,55 @@
+{
+  "comment": "How a session's label / task (trimmed text) and meta/<key> (one trailing newline removed, nothing trimmed) are read from disk. Read by the tests of packages/core (session-state.ts readDeclared) and apps/agent (api.go ReadDeclared), so the two readers cannot drift (#191). A file that is not UTF-8 is treated as absent, as for role (role-cases.json): label / task read as \"\", a meta key is left out (value null). Trimming is JavaScript's String.prototype.trim: U+FEFF is trimmed, U+0085 is not.",
+  "text": [
+    {
+      "file": "name\n",
+      "value": "name"
+    },
+    {
+      "file": " name \t\n",
+      "value": "name"
+    },
+    {
+      "file": "\ufeffname\n",
+      "value": "name"
+    },
+    {
+      "file": "name\u0085\n",
+      "value": "name\u0085"
+    },
+    {
+      "file": "\u540d\u524d\n",
+      "value": "\u540d\u524d"
+    },
+    {
+      "hex": "77ff72",
+      "value": ""
+    }
+  ],
+  "meta": [
+    {
+      "file": "alice\n",
+      "value": "alice"
+    },
+    {
+      "file": " alice \n",
+      "value": " alice "
+    },
+    {
+      "file": "\ufeffalice\n",
+      "value": "alice"
+    },
+    {
+      "file": "a\nb\n",
+      "value": "a\nb"
+    },
+    {
+      "file": "",
+      "value": ""
+    },
+    {
+      "hex": "77ff72",
+      "value": null
+    }
+  ]
+}

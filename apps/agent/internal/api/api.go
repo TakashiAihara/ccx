@@ -20,13 +20,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
@@ -48,16 +48,8 @@ var metaKey = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{0,127}$`)
 // UTF-8, reads as no role, as the TS reader does.
 var role = regexp.MustCompile(`^[^\p{Cc}\x{2028}\x{2029}]*$`)
 
-// jsSpace is what JavaScript's String.prototype.trim removes, which the TS
-// reader applies: Go's unicode.IsSpace also counts U+0085 and misses U+FEFF.
-func jsSpace(r rune) bool { return r == '\uFEFF' || (r != '\u0085' && unicode.IsSpace(r)) }
-
 func readRole(path string) string {
-	b, _ := os.ReadFile(path)
-	if !utf8.Valid(b) {
-		return ""
-	}
-	r := strings.TrimFunc(string(b), jsSpace)
+	r := declared.Text(path)
 	if !role.MatchString(r) {
 		return ""
 	}
@@ -135,13 +127,12 @@ func ts(t time.Time) *timestamppb.Timestamp {
 
 // ReadDeclared reads a session's declared state the way session-state.ts
 // readDeclared does: archived is an empty file, label / task / role / heartbeat are
-// trimmed text, metadata is meta/<key> with one trailing newline removed.
+// text trimmed as JavaScript trims, metadata is meta/<key> with one trailing
+// newline removed. A file that is not UTF-8 is absent (proto strings must be
+// UTF-8, and core does the same; packages/core/testdata/text-cases.json, #191).
 // A meta/ that is there but unreadable is an error, not an empty set.
 func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
-	text := func(name string) string {
-		b, _ := os.ReadFile(filepath.Join(dir, name))
-		return strings.TrimSpace(string(b))
-	}
+	text := func(name string) string { return declared.Text(filepath.Join(dir, name)) }
 	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Metadata: map[string]string{}}
 	// Bun.file().exists(), which the TS reader uses, is false for a directory.
 	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
@@ -168,7 +159,10 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 			}
 			return nil, "", err
 		}
-		st.Metadata[e.Name()] = strings.TrimSuffix(string(b), "\n")
+		if !utf8.Valid(b) {
+			continue
+		}
+		st.Metadata[e.Name()] = strings.TrimSuffix(strings.TrimPrefix(string(b), "\uFEFF"), "\n")
 	}
 	return st, hb, nil
 }
