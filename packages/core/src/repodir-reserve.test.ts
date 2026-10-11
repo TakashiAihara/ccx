@@ -1,20 +1,18 @@
 /**
  * dir-id の取り合い: 既にあるディレクトリには入らず、消しもしない (#235)。
- * newDirId を決まった列に差し替えるため、repodir.test.ts とは別のファイルにしている。
  */
-import { afterAll, beforeAll, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
-import * as dirid from "./dirid.ts";
 import { git } from "./git.ts";
+import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
 
 let ids: string[] = [];
-mock.module("./dirid.ts", () => ({ ...dirid, newDirId: () => ids.shift() ?? "ZZZZZZZZZZZZZZ" }));
-const { createRepodir } = await import("./repodir.ts");
+const mint = () => ids.shift() ?? "ZZZZZZZZZZZZZZ";
 
 let tmp: string;
 let cfg: Config;
@@ -59,7 +57,7 @@ test("a dir-id whose directory already exists is skipped, and that directory is 
   await Bun.write(join(parent, "AAAAAAAAAAAAAA", "someone-else.txt"), "x");
 
   ids = ["AAAAAAAAAAAAAA", "BBBBBBBBBBBBBB"];
-  const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+  const r = await createRepodir(cfg, spec(), {}, "0.1.0", mint);
   expect(r.dirId).toBe("BBBBBBBBBBBBBB");
   expect(await readdir(join(parent, "AAAAAAAAAAAAAA"))).toEqual(["someone-else.txt"]);
 });
@@ -67,7 +65,7 @@ test("a dir-id whose directory already exists is skipped, and that directory is 
 test("when every dir-id it tries is taken, it gives up with EEXIST and removes nothing", async () => {
   const parent = join(cfg.root, "github.com", "test-owner", "demo");
   ids = Array(10).fill("AAAAAAAAAAAAAA");
-  await expect(createRepodir(cfg, spec(), {}, "0.1.0")).rejects.toThrow(/EEXIST/);
+  await expect(createRepodir(cfg, spec(), {}, "0.1.0", mint)).rejects.toThrow(/EEXIST/);
   expect(await readdir(join(parent, "AAAAAAAAAAAAAA"))).toEqual(["someone-else.txt"]);
   // 6 回で諦める (残りは使われていない)
   expect(ids.length).toBe(4);

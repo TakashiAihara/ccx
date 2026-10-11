@@ -56,6 +56,8 @@ export async function createRepodir(
   spec: RepoSpec,
   opts: NewRepodirOptions,
   version: string,
+  /** テスト用。dir-id の取り合いを決まった列で再現する */
+  mintDirId: () => string = newDirId,
 ): Promise<NewRepodirResult> {
   const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol: opts.protocol, url: opts.url });
 
@@ -69,7 +71,7 @@ export async function createRepodir(
   let dirId = "";
   let path = "";
   for (let i = 0; !path; i++) {
-    dirId = newDirId();
+    dirId = mintDirId();
     try {
       await mkdir(join(parent, dirId));
       path = join(parent, dirId);
