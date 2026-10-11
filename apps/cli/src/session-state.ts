@@ -14,6 +14,8 @@ import {
   markedSessionIds,
   NoLocalSession,
   readDeclared,
+  readMetaValue,
+  sessionDir,
   resolveSessionId,
   runningSessionIds,
   TranscriptClient,
@@ -27,6 +29,7 @@ import {
 import { createClient } from "@connectrpc/connect";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
@@ -291,16 +294,24 @@ export function registerSessionState(session: Command): void {
 
   meta
     .command("get")
-    .description("Print a key's value (empty for a key set without one); exit 1 when the key is not set")
+    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set; exit 2: it could not be read (bad key, no such session, unreadable file)")
     .argument("<key>")
     .argument("[session-id]", "full id or unique prefix (default: this session)")
     .action(async (key: string, idOrPrefix: string | undefined) => {
-      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
-      const home = claudeHome();
-      const id = await target(idOrPrefix, home);
-      // 保存形式 (meta/<key> のファイル) を直に読む道具を作らないための口 (#192)
-      const value = (await readDeclared(id, home)).metadata[key];
-      if (value === undefined) {
+      // 保存形式 (meta/<key> のファイル) を直に読む道具を作らないための口 (#192)。`if ccx session meta get k`
+      // で「無い」と「読めなかった」を取り違えないよう、grep と同じく 1 と 2 に分ける。値は手元のものだけ
+      let value: string | null;
+      let id: string;
+      try {
+        const home = claudeHome();
+        id = await target(idOrPrefix, home);
+        if (!(await stat(sessionDir(id, home)).then(() => true, () => false))) throw new Error(`no local session ${id}`);
+        value = await readMetaValue(id, key, home);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+      if (value === null) {
         console.error(`${key} is not set  ${id}`);
         process.exitCode = 1;
         return;
