@@ -51,6 +51,7 @@ function info(dirId: string, task: string | undefined, over: Partial<RepodirInfo
     problems: [],
     git: { branch: "main", dirty: false, unpushed: 0, hasUpstream: true, stashes: 0 },
     session: { active: false, lastActivity: null, transcripts: 0 },
+    processes: [],
     ...over,
   };
 }

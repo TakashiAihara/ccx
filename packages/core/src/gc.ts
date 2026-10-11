@@ -17,6 +17,10 @@ export function blockers(info: RepodirInfo): string[] {
   const out: string[] = [];
 
   if (info.session.active) out.push("a session is active");
+  if (info.processes.length > 0) {
+    const ps = info.processes.map((p) => `${p.pid} ${p.command}`).join(", ");
+    out.push(`${info.processes.length} process(es) have their cwd in it: ${ps}`);
+  }
   if (info.git.dirty) out.push("the working tree is dirty");
   if (info.git.unpushed === null) out.push("cannot determine whether commits are pushed");
   else if (info.git.unpushed > 0) out.push(`${info.git.unpushed} unpushed commit(s)`);
@@ -137,14 +141,16 @@ export async function plan(infos: RepodirInfo[], opts: PlanOptions = {}): Promis
 
 /**
  * 実際に削除する。plan を通していない info は受け付けない設計にはしていないので、
- * 呼ぶ側が plan().remove だけを渡すこと。念のためここでも blockers を再評価する。
+ * 呼ぶ側が plan().remove だけを渡すこと。plan を通さずに渡された候補への守りとして blockers を
+ * もう一度見る (同じスナップショットを見るので、plan の後に始まった session は捕まえない)。
+ * force は人が理由を見たうえで消すと決めたもの (rd rm --force) で、見直さない (#116)。
+ * 戻り値は消したパス
  */
-export async function reclaim(candidates: Candidate[]): Promise<string[]> {
+export async function reclaim(candidates: Candidate[], opts: { force?: boolean } = {}): Promise<string[]> {
   const removed: string[] = [];
 
   for (const c of candidates) {
-    // 二重チェック。plan から実行までの間に session が立ち上がっている可能性がある。
-    if (blockers(c.info).length > 0) continue;
+    if (!opts.force && blockers(c.info).length > 0) continue;
     await rm(c.info.path, { recursive: true, force: true });
     removed.push(c.info.path);
   }
