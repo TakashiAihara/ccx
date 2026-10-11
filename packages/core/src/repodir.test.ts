@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -229,8 +229,11 @@ describe("createRepodir", () => {
     expect(r.mirror.updated).toBe(true);
   });
 
-  test("存在しないブランチを指定したら失敗する", async () => {
-    await expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow();
+  test("存在しないブランチを指定したら失敗し、取った dir-id のディレクトリも残さない (#235)", async () => {
+    const parent = join(cfg.root, "github.com", "test-owner", "demo");
+    const before = (await readdir(parent)).sort();
+    await expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow(/no-such-branch/);
+    expect((await readdir(parent)).sort()).toEqual(before);
   });
 });
 
@@ -394,5 +397,55 @@ describe("an explicit http / port URL (#215)", () => {
     const switched = await createRepodir(cfg, forge, { protocol: "https" }, "0.1.0");
     expect(await origin(switched.path)).toBe(HTTPS_FORGE);
     expect(await origin(mirrorPath(cfg, forge))).toBe(HTTPS_FORGE);
+  });
+});
+
+describe("createRepodir の失敗", () => {
+  test("clone の後の手順で落ちたら、作りかけの repodir を残さない (#235)", async () => {
+    // 取れない submodule を持つ repo: clone は通り、submodule update で落ちる
+    const work = join(tmp, "broken-work");
+    const src = join(tmp, "broken.git");
+    await git(["init", "--quiet", "--initial-branch", "main", work]);
+    await git(["config", "user.email", "t@example.com"], work);
+    await git(["config", "user.name", "t"], work);
+    await Bun.write(join(work, ".gitmodules"), `[submodule "sub"]\n\tpath = sub\n\turl = file://${join(tmp, "no-such.git")}\n`);
+    await git(["update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},sub`], work);
+    await git(["add", ".gitmodules"], work);
+    await git(["commit", "--quiet", "-m", "sub"], work);
+    await git(["clone", "--quiet", "--bare", work, src]);
+    await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/broken.git"]);
+
+    const broken = parseRepoSpec("test-owner/broken", { defaultHost: "github.com" });
+    // 落ちた理由まで見る (コマンド名の submodule には当てない)
+    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow(/no-such\.git/);
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([]);
+
+    // submodule を取らなければ同じ repo でも作れる (落ちたのが clone の後だったことの確認)
+    const ok = await createRepodir(cfg, broken, { recurseSubmodules: false }, "0.1.0");
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([ok.dirId]);
+  });
+});
+
+describe("createRepodir の失敗 (checkout)", () => {
+  test("clone の checkout で落ちても、git が残した作りかけを残さない (#235)", async () => {
+    // 必須の smudge filter が落ちる repo: git は "Clone succeeded, but checkout failed" で .git を残す
+    const work = join(tmp, "nocheckout-work");
+    const src = join(tmp, "nocheckout.git");
+    await git(["init", "--quiet", "--initial-branch", "main", work]);
+    await git(["config", "user.email", "t@example.com"], work);
+    await git(["config", "user.name", "t"], work);
+    await Bun.write(join(work, ".gitattributes"), "*.txt filter=ccxfail\n");
+    await Bun.write(join(work, "a.txt"), "a\n");
+    await git(["add", ".gitattributes", "a.txt"], work);
+    await git(["commit", "--quiet", "-m", "filtered"], work);
+    await git(["clone", "--quiet", "--bare", work, src]);
+    await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/nocheckout.git"]);
+    await git(["config", "--global", "filter.ccxfail.smudge", "false"]);
+    await git(["config", "--global", "filter.ccxfail.required", "true"]);
+
+    const spec = parseRepoSpec("test-owner/nocheckout", { defaultHost: "github.com" });
+    // checkout で落ちたこと (mirror の取得で落ちたのなら git が自分で片付けるので、この試験にならない)
+    await expect(createRepodir(cfg, spec, {}, "0.1.0")).rejects.toThrow(/checkout failed/);
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "nocheckout"))).toEqual([]);
   });
 });
