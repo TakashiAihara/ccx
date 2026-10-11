@@ -42,6 +42,7 @@ beforeEach(async () => {
     port: 0,
     fetch: (req, srv) => {
       tokens.push(req.headers.get("x-amz-security-token"));
+      auths.push(req.headers.get("authorization"));
       return app.fetch(req, srv);
     },
   });
@@ -68,8 +69,9 @@ beforeEach(async () => {
 });
 
 /** 本物のコマンドを、この store を向けて走らせる */
-/** center 役が受けた x-amz-security-token (#213) */
+/** center 役が受けた x-amz-security-token と authorization (#213) */
 let tokens: (string | null)[] = [];
+let auths: (string | null)[] = [];
 
 async function ccx(...args: string[]): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", ...args], {
@@ -196,6 +198,25 @@ describe("search: embedded DuckDB over the store", () => {
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
+
+  test("search ignores a persistent DuckDB secret the user saved for s3://ccx (#213)", async () => {
+    const userHome = join(root, "user-home");
+    const { DuckDBInstance } = await import("@duckdb/node-api");
+    const db = await DuckDBInstance.create(":memory:");
+    const conn = await db.connect();
+    await conn.run(`SET secret_directory = '${join(userHome, ".duckdb", "stored_secrets")}'`);
+    await conn.run("CREATE PERSISTENT SECRET mine (TYPE s3, KEY_ID 'USER-REAL-KEY', SECRET 'x', SCOPE 's3://ccx')");
+    conn.closeSync();
+    auths = [];
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", "needle-alpha", "--json"], {
+      env: { ...process.env, HOME: userHome, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await p.exited).toBe(0);
+    expect(auths.length).toBeGreaterThan(0);
+    expect(auths.filter((a) => a?.includes("USER-REAL-KEY"))).toEqual([]);
+  });
 
   test("search does not send the env's AWS session token to the center (#213)", async () => {
     tokens = [];
