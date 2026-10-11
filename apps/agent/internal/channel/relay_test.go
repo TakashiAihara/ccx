@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"net"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,7 +24,7 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 // Relay registers the session it was given and turns each event serve sends
 // into a channel notification.
 func TestRelayRegistersAndPushes(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 // serve not there yet (not started, or restarted to apply config) is normal:
 // the relay keeps trying and registers once it appears.
 func TestRelayWaitsForServe(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	s := NewServer("ccx", "0", &syncBuf{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

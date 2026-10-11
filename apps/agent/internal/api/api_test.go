@@ -21,6 +21,7 @@ import (
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
@@ -177,12 +178,7 @@ func TestRequireBearer(t *testing.T) {
 
 func shortDir(t *testing.T) string {
 	t.Helper()
-	d, err := os.MkdirTemp("", "ccx-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
-	return d
+	return testsock.Dir(t)
 }
 
 func waitDial(t *testing.T, network, addr string) {

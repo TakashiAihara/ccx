@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 )
 
 // failWriteConn is a conn whose ack write never reaches the hook: the agent has
@@ -51,7 +52,7 @@ func drainAll(t *testing.T, s *Spool) []string {
 // events, so an id that never changed between hooks would fail too.
 func TestAckLost_DedupingCenterStoresEachEventOnce(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/a.sock"
+	sock := testsock.Path(t, "a.sock")
 	spoolDir := dir + "/spool"
 	spool, err := OpenSpool(spoolDir, testOrigin())
 	if err != nil {
@@ -323,7 +324,7 @@ func TestHandle_LogsARejectedHookID(t *testing.T) {
 // payload under the id it minted.
 func TestHook_OldAgentRefuses_EventLandsInIncoming(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/a.sock"
+	sock := testsock.Path(t, "a.sock")
 	spoolDir := dir + "/spool"
 
 	ln, err := net.Listen("unix", sock)

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
@@ -32,7 +33,7 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 	write(due, 51*time.Minute)
 	write(fresh, time.Minute)
 
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	c := &Concern{socketPath: sock, claudeHome: home, log: t.Logf,
 		cfg: config.Heartbeat{Default: true, Interval: 50 * time.Minute, MaxIdle: 12 * time.Hour}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,7 +82,7 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 func isTimeout(err error) bool { ne, ok := err.(net.Error); return ok && ne.Timeout() }
 
 func TestConcernRefusesASecondServe(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	first := &Concern{socketPath: sock, log: t.Logf}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

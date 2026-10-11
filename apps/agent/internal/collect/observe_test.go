@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
@@ -15,7 +16,7 @@ import (
 // and nothing about the event's own path changes.
 func TestObserverGetsEachSpooledPayloadAfterTheAck(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/ccx-agent.sock"
+	sock := testsock.Path(t, "ccx-agent.sock")
 	spool, err := OpenSpool(dir+"/spool", &ccxv1.Origin{Machine: "m", User: "u"})
 	if err != nil {
 		t.Fatal(err)
