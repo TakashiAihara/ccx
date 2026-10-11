@@ -109,14 +109,26 @@ describe("transcript: local side", () => {
     expect(await hasLocalTranscript("ffffffff-0000-4000-8000-000000000000", homeA)).toBe(false);
     expect(await hasLocalTranscript("not-a-session", homeA)).toBe(false);
     expect(await hasLocalTranscript(SID, join(homeA, "nope"))).toBe(false);
-    // 前方一致ではない
-    await Bun.write(join(homeA, "projects", "-other", `${SID}-x.jsonl`), "{}\n");
-    expect(await hasLocalTranscript(`${SID}-x`, homeA)).toBe(false);
     // 先の無い symlink (消えかけの transcript) は「無い」。全件を stat する localTranscripts はここで投げる
     const gone = "ffffffff-0000-4000-8000-000000000001";
     await symlink(join(homeA, "nowhere"), join(homeA, "projects", "-other", `${gone}.jsonl`));
     expect(await hasLocalTranscript(gone, homeA)).toBe(false);
+    // ファイルでない <id>.jsonl (ディレクトリ) は transcript ではない
+    const dir = "ffffffff-0000-4000-8000-000000000003";
+    await mkdir(join(homeA, "projects", "-other", `${dir}.jsonl`), { recursive: true });
+    expect(await hasLocalTranscript(dir, homeA)).toBe(false);
+    // projects/ 直下のファイル (ENOTDIR) は project ではないだけ
+    await Bun.write(join(homeA, "projects", "stray-file"), "x");
     expect(await hasLocalTranscript(SID, homeA)).toBe(true);
+    expect(await hasLocalTranscript("ffffffff-0000-4000-8000-000000000005", homeA)).toBe(false);
+    // 読めない (自分を指す symlink = ELOOP) ものがあり、他のどこにも無ければ投げる。他で見つかれば在る
+    const looped = "ffffffff-0000-4000-8000-000000000004";
+    const loopPath = join(homeA, "projects", "-loop", `${looped}.jsonl`);
+    await mkdir(join(homeA, "projects", "-loop"), { recursive: true });
+    await symlink(loopPath, loopPath);
+    await expect(hasLocalTranscript(looped, homeA)).rejects.toThrow(/ELOOP/);
+    await Bun.write(join(homeA, "projects", "-real", `${looped}.jsonl`), "{}\n");
+    expect(await hasLocalTranscript(looped, homeA)).toBe(true);
   });
 
   test("transcriptFacts takes cwd / gitBranch / version from the first records that carry them, and stops at the line cap", async () => {

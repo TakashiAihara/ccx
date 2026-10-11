@@ -351,7 +351,9 @@ export function registerSessionState(session: Command): void {
       const home = claudeHome();
       const store = await storeOrNull();
       const id = await target(idOrPrefix, home, store);
-      const [running, hasTranscript] = await Promise.all([runningSessionIds(home), hasLocalTranscript(id, home)]);
+      // 動いている session は transcript を見に行かない (読めない project があっても status は答える)
+      const running = await runningSessionIds(home);
+      const hasTranscript = running.has(id) || (await hasLocalTranscript(id, home));
       const lifecycle = await lifecycleOf(id, running, hasTranscript, store);
       const s = await declaredFor(id, home, lifecycle, store);
       if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s }, null, 2));
