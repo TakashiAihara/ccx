@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -56,6 +57,10 @@ type Spool struct {
 	origin *ccxv1.Origin
 	newID  func() string
 	now    func() time.Time
+
+	// What OpenSpool found among the hook's temp files in incoming/ (#218):
+	// complete events taken in as .raw, and empty or partial ones removed.
+	RecoveredTemps, DroppedTemps int
 }
 
 const (
@@ -90,7 +95,10 @@ func OpenSpool(dir string, origin *ccxv1.Origin) (*Spool, error) {
 	// read (only .pb / .raw names are), but without a reaper they accumulate
 	// across crash cycles. Best-effort — a failure here is not fatal.
 	reapTemps(dir)
-	reapTemps(incoming)
+	// incoming/ is different: the hook is cut off at its time budget after it
+	// wrote the event but before the rename, so a temp file there is often a
+	// whole event. Take those in instead of deleting them (#218).
+	s.RecoveredTemps, s.DroppedTemps = recoverIncomingTemps(incoming, s.now())
 
 	max, err := s.maxSeqOnDisk()
 	if err != nil {
@@ -114,6 +122,44 @@ func reapTemps(dir string) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
+}
+
+// tempAge is how old a temp file in incoming/ must be before it is touched: the
+// hook gives up after hookOverallBudget, so an older one is not being written.
+const tempAge = time.Minute
+
+// recoverIncomingTemps renames each settled ".tmp-*" in incoming/ that holds
+// complete JSON (a hook payload) to a .raw, which the drain then takes in under
+// an id the agent mints, and removes the empty or partial ones. A hook that also
+// reached the socket (a lost ack) makes this a second copy with another id; that
+// is rarer than losing the event.
+func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped int) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	for _, e := range ents {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) < tempAge {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		b, err := os.ReadFile(p)
+		if err == nil && len(b) > 0 && json.Valid(b) {
+			if os.Rename(p, filepath.Join(dir, "recovered"+name+incomingExt)) == nil {
+				recovered++
+			}
+			continue
+		}
+		if os.Remove(p) == nil {
+			dropped++
+		}
+	}
+	return recovered, dropped
 }
 
 // IncomingDir is where the hook drops events when the socket is unreachable.

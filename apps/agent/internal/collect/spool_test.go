@@ -230,3 +230,41 @@ func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
 		t.Errorf("OtherIncoming = %v, %v", got, err)
 	}
 }
+
+// A temp file the hook left in incoming/ after its time budget is often a whole
+// event: a settled one with complete JSON is taken in, an empty or partial one is
+// removed, and one still young (maybe being written) is left alone (#218).
+func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
+	dir := t.TempDir()
+	incoming := filepath.Join(dir, "incoming")
+	if err := os.MkdirAll(incoming, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	for name, body := range map[string]string{
+		".tmp-1": `{"hook_event_name":"Stop"}`,
+		".tmp-2": "",
+		".tmp-3": `{"hook_event_na`,
+		".tmp-4": `{"young":true}`,
+	} {
+		p := filepath.Join(incoming, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if name != ".tmp-4" {
+			if err := os.Chtimes(p, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	s := openTestSpool(t, dir)
+	if s.RecoveredTemps != 1 || s.DroppedTemps != 2 {
+		t.Fatalf("recovered %d dropped %d, want 1 and 2", s.RecoveredTemps, s.DroppedTemps)
+	}
+	if n, err := s.DrainIncoming(); err != nil || n != 1 {
+		t.Fatalf("DrainIncoming = %d, %v; want the recovered event", n, err)
+	}
+	if _, err := os.Stat(filepath.Join(incoming, ".tmp-4")); err != nil {
+		t.Errorf("the young temp file was touched: %v", err)
+	}
+}

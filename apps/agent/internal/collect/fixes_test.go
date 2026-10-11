@@ -76,6 +76,11 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	if err := os.WriteFile(strayIn, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// In incoming/ only a settled temp file is looked at (#218).
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(strayIn, old, old); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"}); err != nil {
 		t.Fatal(err)

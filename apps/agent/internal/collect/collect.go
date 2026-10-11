@@ -111,6 +111,9 @@ func (s *Collect) Run(ctx context.Context) error {
 	// Startup drain: events hooks wrote to the fallback while ccx-agent was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
+	if r, d := s.spool.RecoveredTemps, s.spool.DroppedTemps; r+d > 0 {
+		s.log("incoming/: took in %d event(s) a hook wrote but did not finish naming, removed %d empty or partial", r, d)
+	}
 	if n, err := s.spool.DrainIncoming(); err != nil {
 		s.log("startup drain error: %v", err)
 	} else if n > 0 {
