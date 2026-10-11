@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { cloneUrl, parseProtocol, parseRepoSpec, specToSlug } from "./repospec.ts";
+import { cloneUrl, explicitCloneUrl, parseProtocol, parseRepoSpec, specToSlug } from "./repospec.ts";
 
 const opts = { defaultHost: "github.com", defaultOwner: "TakashiAihara" };
 
@@ -55,6 +55,23 @@ describe("parseRepoSpec", () => {
   test("ssh URL を入力に渡しても、同じ spec に正規化される (往復する)", () => {
     const s = parseRepoSpec("git@github.com:micoworks/lepus-short-link.git", opts);
     expect(cloneUrl(s, "ssh")).toBe("git@github.com:micoworks/lepus-short-link.git");
+  });
+
+  test("http(s) はポートまでが host、ssh のポートは host に入れない (#215)", () => {
+    expect(parseRepoSpec("http://localhost:13000/o/app.git", opts).host).toBe("localhost:13000");
+    expect(parseRepoSpec("https://forge.example:8443/o/app", opts).host).toBe("forge.example:8443");
+    expect(parseRepoSpec("https://forge.example:443/o/app", opts).host).toBe("forge.example");
+    expect(parseRepoSpec("ssh://git@forge.example:2222/o/app.git", opts).host).toBe("forge.example");
+  });
+
+  test("組み立てでは表せない URL (http / ポート付き) だけを明示の clone URL とする (#215)", () => {
+    expect(explicitCloneUrl("http://localhost:13000/o/app.git")).toBe("http://localhost:13000/o/app.git");
+    expect(explicitCloneUrl("http://forge.example/o/app")).toBe("http://forge.example/o/app");
+    expect(explicitCloneUrl("https://forge.example:8443/o/app")).toBe("https://forge.example:8443/o/app");
+    expect(explicitCloneUrl("ssh://git@forge.example:2222/o/app.git")).toBe("ssh://git@forge.example:2222/o/app.git");
+    expect(explicitCloneUrl("https://github.com/o/app")).toBeUndefined();
+    expect(explicitCloneUrl("localhost:13000/o/app")).toBeUndefined();
+    expect(explicitCloneUrl("o/app")).toBeUndefined();
   });
 
   test("protocol の既定は https", () => {

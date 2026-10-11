@@ -36,7 +36,10 @@ export function parseRepoSpec(input: string, opts: ResolveOptions): RepoSpec {
 
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     const url = new URL(raw);
-    return fromPath(strip(url.pathname.replace(/^\//, "")), url.hostname);
+    // http(s) はポートまでが forge の識別 (同じ host の別ポートは別の forge)。ssh のポートは経路で、
+    // 同じ forge の http 側と同じ場所に置く (#215)。既定のポート (443 / 80) は URL が落とす
+    const host = /^https?:$/i.test(url.protocol) ? url.host : url.hostname;
+    return fromPath(strip(url.pathname.replace(/^\//, "")), host);
   }
 
   const parts = strip(raw).split("/").filter(Boolean);
@@ -89,6 +92,18 @@ export function parseProtocol(v: string): Protocol {
  * 例外的なフォージは ~/.ssh/config か git の insteadOf で吸収できる (ccx 側で持つと
  * 設定キーが増えるだけで、git 側の既存の仕組みと二重管理になる)。
  */
+/**
+ * 入力が、組み立てた clone URL では表せない URL (http、またはポート付き) ならそれを返す。
+ * repodir new はそれをそのまま mirror の origin にする (#215)。https / ssh の既定ポートの URL は
+ * 組み立てで足りるので返さない (protocol の設定が効く)
+ */
+export function explicitCloneUrl(input: string): string | undefined {
+  const raw = input.trim();
+  if (!/^(https?|ssh):\/\//i.test(raw)) return undefined;
+  const url = new URL(raw);
+  return url.protocol === "http:" || url.port !== "" ? raw : undefined;
+}
+
 export function cloneUrl(s: RepoSpec, protocol: Protocol = "https"): string {
   return protocol === "ssh"
     ? `git@${s.host}:${s.owner}/${s.repo}.git`

@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.ts";
 import { git, GitError } from "./git.ts";
-import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
+import { cloneUrl, explicitCloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
 
 export function mirrorPath(cfg: Config, spec: RepoSpec): string {
   return join(cfg.mirrorRoot, spec.host, spec.owner, `${spec.repo}.git`);
@@ -77,6 +77,8 @@ export type EnsureMirrorResult = {
   path: string;
   created: boolean;
   updated: boolean;
+  /** mirror の origin (repodir の origin にもこれを使う) */
+  origin: string;
 };
 
 /**
@@ -88,36 +90,58 @@ export type EnsureMirrorResult = {
 export async function ensureMirror(
   cfg: Config,
   spec: RepoSpec,
-  opts: { force?: boolean; protocol?: Protocol; warn?: (message: string) => void } = {},
+  /**
+   * protocol: 明示されたときだけ渡す (無ければ cfg.protocol)。url: 組み立てでは表せない clone URL
+   * (http / ポート付き。explicitCloneUrl)。どちらかが明示されたら、既存の origin もそれに付け替える
+   */
+  opts: { force?: boolean; protocol?: Protocol; url?: string; warn?: (message: string) => void } = {},
 ): Promise<EnsureMirrorResult> {
   const path = mirrorPath(cfg, spec);
-  const url = cloneUrl(spec, opts.protocol ?? cfg.protocol);
+  const url = opts.url ?? cloneUrl(spec, opts.protocol ?? cfg.protocol);
   const warn = opts.warn ?? ((m: string) => process.stderr.write(`${m}\n`));
 
   if (!(await exists(path))) {
     const created = await cloneMirror(url, path);
-    return { path, created, updated: false };
+    return { path, created, updated: false, origin: (await storedOrigin(path)) ?? url };
   }
 
   // 既存 mirror の origin は作られた時点の protocol のまま残る。protocol を切り替えても
   // fetch が旧 protocol のまま飛ぶと、設定した意味が無い (SSH のみのフォージなら失敗する)。
+  // ただし初回に明示した http / ポート付きの URL は、設定の protocol では組み立てられない。
+  // それが origin の唯一の記録なので、明示が無い限り付け替えない (#215)。
   //
-  // ただし origin の付け替えは fetch の下準備でしかない。並行実行で .git/config のロックを
+  // origin の付け替えは fetch の下準備でしかない。並行実行で .git/config のロックを
   // 取り損ねたときに、それだけで repodir の生成そのものを諦めるのは割に合わない。失敗しても
   // 警告に留めて進み、fetch は (古い protocol の origin で) 続行する。
-  try {
-    await syncOrigin(path, url);
-  } catch (e) {
-    const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
-    warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
+  const current = await storedOrigin(path);
+  const keep = !opts.url && !opts.protocol && current !== null && explicitCloneUrl(current) !== undefined;
+  let origin = current ?? url;
+  if (!keep) {
+    try {
+      await syncOrigin(path, url);
+      origin = url;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
+      warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
+    }
   }
 
   const fetched = await lastFetchedAt(path);
   const stale = opts.force || !fetched || Date.now() - fetched.getTime() > cfg.mirrorMaxAgeMs;
-  if (!stale) return { path, created: false, updated: false };
+  if (!stale) return { path, created: false, updated: false, origin };
 
   await git(["remote", "update", "--prune"], path);
-  return { path, created: false, updated: true };
+  return { path, created: false, updated: true, origin };
+}
+
+/** 保存されている origin の URL (insteadOf を通さない)。無ければ null。壊れた config は投げる */
+async function storedOrigin(path: string): Promise<string | null> {
+  try {
+    return await git(["config", "--get", "remote.origin.url"], path);
+  } catch (e) {
+    if (e instanceof GitError && e.code === 1) return null;
+    throw e;
+  }
 }
 
 /**

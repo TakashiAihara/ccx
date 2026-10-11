@@ -17,9 +17,12 @@ import { git } from "./git.ts";
 import { readMeta, readState } from "./meta.ts";
 import { mirrorPath } from "./mirror.ts";
 import { createRepodir } from "./repodir.ts";
-import { parseRepoSpec } from "./repospec.ts";
+import { explicitCloneUrl, parseRepoSpec } from "./repospec.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
+// 平文の http で既定外のポートに立つ自前の forge (Forgejo / Gitea)。#215
+const HTTP_FORGE = "http://localhost:13000/test-owner/demo.git";
+const HTTPS_FORGE = "https://localhost:13000/test-owner/demo.git";
 const SSH_REMOTE = "git@github.com:test-owner/demo.git";
 
 let tmp: string;
@@ -54,7 +57,7 @@ beforeAll(async () => {
   const gitconfig = join(tmp, "gitconfig");
   await Bun.write(
     gitconfig,
-    `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n\tinsteadOf = ${SSH_REMOTE}\n`,
+    `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n\tinsteadOf = ${SSH_REMOTE}\n\tinsteadOf = ${HTTP_FORGE}\n\tinsteadOf = ${HTTPS_FORGE}\n`,
   );
   originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
   process.env.GIT_CONFIG_GLOBAL = gitconfig;
@@ -362,5 +365,28 @@ describe("protocol", () => {
     // ssh の URL 経由で新しい commit が mirror と repodir の両方に届いている
     expect(await git(["rev-parse", "refs/heads/main"], mirror)).toBe(head);
     expect(await Bun.file(join(r.path, "after-switch.md")).exists()).toBe(true);
+  });
+});
+
+describe("an explicit http / port URL (#215)", () => {
+  const origin = (path: string) => git(["config", "--get", "remote.origin.url"], path);
+
+  test("is the mirror's origin, later rd new without it keeps it, and an explicit protocol replaces it", async () => {
+    const forge = parseRepoSpec(HTTP_FORGE, { defaultHost: "github.com" });
+    expect(forge).toEqual({ host: "localhost:13000", owner: "test-owner", repo: "demo" });
+
+    const first = await createRepodir(cfg, forge, { url: explicitCloneUrl(HTTP_FORGE) }, "0.1.0");
+    expect(await origin(first.path)).toBe(HTTP_FORGE);
+    expect(await origin(mirrorPath(cfg, forge))).toBe(HTTP_FORGE);
+
+    // scheme の無い指定 (issue の症状 1) と refresh: 設定の https で書き換えない
+    const again = await createRepodir(cfg, parseRepoSpec("localhost:13000/test-owner/demo", { defaultHost: "github.com" }), { refresh: true }, "0.1.0");
+    expect(await origin(again.path)).toBe(HTTP_FORGE);
+    expect(await origin(mirrorPath(cfg, forge))).toBe(HTTP_FORGE);
+
+    // 明示すれば付け替える
+    const switched = await createRepodir(cfg, forge, { protocol: "https" }, "0.1.0");
+    expect(await origin(switched.path)).toBe(HTTPS_FORGE);
+    expect(await origin(mirrorPath(cfg, forge))).toBe(HTTPS_FORGE);
   });
 });
