@@ -39,8 +39,10 @@ async function writeAtomic(path: string, content: string): Promise<void> {
   }
 }
 
+// 空文字は未設定と同じ (#176)。?? だと "" が通り、cwd 相対の sessions/ を作る。相対パスの扱いは
+// ccx-agent と揃っていない (#237)
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
-  env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
 export const FLAGS = ["archived"] as const;
 export type Flag = (typeof FLAGS)[number];
