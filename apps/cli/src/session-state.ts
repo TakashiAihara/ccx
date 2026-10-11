@@ -53,7 +53,8 @@ async function knownIds(home: string): Promise<string[]> {
 async function target(idOrPrefix: string | undefined, home: string, store: TranscriptClient | null = null): Promise<string> {
   if (idOrPrefix) {
     try {
-      return resolveSessionId(idOrPrefix, await knownIds(home));
+      // 完全な id なら列挙しない (2,353 session で 1 回 0.3〜0.4 s。auto-label が毎 prompt で呼ぶ。#177)
+      return resolveSessionId(idOrPrefix, UUID.test(idOrPrefix) ? [] : await knownIds(home));
     } catch (e) {
       if (!(e instanceof NoLocalSession) || !store) throw e;
       const id = await store.resolve(idOrPrefix.toLowerCase()).catch(() => null);

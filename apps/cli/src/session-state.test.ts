@@ -380,6 +380,19 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
   });
 
+  test("a full id does not enumerate the local sessions; a prefix does (#177)", async () => {
+    await seed(homeA, SID);
+    // 印の読めない別の session。列挙するとその警告が stderr に出る
+    const other = "9e8d7c6b-5a49-4382-9172-6b5a4c3d2e1f";
+    await mkdir(join(homeA, "sessions", other), { recursive: true });
+    await Bun.write(join(homeA, "sessions", other, "meta"), "not a dir");
+    const full = await run(["label", "renamed", SID]);
+    expect([full.code, full.err]).toEqual([0, ""]);
+    expect((await readDeclared(SID, homeA)).label).toBe("renamed");
+    const prefix = await run(["label", "again", SID.slice(0, 8)]);
+    expect([prefix.code, prefix.err]).toEqual([0, expect.stringContaining(`${other}: declared state could not be read`)]);
+  });
+
   test("meta set key / key=value / unset write meta/<key>; bad keys stop before writing", async () => {
     await seed(homeA, SID);
     for (const k of ["..", "a/b", "=x", ".x", "Done"]) {
