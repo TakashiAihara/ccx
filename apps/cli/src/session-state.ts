@@ -294,9 +294,11 @@ export function registerSessionState(session: Command): void {
 
   meta
     .command("get")
-    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set; exit 2: it could not be read (bad key, no such session, unreadable file)")
+    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set; exit 2: it could not be read (bad key or arguments, no such session on this machine, unreadable file)")
     .argument("<key>")
     .argument("[session-id]", "full id or unique prefix (default: this session)")
+    // 使い方の誤りも「無い」(1) と取り違えないよう 2 にする。--help は 0 のまま
+    .exitOverride((err) => process.exit(err.exitCode === 0 ? 0 : 2))
     .action(async (key: string, idOrPrefix: string | undefined) => {
       // 保存形式 (meta/<key> のファイル) を直に読む道具を作らないための口 (#192)。`if ccx session meta get k`
       // で「無い」と「読めなかった」を取り違えないよう、grep と同じく 1 と 2 に分ける。値は手元のものだけ
@@ -305,7 +307,11 @@ export function registerSessionState(session: Command): void {
       try {
         const home = claudeHome();
         id = await target(idOrPrefix, home);
-        if (!(await stat(sessionDir(id, home)).then(() => true, () => false))) throw new Error(`no local session ${id}`);
+        // 印をまだ 1 つも付けていない session は sessions/<id>/ を持たない。transcript があれば手元の session
+        const local =
+          (await stat(sessionDir(id, home)).then(() => true, () => false)) ||
+          (await localTranscripts(home)).some((t) => t.sessionId === id);
+        if (!local) throw new Error(`no session ${id} on this machine`);
         value = await readMetaValue(id, key, home);
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));

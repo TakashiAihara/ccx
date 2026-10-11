@@ -438,7 +438,16 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     // 読めないのは「無い」ではない
     expect((await run(["meta", "get", "../x", SID])).code).toBe(2);
     const ghost = await run(["meta", "get", "owner", "ffffffff-0000-4000-8000-000000000000"]);
-    expect([ghost.code, ghost.err]).toEqual([2, expect.stringContaining("no local session")]);
+    expect([ghost.code, ghost.err]).toEqual([2, expect.stringContaining("on this machine")]);
+    // 印をまだ付けていない (sessions/<id>/ が無い) が transcript はある session は「無い」(1)
+    const fresh = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+    await seed(homeA, fresh);
+    const unset = await run(["meta", "get", "done"], { CLAUDE_CODE_SESSION_ID: fresh });
+    expect([unset.code, unset.err]).toEqual([1, expect.stringContaining("done is not set")]);
+    // 使い方の誤りも 2
+    expect((await run(["meta", "get"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(2);
+    expect((await run(["meta", "get", "owner", SID, "--json"])).code).toBe(2);
+    expect((await run(["meta", "get", "--help"])).code).toBe(0);
     // 他の key が壊れていても、この key は読める
     await symlink("loop", join(homeA, "sessions", SID, "meta", "loop"));
     expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n" });

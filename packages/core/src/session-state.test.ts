@@ -9,6 +9,7 @@ import {
   claudeHome,
   EMPTY_DECLARED,
   isMetaKey,
+  readMetaValue,
   flagsOf,
   holdsDeclared,
   isEmptyDeclared,
@@ -246,6 +247,16 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test("readMetaValue reads one key like readDeclared: absent or a directory is null, one trailing newline removed (#192)", async () => {
+    const meta = join(home, "sessions", SID, "meta");
+    await mkdir(join(meta, "dir"), { recursive: true });
+    await Bun.write(join(meta, "owner"), "alice\n\n");
+    expect(await readMetaValue(SID, "owner", home)).toBe("alice\n");
+    expect(await readMetaValue(SID, "dir", home)).toBeNull();
+    expect(await readMetaValue(SID, "none", home)).toBeNull();
+    await expect(readMetaValue(SID, "../x", home)).rejects.toThrow(/invalid key/);
   });
 
   test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {
