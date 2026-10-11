@@ -429,6 +429,19 @@ describe("transcript: push / pull / prune through the store", () => {
       }
     }
 
+    // 壊れた state.json 1 件で一覧全体を止めない。その行は ? で、-s では 1 件の答えなので 2 (#229)
+    await Bun.write(join(root, "ccx", `${prefixA}state.json`), "{");
+    const [bout, berr, bcode] = await ls("--json");
+    const rows = JSON.parse(bout) as { machine: string; stateError?: string }[];
+    expect([bcode, rows.map((m) => [m.machine, Boolean(m.stateError)]), berr]).toEqual([
+      0,
+      [["host-b", false], ["host-a", true]],
+      expect.stringContaining(`could not read the state of ${SID}`),
+    ]);
+    const [tout, , tcode] = await ls();
+    expect([tcode, tout.split("\n").filter((l) => / host-a /.test(l)).map((l) => l.split(/\s+/)[3])]).toEqual([0, ["?"]]);
+    expect((await ls("-s", SID, "-m", "host-a"))[2]).toBe(2);
+
     // 保存先が答えないのは「無い」ではない
     const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
       env: { ...process.env, CCX_HUB_URL: "http://127.0.0.1:1", CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },

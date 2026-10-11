@@ -222,8 +222,19 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
-          const [h, state] = await Promise.all([c.history(m), c.readRemoteDeclared(m.sessionId, m)]);
-          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state };
+          // 一覧では壊れた state.json 1 件で全体を止めない (#229)。c.list の壊れた meta と同じく 1 行出して続ける。
+          // --session では 1 件の答えなので投げる (下で exit 2)
+          let stateError: string | undefined;
+          const [h, state] = await Promise.all([
+            c.history(m),
+            c.readRemoteDeclared(m.sessionId, m).catch((e: unknown) => {
+              if (o.session !== undefined) throw e;
+              stateError = e instanceof Error ? e.message : String(e);
+              console.error(`(could not read the state of ${m.sessionId}: ${stateError})`);
+              return null;
+            }),
+          ]);
+          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state, ...(stateError ? { stateError } : {}) };
         }),
       ).catch((e: unknown) => {
         // --session では見つけた後に読めなかったのも 2 (1 は「無い」だけ)
@@ -243,7 +254,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
         shortId(m.sessionId),
         m.machine,
         m.user,
-        m.state ? flagsOf(m.state).join(",") : "",
+        m.stateError ? "?" : m.state ? flagsOf(m.state).join(",") : "",
         human(m.size),
         `${humanSince(Date.parse(m.pushedAt))} ago`,
         m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
