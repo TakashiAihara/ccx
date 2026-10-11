@@ -109,6 +109,14 @@ describe("transcript: local side", () => {
     expect(await hasLocalTranscript("ffffffff-0000-4000-8000-000000000000", homeA)).toBe(false);
     expect(await hasLocalTranscript("not-a-session", homeA)).toBe(false);
     expect(await hasLocalTranscript(SID, join(homeA, "nope"))).toBe(false);
+    // 前方一致ではない
+    await Bun.write(join(homeA, "projects", "-other", `${SID}-x.jsonl`), "{}\n");
+    expect(await hasLocalTranscript(`${SID}-x`, homeA)).toBe(false);
+    // 先の無い symlink (消えかけの transcript) は「無い」。全件を stat する localTranscripts はここで投げる
+    const gone = "ffffffff-0000-4000-8000-000000000001";
+    await symlink(join(homeA, "nowhere"), join(homeA, "projects", "-other", `${gone}.jsonl`));
+    expect(await hasLocalTranscript(gone, homeA)).toBe(false);
+    expect(await hasLocalTranscript(SID, homeA)).toBe(true);
   });
 
   test("transcriptFacts takes cwd / gitBranch / version from the first records that carry them, and stops at the line cap", async () => {
