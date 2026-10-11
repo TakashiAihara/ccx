@@ -180,15 +180,26 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("ls")
     .description("List sessions in the store, newest push first")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
-    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read")
     .option("--json", "print as JSON")
     .action(async (o) => {
-      const c = await client();
+      // --session では保存先が答えないのも「引けなかった」(2)。未設定 (3) は他のコマンドと同じ
+      const c = await client().catch((e: unknown) => {
+        if (!o.session || e instanceof NoTranscriptStore) throw e;
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      });
       // 1 件を見るために全件を読ませない (#183)。無いことを exit 1 で返すので、`if ccx tr ls -s "$id"` で書ける
       let metas: Awaited<ReturnType<typeof c.list>>;
       if (o.session) {
-        const id = await c.resolve(String(o.session).toLowerCase());
-        metas = id ? (await c.findAll(id)).filter((m) => !o.machine || m.machine === o.machine) : [];
+        // 「無い」(1) と「引けなかった」(2: 保存先が答えない / prefix が曖昧) を分ける。meta get と同じ
+        try {
+          const id = await c.resolve(String(o.session).toLowerCase());
+          metas = id ? (await c.findAll(id)).filter((m) => !o.machine || m.machine === o.machine) : [];
+        } catch (e) {
+          console.error(e instanceof Error ? e.message : String(e));
+          process.exit(2);
+        }
         if (metas.length === 0) {
           console.error(`${o.session} is not in the store${o.machine ? ` from ${o.machine}` : ""}`);
           process.exitCode = 1;

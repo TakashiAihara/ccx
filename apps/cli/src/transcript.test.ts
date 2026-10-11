@@ -388,6 +388,14 @@ describe("transcript: push / pull / prune through the store", () => {
 
     const [nout, nerr, ncode] = await ls("--session", "ffffffff-0000-4000-8000-000000000000", "--json");
     expect([ncode, JSON.parse(nout), nerr]).toEqual([1, [], expect.stringContaining("is not in the store")]);
+
+    // 保存先が答えないのは「無い」ではない
+    const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
+      env: { ...process.env, CCX_HUB_URL: "http://127.0.0.1:1", CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await down.exited).toBe(2);
   });
 
   test("push puts the object right after the local file was cut back, though session.json already matches (#120)", async () => {
