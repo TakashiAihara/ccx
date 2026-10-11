@@ -188,9 +188,9 @@ export function registerTranscript(program: Command, VERSION: string): void {
 
   transcript
     .command("ls")
-    .description("List sessions in the store, newest push first. A session whose state.json cannot be read shows ? in the flags column (stateError in --json) and the rest are listed")
+    .description("List sessions in the store, newest push first. A session whose state.json cannot be read shows ? where its flags (archived, …) go, with stateError in --json, and the rest are listed")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
-    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous (a state.json that is not valid JSON shows ?, not 2)")
     .option("--json", "print as JSON")
     .action(async (o) => {
       // --session では保存先が答えないのも「引けなかった」(2)。未設定 (3) は他のコマンドと同じ
@@ -222,14 +222,16 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
-          // 壊れた / 取れない state.json 1 件で一覧を止めない (#229)。c.list の読めない meta と同じく、理由を問わず
-          // 1 行出して続ける。-s でも同じ: session は保存先に在り (1 ではない)、他の machine の写しは読める
+          // 読めない state.json 1 件で一覧を止めない (#229)。一覧は c.list の読めない meta と同じく理由を問わず
+          // 1 行出して続ける。-s は壊れた JSON だけ: session は保存先に在る (1 ではない) が、保存先が答えないのは
+          // session.json / 履歴と同じく 2
           let stateError: string | undefined;
           const [h, state] = await Promise.all([
             c.history(m),
             c.readRemoteDeclared(m.sessionId, m).catch((e: unknown) => {
+              if (o.session !== undefined && !(e instanceof SyntaxError)) throw e;
               stateError = (e instanceof Error ? e.message : String(e)) || "unreadable";
-              console.error(`(could not read the state of ${m.sessionId}: ${stateError})`);
+              console.error(`(could not read the state of ${m.sessionId} from ${m.machine}: ${stateError})`);
               return null;
             }),
           ]);

@@ -445,6 +445,32 @@ describe("transcript: push / pull / prune through the store", () => {
       0,
       [["host-b", false], ["host-a", true]],
     ]);
+    // 保存先が state.json に答えないのは、一覧では ? だが -s では 2 (session.json / 履歴と同じ)
+    {
+      const upstream = A.store.endpoint;
+      const proxy = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          const u = new URL(req.url);
+          if (req.method === "GET" && decodeURIComponent(u.pathname).endsWith(`${prefixA}state.json`)) return new Response("boom", { status: 500 });
+          return fetch(`${upstream}${u.pathname}${u.search}`, { method: req.method, headers: req.headers, body: req.body });
+        },
+      });
+      try {
+        const env = { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root };
+        const one = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID, "--json"], { env, stdout: "pipe", stderr: "pipe" });
+        const all = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "--json"], { env, stdout: "pipe", stderr: "pipe" });
+        const [oout, ocode, aout, acode] = await Promise.all([new Response(one.stdout).text(), one.exited, new Response(all.stdout).text(), all.exited]);
+        expect([ocode, oout]).toEqual([2, ""]);
+        expect([acode, (JSON.parse(aout) as { machine: string; stateError?: string }[]).map((m) => [m.machine, Boolean(m.stateError)])]).toEqual([
+          0,
+          [["host-b", false], ["host-a", true]],
+        ]);
+      } finally {
+        proxy.stop(true);
+      }
+    }
 
     // 保存先が答えないのは「無い」ではない
     const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
