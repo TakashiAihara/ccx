@@ -213,7 +213,7 @@ describe("unpushedLanded (#220)", () => {
     const e = await clone("no-change");
     await git(["switch", "--quiet", "-c", "feat"], e);
     await git(["commit", "--quiet", "--allow-empty", "-m", "empty"], e);
-    expect(await unpushedLanded(e)).toEqual({ landed: true, how: "no change since the branch point from origin/main" });
+    expect(await unpushedLanded(e)).toEqual({ landed: true, how: "the files are the same as at the branch point on origin/main" });
   });
 
   test("with nothing to compare with, it says so instead of guessing", async () => {

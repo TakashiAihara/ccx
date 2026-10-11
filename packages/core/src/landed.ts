@@ -11,7 +11,8 @@
  * commit の件名は使わない (stacked branch では全部外れる)。消してよいかは決めない: 判断材料を出すだけ。
  * 上流に入った後で上流が戻したものも「入っている」と答える (中身は上流の履歴から取り戻せる)。
  * 比べる ref との分岐点が 1 つに決まらない (develop から切ったブランチに main を merge した等) ときは、
- * 入っていないと答える (安全側。その repodir は gc に残る)
+ * 入っていないと答える (安全側。その repodir は gc に残る)。ファイルが分岐点と同じなら「入っている」と答える:
+ * 途中の commit (別の remote ブランチに push したものを含む) が何をしていても、手元の中身はすべて分岐点にある
  */
 
 import { git } from "./git.ts";
@@ -95,7 +96,7 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
   let best: { name: string; missing: string[] } | null = null;
   for (const t of targets.filter((t) => t.base)) {
     const files = nul(await git(["diff", "-z", "--no-renames", "--name-only", t.base, "HEAD"], path));
-    if (files.length === 0) return { landed: true, how: `no change since the branch point from ${t.name}` };
+    if (files.length === 0) return { landed: true, how: `the files are the same as at the branch point on ${t.name}` };
     const missing: string[] = [];
     for (const f of files) {
       if (!blobOf.has(f)) {
