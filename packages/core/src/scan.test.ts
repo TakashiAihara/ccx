@@ -18,7 +18,7 @@ import { git } from "./git.ts";
 import { META_SCHEMA, metaPath, statePath } from "./meta.ts";
 import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
-import { scanRepodirs, type RepodirInfo } from "./scan.ts";
+import { encodeCwd, scanRepodirs, type RepodirInfo } from "./scan.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
 
@@ -144,5 +144,25 @@ describe("壊れた repodir は他を巻き添えにしない", () => {
     expect(info.problems).not.toEqual([]);
     expect(info.git.branch).toBe("main");
     expect(info.git.dirty).toBe(true);
+  });
+});
+
+describe("session の生死", () => {
+  test("transcript は CLAUDE_CONFIG_DIR の下を見る (#232)", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const home = join(tmp, "account-b");
+    await Bun.write(join(home, "projects", encodeCwd(r.path), "s.jsonl"), "{}\n");
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    const active = async () => (await scanRepodirs(cfg)).find((x) => x.path === r.path)!.session.active;
+    try {
+      process.env.CLAUDE_CONFIG_DIR = home;
+      expect(await active()).toBe(true);
+      // 別の config dir を指していれば、そこには無い
+      process.env.CLAUDE_CONFIG_DIR = join(tmp, "account-c");
+      expect(await active()).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+    }
   });
 });

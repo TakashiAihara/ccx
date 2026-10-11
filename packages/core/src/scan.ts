@@ -7,7 +7,6 @@
  */
 
 import { readdir, readlink, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
@@ -21,6 +20,7 @@ import {
   type RepodirState,
 } from "./meta.ts";
 import type { RepoSpec } from "./repospec.ts";
+import { claudeHome } from "./session-state.ts";
 
 /** この時間だけ session の JSONL が更新されていなければ、生きていないとみなす */
 export const SESSION_IDLE_MS = 15 * 60 * 1000;
@@ -96,8 +96,12 @@ export function encodeCwd(path: string): string {
   return path.replace(/[/._]/g, "-");
 }
 
-export function claudeProjectDir(path: string): string {
-  return join(homedir(), ".claude", "projects", encodeCwd(path));
+/**
+ * その cwd の session の transcript がある場所。CLAUDE_CONFIG_DIR に従う (#232)。別の config dir で動く
+ * session (cswap の別アカウント等) は見えない: 稼働中の session は gc では cwd の process で守られる
+ */
+export function claudeProjectDir(path: string, home = claudeHome()): string {
+  return join(home, "projects", encodeCwd(path));
 }
 
 async function sessionState(path: string, idleMs: number): Promise<SessionState> {
