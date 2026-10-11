@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -296,7 +297,13 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	}
 
 	fwd := &stubForwarder{}
-	c := newCollect(testsock.Path(t, "s.sock"), spool, fwd, quietLog)
+	var logMu sync.Mutex
+	var logs []string
+	c := newCollect(testsock.Path(t, "s.sock"), spool, fwd, func(f string, a ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logs = append(logs, fmt.Sprintf(f, a...))
+	})
 	// what the later look takes in must wake the idle loop, not wait for its poll
 	c.loop.idlePoll = time.Hour
 	// the startup look and the next see the temp as new (a clock stepped back); the
@@ -327,6 +334,12 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	}
 	cancel()
 	<-done
+	logMu.Lock()
+	joined := strings.Join(logs, "\n")
+	logMu.Unlock()
+	if !strings.Contains(joined, "1 temp(s) still too new to judge") {
+		t.Errorf("a look that still finds a young temp must say so; logs:\n%s", joined)
+	}
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Errorf("the temp is still in incoming/: %v", err)
 	}

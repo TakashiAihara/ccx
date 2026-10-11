@@ -162,7 +162,11 @@ func (s *Collect) Run(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-time.After(s.resweepAfter):
-					y = s.takeInIncoming("after the young temps settled")
+					// say so each time: a temp that stays young (an mtime ahead of the
+					// clock) keeps this looking, and Status does not count temps
+					if y = s.takeInIncoming("after the young temps settled"); y > 0 {
+						s.log("incoming/: %d temp(s) still too new to judge (an mtime ahead of the clock?); looking again in %s", y, s.resweepAfter)
+					}
 				}
 			}
 		}()
