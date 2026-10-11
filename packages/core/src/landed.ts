@@ -9,7 +9,9 @@
  *      履歴で同じパスに現れる (消したファイルは ref の先にも無い)。パスと分岐点で絞らないと、古い版への
  *      戻し・空のファイル・他のファイルの写しが「入っている」に見える
  * commit の件名は使わない (stacked branch では全部外れる)。消してよいかは決めない: 判断材料を出すだけ。
- * 上流に入った後で上流が戻したものも「入っている」と答える (中身は上流の履歴から取り戻せる)
+ * 上流に入った後で上流が戻したものも「入っている」と答える (中身は上流の履歴から取り戻せる)。
+ * 比べる ref との分岐点が 1 つに決まらない (develop から切ったブランチに main を merge した等) ときは、
+ * 入っていないと答える (安全側。その repodir は gc に残る)
  */
 
 import { git } from "./git.ts";
@@ -55,8 +57,8 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
 
   // 分岐点は 1 つ: 比べる ref との merge-base のうち一番新しいもの (他がすべてその祖先)。古い分岐点で比べると、
   // 起点ブランチ (develop 等) にだけある変更を戻したものが「変化なし」や「入っている」に見える
-  const isAncestor = (a: string, b: string) =>
-    git(["merge-base", "--is-ancestor", a, b], path).then(
+  const isAncestor = (a: string, b: string, cwd = path) =>
+    git(["merge-base", "--is-ancestor", a, b], cwd).then(
       () => true,
       () => false,
     );
@@ -66,10 +68,17 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
   if (!base) return { landed: false, how: "no single branch point with the compared refs", missing: [] };
 
   const targets: { cwd: string; ref: string; name: string; base: string }[] = [];
-  for (const ref of refs) targets.push({ cwd: path, ref, name: ref, base });
-  // repodir が mirror を通さず fetch していると、分岐点を mirror が持っていない。そのときは mirror を見ない
-  if (mirror && (await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false))) {
-    targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}`, base });
+  // 分岐点を含む ref とだけ比べる。含まない ref (develop から切ったときの origin/main) の base..ref は、その ref
+  // 自身の分岐点からの履歴を全部含むので、backport や develop にだけあるファイルの削除が「入っている」に見える
+  for (const ref of refs) if (await isAncestor(base, ref)) targets.push({ cwd: path, ref, name: ref, base });
+  if (mirror) {
+    // mirror でも起点ブランチを見る (あれば)。repodir が mirror を通さず fetch していて分岐点を mirror が
+    // 持っていなければ、mirror は見ない
+    const branch = baseBranch && (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${baseBranch}`], mirror.path).catch(() => "")) ? baseBranch : mirror.branch;
+    const has = await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false);
+    if (has && (await isAncestor(base, branch, mirror.path))) {
+      targets.push({ cwd: mirror.path, ref: branch, name: `the mirror's ${branch}`, base });
+    }
   }
 
   for (const t of targets.filter((t) => t.cwd === path && t.base)) {

@@ -224,3 +224,88 @@ describe("unpushedLanded (#220)", () => {
     expect(await unpushedLanded(w)).toEqual({ landed: false, how: "no remote branch to compare with", missing: [] });
   });
 });
+
+// 起点ブランチが develop のとき (#220 の 4 周目のレビュー)。順序に依らないよう remote ごと分ける
+describe("unpushedLanded with a develop base", () => {
+  let dev: string;
+  let up: string;
+  const cloneDev = async (name: string) => {
+    const dir = join(tmp, `dev-${name}`);
+    await git(["clone", "--quiet", dev, dir]);
+    await git(["config", "user.email", "t@example.com"], dir);
+    await git(["config", "user.name", "t"], dir);
+    await git(["switch", "--quiet", "-c", "feat", "origin/develop"], dir);
+    return dir;
+  };
+  const push = async (branch: string, files: Record<string, string | null>) => {
+    await git(["switch", "--quiet", branch], up);
+    await git(["pull", "--quiet", "--ff-only", "origin", branch], up);
+    await commit(up, files, `${branch} change`);
+    await git(["push", "--quiet", "origin", branch], up);
+  };
+  const check = async (w: string) => [
+    (await unpushedLanded(w, { baseBranch: "develop" })).landed,
+    (await unpushedLanded(w, { baseBranch: "develop", mirror: { path: dev, branch: "main" } })).landed,
+  ];
+
+  beforeAll(async () => {
+    dev = join(tmp, "dev-remote.git");
+    await git(["init", "--quiet", "--bare", "--initial-branch", "main", dev]);
+    up = join(tmp, "dev-up");
+    await git(["clone", "--quiet", dev, up]);
+    await git(["config", "user.email", "t@example.com"], up);
+    await git(["config", "user.name", "t"], up);
+    await commit(up, { "a.txt": "a\n", "b.txt": "b\n" }, "init");
+    await git(["push", "--quiet", "origin", "main"], up);
+    await git(["switch", "--quiet", "-c", "develop"], up);
+    await commit(up, { "a.txt": "devA\n", "only-dev.txt": "dev\n" }, "develop only");
+    await git(["push", "--quiet", "origin", "develop"], up);
+    // develop を切った後の main: hotfix と、a.txt を一度変えて戻す
+    await push("main", { "b.txt": "hotfix\n" });
+    await push("main", { "a.txt": "m1\n" });
+    await push("main", { "a.txt": "a\n" });
+  });
+
+  test("a backport of a main hotfix is not in develop", async () => {
+    const w = await cloneDev("backport");
+    await commit(w, { "b.txt": "hotfix\n" }, "backport");
+    expect(await check(w)).toEqual([false, false]);
+  });
+
+  test("undoing a develop-only change is not in develop, even if main once had that content", async () => {
+    const w = await cloneDev("undo");
+    await commit(w, { "a.txt": "a\n" }, "undo devA");
+    expect(await check(w)).toEqual([false, false]);
+  });
+
+  test("deleting a develop-only file is not in develop, though main never had it", async () => {
+    const w = await cloneDev("delete");
+    await commit(w, { "only-dev.txt": null }, "drop it");
+    expect(await check(w)).toEqual([false, false]);
+  });
+
+  test("the mirror is looked at on the base branch, and not at all on a branch without the branch point", async () => {
+    // repodir は fetch していない: develop に入ったことは mirror の develop でしか見えない
+    const w = await cloneDev("mirror-develop");
+    await commit(w, { "d.txt": "d1\n" }, "d1");
+    await commit(w, { "d.txt": "d1\nd2\n" }, "d2");
+    await push("develop", { "d.txt": "d1\nd2\n" });
+    expect(await check(w)).toEqual([false, true]);
+
+    // develop を持たない mirror: 分岐点を含まない main とは比べない (main には hotfix がある)
+    const mainOnly = join(tmp, "dev-main-only.git");
+    await git(["clone", "--quiet", "--bare", "--single-branch", "--branch", "main", dev, mainOnly]);
+    const b = await cloneDev("backport-main-mirror");
+    await commit(b, { "b.txt": "hotfix\n" }, "backport");
+    expect((await unpushedLanded(b, { baseBranch: "develop", mirror: { path: mainOnly, branch: "main" } })).landed).toBe(false);
+  });
+
+  test("work squashed into develop is landed (control)", async () => {
+    const w = await cloneDev("landed");
+    await commit(w, { "c.txt": "c1\n" }, "c1");
+    await commit(w, { "c.txt": "c1\nc2\n" }, "c2");
+    await push("develop", { "c.txt": "c1\nc2\n" });
+    await git(["fetch", "--quiet"], w);
+    expect(await check(w)).toEqual([true, true]);
+  });
+});
