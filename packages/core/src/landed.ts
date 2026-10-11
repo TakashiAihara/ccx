@@ -3,9 +3,11 @@
  *
  * squash merge の repo では、merge 済みのブランチの commit もどの remote ref にも届かず
  * 「未 push」に見える。forge に頼らず git だけで次の順に確かめる:
- *   1. HEAD を指す remote ref がある
- *   2. 比べる remote ref (origin/HEAD と起点ブランチ) に対して、patch が欠けている commit が無い (git cherry)
- *   3. 未 push の commit が触ったファイルの手元の中身 (blob) が、比べる ref の履歴のどこかに現れる
+ *   1. 比べる remote ref (origin/HEAD と起点ブランチ) の先が HEAD そのもの
+ *   2. 比べる ref に対して、patch が欠けている commit が無い (git cherry)
+ *   3. 未 push の commit が触った各ファイルについて、手元の中身 (blob) が、分岐点より後の比べる ref の
+ *      履歴で同じパスに現れる (消したファイルは ref の先にも無い)。パスと分岐点で絞らないと、古い版への
+ *      戻し・空のファイル・他のファイルの写しが「入っている」に見える
  * commit の件名は使わない (stacked branch では全部外れる)。消してよいかは決めない: 判断材料を出すだけ
  */
 
@@ -41,24 +43,33 @@ export type LandedOptions = {
 
 export async function unpushedLanded(path: string, opts: LandedOptions = {}): Promise<Landed> {
   const { baseBranch, mirror } = opts;
-  // origin/HEAD は別名なので名前に使わない
-  const at = lines(await git(["for-each-ref", "--points-at", "HEAD", "--format=%(refname)", "refs/remotes"], path))
-    .filter((r) => !r.endsWith("/HEAD"))
-    .map((r) => r.replace(/^refs\/remotes\//, ""));
-  if (at.length > 0) return { landed: true, how: `${at[0]} is at HEAD` };
-
   const refs = await candidates(path, baseBranch);
-  if (refs.length === 0 && !mirror) return { landed: false, how: "no remote branch to compare with", missing: [] };
+  if (refs.length === 0) return { landed: false, how: "no remote branch to compare with", missing: [] };
+
+  const head = await git(["rev-parse", "HEAD"], path);
+  for (const ref of refs) {
+    // 比べる ref だけを見る。別の remote ブランチ (origin/wip 等) に push してあるのは、入ったのではない
+    if ((await git(["rev-parse", ref], path)) === head) return { landed: true, how: `${ref} is at HEAD` };
+  }
 
   for (const ref of refs) {
     const unique = lines(await git(["cherry", ref, "HEAD"], path)).filter((l) => l.startsWith("+"));
     if (unique.length === 0) return { landed: true, how: `every commit's patch is in ${ref}` };
   }
 
-  const files = [...new Set(lines(await git(["log", "--format=", "--name-only", "HEAD", "--not", "--remotes"], path)))];
+  // -z: パスを引用符で囲ませない (core.quotePath)。--no-renames: 改名は消したパスと足したパスの 2 つとして見る
+  // 分岐点は repodir の ref で取る。mirror は repodir の元なので、その commit を持っている
+  const base = await git(["merge-base", "HEAD", refs[0]!], path);
+  // 見るのは分岐点から後の commit が触ったファイル。別の remote ブランチに push 済みでも、比べる ref に
+  // 入っていなければ自分の作業として数える
+  const nul = (s: string) => s.split("\0").filter((l) => l !== "");
+  const files = [...new Set(nul(await git(["log", "-z", "--no-renames", "--format=", "--name-only", `${base}..HEAD`], path)))];
+  const inHead = new Set(nul(await git(["ls-tree", "-z", "-r", "--name-only", "HEAD", "--", ...files], path)));
+  const blobs = await Promise.all(files.map((f) => (inHead.has(f) ? git(["rev-parse", `HEAD:${f}`], path) : Promise.resolve(""))));
   const targets = refs.map((ref) => ({ cwd: path, ref, name: ref }));
-  if (mirror) targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}` });
-  const blobs = await Promise.all(files.map((f) => git(["rev-parse", "--verify", "--quiet", `HEAD:${f}`], path).catch(() => "")));
+  // repodir が mirror を通さず fetch していると、分岐点を mirror が持っていない。そのときは mirror を見ない
+  const mirrorHasBase = mirror && (await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false));
+  if (mirror && mirrorHasBase) targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}` });
   let best: { name: string; missing: string[] } | null = null;
   for (const t of targets) {
     const missing: string[] = [];
@@ -73,10 +84,10 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
         if (there) missing.push(f);
         continue;
       }
-      const seen = await git(["log", t.ref, "-1", "--format=%H", `--find-object=${blob}`], t.cwd);
+      const seen = await git(["log", `${base}..${t.ref}`, "-1", "--format=%H", `--find-object=${blob}`, "--", f], t.cwd);
       if (!seen) missing.push(f);
     }
-    if (missing.length === 0) return { landed: true, how: `every changed file's content is in ${t.name}'s history` };
+    if (missing.length === 0) return { landed: true, how: `every changed file's content reached ${t.name} after the branch point` };
     if (!best || missing.length < best.missing.length) best = { name: t.name, missing };
   }
   return { landed: false, how: `not in ${best!.name}`, missing: best!.missing };

@@ -72,7 +72,7 @@ describe("unpushedLanded (#220)", () => {
     await commit(w, { "s.txt": "one\ntwo\n", "gone.txt": null }, "second");
     await landOnMain({ "s.txt": "one\ntwo\n", "gone.txt": null });
     await git(["fetch", "--quiet"], w);
-    expect(await unpushedLanded(w)).toEqual({ landed: true, how: "every changed file's content is in origin/main's history" });
+    expect(await unpushedLanded(w)).toEqual({ landed: true, how: "every changed file's content reached origin/main after the branch point" });
   });
 
   test("a commit added after the squash, never pushed, is not landed and its files are named", async () => {
@@ -94,12 +94,77 @@ describe("unpushedLanded (#220)", () => {
     await commit(w, { "m.txt": "mirror one\n" }, "first");
     await commit(w, { "m.txt": "mirror one\nmirror two\n" }, "second");
     await landOnMain({ "m.txt": "mirror one\nmirror two\n" });
+    // mirror が分岐点を持っていなければ mirror は見ない (判定できないで止めない)
+    const empty = join(tmp, "empty-mirror.git");
+    await git(["init", "--quiet", "--bare", "--initial-branch", "main", empty]);
+    expect((await unpushedLanded(w, { mirror: { path: empty, branch: "main" } })).landed).toBe(false);
     // repodir の origin/main は古いまま: それだけでは入っていないと見える
     expect((await unpushedLanded(w)).landed).toBe(false);
     expect(await unpushedLanded(w, { mirror: { path: remote, branch: "main" } })).toEqual({
       landed: true,
-      how: "every changed file's content is in the mirror's main's history",
+      how: "every changed file's content reached the mirror's main after the branch point",
     });
+  });
+
+  test("content that only looks upstream is not landed: an old version, a rename, an empty or copied file, a non-ASCII name, another branch", async () => {
+    // main に v1 → v2 と入っている old.txt
+    await landOnMain({ "old.txt": "v1\n" });
+    await landOnMain({ "old.txt": "v2\n" });
+    const check = async (name: string, files: Record<string, string | null>, after?: (w: string) => Promise<void>) => {
+      const w = await clone(name);
+      await git(["config", "core.quotePath", "true"], w);
+      await git(["switch", "--quiet", "-c", "feat"], w);
+      if (after) await after(w);
+      else await commit(w, files, name);
+      return unpushedLanded(w);
+    };
+    // 古い版へ戻す
+    expect((await check("revert", { "old.txt": "v1\n" })).landed).toBe(false);
+    // 空のファイル / 他のファイルの写し (同じ中身は main の別のパスにある)
+    expect((await check("empty", { "e.txt": "" })).landed).toBe(false);
+    expect((await check("copy", { "copy.txt": "v2\n" })).landed).toBe(false);
+    // 日本語のファイル名 (core.quotePath で引用符付きになる)
+    expect((await check("ja", { "メモ.md": "v2\n" })).landed).toBe(false);
+    // 改名 (main には元の名前しかない)
+    expect(
+      (
+        await check("rename", {}, async (w) => {
+          await git(["mv", "old.txt", "moved.txt"], w);
+          await git(["commit", "--quiet", "-m", "rename"], w);
+        })
+      ).landed,
+    ).toBe(false);
+    // 別の remote ブランチに push しただけ
+    expect(
+      (
+        await check("wip", {}, async (w) => {
+          await commit(w, { "w.txt": "wip\n" }, "wip");
+          await git(["push", "--quiet", "origin", "HEAD:refs/heads/wip"], w);
+        })
+      ).landed,
+    ).toBe(false);
+  });
+
+  test("after the branch point: the same content under another path, or a rename whose old path is still upstream, is not landed", async () => {
+    // 他のパスに同じ中身が分岐点の後で入った
+    const copy = await clone("copy-after");
+    await git(["switch", "--quiet", "-c", "feat"], copy);
+    await landOnMain({ "src.txt": "shared after the branch\n" });
+    await git(["fetch", "--quiet"], copy);
+    await commit(copy, { "dst.txt": "shared after the branch\n" }, "copy");
+    expect(await unpushedLanded(copy)).toEqual({ landed: false, how: "not in origin/main", missing: ["dst.txt"] });
+
+    // 改名: main には新しい名前も入ったが、元の名前も残っている
+    const ren = await clone("rename-after");
+    await git(["switch", "--quiet", "-c", "feat"], ren);
+    await landOnMain({ "keep.txt": "kept\n" });
+    await git(["pull", "--quiet", "--rebase", "origin", "main"], ren);
+    await landOnMain({ "moved.txt": "kept\n" });
+    await git(["fetch", "--quiet"], ren);
+    await git(["mv", "keep.txt", "moved.txt"], ren);
+    await git(["commit", "--quiet", "-m", "rename"], ren);
+    const r = await unpushedLanded(ren);
+    expect(r.landed ? [] : r.missing).toEqual(["keep.txt"]);
   });
 
   test("with nothing to compare with, it says so instead of guessing", async () => {
