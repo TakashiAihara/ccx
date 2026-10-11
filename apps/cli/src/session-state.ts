@@ -294,7 +294,7 @@ export function registerSessionState(session: Command): void {
 
   meta
     .command("get")
-    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set; exit 2: it could not be read (bad key or arguments, no such session on this machine, unreadable file)")
+    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set (a value that is not UTF-8 counts as not set); exit 2: it could not be read (bad key or arguments, no such session on this machine, unreadable file)")
     .argument("<key>")
     .argument("[session-id]", "full id or unique prefix (default: this session)")
     // 使い方の誤りも「無い」(1) と取り違えないよう 2 にする。--help は 0 のまま

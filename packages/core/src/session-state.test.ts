@@ -127,7 +127,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     }
     for (const c of textCases.meta) {
       await Bun.write(join(dir, "meta", "k"), bytes(c));
-      expect([c.file ?? c.hex, (await readDeclared(SID, home)).metadata.k ?? null]).toEqual([c.file ?? c.hex, c.value]);
+      expect([c.file ?? c.hex, (await readDeclared(SID, home)).metadata.k ?? null, await readMetaValue(SID, "k", home)]).toEqual([c.file ?? c.hex, c.value, c.value]);
     }
   });
 
