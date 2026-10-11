@@ -136,14 +136,15 @@ export const sessionDir = (sessionId: string, home = claudeHome()) => join(home,
 
 /**
  * meta/<key> 1 つの値 (readDeclared と同じ読み: 末尾の改行 1 つを外す)。無ければ null。
- * 他の key や label が壊れていても、この key は読める (#192)。読めない (ELOOP / EACCES) は投げる
+ * 他の key や label が壊れていても、この key は読める (#192)。UTF-8 でない値は readMetadata と同じく
+ * 無い (#191)。読めない (ELOOP / EACCES) は投げる
  */
 export async function readMetaValue(sessionId: string, key: string, home = claudeHome()): Promise<string | null> {
   if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
   try {
-    return (await Bun.file(join(sessionDir(sessionId, home), META_DIR, key)).text()).replace(/\n$/, "");
+    return utf8(await Bun.file(join(sessionDir(sessionId, home), META_DIR, key)).bytes()).replace(/\n$/, "");
   } catch (e) {
-    if (errCode(e) === "ENOENT" || errCode(e) === "EISDIR") return null;
+    if (e instanceof TypeError || errCode(e) === "ENOENT" || errCode(e) === "EISDIR") return null;
     throw e;
   }
 }

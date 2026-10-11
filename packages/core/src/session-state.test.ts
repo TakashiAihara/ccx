@@ -257,6 +257,10 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(await readMetaValue(SID, "dir", home)).toBeNull();
     expect(await readMetaValue(SID, "none", home)).toBeNull();
     await expect(readMetaValue(SID, "../x", home)).rejects.toThrow(/invalid key/);
+    // UTF-8 でない値は readDeclared の metadata と同じく無い (#191)
+    await Bun.write(join(meta, "bin"), new Uint8Array([0x61, 0xff, 0x62]));
+    expect(await readMetaValue(SID, "bin", home)).toBeNull();
+    expect((await readDeclared(SID, home)).metadata.bin).toBeUndefined();
   });
 
   test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {
