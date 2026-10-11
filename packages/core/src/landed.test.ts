@@ -167,6 +167,41 @@ describe("unpushedLanded (#220)", () => {
     expect(r.landed ? [] : r.missing).toEqual(["keep.txt"]);
   });
 
+  test("each compared ref uses its own branch point; a merge carrying its own change is not landed; no change says so", async () => {
+    // develop: d0 → d1 → 分岐。起点ブランチ develop で、分岐点より前の d0 に戻すのは入っていない
+    // (main の分岐点で develop を見ると、d0 が develop の履歴にあるので入っているに見える)
+    await git(["pull", "--quiet", "--ff-only"], other);
+    await git(["switch", "--quiet", "-c", "develop"], other);
+    await commit(other, { "dev.txt": "d0\n" }, "d0");
+    await commit(other, { "dev.txt": "d1\n" }, "d1");
+    await git(["push", "--quiet", "origin", "develop"], other);
+    await git(["switch", "--quiet", "main"], other);
+    const d = await clone("develop-base");
+    await git(["switch", "--quiet", "-c", "feat", "origin/develop"], d);
+    await commit(d, { "dev.txt": "d0\n" }, "back to d0");
+    expect((await unpushedLanded(d, { baseBranch: "develop" })).landed).toBe(false);
+
+    // merge が独自の変更を持つ (evil merge)
+    const m = await clone("evil-merge");
+    await git(["switch", "--quiet", "-c", "side"], m);
+    await commit(m, { "side.txt": "side\n" }, "side");
+    await landOnMain({ "side.txt": "side\n" });
+    await git(["switch", "--quiet", "-c", "feat", "origin/main"], m);
+    await git(["merge", "--quiet", "--no-ff", "--no-commit", "side"], m);
+    await Bun.write(join(m, "evil.txt"), "only in the merge\n");
+    await git(["add", "evil.txt"], m);
+    await git(["commit", "--quiet", "-m", "merge side"], m);
+    await git(["fetch", "--quiet"], m);
+    const r = await unpushedLanded(m);
+    expect([r.landed, r.landed ? [] : r.missing]).toEqual([false, ["evil.txt"]]);
+
+    // 中身の変わらない commit だけ
+    const e = await clone("no-change");
+    await git(["switch", "--quiet", "-c", "feat"], e);
+    await git(["commit", "--quiet", "--allow-empty", "-m", "empty"], e);
+    expect(await unpushedLanded(e)).toEqual({ landed: true, how: "no change since the branch point from origin/main" });
+  });
+
   test("with nothing to compare with, it says so instead of guessing", async () => {
     const w = await clone("no-ref");
     await git(["switch", "--quiet", "-c", "feat"], w);
