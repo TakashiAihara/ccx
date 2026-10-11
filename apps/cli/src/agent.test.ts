@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,7 +44,7 @@ describe("パスの解決", () => {
     expect(defaultSpoolDir({ CCX_ROOT: "/r" })).toBe("/r/spool");
   });
 
-  test("XDG_RUNTIME_DIR が無い / 空なら ~/.ccx/run (ccx-agent の既定と同じ。macOS に /run は無い) (#198)", () => {
+  test("XDG_RUNTIME_DIR が無い / 空なら ~/.ccx/run (ccx-agent の既定と同じ。macOS に /run は無い)", () => {
     expect(defaultSocketPath({})).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
     expect(defaultSocketPath({ XDG_RUNTIME_DIR: "" })).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
   });
@@ -59,27 +59,6 @@ describe("agentStatus", () => {
     expect(st.incoming).toBe(0);
     // hub 未設定は「届かない」ではない。区別できる形で返す
     expect(st.hubReachable).toBeUndefined();
-  });
-
-  test("ccx-agent が PATH に無いホストは「入っていない」、あれば「動いていない」と区別する (#198)", async () => {
-    const env = { CCX_SOCKET: join(dir, "none.sock"), CCX_SPOOL: join(dir, "none") };
-    expect((await agentStatus(undefined, { ...env, PATH: join(dir, "empty-bin") })).agentInstalled).toBe(false);
-    const bin = join(dir, "bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "ccx-agent"), "#!/bin/sh\n");
-    chmodSync(join(bin, "ccx-agent"), 0o755);
-    expect((await agentStatus(undefined, { ...env, PATH: bin })).agentInstalled).toBe(true);
-
-    const run = async (path: string) => {
-      const p = Bun.spawn([process.execPath, "run", join(import.meta.dir, "index.ts"), "agent", "status"], {
-        env: { ...process.env, ...env, PATH: path, CCX_HUB_URL: "", XDG_CONFIG_HOME: dir },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      return (await new Response(p.stdout).text()).split("\n").find((l) => l.startsWith("ccx-agent")) ?? "";
-    };
-    expect(await run(join(dir, "empty-bin"))).toContain("not installed on this host");
-    expect(await run(bin)).toMatch(/ccx-agent\s+not running$/);
   });
 
   test("socket が在って繋がれば running", async () => {

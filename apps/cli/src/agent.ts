@@ -13,11 +13,7 @@ export type AgentStatus = {
   socketPresent: boolean;
   /** 実際に connect できたか。ここが true なら ccx-agent は生きている */
   socketConnectable: boolean;
-  /**
-   * ccx-agent の実行ファイルが PATH にあるか。無いホスト (業務 PC など、置かないと決めた所) で
-   * 「動いていない」と出すと「落ちた」と読まれる (#198)
-   */
-  agentInstalled: boolean;
+
   spoolDir: string;
   /** center へ未転送の event 数 */
   spooled: number;
@@ -37,7 +33,7 @@ export type AgentStatus = {
 };
 
 // ccx-agent の既定 (packages/core/config/config.go socketPath) と同じ。XDG_RUNTIME_DIR の無い macOS に
-// /run/user を出さない (#198)
+// /run/user を出さない
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.CCX_SOCKET) return env.CCX_SOCKET;
   if (env.XDG_RUNTIME_DIR) return join(env.XDG_RUNTIME_DIR, "ccx", "ccx-agent.sock");
@@ -145,7 +141,7 @@ export async function agentStatus(
     socketPath,
     socketPresent,
     socketConnectable,
-    agentInstalled: Bun.which("ccx-agent", { PATH: env.PATH ?? "" }) !== null,
+
     spoolDir,
     spooled,
     incoming,
