@@ -137,48 +137,34 @@ export function registerTranscript(program: Command, VERSION: string): void {
 
   transcript
     .command("pull")
-    .description("Fetch a transcript from the store so that `claude --resume <id>` works here")
-    .argument("<session-id>", "full id, or the unique prefix that `ls` prints")
+    .description("Fetch transcripts from the store so that `claude --resume <id>` works here")
+    .argument("<session-id...>", "full ids, or the unique prefixes that `ls` prints")
     .option("--force", "replace a local transcript with the same id but different content (the local file is kept as .replaced-<time>)")
     .option("--no-repodir", "only install the transcript; do not create a repodir for the session's repo")
-    .option("--json", "print as JSON")
-    .action(async (idOrPrefix: string, o) => {
+    .option("--json", "print as JSON (an array, one entry per id, like push and prune)")
+    .action(async (ids: string[], o) => {
       const cfg = await loadConfig();
       const c = await client();
-      const id = await c.resolve(idOrPrefix);
-      if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
-      const r = await c.pull(id, claudeHome(), Boolean(o.force));
-      // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
-      if (r.stateApplied && r.state) await reportState(cfg.hub, cfg.machine, id, r.state);
-      if (r.stateError) console.error(`(${id}: the store's state was not applied: this machine's declared state could not be read: ${r.stateError})`);
-
-      // 会話だけでは作業できない。session.json の repo から、default branch の最新で
-      // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。
-      // Claude Code は session を id で引くので、JSONL の置き場所と cwd は一致しなくてよい (#110)
-      let repodir: string | undefined;
-      if (o.repodir !== false && r.meta.repo) {
-        const spec = parseRepoSpec(r.meta.repo, { defaultHost: cfg.defaultHost, defaultOwner: cfg.defaultOwner });
-        const made = await createRepodir(cfg, spec, { initialTask: `resume session ${id}`, refresh: true }, VERSION);
-        repodir = made.path;
+      const done: Record<string, unknown>[] = [];
+      // 1 件の失敗で残りを止めない。失敗した id は exit 1 で、戻せたものは戻したまま
+      for (const idOrPrefix of ids) {
+        try {
+          done.push(await pullOne(c, cfg, VERSION, idOrPrefix, o));
+        } catch (e) {
+          const error = e instanceof Error ? e.message : String(e);
+          console.error(`(${idOrPrefix}: not pulled: ${error})`);
+          done.push({ sessionId: idOrPrefix, status: "failed", error });
+          process.exitCode = 1;
+        }
       }
-
       if (o.json) {
-        console.log(JSON.stringify({ ...r, repodir }, null, 2));
+        console.log(JSON.stringify(done, null, 2));
         return;
       }
-      console.log(`${r.status}  ${r.path}`);
-      if (r.replaced) console.log(`the previous local file was kept as ${r.replaced}`);
-      if (repodir) {
-        console.log(`repodir       ${repodir}  (${r.meta.repo}, default branch, fresh)`);
-        console.log(`resume with:  cd ${repodir} && claude --resume ${id}`);
-      } else {
-        console.log(`resume with:  claude --resume ${id}${r.meta.repo ? "" : "   (no repo recorded for this session; run it where you like)"}`);
-      }
-      console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
-      if (r.state) {
-        const meta = Object.keys(r.state.metadata);
-        const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, r.state.role && `role: ${r.state.role}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
-        if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
+      if (ids.length > 1) {
+        console.log("");
+        const rows = done.map((r) => [String(r.sessionId), String(r.status), r.repodir ? String(r.repodir) : r.repodirError ? "(repodir failed)" : ""]);
+        for (const line of table([["session", "status", "repodir"], ...rows])) console.log(line);
       }
     });
 
@@ -328,4 +314,57 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 1 件でも断ったら非 0。「全部消えた」と読まれないように
       if (refused) process.exitCode = 1;
     });
+}
+
+/**
+ * 1 件の pull。transcript を戻せたら、その後の repodir (mirror の更新を含む) の失敗は警告にして
+ * repodirError に入れ、失敗にしない: 本体は戻っており、呼び出し側が exit 1 を pull の失敗と読んで
+ * push / resume を飛ばす (#168)
+ */
+async function pullOne(
+  c: TranscriptClient,
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+  VERSION: string,
+  idOrPrefix: string,
+  o: { force?: boolean; repodir?: boolean; json?: boolean },
+): Promise<Record<string, unknown>> {
+  const id = await c.resolve(idOrPrefix);
+  if (!id) throw new Error(`no session in the store matches ${idOrPrefix}`);
+  const r = await c.pull(id, claudeHome(), Boolean(o.force));
+  // pull が手元に写した宣言状態も center に報告する (mark と同じ経路。手元に書いた唯一の他の場所)
+  if (r.stateApplied && r.state) await reportState(cfg.hub, cfg.machine, id, r.state);
+  if (r.stateError) console.error(`(${id}: the store's state was not applied: this machine's declared state could not be read: ${r.stateError})`);
+
+  // 会話だけでは作業できない。session.json の repo から、default branch の最新で
+  // 作業場所を作る (元の branch には戻さない: 未 push の続きは transcript に無い)。
+  // Claude Code は session を id で引くので、JSONL の置き場所と cwd は一致しなくてよい (#110)
+  let repodir: string | undefined;
+  let repodirError: string | undefined;
+  if (o.repodir !== false && r.meta.repo) {
+    try {
+      const spec = parseRepoSpec(r.meta.repo, { defaultHost: cfg.defaultHost, defaultOwner: cfg.defaultOwner });
+      repodir = (await createRepodir(cfg, spec, { initialTask: `resume session ${id}`, refresh: true }, VERSION)).path;
+    } catch (e) {
+      repodirError = e instanceof Error ? e.message : String(e);
+      console.error(`(${id}: the transcript is in place, but no repodir: ${repodirError})`);
+    }
+  }
+  const result = { sessionId: id, ...r, repodir, repodirError };
+  if (o.json) return result;
+
+  console.log(`${r.status}  ${r.path}`);
+  if (r.replaced) console.log(`the previous local file was kept as ${r.replaced}`);
+  if (repodir) {
+    console.log(`repodir       ${repodir}  (${r.meta.repo}, default branch, fresh)`);
+    console.log(`resume with:  cd ${repodir} && claude --resume ${id}`);
+  } else {
+    console.log(`resume with:  claude --resume ${id}${r.meta.repo ? "" : "   (no repo recorded for this session; run it where you like)"}`);
+  }
+  console.log(`pushed from ${r.meta.machine} (${r.meta.user}) at ${r.meta.pushedAt}; cwd was ${r.meta.cwd}${r.meta.gitBranch ? ` on ${r.meta.gitBranch}` : ""}`);
+  if (r.state) {
+    const meta = Object.keys(r.state.metadata);
+    const parts = [flagsOf(r.state).join(","), r.state.label && `label: ${r.state.label}`, r.state.task && `task: ${r.state.task}`, r.state.role && `role: ${r.state.role}`, meta.length > 0 && `metadata: ${meta.join(",")}`].filter(Boolean);
+    if (parts.length) console.log(`state         ${parts.join("  ")}${r.stateApplied ? "" : "  (not applied: this machine already holds marks for this session)"}`);
+  }
+  return result;
 }

@@ -624,7 +624,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     });
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     expect({ code, err }).toEqual({ code: 0, err: expect.any(String) });
-    const r = JSON.parse(out) as { status: string; repodir?: string; path: string };
+    const [r] = JSON.parse(out) as [{ status: string; repodir?: string; path: string }];
     expect(r.status).toBe("pulled");
     expect(r.repodir).toMatch(new RegExp(`^${ccxRoot}/github.com/test-owner/demo/`));
     // default branch の最新で、元の feat/x ではない
@@ -633,6 +633,52 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     expect(await Bun.file(join(r.repodir!, "README.md")).text()).toBe("# demo\n");
     // transcript は元の cwd の encoded dir に (id で引かれるので repodir と一致しなくてよい)
     expect(r.path).toBe(join(homeB, "projects", encodeCwd(join(tmp, "cwd")), `${SID}.jsonl`));
+  });
+
+  test("a repodir that cannot be made is a warning: the transcript is in place and the exit is 0 (#168)", async () => {
+    const [t] = await localTranscripts(homeA);
+    await A.push(t!);
+    // mirror の取得先を存在しないパスに向ける (認証の要るフォージで fetch が落ちるのと同じ形)
+    const broken = join(tmp, "gitconfig-broken");
+    await Bun.write(broken, `[url "file://${join(tmp, "nowhere.git")}"]\n\tinsteadOf = ${REMOTE}\n`);
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", SID, "--json"], {
+      env: { ...process.env, GIT_CONFIG_GLOBAL: broken, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: join(tmp, "repodirs3"), CLAUDE_CONFIG_DIR: homeB, XDG_CONFIG_HOME: tmp },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect(code).toBe(0);
+    expect(err).toContain("the transcript is in place, but no repodir");
+    const [r] = JSON.parse(out) as [{ status: string; repodir?: string; repodirError?: string; path: string }];
+    expect([r.status, r.repodir, typeof r.repodirError]).toEqual(["pulled", undefined, "string"]);
+    expect(await Bun.file(r.path).exists()).toBe(true);
+  });
+
+  test("several ids: each is pulled, one that fails does not stop the rest, and the exit is 1 (#217)", async () => {
+    const [t] = await localTranscripts(homeA);
+    await A.push(t!);
+    const pj = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", "ffffffff", SID, "--no-repodir", "--json"], {
+      env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: join(tmp, "repodirs5"), CLAUDE_CONFIG_DIR: join(tmp, "homeJ"), XDG_CONFIG_HOME: tmp },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const rows = JSON.parse(await new Response(pj.stdout).text()) as { sessionId: string; status: string }[];
+    expect(rows.map((r) => [r.sessionId, r.status])).toEqual([["ffffffff", "failed"], [SID, "pulled"]]);
+    expect(await pj.exited).toBe(1);
+
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "pull", "ffffffff", SID, "--no-repodir"], {
+      env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", CCX_ROOT: join(tmp, "repodirs4"), CLAUDE_CONFIG_DIR: homeB, XDG_CONFIG_HOME: tmp },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect(code).toBe(1);
+    expect(err).toContain("ffffffff: not pulled");
+    // 最後に 1 表: session / status / repodir
+    expect(out).toMatch(/session\s+status\s+repodir/);
+    expect(out).toMatch(/ffffffff\s+failed/);
+    expect(out).toMatch(new RegExp(`${SID}\\s+pulled`));
+    expect(await Bun.file(join(homeB, "projects", encodeCwd(join(tmp, "cwd")), `${SID}.jsonl`)).exists()).toBe(true);
   });
 
   test("--no-repodir leaves the working tree alone; no repo recorded means no repodir", async () => {
@@ -648,7 +694,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     const p = run("--no-repodir");
     const out = await new Response(p.stdout).text();
     expect(await p.exited).toBe(0);
-    expect((JSON.parse(out) as { repodir?: string }).repodir).toBeUndefined();
+    expect((JSON.parse(out) as { repodir?: string }[])[0]!.repodir).toBeUndefined();
     expect(await stat(join(ccxRoot, "github.com")).catch(() => null)).toBeNull();
   });
 });

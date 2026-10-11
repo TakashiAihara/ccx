@@ -131,7 +131,7 @@ ccx tr push --ended           # every local session that is not running (unchang
 ccx tr push --archived        # every local session marked archived; with --ended too: only those that are both
 ccx tr push <id>...           # just these
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
-ccx tr pull <id>              # fetch it here and make a fresh default-branch repodir for its repo; then cd there and claude --resume <id>
+ccx tr pull <id>...           # fetch here and make a fresh default-branch repodir per repo; then cd there and claude --resume <id>. A repodir that fails is a warning, not a failed pull
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
 ccx tr prune --archived       # the same, for archived sessions that are not running
 ccx tr search "rate limit"    # every transcript in the store, searched with the DuckDB inside ccx
