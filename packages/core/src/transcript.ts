@@ -192,7 +192,8 @@ async function pidAlive(pid: number, procStart: string | undefined): Promise<boo
 
 /**
  * その id の transcript が手元のどこかの project にあるか。1 件を見るために localTranscripts で
- * 全件を stat しない (#233)。localTranscripts と同じく projects/<dir>/<id>.jsonl だけを見る
+ * 全件を stat しない (#233)。localTranscripts と同じく projects/<dir>/<id>.jsonl だけを見るが、ファイルで
+ * あるものだけを数え、先の無い symlink では投げずに「無い」と答える
  */
 export async function hasLocalTranscript(sessionId: string, home = claudeHome()): Promise<boolean> {
   if (!UUID.test(sessionId)) return false;
