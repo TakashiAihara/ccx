@@ -413,7 +413,8 @@ describe("createRepodir の失敗", () => {
     await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/broken.git"]);
 
     const broken = parseRepoSpec("test-owner/broken", { defaultHost: "github.com" });
-    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow(/submodule/);
+    // 落ちた理由まで見る (コマンド名の submodule には当てない)
+    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow(/no-such\.git/);
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([]);
 
     // submodule を取らなければ同じ repo でも作れる (落ちたのが clone の後だったことの確認)
@@ -440,7 +441,8 @@ describe("createRepodir の失敗 (checkout)", () => {
     await git(["config", "--global", "filter.ccxfail.required", "true"]);
 
     const spec = parseRepoSpec("test-owner/nocheckout", { defaultHost: "github.com" });
-    await expect(createRepodir(cfg, spec, {}, "0.1.0")).rejects.toThrow();
+    // checkout で落ちたこと (mirror の取得で落ちたのなら git が自分で片付けるので、この試験にならない)
+    await expect(createRepodir(cfg, spec, {}, "0.1.0")).rejects.toThrow(/checkout failed/);
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "nocheckout"))).toEqual([]);
   });
 });

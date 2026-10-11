@@ -85,12 +85,11 @@ export async function createRepodir(
     return await finishRepodir(cfg, opts, version, { path, dirId, branch, mirror });
   } catch (e) {
     // 作りかけを残すと、ccx.json の無い repodir が ls / gc に混ざる (#235)
-    const left = await rm(path, { recursive: true, force: true }).then(
-      () => "",
-      (re: unknown) => `; the half-made repodir is left at ${path}: ${re instanceof Error ? re.message : String(re)}`,
-    );
-    if (!left) throw e;
-    throw new Error(`${e instanceof Error ? e.message : String(e)}${left}`, { cause: e });
+    // 元のエラー (GitError の型と stack) をそのまま投げ、消せなかったことだけを足す
+    await rm(path, { recursive: true, force: true }).catch((re: unknown) => {
+      if (e instanceof Error) e.message += `\nthe half-made repodir is left at ${path}: ${re instanceof Error ? re.message : String(re)}`;
+    });
+    throw e;
   }
 }
 
