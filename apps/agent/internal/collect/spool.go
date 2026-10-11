@@ -221,10 +221,13 @@ func (s *Spool) Pending() (int, error) {
 	return len(names), err
 }
 
-// isIncoming is what DrainIncoming takes from incoming/: a file, not a temp
-// file still being written. PendingIncoming counts by the same rule.
+// isIncoming is what DrainIncoming takes from incoming/: a .raw file (the only
+// thing the hook writes there), not a temp file still being written. Anything
+// else is not an event, so it is neither sent nor counted. PendingIncoming and
+// the CLI's `ccx agent status` (apps/cli/src/agent.ts) count by the same rule (#186).
 func isIncoming(e os.DirEntry) bool {
-	return !e.IsDir() && !strings.HasPrefix(e.Name(), ".tmp-")
+	n := e.Name()
+	return !e.IsDir() && strings.HasSuffix(n, incomingExt) && !strings.HasPrefix(n, ".tmp-")
 }
 
 // PendingIncoming counts what hooks left in incoming/ and the next start will

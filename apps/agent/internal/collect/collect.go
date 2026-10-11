@@ -168,7 +168,8 @@ func (s *Collect) listen() (net.Listener, error) {
 	// Fail early with a message that says what to do, instead of letting the
 	// kernel return "bind: invalid argument" for a path that is merely too long
 	// (a deep $HOME or $XDG_RUNTIME_DIR reaches this).
-	if len(s.socketPath) > maxUnixPath {
+	// >= like api and heartbeat: 104 bytes with the NUL does not fit the BSDs (#186)
+	if len(s.socketPath) >= maxUnixPath {
 		return nil, fmt.Errorf(
 			"socket path is %d bytes, over the %d-byte unix-socket limit: %s\nset CCX_SOCKET to a shorter path",
 			len(s.socketPath), maxUnixPath, s.socketPath)

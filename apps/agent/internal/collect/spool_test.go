@@ -200,3 +200,25 @@ func TestAtomicWrite_LeavesNoPartialUnderRealName(t *testing.T) {
 		}
 	}
 }
+
+// Only a .raw that is not a temp file is an event (#186): the CLI's agent status
+// counts the same set, so what it reports pending is what the next start sends.
+func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	for name, body := range map[string]string{
+		"01a050e6-8722-7c8a-9041-f38193f5a46f.raw": "event",
+		".tmp-123.raw":   "half",
+		"ccx-agent.lock": "",
+		"stray.pb":       "x",
+	} {
+		if err := os.WriteFile(filepath.Join(s.IncomingDir(), name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.PendingIncoming(); err != nil || n != 1 {
+		t.Fatalf("PendingIncoming = %d, %v; want 1", n, err)
+	}
+	if n, err := s.DrainIncoming(); err != nil || n != 1 {
+		t.Fatalf("DrainIncoming = %d, %v; want 1", n, err)
+	}
+}

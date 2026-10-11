@@ -68,10 +68,11 @@ async function connectable(path: string, timeoutMs = 500): Promise<boolean> {
 const SPOOL_EXT = ".pb";
 const INCOMING_EXT = ".raw";
 
+// 書きかけ (.tmp-*) は数えない。incoming は ccx-agent の isIncoming と同じ規則 (#186)
 async function countFiles(dir: string, suffix: string): Promise<number> {
   try {
     const names = await readdir(dir);
-    return names.filter((n) => n.endsWith(suffix)).length;
+    return names.filter((n) => n.endsWith(suffix) && !n.startsWith(".tmp-")).length;
   } catch {
     // ディレクトリが無いのは「まだ 1 件も来ていない」。エラーではない
     return 0;

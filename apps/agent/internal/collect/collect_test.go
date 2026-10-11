@@ -259,4 +259,13 @@ func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "CCX_SOCKET") {
 		t.Errorf("error should tell the user how to fix it, got: %v", err)
 	}
+
+	// Exactly 104 bytes is refused too, as in api and heartbeat (#186).
+	exact := "/tmp/" + strings.Repeat("y", 104-len("/tmp/")-len("/s.sock")) + "/s.sock"
+	if len(exact) != 104 {
+		t.Fatalf("test path is %d bytes", len(exact))
+	}
+	if _, err := newCollect(exact, spool, nil, quietLog).listen(); err == nil || !strings.Contains(err.Error(), "CCX_SOCKET") {
+		t.Errorf("a 104-byte path should be refused with the hint, got %v", err)
+	}
 }
