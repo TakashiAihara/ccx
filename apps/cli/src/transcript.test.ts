@@ -624,7 +624,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     });
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     expect({ code, err }).toEqual({ code: 0, err: expect.any(String) });
-    const [r] = JSON.parse(out) as { status: string; repodir?: string; path: string }[];
+    const [r] = JSON.parse(out) as [{ status: string; repodir?: string; path: string }];
     expect(r.status).toBe("pulled");
     expect(r.repodir).toMatch(new RegExp(`^${ccxRoot}/github.com/test-owner/demo/`));
     // default branch の最新で、元の feat/x ではない
@@ -649,7 +649,7 @@ describe("transcript: pull materialises a repodir for the session's repo", () =>
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     expect(code).toBe(0);
     expect(err).toContain("the transcript is in place, but no repodir");
-    const [r] = JSON.parse(out) as { status: string; repodir?: string; repodirError?: string; path: string }[];
+    const [r] = JSON.parse(out) as [{ status: string; repodir?: string; repodirError?: string; path: string }];
     expect([r.status, r.repodir, typeof r.repodirError]).toEqual(["pulled", undefined, "string"]);
     expect(await Bun.file(r.path).exists()).toBe(true);
   });
