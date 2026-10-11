@@ -106,10 +106,12 @@ func cmdServe() int {
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
 	// Without a machine and a user name collect would only wedge (#126). Turn it off
-	// and keep the rest: heartbeat and the API do not need them, and `ccx agent
-	// status` then shows the hook socket as not running.
+	// and keep the rest: heartbeat and the API do not need them. The live transcript
+	// goes with it (it rides on collect), and `ccx agent status` then reports
+	// ccx-agent as not running, since that is the hook socket it probes.
 	if err := collect.CheckOrigin(cfg); cfg.Concerns.Collect && err != nil {
-		logger("collect off: %v", err)
+		logger("collect off (and the live transcript with it): %v", err)
+		cfg.Concerns.Collect = false
 	} else if cfg.Concerns.Collect {
 		c, err := collect.New(cfg, logger)
 		if err != nil {
