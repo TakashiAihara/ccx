@@ -433,13 +433,16 @@ describe("transcript: push / pull / prune through the store", () => {
     await Bun.write(join(root, "ccx", `${prefixA}state.json`), "{");
     const [bout, berr, bcode] = await ls("--json");
     const rows = JSON.parse(bout) as { machine: string; stateError?: string }[];
-    expect([bcode, rows.map((m) => [m.machine, Boolean(m.stateError)]), berr]).toEqual([
+    // 読めた行には stateError の鍵そのものが無い
+    expect([bcode, rows.map((m) => [m.machine, "stateError" in m]), berr]).toEqual([
       0,
       [["host-b", false], ["host-a", true]],
       expect.stringContaining(`could not read the state of ${SID}`),
     ]);
     const [tout, , tcode] = await ls();
-    expect([tcode, tout.split("\n").filter((l) => / host-a /.test(l)).map((l) => l.split(/\s+/)[3])]).toEqual([0, ["?"]]);
+    // 2 列目が machine (host-a の行は "pulled on host-b" も含むので部分一致にしない)
+    const cell = (host: string) => tout.split("\n").map((l) => l.split(/\s+/)).filter((c) => c[1] === host).map((c) => c[3]);
+    expect([tcode, cell("host-a"), cell("host-b").includes("?")]).toEqual([0, ["?"], false]);
     const [sout, , scode] = await ls("-s", SID, "--json");
     expect([scode, (JSON.parse(sout) as { machine: string; stateError?: string }[]).map((m) => [m.machine, Boolean(m.stateError)])]).toEqual([
       0,
