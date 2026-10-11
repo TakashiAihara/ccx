@@ -259,4 +259,63 @@ func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "CCX_SOCKET") {
 		t.Errorf("error should tell the user how to fix it, got: %v", err)
 	}
+
+	// Exactly 104 bytes is refused too, as in api and heartbeat; 103 is listened on (#186).
+	pathOf := func(n int) string {
+		dir := testsock.Dir(t)
+		sub := filepath.Join(dir, strings.Repeat("y", n-len(dir)-len("//s.sock")))
+		if err := os.MkdirAll(sub, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(sub, "s.sock")
+		if len(p) != n {
+			t.Fatalf("test path is %d bytes, want %d", len(p), n)
+		}
+		return p
+	}
+	if _, err := newCollect(pathOf(104), spool, nil, quietLog).listen(); err == nil || !strings.Contains(err.Error(), "CCX_SOCKET") {
+		t.Errorf("a 104-byte path should be refused with the hint, got %v", err)
+	}
+	ln, err := newCollect(pathOf(103), spool, nil, quietLog).listen()
+	if err != nil {
+		t.Fatalf("a 103-byte path should be listened on: %v", err)
+	}
+	ln.Close()
+}
+
+// What incoming/ holds besides events is named once at start, capped, instead
+// of being left there unseen (#186).
+func TestRun_LogsWhatIncomingHoldsBesidesEvents(t *testing.T) {
+	spool, err := OpenSpool(t.TempDir(), &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		if err := os.WriteFile(filepath.Join(spool.IncomingDir(), fmt.Sprintf("stray-%02d.txt", i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var logged []string
+	logf := func(f string, a ...any) { mu.Lock(); logged = append(logged, fmt.Sprintf(f, a...)); mu.Unlock() }
+	sock := testsock.Path(t, "s.sock")
+	srv := newCollect(sock, spool, nil, logf)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = srv.Run(ctx); close(done) }()
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	var line string
+	for _, l := range logged {
+		if strings.Contains(l, "not events") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "left 12 entr(ies)") || !strings.Contains(line, "stray-09.txt, …") || strings.Contains(line, "stray-10.txt") {
+		t.Errorf("logged %q, want 12 counted and the first 10 named", logged)
+	}
 }

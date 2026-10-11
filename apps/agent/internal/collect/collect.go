@@ -116,6 +116,17 @@ func (s *Collect) Run(ctx context.Context) error {
 	} else if n > 0 {
 		s.log("drained %d event(s) from the fallback spool on startup", n)
 	}
+	// Only the hook writes there and it writes .raw; anything else is left alone,
+	// so say so instead of ignoring it forever (#186).
+	if others, err := s.spool.OtherIncoming(); err != nil {
+		s.log("could not list %s: %v", s.spool.IncomingDir(), err)
+	} else if len(others) > 0 {
+		shown := others
+		if len(shown) > 10 {
+			shown = append(shown[:10:10], "…")
+		}
+		s.log("left %d entr(ies) in %s that are not events: %s", len(others), s.spool.IncomingDir(), strings.Join(shown, ", "))
+	}
 
 	ln, err := s.listen()
 	if err != nil {
@@ -168,7 +179,8 @@ func (s *Collect) listen() (net.Listener, error) {
 	// Fail early with a message that says what to do, instead of letting the
 	// kernel return "bind: invalid argument" for a path that is merely too long
 	// (a deep $HOME or $XDG_RUNTIME_DIR reaches this).
-	if len(s.socketPath) > maxUnixPath {
+	// >= like api and heartbeat: 104 bytes with the NUL does not fit the BSDs (#186)
+	if len(s.socketPath) >= maxUnixPath {
 		return nil, fmt.Errorf(
 			"socket path is %d bytes, over the %d-byte unix-socket limit: %s\nset CCX_SOCKET to a shorter path",
 			len(s.socketPath), maxUnixPath, s.socketPath)
