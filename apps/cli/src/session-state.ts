@@ -14,6 +14,8 @@ import {
   markedSessionIds,
   NoLocalSession,
   readDeclared,
+  readMetaValue,
+  sessionDir,
   resolveSessionId,
   runningSessionIds,
   TranscriptClient,
@@ -27,6 +29,7 @@ import {
 import { createClient } from "@connectrpc/connect";
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
@@ -287,6 +290,39 @@ export function registerSessionState(session: Command): void {
       if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
       else console.log(`${key}${value ? ` = ${value}` : " set"}  ${id}`);
       await reportAfterWrite(id, s);
+    });
+
+  meta
+    .command("get")
+    .description("Print a key's value (an empty line for a key set without one). Exit 1: the key is not set (a value that is not UTF-8 counts as not set); exit 2: it could not be read (bad key or arguments, no such session on this machine, unreadable file)")
+    .argument("<key>")
+    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    // 使い方の誤りも「無い」(1) と取り違えないよう 2 にする。--help は 0 のまま
+    .exitOverride((err) => process.exit(err.exitCode === 0 ? 0 : 2))
+    .action(async (key: string, idOrPrefix: string | undefined) => {
+      // 保存形式 (meta/<key> のファイル) を直に読む道具を作らないための口 (#192)。`if ccx session meta get k`
+      // で「無い」と「読めなかった」を取り違えないよう、grep と同じく 1 と 2 に分ける。値は手元のものだけ
+      let value: string | null;
+      let id: string;
+      try {
+        const home = claudeHome();
+        id = await target(idOrPrefix, home);
+        // 印をまだ 1 つも付けていない session は sessions/<id>/ を持たない。transcript があれば手元の session
+        const local =
+          (await stat(sessionDir(id, home)).then(() => true, () => false)) ||
+          (await localTranscripts(home)).some((t) => t.sessionId === id);
+        if (!local) throw new Error(`no session ${id} on this machine`);
+        value = await readMetaValue(id, key, home);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(2);
+      }
+      if (value === null) {
+        console.error(`${key} is not set  ${id}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(value);
     });
 
   meta

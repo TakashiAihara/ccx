@@ -100,6 +100,7 @@ ccx session task "kaneo ccx#1"
 ccx session role worker       # what the session is; free text, ccx gives it no meaning
 ccx session meta set done     # your own keys; ccx gives them no meaning (~/.claude/sessions/<id>/meta/<key>)
 ccx session meta set owner=alice
+ccx session meta get owner      # prints alice; exit 1 when the key is not set, 2 when it cannot be read (read this, not the file)
 ccx session meta unset done
 ccx session status [id]       # lifecycle (running / ended / remote) + flags, label, task, role, metadata
 ```

@@ -134,6 +134,29 @@ export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task:
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
+/**
+ * meta/<key> 1 つの値 (readDeclared と同じ読み: 末尾の改行 1 つを外す)。無ければ null。
+ * 他の key や label が壊れていても、この key は読める (#192)。UTF-8 でない値は readMetadata と同じく
+ * 無い (#191)。読めない (ELOOP / EACCES) は投げる
+ */
+export async function readMetaValue(sessionId: string, key: string, home = claudeHome()): Promise<string | null> {
+  if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
+  const bytes = await Bun.file(join(sessionDir(sessionId, home), META_DIR, key))
+    .bytes()
+    .catch((e: unknown) => {
+      if (errCode(e) === "ENOENT" || errCode(e) === "EISDIR") return null;
+      throw e;
+    });
+  if (bytes === null) return null;
+  // TypeError はここでは decode だけが投げる (読みの失敗と混ぜない)
+  try {
+    return utf8(bytes).replace(/\n$/, "");
+  } catch (e) {
+    if (e instanceof TypeError) return null;
+    throw e;
+  }
+}
+
 export const isFlag = (s: string): s is Flag => (FLAGS as readonly string[]).includes(s);
 
 export const isEmptyDeclared = (s: DeclaredState) =>

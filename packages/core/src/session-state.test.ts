@@ -9,6 +9,7 @@ import {
   claudeHome,
   EMPTY_DECLARED,
   isMetaKey,
+  readMetaValue,
   flagsOf,
   holdsDeclared,
   isEmptyDeclared,
@@ -126,7 +127,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     }
     for (const c of textCases.meta) {
       await Bun.write(join(dir, "meta", "k"), bytes(c));
-      expect([c.file ?? c.hex, (await readDeclared(SID, home)).metadata.k ?? null]).toEqual([c.file ?? c.hex, c.value]);
+      expect([c.file ?? c.hex, (await readDeclared(SID, home)).metadata.k ?? null, await readMetaValue(SID, "k", home)]).toEqual([c.file ?? c.hex, c.value, c.value]);
     }
   });
 
@@ -246,6 +247,23 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test("readMetaValue reads one key like readDeclared: absent or a directory is null, one trailing newline removed (#192)", async () => {
+    const meta = join(home, "sessions", SID, "meta");
+    await mkdir(join(meta, "dir"), { recursive: true });
+    await Bun.write(join(meta, "owner"), "alice\n\n");
+    expect(await readMetaValue(SID, "owner", home)).toBe("alice\n");
+    expect(await readMetaValue(SID, "dir", home)).toBeNull();
+    expect(await readMetaValue(SID, "none", home)).toBeNull();
+    await expect(readMetaValue(SID, "../x", home)).rejects.toThrow(/invalid key/);
+    // UTF-8 でない値は readDeclared の metadata と同じく無い (#191)
+    await Bun.write(join(meta, "bin"), new Uint8Array([0x61, 0xff, 0x62]));
+    expect(await readMetaValue(SID, "bin", home)).toBeNull();
+    expect((await readDeclared(SID, home)).metadata.bin).toBeUndefined();
+    // その key 自身が読めないのは無いではない
+    await symlink("loop", join(meta, "loop"));
+    await expect(readMetaValue(SID, "loop", home)).rejects.toThrow(/ELOOP/);
   });
 
   test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {

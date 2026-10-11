@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -424,6 +424,36 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["meta", "unset", "done"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(0);
     expect(await readDeclared(SID, homeA)).toEqual(EMPTY_DECLARED);
     expect((await run(["status", SID])).out).toMatch(/metadata\s+-/);
+  });
+
+  test("meta get: the value, an empty line for a key without one; exit 1 when unset, 2 when it cannot read (#192)", async () => {
+    await seed(homeA, SID);
+    await run(["meta", "set", "owner=alice", SID]);
+    await run(["meta", "set", "done", SID]);
+    expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n" });
+    expect(await run(["meta", "get", "done"], { CLAUDE_CODE_SESSION_ID: SID })).toMatchObject({ code: 0, out: "\n" });
+    const none = await run(["meta", "get", "nope", SID]);
+    expect([none.code, none.out, none.err]).toEqual([1, "", expect.stringContaining("nope is not set")]);
+
+    // 読めないのは「無い」ではない
+    expect((await run(["meta", "get", "../x", SID])).code).toBe(2);
+    const ghost = await run(["meta", "get", "owner", "ffffffff-0000-4000-8000-000000000000"]);
+    expect([ghost.code, ghost.err]).toEqual([2, expect.stringContaining("on this machine")]);
+    // 印をまだ付けていない (sessions/<id>/ が無い) が transcript はある session は「無い」(1)
+    const fresh = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+    await seed(homeA, fresh);
+    const unset = await run(["meta", "get", "done"], { CLAUDE_CODE_SESSION_ID: fresh });
+    expect([unset.code, unset.err]).toEqual([1, expect.stringContaining("done is not set")]);
+    // 使い方の誤りも 2
+    expect((await run(["meta", "get"], { CLAUDE_CODE_SESSION_ID: SID })).code).toBe(2);
+    expect((await run(["meta", "get", "owner", SID, "--json"])).code).toBe(2);
+    expect((await run(["meta", "get", "--help"])).code).toBe(0);
+    // 他の key が壊れていても、この key は読める
+    await symlink("loop", join(homeA, "sessions", SID, "meta", "loop"));
+    expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n", err: "" });
+    // その key 自身が読めなければ「無い」(1) ではなく 2
+    const loop = await run(["meta", "get", "loop", SID]);
+    expect([loop.code, loop.out, loop.err]).toEqual([2, "", expect.stringContaining("ELOOP")]);
   });
 });
 
