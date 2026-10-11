@@ -352,8 +352,7 @@ export class NoTranscriptStore extends Error {
 /**
  * S3 の access key id。保存先は center なので center の token (center は署名を検証せず
  * access key id だけを見る)。token の無い center にはダミー。手元の AWS_ACCESS_KEY_ID は使わない。
- * Bun.S3Client と DuckDB の両方がこれを使う。NOTE: Bun.S3Client は env の AWS_SESSION_TOKEN を
- * 引数で止められず x-amz-security-token で送る (Bun 1.4.0 で実測、#213)
+ * Bun.S3Client と DuckDB の両方がこれを使う
  */
 export function s3AccessKeyId(store: TranscriptStore): string {
   return store.token ?? "ccx";
@@ -369,6 +368,11 @@ function makeS3(store: TranscriptStore): Bun.S3Client {
     region: S3_REGION,
     accessKeyId: s3AccessKeyId(store),
     secretAccessKey: "ccx",
+    // 手元の AWS の一時資格情報 (起動時の env の AWS_SESSION_TOKEN / S3_SESSION_TOKEN) を center に
+    // 送らない (#213)。Bun は null / undefined / "" を「未指定」として env の値を
+    // x-amz-security-token で送る。空白 1 つなら空のヘッダになる (Bun 1.4.2 で実測)。
+    // shortcut: Bun の挙動頼み。sessionToken で env を止められる版が出たら "" に戻す
+    sessionToken: " ",
   });
 }
 
