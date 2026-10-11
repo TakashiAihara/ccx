@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { rm, mkdtemp, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
@@ -18,7 +18,7 @@ import { git } from "./git.ts";
 import { META_SCHEMA, metaPath, statePath } from "./meta.ts";
 import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
-import { encodeCwd, scanRepodirs, type RepodirInfo } from "./scan.ts";
+import { defaultClaudeHomes, encodeCwd, scanRepodirs, type RepodirInfo } from "./scan.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
 
@@ -148,21 +148,29 @@ describe("壊れた repodir は他を巻き添えにしない", () => {
 });
 
 describe("session の生死", () => {
-  test("transcript は CLAUDE_CONFIG_DIR の下を見る (#232)", async () => {
-    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
-    const home = join(tmp, "account-b");
-    await Bun.write(join(home, "projects", encodeCwd(r.path), "s.jsonl"), "{}\n");
+  test("既定では CLAUDE_CONFIG_DIR と ~/.claude の両方を見る (#232)", () => {
     const saved = process.env.CLAUDE_CONFIG_DIR;
-    const active = async () => (await scanRepodirs(cfg)).find((x) => x.path === r.path)!.session.active;
     try {
-      process.env.CLAUDE_CONFIG_DIR = home;
-      expect(await active()).toBe(true);
-      // 別の config dir を指していれば、そこには無い
-      process.env.CLAUDE_CONFIG_DIR = join(tmp, "account-c");
-      expect(await active()).toBe(false);
+      process.env.CLAUDE_CONFIG_DIR = join(tmp, "account-b");
+      expect(defaultClaudeHomes()).toEqual([join(tmp, "account-b"), join(homedir(), ".claude")]);
+      delete process.env.CLAUDE_CONFIG_DIR;
+      expect(defaultClaudeHomes()).toEqual([join(homedir(), ".claude")]);
     } finally {
       if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = saved;
     }
+  });
+
+  test("transcript がどの config dir にあっても active (#232)", async () => {
+    const inAccount = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const inDefault = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const account = join(tmp, "account-b");
+    const dflt = join(tmp, "home", ".claude");
+    await Bun.write(join(account, "projects", encodeCwd(inAccount.path), "s.jsonl"), "{}\n");
+    await Bun.write(join(dflt, "projects", encodeCwd(inDefault.path), "s.jsonl"), "{}\n");
+    const active = async (claudeHomes: string[]) =>
+      (await scanRepodirs(cfg, { claudeHomes })).filter((x) => x.path === inAccount.path || x.path === inDefault.path).map((x) => [x.path === inAccount.path ? "account" : "default", x.session.active]);
+    expect(new Map(await active([account, dflt]))).toEqual(new Map([["account", true], ["default", true]]));
+    expect(new Map(await active([join(tmp, "account-c"), dflt]))).toEqual(new Map([["account", false], ["default", true]]));
   });
 });

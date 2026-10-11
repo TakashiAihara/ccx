@@ -7,6 +7,7 @@
  */
 
 import { readdir, readlink, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
@@ -97,33 +98,33 @@ export function encodeCwd(path: string): string {
 }
 
 /**
- * その cwd の session の transcript がある場所。CLAUDE_CONFIG_DIR に従う (#232)。別の config dir で動く
- * session (cswap の別アカウント等) は見えない: 稼働中の session は gc では cwd の process で守られる
+ * その cwd の session の transcript がある場所。CLAUDE_CONFIG_DIR (#232) と ~/.claude の両方を見る:
+ * ccx を叩いた shell と session とで CLAUDE_CONFIG_DIR が違っても (片方だけに設定がある等)、見る範囲を
+ * 以前 (~/.claude だけ) より狭めない。それ以外の config dir (cswap の別アカウント等) で動く session は
+ * 見えない。gc でそれを守るのは cwd の process (/proc を読むので Linux だけ。macOS では守られない)
  */
-export function claudeProjectDir(path: string, home = claudeHome()): string {
-  return join(home, "projects", encodeCwd(path));
-}
+export const defaultClaudeHomes = () => [...new Set([claudeHome(), join(homedir(), ".claude")])];
 
-async function sessionState(path: string, idleMs: number): Promise<SessionState> {
-  const dir = claudeProjectDir(path);
-
-  let names: string[];
-  try {
-    names = (await readdir(dir)).filter((n) => n.endsWith(".jsonl"));
-  } catch {
-    return { active: false, lastActivity: null, transcripts: 0 };
+async function sessionState(path: string, idleMs: number, homes: string[]): Promise<SessionState> {
+  const files: string[] = [];
+  for (const dir of homes.map((home) => join(home, "projects", encodeCwd(path)))) {
+    try {
+      for (const n of await readdir(dir)) if (n.endsWith(".jsonl")) files.push(join(dir, n));
+    } catch {
+      // その config dir に、この cwd の session が無い
+    }
   }
 
   let last: Date | null = null;
-  for (const n of names) {
-    const { mtime } = await Bun.file(join(dir, n)).stat();
+  for (const f of files) {
+    const { mtime } = await Bun.file(f).stat();
     if (!last || mtime > last) last = mtime;
   }
 
   return {
     active: last !== null && Date.now() - last.getTime() < idleMs,
     lastActivity: last,
-    transcripts: names.length,
+    transcripts: files.length,
   };
 }
 
@@ -165,13 +166,14 @@ async function readOne(
   spec: RepoSpec,
   dirId: string,
   idleMs: number,
+  homes: string[],
   procs: (CwdProcess & { cwd: string })[],
 ): Promise<RepodirInfo> {
   const [meta, state, g, s, real] = await Promise.all([
     loadMeta(path),
     loadState(path),
     gitState(path),
-    sessionState(path, idleMs),
+    sessionState(path, idleMs, homes),
     realpath(path).catch(() => path),
   ]);
 
@@ -205,6 +207,8 @@ export type ScanOptions = {
   /** repo で絞る (host/owner/repo の部分一致) */
   filter?: string;
   idleMs?: number;
+  /** テスト用。session の transcript を探す Claude の config dir (既定は defaultClaudeHomes) */
+  claudeHomes?: string[];
   /** テスト用。cwd を読む /proc の場所 */
   procRoot?: string;
 };
@@ -212,6 +216,7 @@ export type ScanOptions = {
 /** root 配下の repodir をすべて読む。<host>/<owner>/<repo>/<dir-id> の 4 階層。 */
 export async function scanRepodirs(cfg: Config, opts: ScanOptions = {}): Promise<RepodirInfo[]> {
   const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
+  const homes = opts.claudeHomes ?? defaultClaudeHomes();
   const found: Promise<RepodirInfo>[] = [];
   const procs = await cwdProcesses(opts.procRoot);
 
@@ -224,7 +229,7 @@ export async function scanRepodirs(cfg: Config, opts: ScanOptions = {}): Promise
         for (const dirId of await subdirs(join(cfg.root, host, owner, repo))) {
           if (!isDirId(dirId)) continue;
           const path = join(cfg.root, host, owner, repo, dirId);
-          found.push(readOne(path, { host, owner, repo }, dirId, idleMs, procs));
+          found.push(readOne(path, { host, owner, repo }, dirId, idleMs, homes, procs));
         }
       }
     }
