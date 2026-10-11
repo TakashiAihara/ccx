@@ -19,6 +19,7 @@ import { transcriptKey } from "@ccx/hub/src/transcript.ts";
 import {
   AmbiguousSessionId,
   encodeCwd,
+  hasLocalTranscript,
   localTranscripts,
   runningSessionIds,
   sha256,
@@ -99,6 +100,15 @@ describe("transcript: local side", () => {
     const loop = join(homeA, "projects", encodeCwd(CWD_A), "ffffffff-0000-4000-8000-000000000004.jsonl");
     await symlink(loop, loop);
     await expect(localTranscripts(homeA)).rejects.toThrow(/ELOOP/);
+  });
+
+  test("hasLocalTranscript looks for one id under every project dir without listing them all (#233)", async () => {
+    await seedA();
+    await Bun.write(join(homeA, "projects", "-other", "not-a-session.jsonl"), "{}\n");
+    expect(await hasLocalTranscript(SID, homeA)).toBe(true);
+    expect(await hasLocalTranscript("ffffffff-0000-4000-8000-000000000000", homeA)).toBe(false);
+    expect(await hasLocalTranscript("not-a-session", homeA)).toBe(false);
+    expect(await hasLocalTranscript(SID, join(homeA, "nope"))).toBe(false);
   });
 
   test("transcriptFacts takes cwd / gitBranch / version from the first records that carry them, and stops at the line cap", async () => {

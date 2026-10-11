@@ -194,6 +194,23 @@ async function pidAlive(pid: number, procStart: string | undefined): Promise<boo
  * 今動いている session の id。Claude Code が ~/.claude/sessions/<pid>.json に
  * 自分の pid と sessionId を書くので、そのプロセスが生きているものだけを数える。
  */
+/**
+ * その id の transcript が手元のどこかの project にあるか。1 件を見るために localTranscripts で
+ * 全件を stat しない (#233)。localTranscripts と同じく projects/<dir>/<id>.jsonl だけを見る
+ */
+export async function hasLocalTranscript(sessionId: string, home = claudeHome()): Promise<boolean> {
+  if (!UUID.test(sessionId)) return false;
+  const projects = join(home, "projects");
+  let dirs: string[];
+  try {
+    dirs = await readdir(projects);
+  } catch {
+    return false;
+  }
+  const found = await Promise.all(dirs.map((d) => Bun.file(join(projects, d, `${sessionId}.jsonl`)).exists()));
+  return found.includes(true);
+}
+
 export async function runningSessionIds(home = claudeHome()): Promise<Set<string>> {
   const dir = join(home, "sessions");
   const ids = new Set<string>();
