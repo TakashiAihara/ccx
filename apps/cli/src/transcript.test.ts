@@ -413,6 +413,17 @@ describe("transcript: push / pull / prune through the store", () => {
         });
         const [pout, pcode] = await Promise.all([new Response(p.stdout).text(), p.exited]);
         expect([failing, pcode, pout]).toEqual([failing, 2, ""]);
+        if (failing === "/session.json") {
+          const env = { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root };
+          // 全件の一覧は止まらず、読めなかったものを stderr に出す
+          const all = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "--json"], { env, stdout: "pipe", stderr: "pipe" });
+          const [aout, aerr, acode] = await Promise.all([new Response(all.stdout).text(), new Response(all.stderr).text(), all.exited]);
+          expect([acode, JSON.parse(aout), aerr]).toEqual([0, [], expect.stringContaining("could not read")]);
+          // push はその session を failed にして exit 1 (一括を途中で止めない)
+          const push = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "push", SID, "--json"], { env: { ...env, CLAUDE_CONFIG_DIR: homeA }, stdout: "pipe", stderr: "pipe" });
+          const [push_out, push_code] = await Promise.all([new Response(push.stdout).text(), push.exited]);
+          expect([push_code, (JSON.parse(push_out) as { status: string }[]).map((r) => r.status)]).toEqual([1, ["failed"]]);
+        }
       } finally {
         proxy.stop(true);
       }

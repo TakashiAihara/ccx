@@ -487,7 +487,16 @@ export class TranscriptClient {
         for (const s of await this.children(`${this.root()}${m}/${u}/`)) keys.push(`${this.root()}${m}/${u}/${s}/session.json`);
       }
     }
-    const metas = (await Promise.all(keys.map((k) => this.readMeta(k)))).filter((m): m is SessionMeta => m !== null);
+    // 1 件が読めなくても一覧は止めない。読めなかったことは黙らず stderr に出す
+    const read = async (k: string) => {
+      try {
+        return await this.readMeta(k);
+      } catch (e) {
+        console.error(`(could not read ${k}: ${e instanceof Error ? e.message : String(e)})`);
+        return null;
+      }
+    };
+    const metas = (await Promise.all(keys.map(read))).filter((m): m is SessionMeta => m !== null);
     return metas.sort((a, b) => byString(b.pushedAt, a.pushedAt));
   }
 

@@ -124,7 +124,17 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const { picked } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) });
       const results = [];
       for (const t of picked) {
-        const r = await c.push(t, claudeHome(), { force: Boolean(o.force), dryRun: Boolean(o.dryRun) });
+        // 1 件の失敗 (保存先が答えない等) で残りを止めない
+        let r: Awaited<ReturnType<typeof c.push>>;
+        try {
+          r = await c.push(t, claudeHome(), { force: Boolean(o.force), dryRun: Boolean(o.dryRun) });
+        } catch (e) {
+          const error = e instanceof Error ? e.message : String(e);
+          console.error(`(${t.sessionId}: not pushed: ${error})`);
+          results.push({ sessionId: t.sessionId, status: "failed", error });
+          process.exitCode = 1;
+          continue;
+        }
         results.push({ sessionId: t.sessionId, ...r, ...(o.dryRun ? { dryRun: true } : {}) });
         if (r.status === "refused") {
           console.error(`(${t.sessionId}: not pushed: ${r.reason}; --force makes this copy the one pull picks)`);
@@ -343,7 +353,17 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const results = [];
       let refused = 0;
       for (const t of picked) {
-        const r = await c.prune(t, running);
+        let r: Awaited<ReturnType<typeof c.prune>>;
+        try {
+          r = await c.prune(t, running);
+        } catch (e) {
+          // 消すかどうかを決められなかったものは消していない。残りは続ける
+          const error = e instanceof Error ? e.message : String(e);
+          console.error(`(${t.sessionId}: not pruned: ${error})`);
+          results.push({ sessionId: t.sessionId, status: "failed", error });
+          refused += 1;
+          continue;
+        }
         results.push({ sessionId: t.sessionId, ...r });
         if (r.status === "refused") refused += 1;
         if (!o.json) console.log(`${r.status.padEnd(7)} ${t.sessionId}  ${r.reason ?? t.path}`);
