@@ -14,7 +14,6 @@ export type AgentStatus = {
   socketPresent: boolean;
   /** 実際に connect できたか。ここが true なら ccx-agent は生きている */
   socketConnectable: boolean;
-
   spoolDir: string;
   /** center へ未転送の event 数 */
   spooled: number;
@@ -33,9 +32,9 @@ export type AgentStatus = {
   hubTokenAccepted?: boolean;
 };
 
-// ccx-agent の既定 (packages/core/config/config.go socketPath) と同じく XDG_RUNTIME_DIR、無ければ ~/.ccx/run。
-// ただし XDG_RUNTIME_DIR の無い shell (cron 等) からでも、systemd の user unit で動く agent の socket
-// (/run/user/<uid>) が在ればそちらを見る。macOS には /run/user が無い
+// 基本は ccx-agent の既定 (packages/core/config/config.go socketPath) と同じく XDG_RUNTIME_DIR、無ければ
+// ~/.ccx/run。CLI だけは、XDG_RUNTIME_DIR の無い shell (cron 等) からでも systemd の user unit で動く agent
+// の socket (/run/user/<uid>) が在ればそちらを見る (hook と statusline の Go 側は見ない。macOS には /run/user が無い)
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env, runUser = join("/run/user", String(process.getuid?.() ?? 0))): string {
   if (env.CCX_SOCKET) return env.CCX_SOCKET;
   if (env.XDG_RUNTIME_DIR) return join(env.XDG_RUNTIME_DIR, "ccx", "ccx-agent.sock");
@@ -145,7 +144,6 @@ export async function agentStatus(
     socketPath,
     socketPresent,
     socketConnectable,
-
     spoolDir,
     spooled,
     incoming,
