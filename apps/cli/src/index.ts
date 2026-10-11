@@ -492,7 +492,16 @@ agent
 
     const rows: string[][] = [
       // socket ファイルの存在では見ない。掴んでいたプロセスが死んでも残るため
-      ["ccx-agent", st.socketConnectable ? "running" : st.socketPresent ? "socket present, not answering" : "not running"],
+      [
+        "ccx-agent",
+        st.socketConnectable
+          ? "running"
+          : st.socketPresent
+            ? "socket present, not answering"
+            : st.agentInstalled
+              ? "not running"
+              : "not installed on this host (no ccx-agent on PATH)",
+      ],
       ["socket", st.socketPath],
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
