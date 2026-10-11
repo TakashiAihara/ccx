@@ -52,8 +52,12 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   }
   const endpoint = u.port ? `${u.hostname}:${u.port}` : u.hostname;
   const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
+  // SESSION_TOKEN '': 指定しないと DuckDB も env の AWS_SESSION_TOKEN を center に送る (#213)。
+  // 利用者が保存した永続 secret (~/.duckdb/stored_secrets) は読まない: scope が s3://<bucket> なら
+  // こちらより優先され、手元の本物の鍵で center に署名する
+  await c.run("SET allow_persistent_secrets = false");
   await c.run(
-    `CREATE SECRET store (TYPE s3, KEY_ID ${q(s3AccessKeyId(store))}, SECRET 'ccx', ` +
+    `CREATE SECRET store (TYPE s3, KEY_ID ${q(s3AccessKeyId(store))}, SECRET 'ccx', SESSION_TOKEN '', ` +
       `ENDPOINT ${q(endpoint)}, URL_STYLE 'path', USE_SSL ${u.protocol === "https:"}, REGION ${q(S3_REGION)})`,
   );
   const base = `s3://${store.bucket}/${normalizePrefix(store.prefix)}transcripts`;
