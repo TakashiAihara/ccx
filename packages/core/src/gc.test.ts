@@ -91,6 +91,19 @@ describe("blockers", () => {
     expect(blockers(info)).toContain("2 process(es) have their cwd in it: 101 zsh, 102 vim");
   });
 
+  test("root が symlink を通っていても、実パスの cwd を数える (#221)", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const link = join(tmp, "root-link");
+    await symlink(cfg.root, link).catch(() => {});
+    const proc = await mkdtemp(join(tmp, "proc-"));
+    await mkdir(join(proc, "201"), { recursive: true });
+    await symlink(r.path, join(proc, "201", "cwd"));
+    await Bun.write(join(proc, "201", "comm"), "zsh\n");
+    const viaLink = { ...cfg, root: link };
+    const info = (await scanRepodirs(viaLink, { procRoot: proc })).find((i) => i.dirId === r.path.split("/").at(-1))!;
+    expect(info.processes).toEqual([{ pid: 201, command: "zsh" }]);
+  });
+
   test.skipIf(process.platform !== "linux")("本物の /proc: repodir の中で動くシェルを数える (#221)", async () => {
     const r = await createRepodir(cfg, spec(), {}, "0.1.0");
     const p = Bun.spawn(["sleep", "60"], { cwd: r.path });

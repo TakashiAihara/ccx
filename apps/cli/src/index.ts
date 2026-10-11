@@ -239,13 +239,15 @@ repodir
 repodir
   .command("rm")
   .description("Remove one repodir, refusing to destroy work")
-  .argument("<selector>", "a dir-id (or a unique prefix of one)")
+  .argument("<selector>", "a dir-id (or a unique prefix of one), or the repodir's path as rd ls prints it")
   .option("-f, --force", "remove even if it holds uncommitted or unpushed work")
   .action(async (selector: string, o) => {
     const cfg = await loadConfig();
     const infos = await scanRepodirs(cfg);
 
-    const hits = infos.filter((i) => i.dirId.startsWith(selector.toUpperCase()));
+    // rd ls はパスを出すので、パスもそのまま受ける (末尾の dir-id で引く。#116)
+    const id = selector.replace(/\/+$/, "").split("/").at(-1)!.toUpperCase();
+    const hits = infos.filter((i) => i.dirId.startsWith(id));
     if (hits.length === 0) throw new Error(`no repodir matches "${selector}"`);
     if (hits.length > 1) {
       throw new Error(
@@ -263,7 +265,9 @@ repodir
       );
     }
 
-    await reclaim([{ info, blockers: o.force ? [] : b, finished: null }]);
+    const removed = await reclaim([{ info, blockers: o.force ? [] : b, finished: null }], { force: Boolean(o.force) });
+    // 消えていないのに removed と言わない (#116)
+    if (!removed.includes(info.path)) throw new Error(`${info.dirId} was not removed`);
     console.error(`removed ${info.dirId}${o.force && b.length ? " (forced)" : ""}`);
     console.log(info.path);
   });

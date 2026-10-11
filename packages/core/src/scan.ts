@@ -6,7 +6,7 @@
  * ディレクトリから導出する。複製すれば必ず同期ずれを起こすため。
  */
 
-import { readdir, readlink } from "node:fs/promises";
+import { readdir, readlink, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -65,13 +65,13 @@ export type CwdProcess = { pid: number; command: string };
 
 /**
  * /proc/<pid>/cwd を全部読む。読めないもの (他ユーザー / 消えた) は飛ばす。/proc の無いホスト
- * (macOS) では空で、そこでは数えない。自分自身は除く (repodir の中から gc を叩いても止まらない)。
+ * (macOS) では空で、そこでは数えない。repodir の中から ccx を叩けば、そのシェルが中にいるので止まる。
  * shortcut: Linux の /proc だけ。macOS で要るなら lsof -d cwd で足す
  */
 export async function cwdProcesses(procRoot = "/proc"): Promise<(CwdProcess & { cwd: string })[]> {
   let names: string[];
   try {
-    names = (await readdir(procRoot)).filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid);
+    names = (await readdir(procRoot)).filter((n) => /^\d+$/.test(n));
   } catch {
     return [];
   }
@@ -163,11 +163,12 @@ async function readOne(
   idleMs: number,
   procs: (CwdProcess & { cwd: string })[],
 ): Promise<RepodirInfo> {
-  const [meta, state, g, s] = await Promise.all([
+  const [meta, state, g, s, real] = await Promise.all([
     loadMeta(path),
     loadState(path),
     gitState(path),
     sessionState(path, idleMs),
+    realpath(path).catch(() => path),
   ]);
 
   return {
@@ -181,7 +182,8 @@ async function readOne(
     problems: [...meta.problems, ...state.problems],
     git: g,
     session: s,
-    processes: procs.filter((p) => p.cwd === path || p.cwd.startsWith(`${path}/`)).map(({ pid, command }) => ({ pid, command })),
+    // /proc の cwd は実パス。root が symlink を通っていても一致させる
+    processes: procs.filter((p) => p.cwd === real || p.cwd.startsWith(`${real}/`)).map(({ pid, command }) => ({ pid, command })),
   };
 }
 
