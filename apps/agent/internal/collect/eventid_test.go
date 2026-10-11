@@ -129,7 +129,7 @@ func TestDrainIncoming_UsesTheFileNameAsEventID(t *testing.T) {
 	spoolDir := dir + "/spool"
 
 	// No agent on the socket: the hook goes straight to the fallback.
-	if code := Hook(dir+"/none.sock", spoolDir, strings.NewReader("p")); code != 0 {
+	if code := Hook(testsock.Path(t, "none.sock"), spoolDir, strings.NewReader("p")); code != 0 {
 		t.Fatalf("hook exit %d", code)
 	}
 	ents, err := os.ReadDir(incomingPath(spoolDir))
@@ -296,7 +296,7 @@ func TestHandle_LogsARejectedHookID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newCollect(dir+"/a.sock", spool, nil, logf)
+	srv := newCollect(testsock.Path(t, "a.sock"), spool, nil, logf)
 
 	for _, id := range []string{newUUIDv7(), "", strings.ToUpper(newUUIDv7()), uuid.NewString()} {
 		a, b := net.Pipe()

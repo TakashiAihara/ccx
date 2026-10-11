@@ -238,7 +238,7 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	defer held.release()
 
 	// This instance's Run must fail on the lock — before DrainIncoming runs.
-	c := newCollect(dir+"/s.sock", spool, nil, quietLog)
+	c := newCollect(testsock.Path(t, "s.sock"), spool, nil, quietLog)
 	if err := c.Run(context.Background()); err == nil {
 		t.Fatal("Run should fail while another ccx-agent holds the lock")
 	}
