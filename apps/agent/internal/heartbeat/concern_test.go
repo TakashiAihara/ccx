@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,6 +100,49 @@ func TestConcernRefusesASecondServe(t *testing.T) {
 	}
 	if _, err := os.Stat(sock); err != nil {
 		t.Errorf("the running serve's socket is gone: %v", err)
+	}
+}
+
+// A serve that takes over from one that stopped brings the heartbeat up, instead
+// of staying off until it is restarted (#185).
+func TestConcernTakesOverWhenTheOtherServeStops(t *testing.T) {
+	sock := testsock.Path(t, "ch.sock")
+	first := &Concern{socketPath: sock, log: t.Logf}
+	ctx1, stop1 := context.WithCancel(context.Background())
+	done1 := make(chan struct{})
+	go func() { _ = first.Run(ctx1); close(done1) }()
+	for i := 0; i < 50 && !first.listening.Load(); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var mu sync.Mutex
+	var logged []string
+	second := &Concern{socketPath: sock, retryAfter: 30 * time.Millisecond, log: func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(f, a...))
+	}}
+	ctx2, stop2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() { _ = second.Run(ctx2); close(done2) }()
+	defer func() { stop2(); <-done2 }()
+
+	time.Sleep(200 * time.Millisecond)
+	if second.listening.Load() {
+		t.Fatal("second serve listening while the first holds the lock")
+	}
+	stop1()
+	<-done1
+	for i := 0; i < 100 && !second.listening.Load(); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !second.listening.Load() {
+		t.Fatal("second serve did not take over after the first stopped")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) != 1 || !strings.Contains(logged[0], "another ccx-agent serve") {
+		t.Errorf("logged %q, want the reason once", logged)
 	}
 }
 
