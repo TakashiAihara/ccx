@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, rm, symlink, utimes } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,6 +176,23 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(normalizeDeclared({ heartbeat: "yes" }).heartbeat).toBe("");
     expect(normalizeDeclared({ heartbeat: "off" }).heartbeat).toBe("off");
     expect(sameDeclared({ ...EMPTY_DECLARED, heartbeat: "on" }, EMPTY_DECLARED)).toBe(false);
+  });
+
+  test("label / task / role / heartbeat / meta/<key> are replaced by rename, leaving no temp file (#167)", async () => {
+    const dir = join(home, "sessions", SID);
+    const names = ["label", "task", "role", "heartbeat", "meta/owner"];
+    await writeDeclared(SID, { label: "a", task: "t1", role: "r1", heartbeat: "off", metadata: { owner: "alice" } }, home);
+    const ino = async () => Promise.all(names.map(async (n) => (await stat(join(dir, n))).ino));
+    const before = await ino();
+    await writeDeclared(SID, { label: "b", task: "t2", role: "r2", heartbeat: "on", metadata: { owner: "bob" } }, home);
+    const after = await ino();
+    // 上書きなら inode は変わらない。rename で置き換えたものだけが変わる
+    expect(names.filter((_, i) => before[i] === after[i])).toEqual([]);
+    const left = [...(await readdir(dir)), ...(await readdir(join(dir, "meta")))].filter((n) => n.endsWith(".tmp"));
+    expect(left).toEqual([]);
+    // 書きかけの一時ファイルが残っていても key として読まない
+    await Bun.write(join(dir, "meta", ".owner.x.tmp"), "half");
+    expect((await readDeclared(SID, home)).metadata).toEqual({ owner: "bob" });
   });
 
   test("metadata: one file per key under meta/, empty file = key with no value, null removes it", async () => {

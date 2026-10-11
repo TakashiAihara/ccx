@@ -20,7 +20,22 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+
+/**
+ * 隣の一時ファイルに書いてから rename で置き換える (#167)。別プロセスの session status / tr push が
+ * 書きかけを読んで途中の値を出したり state.json に保存したりしない。名前は . で始め、meta/ の読み手
+ * (META_KEY と ccx-agent の metaKey) が key として拾わない
+ */
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const tmp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    await Bun.write(tmp, content);
+    await rename(tmp, path);
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
 
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
   env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
@@ -275,26 +290,20 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
   for (const k of ["label", "task", "role", "heartbeat"] as const) {
     if (patch[k] === undefined) continue;
     const p = join(dir, TEXT_FILE[k]);
-    if (patch[k]) await Bun.write(p, `${patch[k]}\n`);
+    if (patch[k]) await writeAtomic(p, `${patch[k]}\n`);
     else await rm(p, { force: true });
   }
   for (const [k, v] of Object.entries(patch.metadata ?? {})) {
     const p = join(dir, META_DIR, k);
     if (v === null) await rm(p, { force: true });
-    else await Bun.write(p, v ? `${v}\n` : "");
+    else await writeAtomic(p, v ? `${v}\n` : "");
   }
   const historyPath = join(dir, LABEL_HISTORY_FILE);
   if (patch.labelHistory !== undefined) {
     const h = cleanLabelHistory(patch.labelHistory);
     if (h.length) {
-      // 隣に書いてから rename: 置き換えの途中を読んだ push が、短い履歴を保存先に書かない
-      const tmp = `${historyPath}.${randomUUID()}.tmp`;
-      try {
-        await Bun.write(tmp, h.map((e) => `${JSON.stringify(e)}\n`).join(""));
-        await rename(tmp, historyPath);
-      } finally {
-        await rm(tmp, { force: true });
-      }
+      // 置き換えの途中を読んだ push が、短い履歴を保存先に書かない
+      await writeAtomic(historyPath, h.map((e) => `${JSON.stringify(e)}\n`).join(""));
     } else await rm(historyPath, { force: true });
   } else if (
     before?.labelHistory &&
