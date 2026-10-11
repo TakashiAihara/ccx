@@ -16,6 +16,7 @@ const cli = join(import.meta.dir, "index.ts");
 let tmp: string;
 let cfg: Config;
 let gitconfig: string;
+let savedGitConfig: string | undefined;
 
 beforeAll(async () => {
   tmp = await mkdtemp(join(tmpdir(), "ccx-rm-"));
@@ -31,6 +32,7 @@ beforeAll(async () => {
   await git(["symbolic-ref", "HEAD", "refs/heads/main"], source);
   gitconfig = join(tmp, "gitconfig");
   await Bun.write(gitconfig, `[url "file://${source}"]\n\tinsteadOf = ${REMOTE}\n`);
+  savedGitConfig = process.env.GIT_CONFIG_GLOBAL;
   process.env.GIT_CONFIG_GLOBAL = gitconfig;
   cfg = {
     root: join(tmp, "repodirs"),
@@ -44,6 +46,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (savedGitConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = savedGitConfig;
   await rm(tmp, { recursive: true, force: true });
 });
 
@@ -68,7 +72,13 @@ test.skipIf(process.platform !== "linux")("rd rm refuses a repodir a shell is st
     expect(refused.err).toContain(`have their cwd in it: ${shell.pid} sleep`);
     expect(await exists(r.path)).toBe(true);
 
-    const forced = await ccxRm(r.path, "--force");
+    // パスは repodir と一致するものだけ。dir-id で終わるだけの別のパスでは選ばない
+    const wrong = await ccxRm(join(tmp, r.path.split("/").at(-1)!), "--force");
+    expect([wrong.code, wrong.err]).toEqual([1, expect.stringContaining("no repodir matches")]);
+    expect((await ccxRm("/", "--force")).code).toBe(1);
+    expect(await exists(r.path)).toBe(true);
+
+    const forced = await ccxRm(`${r.path}/`, "--force");
     expect([forced.code, forced.err]).toEqual([0, expect.stringContaining("(forced)")]);
     expect(await exists(r.path)).toBe(false);
   } finally {
