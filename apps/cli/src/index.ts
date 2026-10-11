@@ -271,7 +271,8 @@ repodir
     }
 
     await reclaim([{ info, blockers: o.force ? [] : b, finished: null }], { force: Boolean(o.force) });
-    // 消えていないのに removed と言わない (#116)。消えたかは戻り値ではなくディスクで見る
+    // 消えていないのに removed と言わない (#116)。rm は失敗すれば投げるので、ここに来るのは消した直後に
+    // 同じ場所が作り直されたときくらい
     if (await stat(info.path).then(() => true, () => false)) throw new Error(`${info.dirId} was not removed: ${info.path} is still there`);
     console.error(`removed ${info.dirId}${o.force && b.length ? " (forced)" : ""}`);
     console.log(info.path);

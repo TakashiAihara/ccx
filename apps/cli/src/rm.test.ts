@@ -75,7 +75,8 @@ test.skipIf(process.platform !== "linux")("rd rm refuses a repodir a shell is st
     // パスは repodir と一致するものだけ。dir-id で終わるだけの別のパスでは選ばない
     const wrong = await ccxRm(join(tmp, r.path.split("/").at(-1)!), "--force");
     expect([wrong.code, wrong.err]).toEqual([1, expect.stringContaining("no repodir matches")]);
-    expect((await ccxRm("/", "--force")).code).toBe(1);
+    const root = await ccxRm("/", "--force");
+    expect([root.code, root.err]).toEqual([1, expect.stringContaining("no repodir matches")]);
     expect(await exists(r.path)).toBe(true);
 
     const forced = await ccxRm(`${r.path}/`, "--force");
