@@ -389,6 +389,10 @@ describe("transcript: push / pull / prune through the store", () => {
     const [nout, nerr, ncode] = await ls("--session", "ffffffff-0000-4000-8000-000000000000", "--json");
     expect([ncode, JSON.parse(nout), nerr]).toEqual([1, [], expect.stringContaining("is not in the store")]);
 
+    // 空の指定は全件ではない
+    const [, eerr, ecode] = await ls("-s", "", "--json");
+    expect([ecode, eerr]).toEqual([2, expect.stringContaining("needs an id")]);
+
     // session.json や履歴の取得が失敗するのも「無い」ではない (中継が該当の GET だけを 500 にする)
     for (const failing of ["/session.json", "/history/"]) {
       const upstream = A.store.endpoint;
