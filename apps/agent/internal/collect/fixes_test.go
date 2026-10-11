@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,8 +62,8 @@ func TestSingleInstanceLock_RefusesSecond(t *testing.T) {
 	second.release()
 }
 
-// Stray temp files from a crash mid-write are reaped on open, not accumulated.
-// Fix for the review's Low#7.
+// Stray temp files from a crash mid-write are reaped, not accumulated: the spool's
+// on open, incoming/'s once the lock is held (#218). Fix for the review's Low#7.
 func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "incoming"), 0o700); err != nil {
@@ -82,11 +83,18 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"}); err != nil {
+	s, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(stray); !os.IsNotExist(err) {
 		t.Error("stray temp in spool dir should have been reaped")
+	}
+	if _, err := os.Stat(strayIn); err != nil {
+		t.Errorf("incoming/ must not be touched before the lock: %v", err)
+	}
+	if _, d, _ := s.RecoverIncomingTemps(time.Now()); d != 1 {
+		t.Errorf("dropped %d, want the partial temp", d)
 	}
 	if _, err := os.Stat(strayIn); !os.IsNotExist(err) {
 		t.Error("stray temp in incoming dir should have been reaped")
@@ -256,5 +264,55 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	pending, _ := spool.Pending()
 	if pending != 0 {
 		t.Errorf("nothing should have been drained into the main spool, found %d", pending)
+	}
+}
+
+// A temp too young to judge at startup (the agent came back seconds after the hook
+// was cut off) is looked at again once it has settled, not left forever (#218).
+func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := OpenSpool(dir, &ccxv1.Origin{Machine: "m", User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a472"
+	tmp := filepath.Join(spool.IncomingDir(), ".tmp-"+id+".raw-1")
+	if err := os.WriteFile(tmp, []byte(`{"late":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := newCollect(testsock.Path(t, "s.sock"), spool, nil, quietLog)
+	// the startup look sees the temp as new; the later one, as settled
+	var looks atomic.Int32
+	c.clock = func() time.Time {
+		if looks.Add(1) == 1 {
+			return time.Now()
+		}
+		return time.Now().Add(2 * tempAge)
+	}
+	c.resweepAfter = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if n, _ := spool.Pending(); n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("the young temp was not taken in after it settled (looks: %d)", looks.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if e, err := spool.Oldest(); err != nil || e == nil || e.Event.GetEventId() != id {
+		t.Errorf("queued %v, %v; want the hook's event %s", e, err, id)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("the temp is still in incoming/: %v", err)
 	}
 }

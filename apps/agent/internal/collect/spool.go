@@ -57,10 +57,6 @@ type Spool struct {
 	origin *ccxv1.Origin
 	newID  func() string
 	now    func() time.Time
-
-	// What OpenSpool found among the hook's temp files in incoming/ (#218):
-	// complete events taken in as .raw, and empty or partial ones removed.
-	RecoveredTemps, DroppedTemps int
 }
 
 const (
@@ -95,10 +91,8 @@ func OpenSpool(dir string, origin *ccxv1.Origin) (*Spool, error) {
 	// read (only .pb / .raw names are), but without a reaper they accumulate
 	// across crash cycles. Best-effort — a failure here is not fatal.
 	reapTemps(dir)
-	// incoming/ is different: the hook is cut off at its time budget after it
-	// wrote the event but before the rename, so a temp file there is often a
-	// whole event. Take those in instead of deleting them (#218).
-	s.RecoveredTemps, s.DroppedTemps = recoverIncomingTemps(incoming, s.now())
+	// incoming/ is not reaped here: its temps can be whole events, and touching
+	// it before Run holds the lock would race a second ccx-agent (#218).
 
 	max, err := s.maxSeqOnDisk()
 	if err != nil {
@@ -141,11 +135,12 @@ var createTemp = os.CreateTemp
 // that also reached the socket (a lost ack) is deduped by the center as usual; a
 // temp from before the id was in its name gets an id the drain mints. A file that
 // cannot be read now is left for the next start. tempAge does not cover a hook
-// stuck in a syscall for longer than it; that hook's event is then lost.
-func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped int) {
+// stuck in a syscall for longer than it; that hook's event is then lost. young
+// counts the temps left alone for being newer than tempAge.
+func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young int) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	for _, e := range ents {
 		name := e.Name()
@@ -153,7 +148,11 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped int) {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil || now.Sub(info.ModTime()) < tempAge {
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) < tempAge {
+			young++
 			continue
 		}
 		p := filepath.Join(dir, name)
@@ -178,15 +177,22 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped int) {
 		target := filepath.Join(dir, final)
 		if _, err := os.Lstat(target); !os.IsNotExist(err) {
 			// Something already has that name (only a second writer of one id could
-			// leave it). Do not overwrite or compare: take this one in under a
-			// minted id; a duplicate is better than a lost event.
+			// leave it). Do not compare: take this one in under a minted id; a
+			// duplicate is better than a lost event. An old-style temp's fallback is
+			// that same name; it was unique when the temp was created.
 			target = filepath.Join(dir, "recovered"+name+incomingExt)
 		}
 		if os.Rename(p, target) == nil {
 			recovered++
 		}
 	}
-	return recovered, dropped
+	return recovered, dropped, young
+}
+
+// RecoverIncomingTemps runs recoverIncomingTemps on incoming/. Call it only while
+// holding the spool lock.
+func (s *Spool) RecoverIncomingTemps(now time.Time) (recovered, dropped, young int) {
+	return recoverIncomingTemps(s.incoming, now)
 }
 
 // IncomingDir is where the hook drops events when the socket is unreachable.

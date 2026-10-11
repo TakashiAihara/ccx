@@ -248,7 +248,7 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 	}
 	for name, body := range map[string]string{
 		".tmp-" + id + ".raw-111":     `{"hook_event_name":"Stop"}`,
-		".tmp-" + doneID + ".raw-222": `{"done":true}`,
+		".tmp-" + doneID + ".raw-222": `{"done":"again"}`,
 		".tmp-2":                      "",
 		".tmp-3":                      `{"hook_event_na`,
 		".tmp-4":                      `{"young":true}`,
@@ -265,13 +265,24 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 		}
 	}
 	s := openTestSpool(t, dir)
+	if left, _ := filepath.Glob(filepath.Join(incoming, ".tmp-*")); len(left) != 6 {
+		t.Fatalf("OpenSpool touched incoming/ temps before the lock: %d left, want 6", len(left))
+	}
 	// recovered: the id-named temp, the old-style one, and the one whose name is
 	// taken (under a minted id, not overwriting); dropped: the empty and the partial
-	if s.RecoveredTemps != 3 || s.DroppedTemps != 2 {
-		t.Fatalf("recovered %d dropped %d, want 3 and 2", s.RecoveredTemps, s.DroppedTemps)
+	if r, d, y := s.RecoverIncomingTemps(time.Now()); r != 3 || d != 2 || y != 1 {
+		t.Fatalf("recovered %d dropped %d young %d, want 3, 2 and 1", r, d, y)
+	}
+	for _, gone := range []string{".tmp-2", ".tmp-3"} {
+		if _, err := os.Stat(filepath.Join(incoming, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s was counted as dropped but is still there: %v", gone, err)
+		}
 	}
 	if b, err := os.ReadFile(filepath.Join(incoming, doneID+".raw")); err != nil || string(b) != `{"done":true}` {
 		t.Errorf("the existing .raw was touched: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(incoming, "recovered.tmp-"+doneID+".raw-222.raw")); err != nil || string(b) != `{"done":"again"}` {
+		t.Errorf("the temp whose name was taken is not under a name of its own: %q %v", b, err)
 	}
 	if n, err := s.DrainIncoming(); err != nil || n != 4 {
 		t.Fatalf("DrainIncoming = %d, %v; want the three recovered events and the existing one", n, err)
@@ -286,7 +297,7 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 	if err := os.Chtimes(tmp.Name(), old, old); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 {
+	if r, d, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 || d != 0 {
 		t.Fatalf("recovered %d of the atomicWrite-named temp", r)
 	}
 	if _, err := os.Stat(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")); err != nil {
