@@ -140,7 +140,13 @@ export async function localTranscripts(home = claudeHome()): Promise<LocalTransc
       const sessionId = n.slice(0, -".jsonl".length);
       if (!UUID.test(sessionId)) continue;
       const path = join(projectDir, n);
-      const s = await stat(path);
+      // 先の無い symlink / readdir の後に消えた transcript (tr prune 等) は、その 1 件を飛ばす。一覧全体を
+      // 止めない (#253)。それ以外の読めない (EACCES 等) は投げる
+      const s = await stat(path).catch((e: NodeJS.ErrnoException) => {
+        if (e.code === "ENOENT") return null;
+        throw e;
+      });
+      if (!s) continue;
       const tr = join(projectDir, sessionId, "tool-results");
       const sa = join(projectDir, sessionId, "subagents");
       const wf = join(projectDir, sessionId, "workflows");
