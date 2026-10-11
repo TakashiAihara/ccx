@@ -234,7 +234,7 @@ func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
 // A temp file the hook left in incoming/ after its time budget is often a whole
 // event: a settled one with complete JSON is taken in, an empty or partial one is
 // removed, and one still young (maybe being written) is left alone (#218).
-func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
+func TestRecoverTemps_TakesInCompleteIncomingTemps(t *testing.T) {
 	dir := t.TempDir()
 	incoming := filepath.Join(dir, "incoming")
 	if err := os.MkdirAll(incoming, 0o700); err != nil {
@@ -270,7 +270,7 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 	}
 	// recovered: the id-named temp, the old-style one, and the one whose name is
 	// taken (under a minted id, not overwriting); dropped: the empty and the partial
-	if r, d, y := s.RecoverIncomingTemps(time.Now()); r != 3 || d != 2 || y != 1 {
+	if r, d, y := s.recoverTemps(time.Now()); r != 3 || d != 2 || y != 1 {
 		t.Fatalf("recovered %d dropped %d young %d, want 3, 2 and 1", r, d, y)
 	}
 	for _, gone := range []string{".tmp-2", ".tmp-3"} {

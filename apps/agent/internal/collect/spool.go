@@ -179,7 +179,8 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young 
 			// Something already has that name (only a second writer of one id could
 			// leave it). Do not compare: take this one in under a minted id; a
 			// duplicate is better than a lost event. An old-style temp's fallback is
-			// that same name; it was unique when the temp was created.
+			// that same name, so a leftover recovered file of the same name would be
+			// replaced; the random part makes that unlikely, not impossible (#249).
 			target = filepath.Join(dir, "recovered"+name+incomingExt)
 		}
 		if os.Rename(p, target) == nil {
@@ -189,9 +190,9 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young 
 	return recovered, dropped, young
 }
 
-// RecoverIncomingTemps runs recoverIncomingTemps on incoming/. Call it only while
-// holding the spool lock.
-func (s *Spool) RecoverIncomingTemps(now time.Time) (recovered, dropped, young int) {
+// recoverTemps runs recoverIncomingTemps on incoming/. Call it only while holding
+// the spool lock.
+func (s *Spool) recoverTemps(now time.Time) (recovered, dropped, young int) {
 	return recoverIncomingTemps(s.incoming, now)
 }
 

@@ -147,16 +147,23 @@ func (s *Collect) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 
 	// A temp too young to judge at startup is otherwise never looked at again: the
-	// hook that left it is gone once the socket is back. Look once more when it has
-	// settled; that also takes in .raw a hook dropped during the startup drain.
+	// hook that left it is gone once the socket is back. Look again while any is
+	// young (a wall clock stepped back keeps it young). Such a look also takes in
+	// .raw a hook dropped during the startup drain, and queues what it takes in
+	// after socket events that came meanwhile (the id is kept, so the center
+	// still dedupes).
 	if young > 0 {
+		s.log("incoming/: %d temp(s) too new to judge; looking again in %s", young, s.resweepAfter)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			select {
-			case <-ctx.Done():
-			case <-time.After(s.resweepAfter):
-				s.takeInIncoming("after the young temps settled")
+			for y := young; y > 0; {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(s.resweepAfter):
+					y = s.takeInIncoming("after the young temps settled")
+				}
 			}
 		}()
 	}
@@ -290,7 +297,7 @@ func (s *Collect) handle(conn net.Conn) {
 // the main queue, logging what it did. It returns how many temps were too young to
 // judge. The spool lock must be held.
 func (s *Collect) takeInIncoming(when string) (young int) {
-	r, d, young := s.spool.RecoverIncomingTemps(s.clock())
+	r, d, young := s.spool.recoverTemps(s.clock())
 	if r+d > 0 {
 		s.log("incoming/ %s: took in %d event(s) a hook wrote but did not finish naming, removed %d that were not complete", when, r, d)
 	}
@@ -298,6 +305,10 @@ func (s *Collect) takeInIncoming(when string) (young int) {
 		s.log("drain of incoming/ %s: %v", when, err)
 	} else if n > 0 {
 		s.log("drained %d event(s) from the fallback spool %s", n, when)
+		// as handle does; at startup the loop has not started and reads the queue first
+		if s.loop != nil {
+			s.loop.wake()
+		}
 	}
 	return young
 }

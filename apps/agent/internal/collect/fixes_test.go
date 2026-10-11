@@ -93,7 +93,7 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	if _, err := os.Stat(strayIn); err != nil {
 		t.Errorf("incoming/ must not be touched before the lock: %v", err)
 	}
-	if _, d, _ := s.RecoverIncomingTemps(time.Now()); d != 1 {
+	if _, d, _ := s.recoverTemps(time.Now()); d != 1 {
 		t.Errorf("dropped %d, want the partial temp", d)
 	}
 	if _, err := os.Stat(strayIn); !os.IsNotExist(err) {
@@ -243,6 +243,17 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// ...and a settled temp it could not rename (#218): recovering it is a change to
+	// incoming/ too, so it must also wait for the lock.
+	settled := filepath.Join(spool.IncomingDir(), ".tmp-01a050e6-8722-7c8a-9041-f38193f5a473.raw-1")
+	if err := os.WriteFile(settled, []byte(`{"pending":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * tempAge)
+	if err := os.Chtimes(settled, old, old); err != nil {
+		t.Fatal(err)
+	}
+
 	// Another ccx-agent already holds the spool lock.
 	held, err := acquireLock(dir)
 	if err != nil {
@@ -265,6 +276,9 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	if pending != 0 {
 		t.Errorf("nothing should have been drained into the main spool, found %d", pending)
 	}
+	if _, err := os.Stat(settled); err != nil {
+		t.Errorf("the settled temp should be untouched when Run fails on the lock: %v", err)
+	}
 }
 
 // A temp too young to judge at startup (the agent came back seconds after the hook
@@ -281,11 +295,15 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newCollect(testsock.Path(t, "s.sock"), spool, nil, quietLog)
-	// the startup look sees the temp as new; the later one, as settled
+	fwd := &stubForwarder{}
+	c := newCollect(testsock.Path(t, "s.sock"), spool, fwd, quietLog)
+	// what the later look takes in must wake the idle loop, not wait for its poll
+	c.loop.idlePoll = time.Hour
+	// the startup look and the next see the temp as new (a clock stepped back); the
+	// third, as settled
 	var looks atomic.Int32
 	c.clock = func() time.Time {
-		if looks.Add(1) == 1 {
+		if looks.Add(1) <= 2 {
 			return time.Now()
 		}
 		return time.Now().Add(2 * tempAge)
@@ -297,7 +315,7 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	go func() { done <- c.Run(ctx) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if n, _ := spool.Pending(); n == 1 {
+		if p := fwd.payloads(); len(p) == 1 && p[0] == `{"late":true}` {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -309,9 +327,6 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if e, err := spool.Oldest(); err != nil || e == nil || e.Event.GetEventId() != id {
-		t.Errorf("queued %v, %v; want the hook's event %s", e, err, id)
-	}
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Errorf("the temp is still in incoming/: %v", err)
 	}
