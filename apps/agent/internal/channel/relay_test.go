@@ -5,12 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 )
 
 type syncBuf struct {

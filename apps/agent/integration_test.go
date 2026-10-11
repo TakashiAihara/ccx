@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testcenter"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 )
 
 // This test drives the REAL compiled ccx-agent binary — `ccx-agent serve` and `ccx-agent hook`
@@ -24,8 +25,6 @@ import (
 
 func buildAgent(t *testing.T) string {
 	t.Helper()
-	// A short output dir: unix socket paths (built below) must fit sun_path
-	// (~108 bytes), and t.TempDir() under a deep CI path can be long.
 	dir, err := os.MkdirTemp("", "ccx-agent-it")
 	if err != nil {
 		t.Fatal(err)
@@ -87,11 +86,8 @@ func TestIntegration_RealBinary_AllScenarios(t *testing.T) {
 	c, url := testcenter.Start()
 	t.Cleanup(c.Close)
 
-	work, err := os.MkdirTemp("", "ccx-agent-work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(work) })
+	// The sockets live here, so it must be short whatever TMPDIR is.
+	work := testsock.Dir(t)
 	sock := filepath.Join(work, "s.sock")
 	spool := filepath.Join(work, "spool")
 
@@ -218,11 +214,7 @@ func TestIntegration_StatusClient(t *testing.T) {
 		t.Skip("builds and runs the real ccx-agent binary")
 	}
 	bin := buildAgent(t)
-	work, err := os.MkdirTemp("", "ccx-agent-st")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(work) })
+	work := testsock.Dir(t)
 	home := filepath.Join(work, "claude")
 	const sid = "00000000-0000-4000-8000-0000000000aa"
 	if err := os.MkdirAll(filepath.Join(home, "sessions", sid), 0o755); err != nil {
@@ -260,6 +252,7 @@ func TestIntegration_StatusClient(t *testing.T) {
 	// Until the heartbeat's socket is up too: the concerns start together, and
 	// the API can answer a moment before the channel socket listens.
 	var out string
+	var err error
 	for i := 0; i < 150; i++ {
 		if out, err = status(); err == nil && strings.Contains(strings.ReplaceAll(out, " ", ""), `"listening":true`) {
 			break
