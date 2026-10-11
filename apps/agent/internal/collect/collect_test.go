@@ -207,7 +207,8 @@ func TestStatus_ReachAndPending(t *testing.T) {
 
 	fwd.setDown(false)
 	srv.loop.wake()
-	waitFor(t, 3*time.Second, func() bool { st, _ := srv.Status(); return !st.LastForwarded.IsZero() })
+	// LastForwarded is set before the Ack removes the event, so wait for both
+	waitFor(t, 3*time.Second, func() bool { st, _ := srv.Status(); return !st.LastForwarded.IsZero() && st.Pending == 0 })
 	if st, _ := srv.Status(); st.Pending != 0 || st.LastError != "center down" {
 		t.Errorf("recovered: %+v, want nothing pending and the old error kept", st)
 	}
