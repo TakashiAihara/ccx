@@ -2,6 +2,7 @@ export * from "./config.ts";
 export * from "./dirid.ts";
 export * from "./gc.ts";
 export * from "./git.ts";
+export * from "./landed.ts";
 export * from "./meta.ts";
 export * from "./mirror.ts";
 export * from "./repodir.ts";
