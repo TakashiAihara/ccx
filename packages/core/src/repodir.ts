@@ -8,7 +8,7 @@
  * ディスクと時間のコストは bare mirror からの hardlink clone で回収する。
  */
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Config } from "./config.ts";
@@ -72,9 +72,28 @@ export async function createRepodir(
     path = join(parent, dirId);
   }
 
-  // hardlink clone。--no-checkout せず branch を直接指定する
+  // hardlink clone。--no-checkout せず branch を直接指定する。clone 自身の失敗は git が片付ける
+  // (path が既にある失敗で他人の repodir を消さないよう、消すのは clone が通った後だけ)
   await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
+  try {
+    return await finishRepodir(cfg, opts, version, { path, dirId, branch, mirror });
+  } catch (e) {
+    // 作りかけを残すと、ccx.json の無い repodir が ls / gc に混ざる (#235)
+    const left = await rm(path, { recursive: true, force: true }).then(
+      () => "",
+      (re: unknown) => `; the half-made repodir is left at ${path}: ${re instanceof Error ? re.message : String(re)}`,
+    );
+    if (!left) throw e;
+    throw new Error(`${e instanceof Error ? e.message : String(e)}${left}`, { cause: e });
+  }
+}
 
+async function finishRepodir(
+  cfg: Config,
+  opts: NewRepodirOptions,
+  version: string,
+  { path, dirId, branch, mirror }: { path: string; dirId: string; branch: string; mirror: Awaited<ReturnType<typeof ensureMirror>> },
+): Promise<NewRepodirResult> {
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
   // mirror と同じ origin (明示された http / ポート付きの URL も、以後の rd new で引き継がれる)

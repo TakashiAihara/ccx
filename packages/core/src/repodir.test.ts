@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -394,5 +394,30 @@ describe("an explicit http / port URL (#215)", () => {
     const switched = await createRepodir(cfg, forge, { protocol: "https" }, "0.1.0");
     expect(await origin(switched.path)).toBe(HTTPS_FORGE);
     expect(await origin(mirrorPath(cfg, forge))).toBe(HTTPS_FORGE);
+  });
+});
+
+describe("createRepodir の失敗", () => {
+  test("clone の後の手順で落ちたら、作りかけの repodir を残さない (#235)", async () => {
+    // 取れない submodule を持つ repo: clone は通り、submodule update で落ちる
+    const work = join(tmp, "broken-work");
+    const src = join(tmp, "broken.git");
+    await git(["init", "--quiet", "--initial-branch", "main", work]);
+    await git(["config", "user.email", "t@example.com"], work);
+    await git(["config", "user.name", "t"], work);
+    await Bun.write(join(work, ".gitmodules"), `[submodule "sub"]\n\tpath = sub\n\turl = file://${join(tmp, "no-such.git")}\n`);
+    await git(["update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},sub`], work);
+    await git(["add", ".gitmodules"], work);
+    await git(["commit", "--quiet", "-m", "sub"], work);
+    await git(["clone", "--quiet", "--bare", work, src]);
+    await git(["config", "--global", "--add", `url.file://${src}.insteadOf`, "https://github.com/test-owner/broken.git"]);
+
+    const broken = parseRepoSpec("test-owner/broken", { defaultHost: "github.com" });
+    await expect(createRepodir(cfg, broken, {}, "0.1.0")).rejects.toThrow();
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([]);
+
+    // submodule を取らなければ同じ repo でも作れる (落ちたのが clone の後だったことの確認)
+    const ok = await createRepodir(cfg, broken, { recurseSubmodules: false }, "0.1.0");
+    expect(await readdir(join(cfg.root, "github.com", "test-owner", "broken"))).toEqual([ok.dirId]);
   });
 });
