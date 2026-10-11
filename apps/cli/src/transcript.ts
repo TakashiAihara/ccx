@@ -141,7 +141,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .argument("<session-id...>", "full ids, or the unique prefixes that `ls` prints")
     .option("--force", "replace a local transcript with the same id but different content (the local file is kept as .replaced-<time>)")
     .option("--no-repodir", "only install the transcript; do not create a repodir for the session's repo")
-    .option("--json", "print as JSON (an object for one id, an array for several)")
+    .option("--json", "print as JSON (an array, one entry per id, like push and prune)")
     .action(async (ids: string[], o) => {
       const cfg = await loadConfig();
       const c = await client();
@@ -158,7 +158,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
         }
       }
       if (o.json) {
-        console.log(JSON.stringify(ids.length === 1 ? done[0] : done, null, 2));
+        console.log(JSON.stringify(done, null, 2));
         return;
       }
       if (ids.length > 1) {
