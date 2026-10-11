@@ -79,8 +79,8 @@ export async function createRepodir(
   }
 
   try {
-    // hardlink clone。--no-checkout せず branch を直接指定する。checkout で落ちると git は
-    // "Clone succeeded, but checkout failed" で作りかけを残すので、clone の失敗も下で片付ける
+    // hardlink clone。--no-checkout せず branch を直接指定する。clone の失敗も下で片付ける: 先に取った
+    // ディレクトリは git が消さず、checkout で落ちれば "Clone succeeded, but checkout failed" で中身も残る
     await git(["clone", "--quiet", "--branch", branch, mirror.path, path]);
     return await finishRepodir(cfg, opts, version, { path, dirId, branch, mirror });
   } catch (e) {

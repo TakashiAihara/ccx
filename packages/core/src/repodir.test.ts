@@ -229,8 +229,11 @@ describe("createRepodir", () => {
     expect(r.mirror.updated).toBe(true);
   });
 
-  test("存在しないブランチを指定したら失敗する", async () => {
-    await expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow();
+  test("存在しないブランチを指定したら失敗し、取った dir-id のディレクトリも残さない (#235)", async () => {
+    const parent = join(cfg.root, "github.com", "test-owner", "demo");
+    const before = (await readdir(parent)).sort();
+    await expect(createRepodir(cfg, spec(), { from: "no-such-branch" }, "0.1.0")).rejects.toThrow(/no-such-branch/);
+    expect((await readdir(parent)).sort()).toEqual(before);
   });
 });
 
