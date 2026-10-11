@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,5 +221,9 @@ func TestIncoming_OnlyRawFilesAreEvents(t *testing.T) {
 	}
 	if n, err := s.DrainIncoming(); err != nil || n != 1 {
 		t.Fatalf("DrainIncoming = %d, %v; want 1", n, err)
+	}
+	// what was not taken is named, so it can be logged rather than ignored forever
+	if got := s.OtherIncoming(); strings.Join(got, ",") != "ccx-agent.lock,stray.pb" {
+		t.Errorf("OtherIncoming = %v", got)
 	}
 }

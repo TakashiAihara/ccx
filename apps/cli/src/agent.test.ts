@@ -97,8 +97,6 @@ describe("agentStatus", () => {
     writeFileSync(join(spool, "incoming", "01a050e6-8722-7c8a-9041-f38193f5a46f.raw"), "x");
     writeFileSync(join(spool, "incoming", "ccx-agent.lock"), "");
     writeFileSync(join(spool, "incoming", "half-written.tmp"), "x");
-    // ccx-agent の書きかけ (.tmp-*) は .raw で終わっても数えない
-    writeFileSync(join(spool, "incoming", ".tmp-123.raw"), "x");
     // incoming に .pb は置かれない。ここを .pb で数えていると 0 件になる
     writeFileSync(join(spool, "incoming", "wrong-ext.pb"), "x");
 

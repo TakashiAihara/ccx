@@ -260,12 +260,25 @@ func TestListen_TooLongSocketPath_ClearError(t *testing.T) {
 		t.Errorf("error should tell the user how to fix it, got: %v", err)
 	}
 
-	// Exactly 104 bytes is refused too, as in api and heartbeat (#186).
-	exact := "/tmp/" + strings.Repeat("y", 104-len("/tmp/")-len("/s.sock")) + "/s.sock"
-	if len(exact) != 104 {
-		t.Fatalf("test path is %d bytes", len(exact))
+	// Exactly 104 bytes is refused too, as in api and heartbeat; 103 is listened on (#186).
+	pathOf := func(n int) string {
+		dir := testsock.Dir(t)
+		sub := filepath.Join(dir, strings.Repeat("y", n-len(dir)-len("//s.sock")))
+		if err := os.MkdirAll(sub, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(sub, "s.sock")
+		if len(p) != n {
+			t.Fatalf("test path is %d bytes, want %d", len(p), n)
+		}
+		return p
 	}
-	if _, err := newCollect(exact, spool, nil, quietLog).listen(); err == nil || !strings.Contains(err.Error(), "CCX_SOCKET") {
+	if _, err := newCollect(pathOf(104), spool, nil, quietLog).listen(); err == nil || !strings.Contains(err.Error(), "CCX_SOCKET") {
 		t.Errorf("a 104-byte path should be refused with the hint, got %v", err)
 	}
+	ln, err := newCollect(pathOf(103), spool, nil, quietLog).listen()
+	if err != nil {
+		t.Fatalf("a 103-byte path should be listened on: %v", err)
+	}
+	ln.Close()
 }

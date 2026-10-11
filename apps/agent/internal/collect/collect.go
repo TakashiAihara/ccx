@@ -116,6 +116,11 @@ func (s *Collect) Run(ctx context.Context) error {
 	} else if n > 0 {
 		s.log("drained %d event(s) from the fallback spool on startup", n)
 	}
+	// Only the hook writes there and it writes .raw; anything else is left alone,
+	// so say so instead of ignoring it forever (#186).
+	if others := s.spool.OtherIncoming(); len(others) > 0 {
+		s.log("left %d file(s) in %s that are not events: %s", len(others), s.spool.IncomingDir(), strings.Join(others, ", "))
+	}
 
 	ln, err := s.listen()
 	if err != nil {
