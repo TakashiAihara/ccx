@@ -450,7 +450,10 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["meta", "get", "--help"])).code).toBe(0);
     // 他の key が壊れていても、この key は読める
     await symlink("loop", join(homeA, "sessions", SID, "meta", "loop"));
-    expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n" });
+    expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n", err: "" });
+    // その key 自身が読めなければ「無い」(1) ではなく 2
+    const loop = await run(["meta", "get", "loop", SID]);
+    expect([loop.code, loop.out, loop.err]).toEqual([2, "", expect.stringContaining("ELOOP")]);
   });
 });
 

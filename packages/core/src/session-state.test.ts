@@ -261,6 +261,9 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(meta, "bin"), new Uint8Array([0x61, 0xff, 0x62]));
     expect(await readMetaValue(SID, "bin", home)).toBeNull();
     expect((await readDeclared(SID, home)).metadata.bin).toBeUndefined();
+    // その key 自身が読めないのは無いではない
+    await symlink("loop", join(meta, "loop"));
+    await expect(readMetaValue(SID, "loop", home)).rejects.toThrow(/ELOOP/);
   });
 
   test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {

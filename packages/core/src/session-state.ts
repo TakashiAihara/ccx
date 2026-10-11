@@ -141,10 +141,18 @@ export const sessionDir = (sessionId: string, home = claudeHome()) => join(home,
  */
 export async function readMetaValue(sessionId: string, key: string, home = claudeHome()): Promise<string | null> {
   if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
+  const bytes = await Bun.file(join(sessionDir(sessionId, home), META_DIR, key))
+    .bytes()
+    .catch((e: unknown) => {
+      if (errCode(e) === "ENOENT" || errCode(e) === "EISDIR") return null;
+      throw e;
+    });
+  if (bytes === null) return null;
+  // TypeError はここでは decode だけが投げる (読みの失敗と混ぜない)
   try {
-    return utf8(await Bun.file(join(sessionDir(sessionId, home), META_DIR, key)).bytes()).replace(/\n$/, "");
+    return utf8(bytes).replace(/\n$/, "");
   } catch (e) {
-    if (e instanceof TypeError || errCode(e) === "ENOENT" || errCode(e) === "EISDIR") return null;
+    if (e instanceof TypeError) return null;
     throw e;
   }
 }
