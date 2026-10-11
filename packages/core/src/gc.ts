@@ -17,6 +17,10 @@ export function blockers(info: RepodirInfo): string[] {
   const out: string[] = [];
 
   if (info.session.active) out.push("a session is active");
+  if (info.processes.length > 0) {
+    const ps = info.processes.map((p) => `${p.pid} ${p.command}`).join(", ");
+    out.push(`${info.processes.length} process(es) have their cwd in it: ${ps}`);
+  }
   if (info.git.dirty) out.push("the working tree is dirty");
   if (info.git.unpushed === null) out.push("cannot determine whether commits are pushed");
   else if (info.git.unpushed > 0) out.push(`${info.git.unpushed} unpushed commit(s)`);

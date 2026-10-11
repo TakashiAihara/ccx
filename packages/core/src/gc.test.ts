@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -70,6 +70,37 @@ describe("blockers", () => {
 
     expect(blockers(info)).toEqual([]);
     expect(isSafeToRemove(info)).toBe(true);
+  });
+
+  test("cwd が repodir の中にあるプロセスがあれば止める。隣の名前の dir は数えない (#221)", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const proc = await mkdtemp(join(tmp, "proc-"));
+    const fake = async (pid: number, cwd: string, comm: string) => {
+      await mkdir(join(proc, String(pid)), { recursive: true });
+      await symlink(cwd, join(proc, String(pid), "cwd"));
+      await Bun.write(join(proc, String(pid), "comm"), `${comm}\n`);
+    };
+    await fake(101, r.path, "zsh");
+    await fake(102, join(r.path, "apps"), "vim");
+    await fake(103, `${r.path}x`, "bash");
+    await fake(104, tmp, "bash");
+    await Bun.write(join(proc, "self"), "");
+
+    const info = find(await scanRepodirs(cfg, { procRoot: proc }), r.path);
+    expect(info.processes.sort((a, b) => a.pid - b.pid)).toEqual([{ pid: 101, command: "zsh" }, { pid: 102, command: "vim" }]);
+    expect(blockers(info)).toContain("2 process(es) have their cwd in it: 101 zsh, 102 vim");
+  });
+
+  test.skipIf(process.platform !== "linux")("本物の /proc: repodir の中で動くシェルを数える (#221)", async () => {
+    const r = await createRepodir(cfg, spec(), {}, "0.1.0");
+    const p = Bun.spawn(["sleep", "60"], { cwd: r.path });
+    try {
+      const info = find(await scanRepodirs(cfg), r.path);
+      expect(info.processes).toContainEqual({ pid: p.pid, command: "sleep" });
+    } finally {
+      p.kill();
+      await p.exited;
+    }
   });
 
   test("working tree が dirty なら止める", async () => {

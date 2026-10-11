@@ -6,7 +6,7 @@
  * ディレクトリから導出する。複製すれば必ず同期ずれを起こすため。
  */
 
-import { readdir } from "node:fs/promises";
+import { readdir, readlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -57,7 +57,37 @@ export type RepodirInfo = {
   problems: MetaProblem[];
   git: GitState;
   session: SessionState;
+  /** cwd がこの repodir の中にあるプロセス (エージェントの抜けたシェル等)。消すと削除済みの dir に取り残される (#221) */
+  processes: CwdProcess[];
 };
+
+export type CwdProcess = { pid: number; command: string };
+
+/**
+ * /proc/<pid>/cwd を全部読む。読めないもの (他ユーザー / 消えた) は飛ばす。/proc の無いホスト
+ * (macOS) では空で、そこでは数えない。自分自身は除く (repodir の中から gc を叩いても止まらない)。
+ * shortcut: Linux の /proc だけ。macOS で要るなら lsof -d cwd で足す
+ */
+export async function cwdProcesses(procRoot = "/proc"): Promise<(CwdProcess & { cwd: string })[]> {
+  let names: string[];
+  try {
+    names = (await readdir(procRoot)).filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid);
+  } catch {
+    return [];
+  }
+  const out = await Promise.all(
+    names.map(async (n) => {
+      try {
+        const cwd = await readlink(join(procRoot, n, "cwd"));
+        const command = (await Bun.file(join(procRoot, n, "comm")).text().catch(() => "?")).trim();
+        return { pid: Number(n), command, cwd };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return out.filter((p) => p !== null);
+}
 
 /**
  * Claude Code の project ディレクトリ名。cwd の / . _ をすべて - に潰したもの。
@@ -131,6 +161,7 @@ async function readOne(
   spec: RepoSpec,
   dirId: string,
   idleMs: number,
+  procs: (CwdProcess & { cwd: string })[],
 ): Promise<RepodirInfo> {
   const [meta, state, g, s] = await Promise.all([
     loadMeta(path),
@@ -150,6 +181,7 @@ async function readOne(
     problems: [...meta.problems, ...state.problems],
     git: g,
     session: s,
+    processes: procs.filter((p) => p.cwd === path || p.cwd.startsWith(`${path}/`)).map(({ pid, command }) => ({ pid, command })),
   };
 }
 
@@ -167,12 +199,15 @@ export type ScanOptions = {
   /** repo で絞る (host/owner/repo の部分一致) */
   filter?: string;
   idleMs?: number;
+  /** テスト用。cwd を読む /proc の場所 */
+  procRoot?: string;
 };
 
 /** root 配下の repodir をすべて読む。<host>/<owner>/<repo>/<dir-id> の 4 階層。 */
 export async function scanRepodirs(cfg: Config, opts: ScanOptions = {}): Promise<RepodirInfo[]> {
   const idleMs = opts.idleMs ?? SESSION_IDLE_MS;
   const found: Promise<RepodirInfo>[] = [];
+  const procs = await cwdProcesses(opts.procRoot);
 
   for (const host of await subdirs(cfg.root)) {
     for (const owner of await subdirs(join(cfg.root, host))) {
@@ -183,7 +218,7 @@ export async function scanRepodirs(cfg: Config, opts: ScanOptions = {}): Promise
         for (const dirId of await subdirs(join(cfg.root, host, owner, repo))) {
           if (!isDirId(dirId)) continue;
           const path = join(cfg.root, host, owner, repo, dirId);
-          found.push(readOne(path, { host, owner, repo }, dirId, idleMs));
+          found.push(readOne(path, { host, owner, repo }, dirId, idleMs, procs));
         }
       }
     }
