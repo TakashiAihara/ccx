@@ -86,6 +86,13 @@ describe("session state travels with the transcript", () => {
     expect((await A.push(t, homeA)).status).toBe("state");
     expect((await A.readRemoteDeclared(SID))?.labelHistory).toEqual(h("L", "M", "L"));
 
+    // dry-run は印だけの変更でも state.json も履歴も書かない (#219)
+    await writeDeclared(SID, { role: "dry" }, homeA);
+    const historyBefore = (await A.history((await A.find(SID))!)).length;
+    expect((await A.push(t, homeA, { dryRun: true })).status).toBe("state");
+    expect((await A.readRemoteDeclared(SID))?.role).not.toBe("dry");
+    expect((await A.history((await A.find(SID))!)).length).toBe(historyBefore);
+
     // role だけの変更でも運ぶ
     await writeDeclared(SID, { role: "pm" }, homeA);
     expect((await A.push(t, homeA)).status).toBe("state");

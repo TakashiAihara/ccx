@@ -370,8 +370,138 @@ describe("transcript: push / pull / prune through the store", () => {
     // live 同期が伸ばした object。手元はそれより短い (session.json の写し) のまま
     await Bun.write(storedA(), transcriptBody + line({ live: "B" }));
     const r = await A.push(t);
-    expect(r.status).not.toBe("unchanged");
+    expect(r.status).toBe("pushed");
     expect(await Bun.file(storedA()).text()).toBe(transcriptBody);
+  });
+
+  test("a machine whose copy is only the start of another machine's newer copy is behind, not refused (#219)", async () => {
+    // B が元で、A は pull しただけ (A 自身は push したことがない)
+    const t = await seedA();
+    const C = new TranscriptClient(A.store, { machine: "host-c", user: "carol" });
+    await C.push(t);
+    await B.pull(SID, homeB);
+    await rm(storedA(), { force: true });
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    // その後 B が先へ進めて push した。A の手元はその途中まで
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    expect((await B.push(tB)).status).toBe("pushed");
+    const r = await A.push(t);
+    expect([r.status, r.reason]).toEqual(["behind", expect.stringContaining("host-b/bob")]);
+    expect(await Bun.file(storedA()).exists()).toBe(false);
+    expect(await A.find(SID)).toMatchObject({ machine: "host-b" });
+
+    // 手元にだけある tool-result / subagent / workflow があれば、送るものがあるので behind ではない
+    for (const extra of ["tool-results/only-here.txt", "subagents/only-here.jsonl", "workflows/only-here.json"]) {
+      const p = join(homeA, "projects", encodeCwd(CWD_A), SID, extra);
+      await Bun.write(p, "only on A\n");
+      const t2 = (await localTranscripts(homeA)).find((x) => x.sessionId === SID)!;
+      expect((await A.push(t2, homeA, { dryRun: true })).status).toBe("refused");
+      await rm(p);
+    }
+    // 同じ名前でも中身が違えば、手元にしか無いもの
+    const abc = join(homeA, "projects", encodeCwd(CWD_A), SID, "tool-results", "abc.txt");
+    const was = await Bun.file(abc).text();
+    await Bun.write(abc, "changed on A");
+    expect((await A.push((await localTranscripts(homeA)).find((x) => x.sessionId === SID)!, homeA, { dryRun: true })).status).toBe("refused");
+    await Bun.write(abc, was);
+
+    // 空の手元ファイルは何の途中でもある
+    await Bun.write(t.path, "");
+    expect((await A.push((await localTranscripts(homeA)).find((x) => x.sessionId === SID)!, homeA, { dryRun: true })).status).toBe("behind");
+  });
+
+  test("another user on the same machine is another copy (#219)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    const A2 = new TranscriptClient(A.store, { machine: "host-a", user: "bob" });
+    await A2.pull(SID, homeB);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "bob" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    expect((await A2.push(tB)).status).toBe("pushed");
+    await Bun.write(t.path, transcriptBody + line({ on: "alice" }));
+    expect((await A.push(t)).reason).toContain("host-a/bob");
+  });
+
+  test("the same user name on another machine is still another machine (#219)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    const B2 = new TranscriptClient(A.store, { machine: "host-b", user: "alice" });
+    await B2.pull(SID, homeB);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    expect((await B2.push(tB)).status).toBe("pushed");
+    await Bun.write(t.path, transcriptBody + line({ on: "A" }));
+    expect((await A.push(t)).reason).toContain("host-b/alice");
+  });
+
+  test("push refuses when another machine pushed last and the local copy does not continue it; --force settles the fork (#219)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    // B が resume して伸ばし、push した
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    expect((await B.push(tB)).status).toBe("pushed");
+
+    // A も別の行で伸ばした。最後の写し (B) は A の手元の先頭部分ではない
+    await Bun.write(t.path, transcriptBody + line({ on: "A" }));
+    const before = await Bun.file(storedA()).text();
+    const dry = await A.push(t, homeA, { dryRun: true });
+    expect([dry.status, dry.reason]).toEqual(["refused", expect.stringContaining("host-b/bob")]);
+    expect((await A.push(t)).status).toBe("refused");
+    expect(await Bun.file(storedA()).text()).toBe(before);
+
+    // A が --force した後は A が最後の写しなので、A の次の push は止まらない。止まるのは B の側
+    expect((await A.push(t, homeA, { force: true })).status).toBe("pushed");
+    await Bun.write(t.path, transcriptBody + line({ on: "A" }) + line({ on: "A2" }));
+    expect((await A.push(t)).status).toBe("pushed");
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }) + line({ on: "B2" }));
+    expect((await B.push(tB)).reason).toContain("host-a/alice");
+  });
+
+  test("push refuses when the last copy is another machine's grown by live sync past what the local one continues (#219)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    await B.push(tB);
+    // B の session が動き続け、live 同期が object だけを伸ばした (session.json はそのまま)
+    const storedB = storedA().replace("machine=host-a/user=alice", "machine=host-b/user=bob");
+    await Bun.write(storedB, transcriptBody + line({ on: "B" }) + line({ live: "B" }));
+
+    // A は B の push した分までは続けているが、live 同期の分は持っていない
+    await Bun.write(t.path, transcriptBody + line({ on: "B" }) + line({ on: "A" }));
+    expect((await A.push(t)).reason).toContain("host-b/bob");
+    // live 同期の分まで続けていれば通る
+    await Bun.write(t.path, transcriptBody + line({ on: "B" }) + line({ live: "B" }) + line({ on: "A" }));
+    expect((await A.push(t)).status).toBe("pushed");
+  });
+
+  test("push after pulling another machine's copy and continuing it is not refused; dry-run writes nothing (#219)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    // A は自分の写しを B より長く伸ばした。その後 B が分岐を --force で置いた
+    await Bun.write(t.path, transcriptBody + line({ on: "A" }) + line({ on: "A" }) + line({ on: "A" }));
+    await A.push(t);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    const tB = (await localTranscripts(homeB)).find((x) => x.sessionId === SID)!;
+    expect((await B.push(tB, homeB, { force: true })).status).toBe("pushed");
+
+    // A が B の版を pull --force で採り、続けた。A 自身の古い (長い) 写しは止める理由にならない
+    expect((await A.pull(SID, homeA, true)).status).toBe("pulled");
+    await Bun.write(t.path, transcriptBody + line({ on: "B" }) + line({ on: "A" }));
+    const before = await Bun.file(storedA()).text();
+    expect((await A.push(t, homeA, { dryRun: true })).status).toBe("pushed");
+    expect(await Bun.file(storedA()).text()).toBe(before);
+    expect((await A.push(t)).status).toBe("pushed");
   });
 
   test("pull with nothing new does not download the transcript; an empty local file is a prefix (#120)", async () => {

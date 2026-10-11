@@ -312,6 +312,12 @@ const carriedOf = (m: SessionMeta, k: Carried) => m[k] ?? [];
 const carriedDir = (t: LocalTranscript, k: Carried) => t[`${k}Dir` as const];
 const sameCarried = (m: SessionMeta, local: Record<Carried, ToolResult[]>) => CARRIED.every((k) => sameFiles(carriedOf(m, k), local[k]));
 
+/** local のファイル (名前と sha256) がどれも remote にあるか */
+const holdsAll = (remote: ToolResult[], local: ToolResult[]) => {
+  const have = new Set(remote.map((r) => `${r.name}\0${r.sha256}`));
+  return local.every((r) => have.has(`${r.name}\0${r.sha256}`));
+};
+
 /** 運ぶディレクトリごとの全ファイル */
 async function carriedFiles(dirs: (k: Carried) => string | null): Promise<Record<Carried, ToolResult[]>> {
   const lists = await Promise.all(CARRIED.map((k) => localFiles(dirs(k))));
@@ -376,9 +382,15 @@ export class AmbiguousSessionId extends Error {
 
 /**
  * status `state` は state.json だけが変わった (transcript は同じ)。手元の宣言が読めなければ state は null で
- * stateError に理由。transcript は運び、state.json は書かない (読めなかった key を消した写しを置かない)
+ * stateError に理由。transcript は運び、state.json は書かない (読めなかった key を消した写しを置かない)。
+ * status `refused` は何も書かずに止めた (reason に理由)。`behind` は手元が他のマシンの最新の写しの途中までで、
+ * 送るものが無い (何も書かない。失敗ではない)。dryRun では status は「書いたらどうなったか」で、
+ * store には何も書かない
  */
-export type PushResult = { status: "pushed" | "state" | "unchanged"; meta: SessionMeta; state: DeclaredState | null; stateError?: string };
+export type PushResult = { status: "pushed" | "state" | "unchanged" | "refused" | "behind"; reason?: string; meta: SessionMeta; state: DeclaredState | null; stateError?: string };
+
+/** force は他のマシンが先へ進めた写しがあっても置く。dryRun は判定だけして store に書かない */
+export type PushOptions = { force?: boolean; dryRun?: boolean };
 export type PullResult = {
   status: "pulled" | "already-here";
   meta: SessionMeta;
@@ -542,6 +554,38 @@ export class TranscriptClient {
     }
   }
 
+  /**
+   * push すると、別のマシンが先へ進めた版が pull で選ばれなくなるなら、その理由 (#219)。pull は最後に
+   * push された写しを取るので、見るのはそれ 1 つ。自分のものか、手元がそれを続けたもの (pull して resume
+   * した) なら通す。他のマシンの写しは消えない (自分の prefix にしか書かない) が、pull からは隠れる。
+   * 自分の prefix の object が手元より長いのは手元を切り詰めたときで、それは push で直す (live-transcript.md)。
+   * 判定と書き込みの間に他のマシンが push すれば、それは見えない (store に条件付き書き込みが無い)
+   */
+  private async forkRisk(
+    sessionId: string,
+    snapshot: string,
+    size: number,
+    localDigest: string,
+    files: { toolResults: ToolResult[]; carried: Record<Carried, ToolResult[]> },
+  ): Promise<{ status: "refused" | "behind"; reason: string } | null> {
+    const [latest] = await this.findAll(sessionId);
+    if (!latest || (latest.machine === this.origin.machine && latest.user === this.origin.user)) return null;
+    // その写しが live 同期で伸びていれば、伸びた分まで続けていないと、その分が pull から隠れる。
+    // 長さを見た後に伸びても、hash するのは見た長さまで (その間の追記で誤って止めない)
+    const key = `${this.keyPrefix(sessionId, latest)}transcript.jsonl`;
+    const grown = await this.objectSize(key);
+    const [len, digest] = grown !== null && grown > latest.size ? [grown, await sha256Blob(this.s3.file(key).slice(0, grown))] : [latest.size, latest.sha256];
+    // 手元が短ければ hash するまでもなく続けていない
+    if (len <= size && (await sha256Blob(Bun.file(snapshot).slice(0, len))) === digest) return null;
+    const who = `${latest.machine}/${latest.user} pushed a copy at ${latest.pushedAt}`;
+    // 手元がその写しの途中までで、手元のファイルもどれもその写しにある: 送るものが無い (session は向こうで
+    // 進んだ)。失敗ではない。空の手元は何の途中でもある (Bun の slice(0, 0) は 1 byte 返すので hash しない)
+    const prefix = size === 0 || (size < len && (await sha256Blob(this.s3.file(key).slice(0, size))) === localDigest);
+    const filesThere = holdsAll(latest.toolResults, files.toolResults) && CARRIED.every((k) => holdsAll(carriedOf(latest, k), files.carried[k]));
+    if (prefix && filesThere) return { status: "behind", reason: `${who} that continues the local one; pull it (--no-repodir to skip the repodir)` };
+    return { status: "refused", reason: `${who} that the local one does not continue` };
+  }
+
   /** 保存先の object を読み戻して sha256 を取る。session.json の値ではなく実体で比べるため */
   private async remoteSha256(key: string): Promise<string | null> {
     if (!(await this.s3.exists(key))) return null;
@@ -561,7 +605,7 @@ export class TranscriptClient {
    * state.json は transcript と独立に、ローカルの印と違うときだけ書く (印は transcript
    * が変わらなくても変わる)。
    */
-  async push(t: LocalTranscript, home = claudeHome()): Promise<PushResult> {
+  async push(t: LocalTranscript, home = claudeHome(), opts: PushOptions = {}): Promise<PushResult> {
     const prefix = this.keyPrefix(t.sessionId);
     const snapshot = `${t.path}.push-tmp`;
     const snapshots: Partial<Record<Carried, string>> = {};
@@ -579,6 +623,7 @@ export class TranscriptClient {
       // 印が 1 つも無い session に空の state.json を置かない。無いのは空と同じ意味で、
       // 印を付けたことのない session ごとに PUT が 1 つ増えるだけになる
       if (!remote && isEmptyDeclared(state)) return false;
+      if (opts.dryRun) return true;
       await this.s3.write(`${prefix}state.json`, JSON.stringify(state, null, 2));
       return true;
     };
@@ -613,9 +658,27 @@ export class TranscriptClient {
       ) {
         if (!(await syncState())) return { status: "unchanged", meta: prev, state, stateError };
         // transcript は運んでいないが、印が変わったことは履歴に残す (いつ・どのマシンが)
-        await this.record(prefix, "state");
+        if (!opts.dryRun) await this.record(prefix, "state");
         return { status: "state", meta: prev, state, stateError };
       }
+
+      const meta: SessionMeta = {
+        sessionId: t.sessionId,
+        machine: this.origin.machine,
+        user: this.origin.user,
+        ...facts,
+        size,
+        sha256: digest,
+        pushedAt: new Date().toISOString(),
+        toolResults,
+        ...carried,
+        ...(repo ? { repo } : {}),
+      };
+      if (!opts.force) {
+        const risk = await this.forkRisk(t.sessionId, snapshot, size, digest, { toolResults, carried });
+        if (risk) return { ...risk, meta, state, stateError };
+      }
+      if (opts.dryRun) return { status: "pushed", meta, state, stateError };
 
       await this.s3.write(`${prefix}transcript.jsonl`, Bun.file(snapshot));
       // tool-results は 1 度置いたら変わらない (名前と sha256 が前回と同じなら送らない)
@@ -632,18 +695,6 @@ export class TranscriptClient {
         }
       }
 
-      const meta: SessionMeta = {
-        sessionId: t.sessionId,
-        machine: this.origin.machine,
-        user: this.origin.user,
-        ...facts,
-        size,
-        sha256: digest,
-        pushedAt: new Date().toISOString(),
-        toolResults,
-        ...carried,
-        ...(repo ? { repo } : {}),
-      };
       await this.s3.write(metaKey, JSON.stringify(meta, null, 2));
       await syncState();
       await this.record(prefix, "push");
