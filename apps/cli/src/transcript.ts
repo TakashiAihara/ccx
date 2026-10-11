@@ -116,14 +116,21 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
     .option("--archived", "every local session marked archived (ccx session mark archived)")
+    .option("--dry-run", "say what would be pushed, unchanged or refused, and write nothing")
+    .option("--force", "push even when another machine pushed last and the local copy does not continue it, or is behind it (its copy stays, but pull stops picking it)")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
       const { picked } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) });
       const results = [];
       for (const t of picked) {
-        const r = await c.push(t);
-        results.push({ sessionId: t.sessionId, ...r });
+        const r = await c.push(t, claudeHome(), { force: Boolean(o.force), dryRun: Boolean(o.dryRun) });
+        results.push({ sessionId: t.sessionId, ...r, ...(o.dryRun ? { dryRun: true } : {}) });
+        if (r.status === "refused") {
+          console.error(`(${t.sessionId}: not pushed: ${r.reason}; --force makes this copy the one pull picks)`);
+          process.exitCode = 1;
+        }
+        if (r.status === "behind") console.error(`(${t.sessionId}: nothing to push: ${r.reason})`);
         if (r.stateError) {
           console.error(`(${t.sessionId}: transcript ${r.status}, state.json not written: declared state could not be read: ${r.stateError})`);
           process.exitCode = 1;
@@ -133,6 +140,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       }
       if (o.json) console.log(JSON.stringify(results, null, 2));
       if (!o.json && picked.length === 0) console.error("nothing to push");
+      if (o.dryRun) console.error("(dry run: nothing was written)");
     });
 
   transcript
