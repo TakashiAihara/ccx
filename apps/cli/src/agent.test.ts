@@ -45,8 +45,14 @@ describe("パスの解決", () => {
   });
 
   test("XDG_RUNTIME_DIR が無い / 空なら ~/.ccx/run (ccx-agent の既定と同じ。macOS に /run は無い)", () => {
-    expect(defaultSocketPath({})).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
-    expect(defaultSocketPath({ XDG_RUNTIME_DIR: "" })).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
+    const none = join(dir, "no-run-user");
+    expect(defaultSocketPath({}, none)).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
+    expect(defaultSocketPath({ XDG_RUNTIME_DIR: "" }, none)).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
+    // systemd の user unit で動く agent の socket が在れば、XDG_RUNTIME_DIR の無い shell からもそれを見る
+    const runUser = join(dir, "run-user");
+    mkdirSync(join(runUser, "ccx"), { recursive: true });
+    writeFileSync(join(runUser, "ccx", "ccx-agent.sock"), "");
+    expect(defaultSocketPath({}, runUser)).toBe(join(runUser, "ccx", "ccx-agent.sock"));
   });
 });
 

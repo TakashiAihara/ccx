@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { connect } from "node:net";
 import { homedir } from "node:os";
@@ -32,11 +33,14 @@ export type AgentStatus = {
   hubTokenAccepted?: boolean;
 };
 
-// ccx-agent の既定 (packages/core/config/config.go socketPath) と同じ。XDG_RUNTIME_DIR の無い macOS に
-// /run/user を出さない
-export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+// ccx-agent の既定 (packages/core/config/config.go socketPath) と同じく XDG_RUNTIME_DIR、無ければ ~/.ccx/run。
+// ただし XDG_RUNTIME_DIR の無い shell (cron 等) からでも、systemd の user unit で動く agent の socket
+// (/run/user/<uid>) が在ればそちらを見る。macOS には /run/user が無い
+export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env, runUser = join("/run/user", String(process.getuid?.() ?? 0))): string {
   if (env.CCX_SOCKET) return env.CCX_SOCKET;
   if (env.XDG_RUNTIME_DIR) return join(env.XDG_RUNTIME_DIR, "ccx", "ccx-agent.sock");
+  const systemd = join(runUser, "ccx", "ccx-agent.sock");
+  if (existsSync(systemd)) return systemd;
   return join(homedir(), ".ccx", "run", "ccx-agent.sock");
 }
 
