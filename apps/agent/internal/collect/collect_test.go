@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
@@ -55,7 +56,7 @@ func (s *stubForwarder) payloads() []string {
 func startServer(t *testing.T, fwd Forwarder) (*Collect, string, string, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
-	sock := dir + "/ccx-agent.sock"
+	sock := testsock.Path(t, "ccx-agent.sock")
 	spoolDir := dir + "/spool"
 
 	spool, err := OpenSpool(spoolDir, &ccxv1.Origin{Machine: "m", User: "u"})
@@ -216,7 +217,7 @@ func TestStatus_ReachAndPending(t *testing.T) {
 // it drains that fallback into the queue before serving.
 func TestAgentDown_HookFallsBack_ThenDrainedOnStart(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/ccx-agent.sock"
+	sock := testsock.Path(t, "ccx-agent.sock")
 	spoolDir := dir + "/spool"
 
 	// ccx-agent is NOT running. Hook fires: dial fails fast, falls back to incoming.

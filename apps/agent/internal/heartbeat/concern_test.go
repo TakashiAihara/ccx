@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
@@ -32,7 +33,7 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 	write(due, 51*time.Minute)
 	write(fresh, time.Minute)
 
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	c := &Concern{socketPath: sock, claudeHome: home, log: t.Logf,
 		cfg: config.Heartbeat{Default: true, Interval: 50 * time.Minute, MaxIdle: 12 * time.Hour}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,7 +82,7 @@ func TestConcernSendsTheBeatToTheRegisteredSession(t *testing.T) {
 func isTimeout(err error) bool { ne, ok := err.(net.Error); return ok && ne.Timeout() }
 
 func TestConcernRefusesASecondServe(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "ch.sock")
+	sock := testsock.Path(t, "ch.sock")
 	first := &Concern{socketPath: sock, log: t.Logf}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -193,11 +194,7 @@ func TestConcernKeepsAcceptingAfterAnError(t *testing.T) {
 // old connection winds down; the old one going away must not unregister it.
 func TestReconnectKeepsTheSessionRegistered(t *testing.T) {
 	const id = "00000000-0000-4000-8000-0000000000bb"
-	dir, err := os.MkdirTemp("", "hb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := testsock.Dir(t)
 	sock := filepath.Join(dir, "c.sock")
 	c := &Concern{socketPath: sock, claudeHome: dir, log: t.Logf, cfg: config.Heartbeat{Interval: 50 * time.Minute}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,6 +205,7 @@ func TestReconnectKeepsTheSessionRegistered(t *testing.T) {
 	register := func(prev *Heartbeat) net.Conn {
 		t.Helper()
 		var conn net.Conn
+		var err error
 		for i := 0; i < 100; i++ {
 			if conn, err = net.Dial("unix", sock); err == nil {
 				break

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
 )
@@ -23,7 +24,7 @@ func TestAcceptLoop_ReturnsErrorOnUnexpectedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := newCollect(t.TempDir()+"/s.sock", spool, nil, quietLog)
+	c := newCollect(testsock.Path(t, "s.sock"), spool, nil, quietLog)
 
 	ln, err := net.Listen("unix", c.socketPath)
 	if err != nil {
@@ -92,7 +93,7 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 // the review's Medium#5 / Low#6.
 func TestHook_ReturnsWithinBudget_WhenServerStalls(t *testing.T) {
 	dir := t.TempDir()
-	sock := dir + "/s.sock"
+	sock := testsock.Path(t, "s.sock")
 	// A listener that accepts connections but never reads or replies — a wedged
 	// ccx-agent. The hook must not wait on it beyond its deadlines.
 	ln, err := net.Listen("unix", sock)
@@ -237,7 +238,7 @@ func TestRun_LockPrecedesDrain(t *testing.T) {
 	defer held.release()
 
 	// This instance's Run must fail on the lock — before DrainIncoming runs.
-	c := newCollect(dir+"/s.sock", spool, nil, quietLog)
+	c := newCollect(testsock.Path(t, "s.sock"), spool, nil, quietLog)
 	if err := c.Run(context.Background()); err == nil {
 		t.Fatal("Run should fail while another ccx-agent holds the lock")
 	}
