@@ -106,6 +106,14 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await writeDeclared(SID, { role: "" }, home);
   });
 
+  test("a label file that is not UTF-8 is not seeded into the label history (#191)", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(dir, { recursive: true });
+    await Bun.write(join(dir, "label"), Buffer.from("77ff72", "hex"));
+    const s = await writeDeclared(SID, { label: "named" }, home);
+    expect(s.labelHistory.map((e) => e.label)).toEqual(["named"]);
+  });
+
   test("label / task / meta are read by the table shared with ccx-agent: not UTF-8 is absent, JS trim (#191)", async () => {
     const dir = join(home, "sessions", SID);
     await mkdir(join(dir, "meta"), { recursive: true });

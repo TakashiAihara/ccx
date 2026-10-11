@@ -280,7 +280,8 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
   const before =
     patch.label !== undefined && patch.labelHistory === undefined
       ? {
-          label: (await Bun.file(join(dir, TEXT_FILE.label)).text().catch(() => "")).trim(),
+          // readDeclared と同じ読み: UTF-8 でない名前は無い (置換文字入りの名前を履歴の種にしない。#191)
+          label: await Bun.file(join(dir, TEXT_FILE.label)).bytes().then((b) => utf8(b).trim()).catch(() => ""),
           labelHistory: await readLabelHistory(dir).catch(() => null),
         }
       : undefined;
