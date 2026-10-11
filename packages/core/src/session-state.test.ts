@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import {
   atomicTempPath,
+  claudeHome,
   EMPTY_DECLARED,
   isMetaKey,
   flagsOf,
@@ -33,6 +34,13 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(home, { recursive: true, force: true });
+});
+
+test("claudeHome: an empty CLAUDE_CONFIG_DIR is the same as unset (#176)", () => {
+  const def = claudeHome({});
+  expect(def).toBe(join(homedir(), ".claude"));
+  expect(claudeHome({ CLAUDE_CONFIG_DIR: "" })).toBe(def);
+  expect(claudeHome({ CLAUDE_CONFIG_DIR: "/x/acct" })).toBe("/x/acct");
 });
 
 describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
