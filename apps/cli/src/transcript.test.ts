@@ -429,6 +429,52 @@ describe("transcript: push / pull / prune through the store", () => {
       }
     }
 
+    // 壊れた state.json 1 件で一覧全体を止めない。その行は ? で、-s でも他の写しは出る (#229)
+    await Bun.write(join(root, "ccx", `${prefixA}state.json`), "{");
+    const [bout, berr, bcode] = await ls("--json");
+    const rows = JSON.parse(bout) as { machine: string; stateError?: string }[];
+    // 読めた行には stateError の鍵そのものが無い
+    expect([bcode, rows.map((m) => [m.machine, "stateError" in m]), berr]).toEqual([
+      0,
+      [["host-b", false], ["host-a", true]],
+      expect.stringContaining(`could not read the state of ${SID}`),
+    ]);
+    const [tout, , tcode] = await ls();
+    // 2 列目が machine (host-a の行は "pulled on host-b" も含むので部分一致にしない)
+    const cell = (host: string) => tout.split("\n").map((l) => l.split(/\s+/)).filter((c) => c[1] === host).map((c) => c[3]);
+    expect([tcode, cell("host-a"), cell("host-b").includes("?")]).toEqual([0, ["?"], false]);
+    const [sout, , scode] = await ls("-s", SID, "--json");
+    expect([scode, (JSON.parse(sout) as { machine: string; stateError?: string }[]).map((m) => [m.machine, Boolean(m.stateError)])]).toEqual([
+      0,
+      [["host-b", false], ["host-a", true]],
+    ]);
+    // 保存先が state.json に答えないのは、一覧では ? だが -s では 2 (session.json / 履歴と同じ)
+    {
+      const upstream = A.store.endpoint;
+      const proxy = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          const u = new URL(req.url);
+          if (req.method === "GET" && decodeURIComponent(u.pathname).endsWith(`${prefixA}state.json`)) return new Response("boom", { status: 500 });
+          return fetch(`${upstream}${u.pathname}${u.search}`, { method: req.method, headers: req.headers, body: req.body });
+        },
+      });
+      try {
+        const env = { ...process.env, CCX_HUB_URL: `http://127.0.0.1:${proxy.port}`, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root };
+        const one = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID, "--json"], { env, stdout: "pipe", stderr: "pipe" });
+        const all = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "--json"], { env, stdout: "pipe", stderr: "pipe" });
+        const [oout, ocode, aout, acode] = await Promise.all([new Response(one.stdout).text(), one.exited, new Response(all.stdout).text(), all.exited]);
+        expect([ocode, oout]).toEqual([2, ""]);
+        expect([acode, (JSON.parse(aout) as { machine: string; stateError?: string }[]).map((m) => [m.machine, Boolean(m.stateError)])]).toEqual([
+          0,
+          [["host-b", false], ["host-a", true]],
+        ]);
+      } finally {
+        proxy.stop(true);
+      }
+    }
+
     // 保存先が答えないのは「無い」ではない
     const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
       env: { ...process.env, CCX_HUB_URL: "http://127.0.0.1:1", CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },

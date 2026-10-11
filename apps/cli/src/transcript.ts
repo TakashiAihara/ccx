@@ -188,9 +188,9 @@ export function registerTranscript(program: Command, VERSION: string): void {
 
   transcript
     .command("ls")
-    .description("List sessions in the store, newest push first")
+    .description("List sessions in the store, newest push first. A session whose state.json cannot be read shows ? where its flags (archived, …) go, with stateError in --json, and the rest are listed")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
-    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous (a state.json that is not valid JSON shows ?, not 2)")
     .option("--json", "print as JSON")
     .action(async (o) => {
       // --session では保存先が答えないのも「引けなかった」(2)。未設定 (3) は他のコマンドと同じ
@@ -222,8 +222,21 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
-          const [h, state] = await Promise.all([c.history(m), c.readRemoteDeclared(m.sessionId, m)]);
-          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state };
+          // 読めない state.json 1 件で一覧を止めない (#229)。一覧は c.list の読めない meta と同じく理由を問わず
+          // 1 行出して続ける。-s は壊れた JSON だけ: session は保存先に在る (1 ではない) が、保存先が答えないのは
+          // session.json / 履歴と同じく 2
+          let stateError: string | undefined;
+          const [h, state] = await Promise.all([
+            c.history(m),
+            c.readRemoteDeclared(m.sessionId, m).catch((e: unknown) => {
+              if (o.session !== undefined && !(e instanceof SyntaxError)) throw e;
+              stateError = (e instanceof Error ? e.message : String(e)) || "unreadable";
+              console.error(`(could not read the state of ${m.sessionId} from ${m.machine}: ${stateError})`);
+              return null;
+            }),
+          ]);
+          // JSON.stringify は undefined の鍵を出さないので、stateError は読めなかった行にだけ載る
+          return { ...m, lastPull: [...h].reverse().find((e) => e.op === "pull") ?? null, state, stateError };
         }),
       ).catch((e: unknown) => {
         // --session では見つけた後に読めなかったのも 2 (1 は「無い」だけ)
@@ -243,7 +256,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
         shortId(m.sessionId),
         m.machine,
         m.user,
-        m.state ? flagsOf(m.state).join(",") : "",
+        m.stateError !== undefined ? "?" : m.state ? flagsOf(m.state).join(",") : "",
         human(m.size),
         `${humanSince(Date.parse(m.pushedAt))} ago`,
         m.lastPull ? `pulled on ${m.lastPull.machine} ${humanSince(Date.parse(m.lastPull.at))} ago` : "",
