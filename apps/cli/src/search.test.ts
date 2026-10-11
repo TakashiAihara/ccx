@@ -189,12 +189,14 @@ describe("search: embedded DuckDB over the store", () => {
     const histDir = join(root, "ccx", "pre", "transcripts", "machine=host-a", "user=alice", `session_id=${SID}`, "history");
     await Bun.write(join(histDir, "1-push-host-a-deadbeef.json"), '{"op": "pu');
     await Bun.write(join(histDir, "2-push-host-a-cafef00d.json"), "[]");
+    await Bun.write(join(histDir, "3-push-host-a-00000000.json"), "null");
+    await Bun.write(join(histDir, "4-pull-host-a-11111111.json"), '{"op":"pull"}');
     const hist = await ccx("--sql", "SELECT session_id, op FROM history ORDER BY session_id", "--json");
     expect(hist.code).toBe(0);
     expect(JSON.parse(hist.out)).toEqual([{ session_id: SID, op: "push" }, { session_id: SID2, op: "push" }]);
     const client = new TranscriptClient(store, { machine: "host-a", user: "alice" });
     const meta = (await client.find(SID))!;
-    expect((await client.history(meta)).map((e) => e.op)).toEqual(["push"]);
+    expect(await client.history(meta)).toStrictEqual([{ op: "push", machine: "host-a", user: "alice", at: expect.any(String) }]);
 
     await rm(histDir, { recursive: true });
     const c = await openDuckDB(store, { withHistory: true, session: SID.slice(0, 8) });

@@ -245,6 +245,20 @@ export async function transcriptFacts(
   return facts;
 }
 
+/** history/ の 1 件。op / machine / user / at が文字列でなければ null (並べられず、表示が壊れる) */
+function parseHistoryEntry(text: string): HistoryEntry | null {
+  let e: unknown;
+  try {
+    e = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  // 配列 / 数値 / 文字列は下の検査で落ちる。null だけは添字で投げる
+  if (e === null) return null;
+  const r = e as Record<string, unknown>;
+  return ["op", "machine", "user", "at"].every((k) => typeof r[k] === "string") ? (r as HistoryEntry) : null;
+}
+
 export async function sha256(path: string): Promise<string> {
   const h = new Bun.CryptoHasher("sha256");
   for await (const chunk of Bun.file(path).stream()) h.update(chunk);
@@ -501,11 +515,9 @@ export class TranscriptClient {
       const page = await this.s3.list({ prefix, continuationToken: token });
       for (const o of page.contents ?? []) {
         // 壊れた 1 件で tr ls 全体を止めない (#172)。読めないのは取得の失敗で、それは投げる
-        const text = await this.s3.file(o.key).text();
-        try {
-          const e = JSON.parse(text) as unknown;
-          if (e && typeof e === "object" && !Array.isArray(e)) out.push(e as HistoryEntry);
-        } catch {}
+        const e = parseHistoryEntry(await this.s3.file(o.key).text());
+        if (e) out.push(e);
+        else console.error(`(skipped ${o.key}: not a history entry)`);
       }
       token = page.isTruncated ? page.nextContinuationToken : undefined;
     } while (token);
