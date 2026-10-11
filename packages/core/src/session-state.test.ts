@@ -57,7 +57,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
-    // hook が ccx を通さず書いた label は履歴に残らない (ccx が見ていない)
+    // ccx を通さず書かれた label (claude-config#966 より前の hook) は履歴に残らない (ccx が見ていない)
     expect(s).toEqual({ archived: true, label: "scope｜step", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
     expect(flagsOf(s)).toEqual(["archived"]);
   });
@@ -109,7 +109,7 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await writeDeclared(SID, { label: " a " }, home);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("a\n");
     await writeDeclared(SID, { task: "t" }, home);
-    // 比べる相手は履歴の最後: label ファイルだけ先に変わっていても (hook が書いた / 履歴に足す前に落ちた) 記録する
+    // 比べる相手は履歴の最後: label ファイルだけ先に変わっていても (claude-config#966 より前の hook が書いた / 履歴に足す前に落ちた) 記録する
     await Bun.write(join(home, "sessions", SID, "label"), "b\n");
     await writeDeclared(SID, { label: "b" }, home);
     const s = await writeDeclared(SID, { label: "c" }, home);

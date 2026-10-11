@@ -12,7 +12,7 @@
  * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` (利用者側の script が marker を
  * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` は空
  * ファイル、`label` はテキストで、auto-label hook も `ccx session label` で書く (claude-config#966 より
- * 前の hook と ccx の無いホストでは hook が直接書く。それもそのまま読む)、`task` は
+ * 前の hook は直接書いていた。それもそのまま読む)、`task` は
  * 新しいテキスト。metadata は `meta/<key>` の 1 key 1 ファイル (中身が値、空なら値なし)。
  * shell の読み手 (statusline / hook) が `[ -e … ]` で読めるように、JSON 1 つにはしない。
  * 保存先には `state.json` 1 つにまとめて置く (transcript.ts が push / pull で運ぶ)。
@@ -269,7 +269,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
   await mkdir(dir, { recursive: true });
   // 比べる相手は履歴の最後の 1 件で、ファイルではない。ファイルと比べると、label を書いた後・履歴に足す前に
   // 落ちた変更を次の同じ書き込みが「変わっていない」と読み、二度と記録しない。ccx を通さず書かれた名前
-  // (#966 より前の hook / ccx の無いホスト) を ccx で書き直したときも記録される。履歴が空なら、空でない名前は記録する (空を空で消すのだけは記録しない)。
+  // (claude-config#966 より前の hook が書いたもの) を ccx で書き直したときも記録される。履歴が空なら、空でない名前は記録する (空を空で消すのだけは記録しない)。
   // label と履歴だけを読む: 他 (meta/ 等) が壊れていても label の書き込みは止めない。履歴が読めなければ
   // 履歴には足さない (読めない履歴に続けて書かない。push は同じ読みで止まる)
   const before =
@@ -279,7 +279,7 @@ export async function writeDeclared(sessionId: string, patch: DeclaredPatch, hom
           labelHistory: await readLabelHistory(dir).catch(() => null),
         }
       : undefined;
-  // 最初の記録の前に、ccx を通さず付いていた名前 (#966 より前の hook が書いた label) を 1 件目として残す。時刻はそのファイルの mtime
+  // 最初の記録の前に、ccx を通さず付いていた名前 (claude-config#966 より前の hook が書いた label) を 1 件目として残す。時刻はそのファイルの mtime
   const seedAt =
     before?.labelHistory && before.label && before.labelHistory.length === 0 && before.label !== patch.label
       ? // 読んだ後に消えていれば (hook と競った) 種は置かない。時刻の無い名前は残さない
@@ -327,7 +327,7 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 /**
  * この machine が、その session の宣言状態を持っているか。宣言を 1 度でも書いた (全部
- * 外した後も含む) か、印が 1 つでもある (label は ccx を通さず書かれていることがある: #966 より前の hook) とき。
+ * 外した後も含む) か、印が 1 つでもある (label は ccx を通さず書かれていることがある: claude-config#966 より前の hook) とき。
  * 持っているなら、保存先の写しで上書きも補完もしない
  */
 export async function holdsDeclared(sessionId: string, home = claudeHome()): Promise<boolean> {

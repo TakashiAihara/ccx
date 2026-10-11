@@ -85,7 +85,7 @@ shell reader (statusline, hooks) to learn a new place; a file per key lets a hoo
 is one function (`sessionDir` in `packages/core/src/session-state.ts`) if that ever changes.
 
 `label` is the file the auto-label hook rewrites on every prompt, through `ccx session label` since
-claude-config#966 (before that, and on a host without ccx, the hook wrote the file itself). `ccx session label` sets it, and
+claude-config#966 (before that the hook wrote the file itself; without ccx on the host it now writes nothing). `ccx session label` sets it, and
 the next prompt in a running session may replace it; a pulled label likewise lasts until the resumed
 session's first prompt. ccx carries whatever is there — the current name — and does not compete
 with the hook.
@@ -94,11 +94,11 @@ with the hook.
 name a session had to be searchable across machines). A label write (trimmed) appends a line only
 when it differs from the last recorded name (with nothing recorded yet, any non-empty name is
 recorded), so rewriting the same name adds nothing, while a change the file already has but the history lacks —
-the hook wrote it, or ccx died between the two writes — is recorded by the next write of that name;
-a write made on disk without ccx (the hook today) is not recorded by itself,
+a hook from before claude-config#966 wrote it, or ccx died between the two writes — is recorded by the next write of that name;
+a write made on disk without ccx (such a hook) is not recorded by itself,
 except that the first line ccx writes is preceded by the name the session already had, dated by the
 `label` file's mtime (the names from before ccx recorded any are the ones searched for first). That
-mtime is the file's last write — the hook's last rename, or a pull — so the first entry's `at` is
+mtime is the file's last write — such a hook's last rename, or a pull — so the first entry's `at` is
 "had this name by then", not "renamed at". A label write reads only `label` and `labels.jsonl`
 beforehand, so a broken `meta/` does not stop the label from being written; an unreadable history
 adds no line (the next `push` stops on the same read).
@@ -134,7 +134,7 @@ Two copies leave the machine, for two readers:
 
 The center's copy lags by construction in two cases, both accepted: a report that did not get
 through (the next mark resends the whole state), and `label` written on disk without ccx (a hook
-from before claude-config#966, or a host without ccx) — the center's `label` is the last one a
+from before claude-config#966) — the center's `label` is the last one a
 `ccx session label` (or `tr pull`) sent. (User decision, 2026-09-21:
   the center has a database, the list should come from it rather than from one GET per row.)
 
