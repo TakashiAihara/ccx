@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
@@ -129,6 +130,68 @@ func TestReadDeclared(t *testing.T) {
 }
 
 // A session nobody declared anything for is empty, not an error.
+// label / task / meta read by the table core reads too (#191).
+func TestReadDeclaredTextCases(t *testing.T) {
+	var cases struct {
+		Text []struct {
+			File  *string `json:"file"`
+			Hex   string  `json:"hex"`
+			Value string  `json:"value"`
+		} `json:"text"`
+		Meta []struct {
+			File  *string `json:"file"`
+			Hex   string  `json:"hex"`
+			Value *string `json:"value"`
+		} `json:"meta"`
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "core", "testdata", "text-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	content := func(file *string, h string) []byte {
+		if file != nil {
+			return []byte(*file)
+		}
+		out, err := hex.DecodeString(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "meta"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases.Text {
+		for _, name := range []string{"label", "task"} {
+			if err := os.WriteFile(filepath.Join(dir, name), content(c.File, c.Hex), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st, _, err := ReadDeclared(dir)
+		if err != nil || st.Label != c.Value || st.Task != c.Value {
+			t.Errorf("text %q: label %q task %q err %v, want %q", content(c.File, c.Hex), st.GetLabel(), st.GetTask(), err, c.Value)
+		}
+		// The state must marshal: a string that is not UTF-8 fails proto.Marshal.
+		if _, err := proto.Marshal(st); err != nil {
+			t.Errorf("text %q: marshal: %v", content(c.File, c.Hex), err)
+		}
+	}
+	for _, c := range cases.Meta {
+		if err := os.WriteFile(filepath.Join(dir, "meta", "k"), content(c.File, c.Hex), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, _, err := ReadDeclared(dir)
+		got, ok := st.GetMetadata()["k"]
+		if err != nil || ok != (c.Value != nil) || (c.Value != nil && got != *c.Value) {
+			t.Errorf("meta %q: got %q present=%v err %v, want %v", content(c.File, c.Hex), got, ok, err, c.Value)
+		}
+	}
+}
+
 func TestReadDeclaredMissing(t *testing.T) {
 	st, hb, err := ReadDeclared(filepath.Join(t.TempDir(), "nope"))
 	if err != nil || st.Archived || st.Label != "" || hb != "" || len(st.Metadata) != 0 {

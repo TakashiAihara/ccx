@@ -21,6 +21,11 @@ import {
 } from "./session-state.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const textCases = (await Bun.file(join(import.meta.dir, "../testdata/text-cases.json")).json()) as {
+  text: { file?: string; hex?: string; value: string }[];
+  meta: { file?: string; hex?: string; value: string | null }[];
+};
+
 const roleCases = (await Bun.file(join(import.meta.dir, "../testdata/role-cases.json")).json()) as {
   rule: { value: string; valid: boolean }[];
   read: { file?: string; hex?: string; role: string }[];
@@ -99,6 +104,22 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
       expect([c.file ?? c.hex, (await readDeclared(SID, home)).role]).toEqual([c.file ?? c.hex, c.role]);
     }
     await writeDeclared(SID, { role: "" }, home);
+  });
+
+  test("label / task / meta are read by the table shared with ccx-agent: not UTF-8 is absent, JS trim (#191)", async () => {
+    const dir = join(home, "sessions", SID);
+    await mkdir(join(dir, "meta"), { recursive: true });
+    const bytes = (c: { file?: string; hex?: string }) => (c.hex ? Buffer.from(c.hex, "hex") : c.file!);
+    for (const c of textCases.text) {
+      await Bun.write(join(dir, "label"), bytes(c));
+      await Bun.write(join(dir, "task"), bytes(c));
+      const s = await readDeclared(SID, home);
+      expect([c.file ?? c.hex, s.label, s.task]).toEqual([c.file ?? c.hex, c.value, c.value]);
+    }
+    for (const c of textCases.meta) {
+      await Bun.write(join(dir, "meta", "k"), bytes(c));
+      expect([c.file ?? c.hex, (await readDeclared(SID, home)).metadata.k ?? null]).toEqual([c.file ?? c.hex, c.value]);
+    }
   });
 
   test("label history: one line per change, not per write; a pulled history replaces the file; a torn line is skipped", async () => {

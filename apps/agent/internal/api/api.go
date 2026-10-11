@@ -135,12 +135,17 @@ func ts(t time.Time) *timestamppb.Timestamp {
 
 // ReadDeclared reads a session's declared state the way session-state.ts
 // readDeclared does: archived is an empty file, label / task / role / heartbeat are
-// trimmed text, metadata is meta/<key> with one trailing newline removed.
+// text trimmed as JavaScript trims, metadata is meta/<key> with one trailing
+// newline removed. A file that is not UTF-8 is absent (proto strings must be
+// UTF-8, and core does the same; packages/core/testdata/text-cases.json, #191).
 // A meta/ that is there but unreadable is an error, not an empty set.
 func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 	text := func(name string) string {
 		b, _ := os.ReadFile(filepath.Join(dir, name))
-		return strings.TrimSpace(string(b))
+		if !utf8.Valid(b) {
+			return ""
+		}
+		return strings.TrimFunc(string(b), jsSpace)
 	}
 	st := &ccxv1.SessionState{Label: text("label"), Task: text("task"), Metadata: map[string]string{}}
 	// Bun.file().exists(), which the TS reader uses, is false for a directory.
@@ -168,7 +173,10 @@ func ReadDeclared(dir string) (*ccxv1.SessionState, string, error) {
 			}
 			return nil, "", err
 		}
-		st.Metadata[e.Name()] = strings.TrimSuffix(string(b), "\n")
+		if !utf8.Valid(b) {
+			continue
+		}
+		st.Metadata[e.Name()] = strings.TrimSuffix(strings.TrimPrefix(string(b), "\uFEFF"), "\n")
 	}
 	return st, hb, nil
 }

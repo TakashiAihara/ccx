@@ -205,7 +205,15 @@ async function readMetadata(dir: string): Promise<Metadata> {
   for (const k of names.filter(isMetaKey).sort()) {
     try {
       // 書くときに足した末尾の改行 1 つだけを外す。値は利用者のものなので空白は削らない (保存先との往復で変わらない)
-      out.push([k, (await Bun.file(join(dir, META_DIR, k)).text()).replace(/\n$/, "")]);
+      let value: string;
+      try {
+        value = utf8(await Bun.file(join(dir, META_DIR, k)).bytes());
+      } catch (e) {
+        // UTF-8 でない値は「無い」(label / task / role と同じ。#191)
+        if (e instanceof TypeError) continue;
+        throw e;
+      }
+      out.push([k, value.replace(/\n$/, "")]);
     } catch (e) {
       // ディレクトリは key ではない。ENOENT (readdir の後に消えた / 先の無い symlink) は値を持たない
       // ものとして数えない (先の無い symlink は push で保存先からも消える。そう決めている)。
@@ -216,22 +224,19 @@ async function readMetadata(dir: string): Promise<Metadata> {
   return Object.fromEntries(out);
 }
 
+/** UTF-8 として読めなければ TypeError (置換文字にしない) */
+const utf8 = (b: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(b);
+
 const errCode = (e: unknown) => (e && typeof e === "object" && "code" in e ? (e as { code: unknown }).code : undefined);
 
 export async function readDeclared(sessionId: string, home = claudeHome()): Promise<DeclaredState> {
   const dir = sessionDir(sessionId, home);
   const flag = (f: Flag) => Bun.file(join(dir, FLAG_FILE[f])).exists();
+  // UTF-8 として読めなければ「無い」(置換文字にしない)。ccx-agent (Go) の読みと揃える (#191。ケースは
+  // testdata/text-cases.json と role-cases.json)
   const text = async (name: string) => {
     try {
-      return (await Bun.file(join(dir, name)).text()).trim();
-    } catch {
-      return "";
-    }
-  };
-  // role は UTF-8 として読めなければ「無い」(置換文字にしない)。ccx-agent (Go) の読みと揃える
-  const role = async () => {
-    try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(await Bun.file(join(dir, TEXT_FILE.role)).bytes()).trim();
+      return utf8(await Bun.file(join(dir, name)).bytes()).trim();
     } catch {
       return "";
     }
@@ -240,7 +245,7 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
     flag("archived"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
-    role(),
+    text(TEXT_FILE.role),
     text(TEXT_FILE.heartbeat),
     readMetadata(dir),
     readLabelHistory(dir),
