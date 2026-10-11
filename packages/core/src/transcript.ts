@@ -142,8 +142,8 @@ export async function localTranscripts(home = claudeHome()): Promise<LocalTransc
       const path = join(projectDir, n);
       // 先の無い symlink / readdir の後に消えた transcript (tr prune 等) は、その 1 件を飛ばす。一覧全体を
       // 止めない (#253)。それ以外の読めない (EACCES 等) は投げる
-      const s = await stat(path).catch((e: unknown) => {
-        if ((e as { code?: unknown } | null)?.code === "ENOENT") return null;
+      const s = await stat(path).catch((e: NodeJS.ErrnoException) => {
+        if (e.code === "ENOENT") return null;
         throw e;
       });
       if (!s) continue;
