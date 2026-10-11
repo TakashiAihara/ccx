@@ -108,11 +108,11 @@ describe("search: embedded DuckDB over the store", () => {
       await rm(homeB, { recursive: true, force: true });
     }
     const c2 = await openDuckDB(store, { withHistory: true });
-    const history = await c2.runAndReadAll(`SELECT session_id, op, machine, "user", pushed_by_machine FROM history ORDER BY session_id, occurred_at`);
+    const history = await c2.runAndReadAll(`SELECT session_id, op, machine, "user", pushed_by_machine, pushed_by_user FROM history ORDER BY session_id, occurred_at`);
     expect(history.getRowObjectsJson()).toEqual([
-      { session_id: SID, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a" },
-      { session_id: SID, op: "pull", machine: "host-b", user: "bob", pushed_by_machine: "host-a" },
-      { session_id: SID2, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a" },
+      { session_id: SID, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a", pushed_by_user: "alice" },
+      { session_id: SID, op: "pull", machine: "host-b", user: "bob", pushed_by_machine: "host-a", pushed_by_user: "alice" },
+      { session_id: SID2, op: "push", machine: "host-a", user: "alice", pushed_by_machine: "host-a", pushed_by_user: "alice" },
     ]);
 
     // session で絞ると、その session のファイルしか読まない
@@ -184,6 +184,31 @@ describe("search: embedded DuckDB over the store", () => {
     expect((JSON.parse(only.out) as { session_id: string }[]).map((x) => x.session_id)).toEqual([SID]);
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
+
+  test("a history file that is not JSON, not an object, or lacks a string op / machine / user / at drops only itself, in --sql and in tr ls; no history at all is 0 rows (#172)", async () => {
+    const histDir = join(root, "ccx", "pre", "transcripts", "machine=host-a", "user=alice", `session_id=${SID}`, "history");
+    await Bun.write(join(histDir, "1-push-host-a-deadbeef.json"), '{"op": "pu');
+    await Bun.write(join(histDir, "2-push-host-a-cafef00d.json"), "[]");
+    await Bun.write(join(histDir, "3-push-host-a-00000000.json"), "null");
+    // 4 つの値それぞれについて、欠けたもの・文字列でないもの
+    const good = { op: "pull", machine: "host-z", user: "zed", at: "2026-01-01T00:00:00.000Z" };
+    let n = 10;
+    for (const k of ["op", "machine", "user", "at"] as const) {
+      const { [k]: _, ...missing } = good;
+      await Bun.write(join(histDir, `${n++}-pull-host-z-${k}.json`), JSON.stringify(missing));
+      await Bun.write(join(histDir, `${n++}-pull-host-z-${k}.json`), JSON.stringify({ ...good, [k]: 1 }));
+    }
+    const hist = await ccx("--sql", "SELECT session_id, op FROM history ORDER BY session_id", "--json");
+    expect(hist.code).toBe(0);
+    expect(JSON.parse(hist.out)).toEqual([{ session_id: SID, op: "push" }, { session_id: SID2, op: "push" }]);
+    const client = new TranscriptClient(store, { machine: "host-a", user: "alice" });
+    const meta = (await client.find(SID))!;
+    expect(await client.history(meta)).toStrictEqual([{ op: "push", machine: "host-a", user: "alice", at: expect.any(String) }]);
+
+    await rm(histDir, { recursive: true });
+    const c = await openDuckDB(store, { withHistory: true, session: SID.slice(0, 8) });
+    expect((await c.runAndReadAll("SELECT count(*) AS n FROM history")).getRowObjectsJson()).toEqual([{ n: "0" }]);
+  });
 
   test("a state row with no ccx label history still comes before transcript hits; a malformed state.json drops only itself", async () => {
     const dir = (m: string, id: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${id}`);
