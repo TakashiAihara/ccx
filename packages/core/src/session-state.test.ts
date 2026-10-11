@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -192,6 +192,23 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(names.filter((_, i) => before[i] === after[i])).toEqual([]);
     const left = [...(await readdir(dir)), ...(await readdir(join(dir, "meta")))].filter((n) => n.endsWith(".tmp"));
     expect(left).toEqual([]);
+  });
+
+  test("writeDeclared writes each value to a dot temp file next to its target, never to the target (#167)", async () => {
+    const spy = spyOn(Bun, "write");
+    try {
+      await writeDeclared(SID, { label: "a", task: "t", metadata: { owner: "alice" } }, home);
+      const paths = spy.mock.calls.map((c) => String(c[0]));
+      const dir = join(home, "sessions", SID);
+      for (const target of [join(dir, "label"), join(dir, "task"), join(dir, "meta", "owner")]) {
+        expect(paths).not.toContain(target);
+        const tmp = paths.filter((p) => dirname(p) === dirname(target) && basename(p).startsWith(`.${basename(target)}.`));
+        expect(tmp.length).toBe(1);
+        expect(isMetaKey(basename(tmp[0]!))).toBe(false);
+      }
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("the temp file sits next to the target and its name is never a metadata key (#167)", () => {

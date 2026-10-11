@@ -22,13 +22,13 @@ import { appendFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-/**
- * 隣の一時ファイルに書いてから rename で置き換える (#167)。別プロセスの session status / tr push が
- * 書きかけを読んで途中の値を出したり state.json に保存したりしない。名前は . で始め、meta/ の読み手
- * (META_KEY と ccx-agent の metaKey) が key として拾わない
- */
+/** writeAtomic の一時ファイル。名前は . で始め、meta/ の読み手 (META_KEY と ccx-agent の metaKey) が key として拾わない */
 export const atomicTempPath = (path: string) => join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
 
+/**
+ * 隣の一時ファイルに書いてから rename で置き換える (#167)。別プロセスの session status / tr push が
+ * 書きかけを読んで途中の値を出したり state.json に保存したりしない
+ */
 async function writeAtomic(path: string, content: string): Promise<void> {
   const tmp = atomicTempPath(path);
   try {
