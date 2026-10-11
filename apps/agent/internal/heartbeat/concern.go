@@ -114,9 +114,7 @@ func (c *Concern) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if err == nil {
-			c.lastErr = ""
-		} else if msg := err.Error(); msg != c.lastErr {
+		if msg := fmt.Sprint(err); err != nil && msg != c.lastErr {
 			c.log("heartbeat off, retrying every %v: %v", c.retry(), err)
 			c.lastErr = msg
 		}
@@ -168,6 +166,10 @@ func (c *Concern) run(ctx context.Context) error {
 		return err
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
+	if c.lastErr != "" {
+		c.log("heartbeat up again on %s", c.socketPath)
+		c.lastErr = ""
+	}
 	c.listening.Store(true)
 	defer c.listening.Store(false)
 	c.accept(ctx, ln, acceptRetry)

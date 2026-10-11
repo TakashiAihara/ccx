@@ -111,8 +111,11 @@ func TestConcernTakesOverWhenTheOtherServeStops(t *testing.T) {
 	ctx1, stop1 := context.WithCancel(context.Background())
 	done1 := make(chan struct{})
 	go func() { _ = first.Run(ctx1); close(done1) }()
-	for i := 0; i < 50 && !first.listening.Load(); i++ {
+	for i := 0; i < 250 && !first.listening.Load(); i++ {
 		time.Sleep(20 * time.Millisecond)
+	}
+	if !first.listening.Load() {
+		t.Fatal("first serve never listened")
 	}
 
 	var mu sync.Mutex
@@ -141,8 +144,8 @@ func TestConcernTakesOverWhenTheOtherServeStops(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logged) != 1 || !strings.Contains(logged[0], "another ccx-agent serve") {
-		t.Errorf("logged %q, want the reason once", logged)
+	if len(logged) != 2 || !strings.Contains(logged[0], "another ccx-agent serve") || !strings.Contains(logged[1], "up again") {
+		t.Errorf("logged %q, want the reason once, then up again", logged)
 	}
 }
 
