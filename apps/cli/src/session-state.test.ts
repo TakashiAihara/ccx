@@ -425,6 +425,17 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect(await readDeclared(SID, homeA)).toEqual(EMPTY_DECLARED);
     expect((await run(["status", SID])).out).toMatch(/metadata\s+-/);
   });
+
+  test("meta get prints the value, an empty line for a key without one, and exits 1 when unset (#192)", async () => {
+    await seed(homeA, SID);
+    await run(["meta", "set", "owner=alice", SID]);
+    await run(["meta", "set", "done", SID]);
+    expect(await run(["meta", "get", "owner", SID])).toMatchObject({ code: 0, out: "alice\n" });
+    expect(await run(["meta", "get", "done"], { CLAUDE_CODE_SESSION_ID: SID })).toMatchObject({ code: 0, out: "\n" });
+    const none = await run(["meta", "get", "nope", SID]);
+    expect([none.code, none.out, none.err]).toEqual([1, "", expect.stringContaining("nope is not set")]);
+    expect((await run(["meta", "get", "../x", SID])).code).toBe(1);
+  });
 });
 
 describe("ccx session with a center: marks are reported as events, and session ls reads them back", () => {

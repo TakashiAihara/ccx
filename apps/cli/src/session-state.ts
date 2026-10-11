@@ -290,6 +290,25 @@ export function registerSessionState(session: Command): void {
     });
 
   meta
+    .command("get")
+    .description("Print a key's value (empty for a key set without one); exit 1 when the key is not set")
+    .argument("<key>")
+    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .action(async (key: string, idOrPrefix: string | undefined) => {
+      if (!isMetaKey(key)) throw new Error(`invalid key ${JSON.stringify(key)}: ${META_KEY_RULE}`);
+      const home = claudeHome();
+      const id = await target(idOrPrefix, home);
+      // 保存形式 (meta/<key> のファイル) を直に読む道具を作らないための口 (#192)
+      const value = (await readDeclared(id, home)).metadata[key];
+      if (value === undefined) {
+        console.error(`${key} is not set  ${id}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(value);
+    });
+
+  meta
     .command("unset")
     .description("Remove a key")
     .argument("<key>")
