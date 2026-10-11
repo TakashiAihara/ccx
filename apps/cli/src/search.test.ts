@@ -185,12 +185,19 @@ describe("search: embedded DuckDB over the store", () => {
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
 
-  test("a malformed or non-object history file drops only itself, in --sql and in tr ls; no history at all is 0 rows (#172)", async () => {
+  test("a history file that is not JSON, not an object, or lacks a string op / machine / user / at drops only itself, in --sql and in tr ls; no history at all is 0 rows (#172)", async () => {
     const histDir = join(root, "ccx", "pre", "transcripts", "machine=host-a", "user=alice", `session_id=${SID}`, "history");
     await Bun.write(join(histDir, "1-push-host-a-deadbeef.json"), '{"op": "pu');
     await Bun.write(join(histDir, "2-push-host-a-cafef00d.json"), "[]");
     await Bun.write(join(histDir, "3-push-host-a-00000000.json"), "null");
-    await Bun.write(join(histDir, "4-pull-host-a-11111111.json"), '{"op":"pull"}');
+    // 4 つの値それぞれについて、欠けたもの・文字列でないもの
+    const good = { op: "pull", machine: "host-z", user: "zed", at: "2026-01-01T00:00:00.000Z" };
+    let n = 10;
+    for (const k of ["op", "machine", "user", "at"] as const) {
+      const { [k]: _, ...missing } = good;
+      await Bun.write(join(histDir, `${n++}-pull-host-z-${k}.json`), JSON.stringify(missing));
+      await Bun.write(join(histDir, `${n++}-pull-host-z-${k}.json`), JSON.stringify({ ...good, [k]: 1 }));
+    }
     const hist = await ccx("--sql", "SELECT session_id, op FROM history ORDER BY session_id", "--json");
     expect(hist.code).toBe(0);
     expect(JSON.parse(hist.out)).toEqual([{ session_id: SID, op: "push" }, { session_id: SID2, op: "push" }]);

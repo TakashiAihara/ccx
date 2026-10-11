@@ -94,7 +94,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   if (opts.withHistory) {
     // パスの machine / user は push した側で、操作した側はファイルの中にある。history は「誰が pull したか」
     // を答えるもので、押した側ではない。sessions と同じく read_text + json_valid: 壊れた 1 件 (と、JSON でも
-    // object でないもの、op / machine / user / at の欠けたもの。tr ls と同じ) がクエリ全体を止めず、その 1 件
+    // object でないもの、op / machine / user / at のどれかが文字列でないもの。tr ls と同じ) がクエリ全体を止めず、その 1 件
     // だけ落ちる (#172)。glob が空なら 0 行
     const hist = `${base}/machine=*/user=*/${sessionGlob}/history/*.json`;
     await c.run(
@@ -102,7 +102,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       `CREATE VIEW history AS SELECT session_id, json->>'op' AS op, json->>'machine' AS machine, json->>'user' AS "user", json->>'at' AS occurred_at, pushed_by_machine, pushed_by_user
        FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS pushed_by_machine, ${part("user")} AS pushed_by_user, content::JSON AS json
              FROM read_text(${q(hist)}) WHERE json_valid(content))
-       WHERE op IS NOT NULL AND machine IS NOT NULL AND "user" IS NOT NULL AND occurred_at IS NOT NULL`,
+       WHERE ${["op", "machine", "user", "at"].map((k) => `json_type(json, '$.${k}') = 'VARCHAR'`).join(" AND ")}`,
     );
   }
   return c;
