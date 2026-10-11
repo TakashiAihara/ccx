@@ -241,11 +241,18 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-2 * time.Minute)
+	const id = "01a050e6-8722-7c8a-9041-f38193f5a46f"
+	const doneID = "01a050e6-8722-7c8a-9041-f38193f5a470"
+	if err := os.WriteFile(filepath.Join(incoming, doneID+".raw"), []byte(`{"done":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for name, body := range map[string]string{
-		".tmp-1": `{"hook_event_name":"Stop"}`,
-		".tmp-2": "",
-		".tmp-3": `{"hook_event_na`,
-		".tmp-4": `{"young":true}`,
+		".tmp-" + id + ".raw-111":     `{"hook_event_name":"Stop"}`,
+		".tmp-" + doneID + ".raw-222": `{"done":true}`,
+		".tmp-2":                      "",
+		".tmp-3":                      `{"hook_event_na`,
+		".tmp-4":                      `{"young":true}`,
+		".tmp-5":                      `{"old_style":true}`,
 	} {
 		p := filepath.Join(incoming, name)
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
@@ -258,11 +265,38 @@ func TestOpenSpool_RecoversCompleteIncomingTemps(t *testing.T) {
 		}
 	}
 	s := openTestSpool(t, dir)
-	if s.RecoveredTemps != 1 || s.DroppedTemps != 2 {
-		t.Fatalf("recovered %d dropped %d, want 1 and 2", s.RecoveredTemps, s.DroppedTemps)
+	// recovered: the id-named temp and the old-style one; dropped: the empty, the
+	// partial, and the temp whose event was renamed after all
+	if s.RecoveredTemps != 2 || s.DroppedTemps != 3 {
+		t.Fatalf("recovered %d dropped %d, want 2 and 3", s.RecoveredTemps, s.DroppedTemps)
 	}
-	if n, err := s.DrainIncoming(); err != nil || n != 1 {
-		t.Fatalf("DrainIncoming = %d, %v; want the recovered event", n, err)
+	if n, err := s.DrainIncoming(); err != nil || n != 3 {
+		t.Fatalf("DrainIncoming = %d, %v; want the two recovered events and the renamed one", n, err)
+	}
+	// a temp named the way atomicWrite names it is recovered under its event id
+	tmp, err := os.CreateTemp(incoming, tempPattern(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tmp.WriteString(`{"via":"atomicWrite"}`)
+	tmp.Close()
+	if err := os.Chtimes(tmp.Name(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 {
+		t.Fatalf("recovered %d of the atomicWrite-named temp", r)
+	}
+	if _, err := os.Stat(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")); err != nil {
+		t.Errorf("the atomicWrite-named temp was not recovered under its id: %v", err)
+	}
+
+	ids := drainAll(t, s)
+	found := false
+	for _, got := range ids {
+		found = found || got == id
+	}
+	if !found {
+		t.Errorf("drained ids %v, want the hook's id %s kept", ids, id)
 	}
 	if _, err := os.Stat(filepath.Join(incoming, ".tmp-4")); err != nil {
 		t.Errorf("the young temp file was touched: %v", err)
