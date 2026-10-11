@@ -110,7 +110,8 @@ export function explicitCloneUrl(input: string): string | undefined {
  * 設定キーが増えるだけで、git 側の既存の仕組みと二重管理になる)。
  */
 export function cloneUrl(s: RepoSpec, protocol: Protocol = "https"): string {
+  // host のポートは http(s) のもの (#215)。scp-like の ssh には書けず、ssh のポートでもない
   return protocol === "ssh"
-    ? `git@${s.host}:${s.owner}/${s.repo}.git`
+    ? `git@${s.host.replace(/:\d+$/, "")}:${s.owner}/${s.repo}.git`
     : `https://${s.host}/${s.owner}/${s.repo}.git`;
 }

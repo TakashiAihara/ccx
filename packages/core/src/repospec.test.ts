@@ -64,6 +64,10 @@ describe("parseRepoSpec", () => {
     expect(parseRepoSpec("ssh://git@forge.example:2222/o/app.git", opts).host).toBe("forge.example");
   });
 
+  test("ssh の clone URL に http(s) のポートを入れない (#215)", () => {
+    expect(cloneUrl(parseRepoSpec("http://localhost:13000/o/app.git", opts), "ssh")).toBe("git@localhost:o/app.git");
+  });
+
   test("組み立てでは表せない URL (http / ポート付き) だけを明示の clone URL とする (#215)", () => {
     expect(explicitCloneUrl("http://localhost:13000/o/app.git")).toBe("http://localhost:13000/o/app.git");
     expect(explicitCloneUrl("http://forge.example/o/app")).toBe("http://forge.example/o/app");
