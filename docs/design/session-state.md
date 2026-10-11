@@ -84,7 +84,8 @@ theirs. The considered alternative, `~/.ccx/sessions/<id>/state.json`, would hav
 shell reader (statusline, hooks) to learn a new place; a file per key lets a hook test `-f`. Moving
 is one function (`sessionDir` in `packages/core/src/session-state.ts`) if that ever changes.
 
-`label` is the file the auto-label hook rewrites on every prompt. `ccx session label` sets it, and
+`label` is the file the auto-label hook rewrites on every prompt, through `ccx session label` since
+claude-config#966 (before that, and on a host without ccx, the hook wrote the file itself). `ccx session label` sets it, and
 the next prompt in a running session may replace it; a pulled label likewise lasts until the resumed
 session's first prompt. ccx carries whatever is there — the current name — and does not compete
 with the hook.
@@ -108,9 +109,9 @@ is an error, like `meta/` (an empty history would make `push` drop the store's).
 store's history whole, without adding a line for the label it installs. It is part of the declared
 state, so a history-only difference (a name changed and changed back) makes `push` write
 `state.json`. It has no cap and clearing the label keeps it: the point is every name the session
-had (measured by the reviewer: 500 changes → a 60 KB `state.json`). The auto-label hook's `label-history.json` /
-`label-trail.jsonl` are the hook's own files with its own fields (`prompt_id`, `input_excerpt`) and
-are not read; the hook moves onto `ccx session label` in claude-config.
+had (measured by the reviewer: 500 changes → a 60 KB `state.json`). The auto-label hook's `label-history.json`
+is the hook's own file (the context it gives the LLM) and is not read; `label-trail.jsonl` is gone since
+the hook writes through `ccx session label` (claude-config#966).
 
 Two copies leave the machine, for two readers:
 
@@ -132,9 +133,9 @@ Two copies leave the machine, for two readers:
   as `ccx.session.state`.
 
 The center's copy lags by construction in two cases, both accepted: a report that did not get
-through (the next mark resends the whole state), and `label`, which the auto-label hook rewrites on
-disk without telling ccx — the center's `label` is the last one a `ccx session label` (or `tr pull`)
-sent. (User decision, 2026-09-21:
+through (the next mark resends the whole state), and `label` written on disk without ccx (a hook
+from before claude-config#966, or a host without ccx) — the center's `label` is the last one a
+`ccx session label` (or `tr pull`) sent. (User decision, 2026-09-21:
   the center has a database, the list should come from it rather than from one GET per row.)
 
 The local files stay the source of truth; both copies are projections of them, and a copy that is
