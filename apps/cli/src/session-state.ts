@@ -9,6 +9,7 @@ import {
   FLAGS,
   loadConfig,
   localOrigin,
+  hasLocalTranscript,
   localTranscripts,
   holdsDeclared,
   markedSessionIds,
@@ -310,7 +311,7 @@ export function registerSessionState(session: Command): void {
         // 印をまだ 1 つも付けていない session は sessions/<id>/ を持たない。transcript があれば手元の session
         const local =
           (await stat(sessionDir(id, home)).then(() => true, () => false)) ||
-          (await localTranscripts(home)).some((t) => t.sessionId === id);
+          (await hasLocalTranscript(id, home));
         if (!local) throw new Error(`no session ${id} on this machine`);
         value = await readMetaValue(id, key, home);
       } catch (e) {
@@ -350,8 +351,10 @@ export function registerSessionState(session: Command): void {
       const home = claudeHome();
       const store = await storeOrNull();
       const id = await target(idOrPrefix, home, store);
-      const [running, ts] = await Promise.all([runningSessionIds(home), localTranscripts(home)]);
-      const lifecycle = await lifecycleOf(id, running, ts.some((t) => t.sessionId === id), store);
+      // 動いている session は transcript を見に行かない (読めない project があっても status は答える)
+      const running = await runningSessionIds(home);
+      const hasTranscript = running.has(id) || (await hasLocalTranscript(id, home));
+      const lifecycle = await lifecycleOf(id, running, hasTranscript, store);
       const s = await declaredFor(id, home, lifecycle, store);
       if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s }, null, 2));
       else for (const line of show(id, lifecycle, s)) console.log(line);

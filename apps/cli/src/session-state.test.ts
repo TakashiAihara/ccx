@@ -426,6 +426,17 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     expect((await run(["status", SID])).out).toMatch(/metadata\s+-/);
   });
 
+  test("status of a running session answers without looking for its transcript, even if a project dir cannot be read (#233)", async () => {
+    const live = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+    await mkdir(join(homeA, "sessions"), { recursive: true });
+    await Bun.write(join(homeA, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: live }));
+    const loop = join(homeA, "projects", "-loop", `${live}.jsonl`);
+    await mkdir(join(homeA, "projects", "-loop"), { recursive: true });
+    await symlink(loop, loop);
+    const r = await run(["status", live, "--json"]);
+    expect([r.code, JSON.parse(r.out).lifecycle]).toEqual([0, "running"]);
+  });
+
   test("meta get: the value, an empty line for a key without one; exit 1 when unset, 2 when it cannot read (#192)", async () => {
     await seed(homeA, SID);
     await run(["meta", "set", "owner=alice", SID]);

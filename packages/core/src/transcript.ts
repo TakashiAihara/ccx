@@ -191,6 +191,30 @@ async function pidAlive(pid: number, procStart: string | undefined): Promise<boo
 }
 
 /**
+ * その id の transcript が手元のどこかの project にあるか。1 件を見るために localTranscripts で
+ * 全件を stat しない (#233)。localTranscripts と同じく projects/<dir>/<id>.jsonl だけを見るが、ファイルで
+ * あるものだけを数え、先の無い symlink は「無い」と答え、どこにも無いうえに読めないもの (EACCES / ELOOP 等)
+ * があれば投げる (localTranscripts は読めない project ディレクトリを飛ばす)
+ */
+export async function hasLocalTranscript(sessionId: string, home = claudeHome()): Promise<boolean> {
+  if (!UUID.test(sessionId)) return false;
+  const projects = join(home, "projects");
+  // 無いのは「無い」、読めない (EACCES 等) のは投げる。消えかけの transcript (先の無い symlink) は無い
+  const absent = (e: unknown) => {
+    const code = (e as { code?: unknown } | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw e;
+  };
+  const dirs = await readdir(projects).catch((e: unknown): string[] => (absent(e), []));
+  // 見つかれば、他のディレクトリが読めなくても在る。どこにも無く、読めないものがあったときだけ投げる
+  const found = await Promise.allSettled(dirs.map((d) => stat(join(projects, d, `${sessionId}.jsonl`)).then((s) => s.isFile(), absent)));
+  if (found.some((r) => r.status === "fulfilled" && r.value)) return true;
+  const failed = found.find((r) => r.status === "rejected");
+  if (failed) throw failed.reason;
+  return false;
+}
+
+/**
  * 今動いている session の id。Claude Code が ~/.claude/sessions/<pid>.json に
  * 自分の pid と sessionId を書くので、そのプロセスが生きているものだけを数える。
  */
