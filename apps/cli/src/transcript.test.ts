@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -91,6 +91,10 @@ describe("transcript: local side", () => {
     expect(t.subagentsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "subagents"));
     expect(t.workflowsDir).toBe(join(homeA, "projects", encodeCwd(CWD_A), SID, "workflows"));
     expect(await localTranscripts(join(homeA, "nope"))).toEqual([]);
+
+    // 先の無い symlink 1 つで一覧全体を止めない (#253)
+    await symlink(join(homeA, "nowhere"), join(homeA, "projects", encodeCwd(CWD_A), "ffffffff-0000-4000-8000-000000000002.jsonl"));
+    expect((await localTranscripts(homeA)).map((x) => x.sessionId)).toEqual([SID]);
   });
 
   test("transcriptFacts takes cwd / gitBranch / version from the first records that carry them, and stops at the line cap", async () => {
