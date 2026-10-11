@@ -107,6 +107,8 @@ describe("search: embedded DuckDB over the store", () => {
     } finally {
       await rm(homeB, { recursive: true, force: true });
     }
+    // 壊れた履歴が 1 件あっても、その 1 件だけ落ちる (#172)
+    await Bun.write(join(root, "ccx", "pre", "transcripts", "machine=host-a", "user=alice", `session_id=${SID}`, "history", "0-push-broken.json"), '{"op": "pu');
     const c2 = await openDuckDB(store, { withHistory: true });
     const history = await c2.runAndReadAll(`SELECT session_id, op, machine, "user", pushed_by_machine FROM history ORDER BY session_id, occurred_at`);
     expect(history.getRowObjectsJson()).toEqual([
