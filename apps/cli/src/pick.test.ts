@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { Readable, Writable } from "node:stream";
+
 import { join } from "node:path";
 
 import type { RepodirInfo } from "@ccx/core";
@@ -155,13 +155,8 @@ function fakeTty(answer: string) {
   const written: string[] = [];
   return {
     tty: {
-      input: Readable.from([`${answer}\n`]),
-      output: new Writable({
-        write(chunk, _enc, cb) {
-          written.push(String(chunk));
-          cb();
-        },
-      }),
+      write: (text: string) => void written.push(text),
+      readLine: () => answer,
     },
     written,
   };

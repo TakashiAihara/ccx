@@ -15,8 +15,7 @@
  * と両立する唯一の理由になっている。
  */
 
-import { createInterface } from "node:readline/promises";
-import { closeSync, createReadStream, createWriteStream, openSync } from "node:fs";
+import { closeSync, openSync, readSync, writeSync } from "node:fs";
 
 import { summarizeProblems, type RepodirInfo } from "@ccx/core";
 
@@ -116,13 +115,14 @@ async function pickWithFzf(infos: RepodirInfo[]): Promise<RepodirInfo | null> {
  * (fzf が同じことをしている)。テストから差し替えられるように口を開けてある。
  */
 export type Tty = {
-  input: NodeJS.ReadableStream;
-  output: NodeJS.WritableStream;
+  write: (text: string) => void;
+  /** 1 行 (改行を除く)。行が来る前に入力が終われば null */
+  readLine: () => string | null;
   /**
    * 後始末。自分で /dev/tty を開いたときだけ持つ。
    *
-   * open した者が close する。注入された stream (テストの in-memory double や、将来
-   * 呼び出し側が持ち込む stream) を勝手に破棄すると、こちらが知らない寿命を壊す。
+   * open した者が close する。注入された double (テスト) を勝手に閉じると、こちらが
+   * 知らない寿命を壊す。
    */
   close?: () => void;
 };
@@ -158,31 +158,40 @@ export function openTty(
     throw new Error("no fzf and no tty: cannot pick a repodir interactively");
   }
 
-  const input = createReadStream("", { fd: inFd });
-  const output = createWriteStream("", { fd: outFd });
-
+  // stream (readline) を使わず同期で読み書きする。Bun 1.4.3 では /dev/tty の stream を持った
+  // readline を閉じても、プロセスが終わらないことがある (1.4.2 は終わった。fd を自分で閉じても
+  // 揺れる)。番号を 1 行読むだけなので、ブロックする読み取りで足りる
+  const fdIn = inFd;
+  const fdOut = outFd;
   return {
-    input,
-    output,
-    // /dev/tty を掴んだままだと、選び終わってもプロセスが終わらない。readline を閉じても
-    // stream は生きていて epoll に残るので、掴んだ fd はここで手放す。
+    write: (text) => void writeSync(fdOut, text),
+    readLine: () => {
+      const bytes: number[] = [];
+      const one = Buffer.alloc(1);
+      for (;;) {
+        if (readSync(fdIn, one, 0, 1, null) === 0) return bytes.length ? Buffer.from(bytes).toString() : null;
+        if (one[0] === 0x0a) return Buffer.from(bytes).toString();
+        bytes.push(one[0]!);
+      }
+    },
+    // /dev/tty を掴んだままだと、選び終わってもプロセスが終わらない。掴んだ fd はここで手放す。
     close: () => {
-      input.destroy();
-      output.destroy();
+      close(fdIn);
+      close(fdOut);
     },
   };
 }
 
 /** fzf が無い環境用。番号で選ばせる。 */
 export async function pickByNumber(infos: RepodirInfo[], tty: Tty = openTty()): Promise<RepodirInfo | null> {
-  const rl = createInterface({ input: tty.input, output: tty.output });
   try {
     for (const [n, info] of infos.entries()) {
       const [, repo, branch, flags, task] = candidateLine(info).split("\t");
-      tty.output.write(`${String(n + 1).padStart(3)}) ${repo}  ${branch}  ${flags}  ${task}\n`);
+      tty.write(`${String(n + 1).padStart(3)}) ${repo}  ${branch}  ${flags}  ${task}\n`);
     }
 
-    const answer = (await rl.question("select> ")).trim();
+    tty.write("select> ");
+    const answer = (tty.readLine() ?? "").trim();
     if (!answer) return null;
 
     const n = Number(answer);
@@ -191,9 +200,7 @@ export async function pickByNumber(infos: RepodirInfo[], tty: Tty = openTty()): 
     }
     return infos[n - 1]!;
   } finally {
-    rl.close();
-    // rl.close() は readline を閉じるだけ。tty の fd は開いたままなので、閉じるまで
-    // プロセスが終わらない。選べたのにシェルが固まる、という形で出る。
+    // tty の fd を閉じるまでプロセスが終わらない。選べたのにシェルが固まる、という形で出る。
     tty.close?.();
   }
 }
