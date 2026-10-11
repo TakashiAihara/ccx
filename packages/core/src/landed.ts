@@ -53,16 +53,23 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
     if ((await git(["rev-parse", ref], path)) === head) return { landed: true, how: `${ref} is at HEAD` };
   }
 
-  // 分岐点は比べる ref ごとに取る (起点ブランチが default branch でないとき、別の ref の分岐点を使うと
-  // 分岐点より前の版への戻しが「入っている」に見える)。mirror は repodir の同名の origin/* で取る
-  const baseOf = (ref: string) => git(["merge-base", "HEAD", ref], path).catch(() => "");
+  // 分岐点は 1 つ: 比べる ref との merge-base のうち一番新しいもの (他がすべてその祖先)。古い分岐点で比べると、
+  // 起点ブランチ (develop 等) にだけある変更を戻したものが「変化なし」や「入っている」に見える
+  const isAncestor = (a: string, b: string) =>
+    git(["merge-base", "--is-ancestor", a, b], path).then(
+      () => true,
+      () => false,
+    );
+  const bases = (await Promise.all(refs.map((ref) => git(["merge-base", "HEAD", ref], path).catch(() => "")))).filter((b) => b);
+  let base = "";
+  for (const b of bases) if ((await Promise.all(bases.map((o) => isAncestor(o, b)))).every(Boolean)) base = b;
+  if (!base) return { landed: false, how: "no single branch point with the compared refs", missing: [] };
+
   const targets: { cwd: string; ref: string; name: string; base: string }[] = [];
-  for (const ref of refs) targets.push({ cwd: path, ref, name: ref, base: await baseOf(ref) });
-  if (mirror) {
-    const base = await baseOf(`origin/${mirror.branch}`);
-    // repodir が mirror を通さず fetch していると、分岐点を mirror が持っていない。そのときは mirror を見ない
-    const has = base && (await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false));
-    if (has) targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}`, base });
+  for (const ref of refs) targets.push({ cwd: path, ref, name: ref, base });
+  // repodir が mirror を通さず fetch していると、分岐点を mirror が持っていない。そのときは mirror を見ない
+  if (mirror && (await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false))) {
+    targets.push({ cwd: mirror.path, ref: mirror.branch, name: `the mirror's ${mirror.branch}`, base });
   }
 
   for (const t of targets.filter((t) => t.cwd === path && t.base)) {

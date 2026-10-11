@@ -181,6 +181,20 @@ describe("unpushedLanded (#220)", () => {
     await commit(d, { "dev.txt": "d0\n" }, "back to d0");
     expect((await unpushedLanded(d, { baseBranch: "develop" })).landed).toBe(false);
 
+    // develop にだけある変更 (main の a.txt を devA に) を、develop から切ったブランチで main の版に戻す。
+    // main の分岐点で比べると「変化なし」に見える
+    await git(["switch", "--quiet", "develop"], other);
+    await git(["pull", "--quiet", "--ff-only", "origin", "develop"], other);
+    await commit(other, { "a.txt": "devA\n" }, "devA");
+    await git(["push", "--quiet", "origin", "develop"], other);
+    await git(["switch", "--quiet", "main"], other);
+    const u = await clone("undo-develop");
+    await git(["switch", "--quiet", "-c", "feat", "origin/develop"], u);
+    await commit(u, { "a.txt": "a\n" }, "undo devA");
+    for (const mirror of [undefined, { path: remote, branch: "main" }]) {
+      expect((await unpushedLanded(u, { baseBranch: "develop", mirror })).landed).toBe(false);
+    }
+
     // merge が独自の変更を持つ (evil merge)
     const m = await clone("evil-merge");
     await git(["switch", "--quiet", "-c", "side"], m);
