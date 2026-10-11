@@ -188,7 +188,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
 
   transcript
     .command("ls")
-    .description("List sessions in the store, newest push first")
+    .description("List sessions in the store, newest push first. A session whose state.json cannot be read shows ? in the flags column (stateError in --json) and the rest are listed")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
     .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store, 2 when the store could not be read or the prefix is ambiguous")
     .option("--json", "print as JSON")
@@ -222,14 +222,13 @@ export function registerTranscript(program: Command, VERSION: string): void {
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {
-          // 一覧では壊れた state.json 1 件で全体を止めない (#229)。c.list の壊れた meta と同じく 1 行出して続ける。
-          // --session では 1 件の答えなので投げる (下で exit 2)
+          // 壊れた / 取れない state.json 1 件で一覧を止めない (#229)。c.list の読めない meta と同じく、理由を問わず
+          // 1 行出して続ける。-s でも同じ: session は保存先に在り (1 ではない)、他の machine の写しは読める
           let stateError: string | undefined;
           const [h, state] = await Promise.all([
             c.history(m),
             c.readRemoteDeclared(m.sessionId, m).catch((e: unknown) => {
-              if (o.session !== undefined) throw e;
-              stateError = e instanceof Error ? e.message : String(e);
+              stateError = (e instanceof Error ? e.message : String(e)) || "unreadable";
               console.error(`(could not read the state of ${m.sessionId}: ${stateError})`);
               return null;
             }),

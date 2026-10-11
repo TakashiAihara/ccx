@@ -429,7 +429,7 @@ describe("transcript: push / pull / prune through the store", () => {
       }
     }
 
-    // 壊れた state.json 1 件で一覧全体を止めない。その行は ? で、-s では 1 件の答えなので 2 (#229)
+    // 壊れた state.json 1 件で一覧全体を止めない。その行は ? で、-s でも他の写しは出る (#229)
     await Bun.write(join(root, "ccx", `${prefixA}state.json`), "{");
     const [bout, berr, bcode] = await ls("--json");
     const rows = JSON.parse(bout) as { machine: string; stateError?: string }[];
@@ -440,7 +440,11 @@ describe("transcript: push / pull / prune through the store", () => {
     ]);
     const [tout, , tcode] = await ls();
     expect([tcode, tout.split("\n").filter((l) => / host-a /.test(l)).map((l) => l.split(/\s+/)[3])]).toEqual([0, ["?"]]);
-    expect((await ls("-s", SID, "-m", "host-a"))[2]).toBe(2);
+    const [sout, , scode] = await ls("-s", SID, "--json");
+    expect([scode, (JSON.parse(sout) as { machine: string; stateError?: string }[]).map((m) => [m.machine, Boolean(m.stateError)])]).toEqual([
+      0,
+      [["host-b", false], ["host-a", true]],
+    ]);
 
     // 保存先が答えないのは「無い」ではない
     const down = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", "-s", SID], {
