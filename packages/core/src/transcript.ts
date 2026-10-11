@@ -499,7 +499,14 @@ export class TranscriptClient {
     let token: string | undefined;
     do {
       const page = await this.s3.list({ prefix, continuationToken: token });
-      for (const o of page.contents ?? []) out.push((await this.s3.file(o.key).json()) as HistoryEntry);
+      for (const o of page.contents ?? []) {
+        // 壊れた 1 件で tr ls 全体を止めない (#172)。読めないのは取得の失敗で、それは投げる
+        const text = await this.s3.file(o.key).text();
+        try {
+          const e = JSON.parse(text) as unknown;
+          if (e && typeof e === "object" && !Array.isArray(e)) out.push(e as HistoryEntry);
+        } catch {}
+      }
       token = page.isTruncated ? page.nextContinuationToken : undefined;
     } while (token);
     return out.sort((a, b) => byString(a.at, b.at));
