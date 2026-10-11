@@ -162,7 +162,7 @@ it simply has no center to forward to.
 |---|---|---|---|---|
 | center URL | `CCX_HUB_URL` | `ccx.hubUrl` | `[hub] url` | none (spool only) |
 | machine name | `CCX_MACHINE` | `ccx.machine` | `machine` | hostname |
-| socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccx-agent.sock` |
+| socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccx-agent.sock` (`~/.ccx/run/ccx-agent.sock` without `XDG_RUNTIME_DIR`) |
 | spool | `CCX_SPOOL` | — | — | `~/.ccx/spool` |
 | collect on/off | `CCX_COLLECT` | `ccx.collect` | `[collect] enabled` | on |
 | carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |

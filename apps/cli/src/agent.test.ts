@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { agentStatus, defaultSocketPath, defaultSpoolDir } from "./agent.ts";
@@ -42,6 +42,17 @@ describe("パスの解決", () => {
   test("既定は XDG_RUNTIME_DIR と CCX_ROOT の下", () => {
     expect(defaultSocketPath({ XDG_RUNTIME_DIR: "/run/user/9" })).toBe("/run/user/9/ccx/ccx-agent.sock");
     expect(defaultSpoolDir({ CCX_ROOT: "/r" })).toBe("/r/spool");
+  });
+
+  test("XDG_RUNTIME_DIR が無い / 空なら ~/.ccx/run (ccx-agent の既定と同じ。macOS に /run は無い)", () => {
+    const none = join(dir, "no-run-user");
+    expect(defaultSocketPath({}, none)).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
+    expect(defaultSocketPath({ XDG_RUNTIME_DIR: "" }, none)).toBe(join(homedir(), ".ccx", "run", "ccx-agent.sock"));
+    // systemd の user unit で動く agent の socket が在れば、XDG_RUNTIME_DIR の無い shell からもそれを見る
+    const runUser = join(dir, "run-user");
+    mkdirSync(join(runUser, "ccx"), { recursive: true });
+    writeFileSync(join(runUser, "ccx", "ccx-agent.sock"), "");
+    expect(defaultSocketPath({}, runUser)).toBe(join(runUser, "ccx", "ccx-agent.sock"));
   });
 });
 
