@@ -115,11 +115,11 @@ export async function ensureMirror(
   // 警告に留めて進み、fetch は (古い protocol の origin で) 続行する。
   const current = await storedOrigin(path);
   const keep = !opts.url && !opts.protocol && current !== null && explicitCloneUrl(current) !== undefined;
-  let origin = current ?? url;
+  // repodir の origin はこちら。mirror の付け替えに失敗しても、求められた URL を repodir には付ける
+  const origin = keep ? current : url;
   if (!keep) {
     try {
       await syncOrigin(path, url);
-      origin = url;
     } catch (e) {
       const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
       warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);

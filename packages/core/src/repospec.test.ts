@@ -69,6 +69,8 @@ describe("parseRepoSpec", () => {
     expect(explicitCloneUrl("http://forge.example/o/app")).toBe("http://forge.example/o/app");
     expect(explicitCloneUrl("https://forge.example:8443/o/app")).toBe("https://forge.example:8443/o/app");
     expect(explicitCloneUrl("ssh://git@forge.example:2222/o/app.git")).toBe("ssh://git@forge.example:2222/o/app.git");
+    expect(explicitCloneUrl("http://me:secret@localhost:13000/o/app.git")).toBe("http://localhost:13000/o/app.git");
+    expect(explicitCloneUrl("ssh://git:pw@forge.example:2222/o/app.git")).toBe("ssh://git@forge.example:2222/o/app.git");
     expect(explicitCloneUrl("https://github.com/o/app")).toBeUndefined();
     expect(explicitCloneUrl("localhost:13000/o/app")).toBeUndefined();
     expect(explicitCloneUrl("o/app")).toBeUndefined();

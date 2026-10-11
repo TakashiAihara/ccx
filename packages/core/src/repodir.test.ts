@@ -379,12 +379,18 @@ describe("an explicit http / port URL (#215)", () => {
     expect(await origin(first.path)).toBe(HTTP_FORGE);
     expect(await origin(mirrorPath(cfg, forge))).toBe(HTTP_FORGE);
 
-    // scheme の無い指定 (issue の症状 1) と refresh: 設定の https で書き換えない
+    // scheme の無い指定と refresh: 設定の https で書き換えない (mirror があるとき。無ければ https で取りに行く)
     const again = await createRepodir(cfg, parseRepoSpec("localhost:13000/test-owner/demo", { defaultHost: "github.com" }), { refresh: true }, "0.1.0");
     expect(await origin(again.path)).toBe(HTTP_FORGE);
     expect(await origin(mirrorPath(cfg, forge))).toBe(HTTP_FORGE);
 
-    // 明示すれば付け替える
+    // 別の明示 URL を渡せば付け替える (認証情報は落とす)
+    const viaUrl = await createRepodir(cfg, forge, { url: explicitCloneUrl("https://me:secret@localhost:13000/test-owner/demo.git") }, "0.1.0");
+    expect(await origin(viaUrl.path)).toBe(HTTPS_FORGE);
+    expect(await origin(mirrorPath(cfg, forge))).toBe(HTTPS_FORGE);
+
+    // protocol を明示しても付け替える
+    await createRepodir(cfg, forge, { url: explicitCloneUrl(HTTP_FORGE) }, "0.1.0");
     const switched = await createRepodir(cfg, forge, { protocol: "https" }, "0.1.0");
     expect(await origin(switched.path)).toBe(HTTPS_FORGE);
     expect(await origin(mirrorPath(cfg, forge))).toBe(HTTPS_FORGE);
