@@ -179,6 +179,12 @@ it simply has no center to forward to.
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 
+Collect stamps every event with the machine name and the user name, and the center
+rejects an event without them. If either is empty (the hostname or the current user
+could not be read), ccx-agent logs `collect off: ...` and runs without collect; hooks
+keep falling back to `incoming/` until it is fixed (set `CCX_MACHINE`, or `USER` and
+`HOME`) and ccx-agent is restarted.
+
 The live transcript appends a running session's `transcript.jsonl` to the store
 through the center (`docs/design/live-transcript.md`), so the center holds the
 conversation as it runs instead of only after the session ends. It follows

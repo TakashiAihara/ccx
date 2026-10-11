@@ -40,14 +40,8 @@ type Collect struct {
 // just has nowhere to forward them yet. The local side never depends on the
 // center (scope.md).
 func New(cfg config.Config, log func(string, ...any)) (*Collect, error) {
-	// The center rejects an event without both, and the forward loop would retry
-	// it forever, holding back everything behind it (#126). Stop here instead:
-	// hooks fall back to incoming/ while ccx-agent is down, so nothing is lost.
-	if cfg.Machine == "" {
-		return nil, fmt.Errorf("no machine name: the hostname could not be read; set CCX_MACHINE or machine in config.toml")
-	}
-	if cfg.User == "" {
-		return nil, fmt.Errorf("no user name: the current user could not be looked up")
+	if err := CheckOrigin(cfg); err != nil {
+		return nil, err
 	}
 	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
 	spool, err := OpenSpool(cfg.SpoolDir, origin)
@@ -324,4 +318,18 @@ func (s *Collect) takeInIncoming(when string) (young int) {
 		}
 	}
 	return young
+}
+
+// CheckOrigin says why collect cannot stamp its events, or nil. The center rejects
+// an event without a machine and a user name, and the forward loop would retry it
+// forever, holding back everything behind it (#126). Hooks fall back to incoming/
+// while collect is not running, so refusing to start loses nothing.
+func CheckOrigin(cfg config.Config) error {
+	if cfg.Machine == "" {
+		return fmt.Errorf("no machine name: the hostname could not be read; set CCX_MACHINE or machine in config.toml")
+	}
+	if cfg.User == "" {
+		return fmt.Errorf("no user name: the current user could not be looked up; set USER and HOME in ccx-agent's environment")
+	}
+	return nil
 }

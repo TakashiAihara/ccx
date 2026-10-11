@@ -105,7 +105,12 @@ func cmdServe() int {
 	// carry and persistence append here the same way when they exist.
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
-	if cfg.Concerns.Collect {
+	// Without a machine and a user name collect would only wedge (#126). Turn it off
+	// and keep the rest: heartbeat and the API do not need them, and `ccx agent
+	// status` then shows the hook socket as not running.
+	if err := collect.CheckOrigin(cfg); cfg.Concerns.Collect && err != nil {
+		logger("collect off: %v", err)
+	} else if cfg.Concerns.Collect {
 		c, err := collect.New(cfg, logger)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ccx-agent: collect: %v\n", err)
