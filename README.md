@@ -132,6 +132,7 @@ ccx tr push --archived        # every local session marked archived; with --ende
 ccx tr push <id>...           # just these; refused when another machine pushed last and yours does not continue it (resumed there and went on)
 ccx tr push --dry-run --ended # what would be pushed / unchanged / refused, writing nothing (--force overwrites a refused one)
 ccx tr ls                     # what the store holds, newest push first, with who last pulled it
+ccx tr ls -s <id>             # one session (every machine's copy); exit 1 when it is not in the store
 ccx tr pull <id>...           # fetch here and make a fresh default-branch repodir per repo; then cd there and claude --resume <id>. A repodir that fails is a warning, not a failed pull
 ccx tr prune --ended          # delete local copies — only where the store's copy reads back identical
 ccx tr prune --archived       # the same, for archived sessions that are not running

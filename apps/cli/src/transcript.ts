@@ -180,10 +180,22 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("ls")
     .description("List sessions in the store, newest push first")
     .option("-m, --machine <name>", "only sessions pushed from this machine")
+    .option("-s, --session <id>", "only this session (full id or unique prefix), every machine's copy; exit 1 when it is not in the store")
     .option("--json", "print as JSON")
     .action(async (o) => {
       const c = await client();
-      const metas = await c.list(o.machine);
+      // 1 件を見るために全件を読ませない (#183)。無いことを exit 1 で返すので、`if ccx tr ls -s "$id"` で書ける
+      let metas: Awaited<ReturnType<typeof c.list>>;
+      if (o.session) {
+        const id = await c.resolve(String(o.session).toLowerCase());
+        metas = id ? (await c.findAll(id)).filter((m) => !o.machine || m.machine === o.machine) : [];
+        if (metas.length === 0) {
+          console.error(`${o.session} is not in the store${o.machine ? ` from ${o.machine}` : ""}`);
+          process.exitCode = 1;
+          if (o.json) console.log("[]");
+          return;
+        }
+      } else metas = await c.list(o.machine);
       // 「最後に誰が pull したか」は履歴から。JSON にも同じ形で載せる
       const withPull = await Promise.all(
         metas.map(async (m) => {

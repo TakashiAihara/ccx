@@ -364,6 +364,32 @@ describe("transcript: push / pull / prune through the store", () => {
     await expect(B.pull(SID, homeB)).rejects.toThrow(/different content/);
   });
 
+  test("tr ls --session shows every machine's copy of one session, and exits 1 when it is not in the store (#183)", async () => {
+    const t = await seedA();
+    await A.push(t);
+    await B.pull(SID, homeB);
+    const pathB = join(homeB, "projects", encodeCwd(CWD_A), `${SID}.jsonl`);
+    await Bun.write(pathB, transcriptBody + line({ on: "B" }));
+    await B.push((await localTranscripts(homeB)).find((x) => x.sessionId === SID)!);
+
+    const ls = (...args: string[]) => {
+      const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "ls", ...args], {
+        env: { ...process.env, CCX_HUB_URL: A.store.endpoint, CCX_TRANSCRIPT_PREFIX: "p", XDG_CONFIG_HOME: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      return Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    };
+    const [out, , code] = await ls("--session", SID.slice(0, 8), "--json");
+    expect(code).toBe(0);
+    expect((JSON.parse(out) as { sessionId: string; machine: string }[]).map((m) => [m.sessionId, m.machine])).toEqual([[SID, "host-b"], [SID, "host-a"]]);
+    const [one] = await ls("-s", SID, "-m", "host-a", "--json");
+    expect((JSON.parse(one) as { machine: string }[]).map((m) => m.machine)).toEqual(["host-a"]);
+
+    const [nout, nerr, ncode] = await ls("--session", "ffffffff-0000-4000-8000-000000000000", "--json");
+    expect([ncode, JSON.parse(nout), nerr]).toEqual([1, [], expect.stringContaining("is not in the store")]);
+  });
+
   test("push puts the object right after the local file was cut back, though session.json already matches (#120)", async () => {
     const t = await seedA();
     await A.push(t);
