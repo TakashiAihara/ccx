@@ -9,6 +9,7 @@ import {
   createRepodir,
   loadConfig,
   parseDuration,
+  explicitCloneUrl,
   parseProtocol,
   parseRepoSpec,
   plan,
@@ -103,6 +104,7 @@ repodir
         model: o.model,
         refresh: o.refresh,
         protocol: o.protocol ? parseProtocol(o.protocol) : undefined,
+        url: explicitCloneUrl(repository),
         // commander は --no-recursive を o.recursive = false として渡す
         recurseSubmodules: o.recursive,
       },

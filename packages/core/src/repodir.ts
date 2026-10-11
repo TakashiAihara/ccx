@@ -23,7 +23,7 @@ import {
   type PrIntent,
   type RepodirMeta,
 } from "./meta.ts";
-import { cloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
+import type { Protocol, RepoSpec } from "./repospec.ts";
 import { ensureMirror } from "./mirror.ts";
 
 export type NewRepodirOptions = {
@@ -38,6 +38,8 @@ export type NewRepodirOptions = {
   refresh?: boolean;
   /** clone / origin に使う protocol。省略時は cfg.protocol */
   protocol?: Protocol;
+  /** 組み立てでは表せない clone URL (http / ポート付き。explicitCloneUrl)。mirror の origin になる (#215) */
+  url?: string;
   /** submodule を初期化する (既定 true) */
   recurseSubmodules?: boolean;
 };
@@ -55,8 +57,7 @@ export async function createRepodir(
   opts: NewRepodirOptions,
   version: string,
 ): Promise<NewRepodirResult> {
-  const protocol = opts.protocol ?? cfg.protocol;
-  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol });
+  const mirror = await ensureMirror(cfg, spec, { force: opts.refresh, protocol: opts.protocol, url: opts.url });
 
   const parent = join(cfg.root, spec.host, spec.owner, spec.repo);
   await mkdir(parent, { recursive: true });
@@ -76,7 +77,8 @@ export async function createRepodir(
 
   // mirror から clone すると origin がローカル path になる。付け替えを忘れると
   // push が mirror に飛ぶので、ここは必須。
-  await git(["remote", "set-url", "origin", cloneUrl(spec, protocol)], path);
+  // mirror と同じ origin (明示された http / ポート付きの URL も、以後の rd new で引き継がれる)
+  await git(["remote", "set-url", "origin", mirror.origin], path);
 
   // submodule は origin を直した「後」に取る。相対 URL (../foo.git) は origin を基準に
   // 解決されるため、順序を逆にすると mirror のローカル path を基準に解決してしまう。

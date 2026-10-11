@@ -36,7 +36,11 @@ export function parseRepoSpec(input: string, opts: ResolveOptions): RepoSpec {
 
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     const url = new URL(raw);
-    return fromPath(strip(url.pathname.replace(/^\//, "")), url.hostname);
+    // http(s) はポートまでが forge の識別 (同じ host の別ポートは別の forge)。ssh のポートは経路なので
+    // host に入れない (#215)。ssh と http を同じ場所に置けるのは http が既定ポート (443 / 80。URL が落とす)
+    // のときだけで、http が別ポートの forge は ssh と http で別の repo として扱われる
+    const host = /^https?:$/i.test(url.protocol) ? url.host : url.hostname;
+    return fromPath(strip(url.pathname.replace(/^\//, "")), host);
   }
 
   const parts = strip(raw).split("/").filter(Boolean);
@@ -85,12 +89,29 @@ export function parseProtocol(v: string): Protocol {
 }
 
 /**
+ * 入力が、組み立てた clone URL では表せない URL (http、またはポート付き) なら、それを返す。
+ * repodir new はそれを mirror の origin にする (#215)。https / ssh の既定ポートの URL は
+ * 組み立てで足りるので返さない (protocol の設定が効く)。認証情報は落とす: origin は
+ * .git/config と警告文に残る。ssh のユーザ名 (git@) は認証情報ではなく接続先の一部なので残す
+ */
+export function explicitCloneUrl(input: string): string | undefined {
+  const raw = input.trim();
+  if (!/^(https?|ssh):\/\//i.test(raw)) return undefined;
+  const url = new URL(raw);
+  if (url.protocol !== "http:" && url.port === "") return undefined;
+  url.password = "";
+  if (url.protocol !== "ssh:") url.username = "";
+  return url.href;
+}
+
+/**
  * ssh のユーザ名は git 固定。GitHub / GitLab / Bitbucket / Gitea いずれも git であり、
  * 例外的なフォージは ~/.ssh/config か git の insteadOf で吸収できる (ccx 側で持つと
  * 設定キーが増えるだけで、git 側の既存の仕組みと二重管理になる)。
  */
 export function cloneUrl(s: RepoSpec, protocol: Protocol = "https"): string {
+  // host のポートは http(s) のもの (#215)。scp-like の ssh には書けず、ssh のポートでもない
   return protocol === "ssh"
-    ? `git@${s.host}:${s.owner}/${s.repo}.git`
+    ? `git@${s.host.replace(/:\d+$/, "")}:${s.owner}/${s.repo}.git`
     : `https://${s.host}/${s.owner}/${s.repo}.git`;
 }
