@@ -225,7 +225,7 @@ describe("設定の解決", () => {
   });
 
   test("読めない protocol は理由を添えて失敗する", async () => {
-    expect(loadConfig({ env: { CCX_PROTOCOL: "git" }, git: noGit })).rejects.toThrow(
+    await expect(loadConfig({ env: { CCX_PROTOCOL: "git" }, git: noGit })).rejects.toThrow(
       /invalid protocol/,
     );
   });
