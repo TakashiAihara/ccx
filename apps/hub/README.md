@@ -219,6 +219,6 @@ ccx-agent 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / 
 - 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
 - 保持期間。`events` は無限に増える。ccx-agent 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る。完了も中止もされなかった multipart (`<objects dir>/.multipart/<uploadId>/`) も同じで、誰も掃かない
 - object API の一覧は index を持たず、ページごとに prefix 配下を歩き直す。実測で 2 万 key のとき 1 ページ 0.55 s、全部で 15 s (レビュー時の計測)。transcript の数がそこに届いたら index を足す
-- Web UI (#46)。ここは事実を返すだけで、描かない
+- Web UI (#46)。描くのは `/ui` の 1 枚 (止まった session を選んで開く、#261) だけで、それ以外は事実を返すだけ
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの
   上のクエリ

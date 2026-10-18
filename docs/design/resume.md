@@ -136,4 +136,9 @@ configuration. Hand the token only to those who may open sessions elsewhere.
 The center, the agents and the CLI of one release go together: no release before this one had
 the resume concern, and the claim token and the request phases are new in the same change.
 
-There is no Web UI over this list yet; `ccx session ls --stopped` is what there is.
+The center serves a page at `/ui` over the same list: label, task, cwd, machine, user and age per
+stopped session, a filter, and an Open button per row that puts the request above and shows its
+phase until it ends (or 300 s pass). `GET /ui` is the one path besides `/healthz` that needs no
+token; the page asks for the token, keeps it in the browser's localStorage and sends it as Bearer.
+Its CSP lets it talk only to the center that served it. A session whose machine has no fresh
+running list is neither running nor stopped, so it is not on the page.
