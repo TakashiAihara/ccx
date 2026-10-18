@@ -100,3 +100,9 @@ describe("CCX_CENTER_AGENT_TOKEN", () => {
     expect(loadCenterConfig({ CCX_CENTER_TOKEN: T, CCX_CENTER_AGENT_TOKEN: U }).agentToken).toBe(U);
   });
 });
+
+test("CCX_CENTER_AGENT_TOKEN is trimmed like CCX_CENTER_TOKEN, and spaces alone are unset", () => {
+  const U = "c".repeat(32);
+  expect(loadCenterConfig({ CCX_CENTER_AGENT_TOKEN: `  ${U}\n` }).agentToken).toBe(U);
+  expect(loadCenterConfig({ CCX_CENTER_AGENT_TOKEN: "   " }).agentToken).toBeUndefined();
+});

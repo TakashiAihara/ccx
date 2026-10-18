@@ -52,7 +52,7 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
   }
 
   // 空文字は未設定。CCX_CENTER_TOKEN と同じ扱い
-  const agentToken = env.CCX_CENTER_AGENT_TOKEN || undefined;
+  const agentToken = env.CCX_CENTER_AGENT_TOKEN?.trim() || undefined;
   if (agentToken !== undefined && !TOKEN_SHAPE.test(agentToken)) {
     throw new Error(
       "CCX_CENTER_AGENT_TOKEN must be 16+ characters of A-Z a-z 0-9 . _ ~ - (it is sent in an Authorization header). " +

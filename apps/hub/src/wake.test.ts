@@ -234,3 +234,12 @@ test("an agent that cannot be reached does not fail the request", async () => {
   const { request } = await client.requestResume({ key: key() });
   expect(request?.id).toBeTruthy();
 });
+
+test("a failure while looking up the address does not fail the request that was already stored", async () => {
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  // 宛先の表を消して、起こしの検索だけを壊す (依頼の表はそのまま)
+  db.$client.exec("DROP TABLE agent_endpoints");
+  const { request } = await client.requestResume({ key: key() });
+  expect(request?.id).toBeTruthy();
+});

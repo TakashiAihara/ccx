@@ -205,8 +205,15 @@ export function resumeImpl(db: Db, now: () => number, agentToken?: string): Serv
         { behavior: "immediate" },
       );
 
-      // 新しい依頼を置いたときだけ起こす。既にある依頼を返したときは、起こしは最初の依頼で済んでいる
-      if (inserted && agentToken) wakeAgent(db, key.machine, key.user, agentToken, nowMs);
+      // 新しい依頼を置いたときだけ起こす。既にある依頼を返したときは、起こしは最初の依頼で済んでいる。
+      // 依頼はもう保存してあるので、起こしの失敗 (宛先を読む DB の例外も) で RPC を失敗にしない
+      if (inserted && agentToken) {
+        try {
+          wakeAgent(db, key.machine, key.user, agentToken, nowMs);
+        } catch (err: unknown) {
+          console.error(`wake ${key.machine}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       return { $typeName: "ccx.v1.RequestResumeResponse", request };
     },
