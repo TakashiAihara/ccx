@@ -35,6 +35,12 @@ type fakeCenter struct {
 	claims    []*ccxv1.ClaimResumeRequest
 	queue     []*ccxv1.ResumeRequest
 	finished  []*ccxv1.FinishResumeRequest
+	// finishErrs are returned by the first FinishResume calls, in order (nil = accept).
+	finishErrs  []error
+	finishCalls int
+	// cancelAware refuses a FinishResume whose context is already cancelled, as a
+	// real client would.
+	cancelAware bool
 }
 
 func (f *fakeCenter) Ingest(_ context.Context, r *connect.Request[ccxv1.IngestRequest]) (*connect.Response[ccxv1.IngestResponse], error) {
@@ -58,9 +64,20 @@ func (f *fakeCenter) ClaimResume(_ context.Context, r *connect.Request[ccxv1.Cla
 	return connect.NewResponse(res), nil
 }
 
-func (f *fakeCenter) FinishResume(_ context.Context, r *connect.Request[ccxv1.FinishResumeRequest]) (*connect.Response[ccxv1.FinishResumeResponse], error) {
+func (f *fakeCenter) FinishResume(ctx context.Context, r *connect.Request[ccxv1.FinishResumeRequest]) (*connect.Response[ccxv1.FinishResumeResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.finishCalls++
+	if f.cancelAware && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if len(f.finishErrs) > 0 {
+		err := f.finishErrs[0]
+		f.finishErrs = f.finishErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	f.finished = append(f.finished, r.Msg)
 	return connect.NewResponse(&ccxv1.FinishResumeResponse{}), nil
 }
@@ -666,5 +683,137 @@ func TestRunOpensClaimedRequestsSideBySide(t *testing.T) {
 	<-done
 	if len(c.finished) != 2 {
 		t.Fatalf("finished %d, want 2", len(c.finished))
+	}
+}
+
+// A request taken while the agent is stopping is neither run nor answered: the
+// center offers it again once its run limit is over.
+func TestOpenDoesNothingOnceTheAgentIsStopping(t *testing.T) {
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, ClaimToken: "t"}}}
+	ran := 0
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Log: t.Logf,
+		Run: func(context.Context, RunRequest) (int, string) { ran++; return 0, "" }})
+	ctx, cancel := context.WithCancel(context.Background())
+	req := r.claim(ctx)
+	cancel()
+	r.open(ctx, req)
+	if ran != 0 || len(c.finished) != 0 {
+		t.Fatalf("ran %d, finished %d; want 0, 0", ran, len(c.finished))
+	}
+}
+
+// A resume that ends after the agent began stopping is still reported.
+func TestFinishIsSentEvenAfterTheAgentBeganStopping(t *testing.T) {
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, ClaimToken: "t"}}, cancelAware: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Log: t.Logf,
+		Run: func(context.Context, RunRequest) (int, string) { cancel(); return 0, "opened" }})
+	r.Claim(ctx)
+	if len(c.finished) != 1 || c.finished[0].Detail != "opened" {
+		t.Fatalf("finished %v, want the result sent despite the cancelled context", c.finished)
+	}
+}
+
+func TestCommandRunnerSaysTheAgentWasStopped(t *testing.T) {
+	ccx := writeScript(t, t.TempDir(), "ccx", `exec sleep 5`)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	code, out := CommandRunner(ccx, nil)(ctx, RunRequest{SessionID: idA})
+	if code != 4 || !strings.Contains(out, "ccx-agent was stopped") {
+		t.Fatalf("code %d out %q", code, out)
+	}
+}
+
+func TestFinishIsRetriedWhenTheCenterDoesNotAnswer(t *testing.T) {
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, ClaimToken: "t"}},
+		finishErrs: []error{connect.NewError(connect.CodeUnavailable, errors.New("down"))}}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Log: t.Logf, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	r.Claim(context.Background())
+	if len(c.finished) != 1 || c.finishCalls != 2 {
+		t.Fatalf("finished %d after %d calls; want 1 after 2", len(c.finished), c.finishCalls)
+	}
+}
+
+func TestFinishIsNotRetriedWhenTheCenterRefuses(t *testing.T) {
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, ClaimToken: "t"}},
+		finishErrs: []error{connect.NewError(connect.CodeFailedPrecondition, errors.New("claimed again")), nil}}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Log: t.Logf, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	r.Claim(context.Background())
+	if c.finishCalls != 1 {
+		t.Fatalf("%d finish calls, want 1", c.finishCalls)
+	}
+}
+
+// No more than four resumes run at once; the rest stay on the center.
+func TestRunStartsAtMostFourResumesAtOnce(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	started := 0
+	var queue []*ccxv1.ResumeRequest
+	for i := 0; i < 6; i++ {
+		queue = append(queue, &ccxv1.ResumeRequest{Id: "r" + strconv.Itoa(i), Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}})
+	}
+	c := &fakeCenter{queue: queue}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Interval: time.Hour, Poll: 2 * time.Millisecond, Log: t.Logf,
+		Run: func(context.Context, RunRequest) (int, string) {
+			mu.Lock()
+			started++
+			mu.Unlock()
+			<-release
+			return 0, ""
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = r.Run(ctx); close(done) }()
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	n := started
+	mu.Unlock()
+	c.mu.Lock()
+	left := len(c.queue)
+	c.mu.Unlock()
+	close(release)
+	cancel()
+	<-done
+	if n != 4 || left != 2 {
+		t.Fatalf("started %d with %d left on the center; want 4 and 2", n, left)
+	}
+}
+
+func TestLoadHomesRefusesAFileOthersCanWriteAndOddLines(t *testing.T) {
+	def := t.TempDir()
+	file := filepath.Join(t.TempDir(), "claude-homes")
+	if err := os.WriteFile(file, []byte("/ok/home\nrelative/home\n/\n/ok/../ok/home\n/ok/home\n"+def+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: def, HomesFile: file, Center: &fakeCenter{}, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	if hs := r.homes(); len(hs) != 2 || hs[1] != "/ok/home" {
+		t.Fatalf("homes %v, want [%s /ok/home]", hs, def)
+	}
+	if err := os.Chmod(file, 0o622); err != nil {
+		t.Fatal(err)
+	}
+	r = New(Options{Machine: "m1", User: "dev", DefaultHome: def, HomesFile: file, Center: &fakeCenter{}, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	if hs := r.homes(); len(hs) != 1 {
+		t.Fatalf("homes %v from a file others can write, want only the default", hs)
+	}
+}
+
+func TestClaimFindsAHomeWhosePathLooksLikeAGlob(t *testing.T) {
+	def := t.TempDir()
+	other := filepath.Join(t.TempDir(), "acct[1]")
+	if err := os.MkdirAll(filepath.Join(other, "projects", "-w"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "projects", "-w", idA+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var home string
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}}}}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: def, Center: c, Log: t.Logf, Run: func(_ context.Context, q RunRequest) (int, string) { home = q.Home; return 0, "" }})
+	r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(other, "projects", "-w", idA+".jsonl") + `"}`))
+	r.Claim(context.Background())
+	if home != other {
+		t.Fatalf("home %q, want %q", home, other)
 	}
 }

@@ -97,12 +97,20 @@ test("待っても終わらなければ exit 5 で、誰も取っていないか
   expect(b.message).toContain("taken but has not answered");
 });
 
-test("期限が切れたら exit 5 で、開かれないことを言う", async () => {
+test("期限が切れたら exit 5 で、誰も取らなかったなら開かれないと言う", async () => {
   const { center } = fakeCenter([req(), req({ expired: true })]);
   const e = (await resumeRemote({ ...base, center }).catch((x: unknown) => x)) as ResumeError;
   expect(e).toBeInstanceOf(ResumeError);
   expect(e.exitCode).toBe(5);
-  expect(e.message).toContain("expired");
+  expect(e.message).toContain("it was not taken in time and will not be opened");
+});
+
+test("取られた依頼が期限切れになったら、開いたかは分からないと言う (開かれないとは言わない)", async () => {
+  const { center } = fakeCenter([req({ expired: true, claimedAt: timestampFromMs(1) })]);
+  const e = (await resumeRemote({ ...base, center }).catch((x: unknown) => x)) as ResumeError;
+  expect(e.exitCode).toBe(5);
+  expect(e.message).toContain("whether it opened is not known");
+  expect(e.message).not.toContain("will not be opened");
 });
 
 test("依頼を置いた後に center へ届かなくなっても、待つ間は読み直し、最後まで届かなければ exit 5 で理由を添える", async () => {

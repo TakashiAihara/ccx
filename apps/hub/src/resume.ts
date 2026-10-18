@@ -35,11 +35,12 @@ export const MAX_WAIT_SECONDS = 600;
 const DEFAULT_WAIT_SECONDS = 40;
 
 /**
- * 取られた依頼を「実行中」とみなす時間。agent は 1 回の実行を待ち + 60 秒で打ち切る (resume.go の
- * DefaultRunTimeout)。それにもう 60 秒を足し、打ち切られた実行の結果が戻る前に別の agent が取り直さないようにする
+ * 取られた依頼を「実行中」とみなす時間。agent 側の最も長い道筋は、Claim の応答 (30 秒の上限) + 実行 (待ち + 60 秒で
+ * 打ち切る、resume.go の DefaultRunTimeout) + 打ち切った後に出力を待つ 5 秒 + Finish (30 秒の上限、送り直しを含めて
+ * 数十秒) で、待ち + 125 秒を少し超える。余裕を持って待ち + 180 秒とし、その結果が戻る前に別の agent が取り直さないようにする
  */
 export function claimLeaseMs(waitSeconds: number): number {
-  return ((waitSeconds || DEFAULT_WAIT_SECONDS) + 120) * 1000;
+  return ((waitSeconds || DEFAULT_WAIT_SECONDS) + 180) * 1000;
 }
 
 /** detail が持つ上限 (resume.proto)。UTF-8 のバイトで数え、古いところから文字の境界で切る (agent の detailOf と同じ単位) */
@@ -50,7 +51,7 @@ type Row = typeof resumeRequests.$inferSelect;
 /**
  * 依頼の段階。
  * - finished: 結果が返った
- * - running: 取られて、その実行の上限 (claimLeaseMs) の内にある。同じ session の次の依頼を塞ぐ
+ * - running: 取られて、その実行の上限 (claimLeaseMs、待ち + 180 秒) の内にある。同じ session の次の依頼を塞ぐ
  * - pending: 誰も取っていないか、取られたが上限を過ぎた (agent が落ちた) 依頼で、置いてから REQUEST_TTL_MS の内。取れる
  * - expired: 上のどれでもない。取らず、次の依頼を塞がない
  */
@@ -134,8 +135,8 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
             const p = phase(r, nowMs);
             return p === "running" || p === "pending";
           });
-          // force は、まだ誰も取っていない依頼にだけ足せる。取った agent はもう force 無しで走っている
-          if (open && open.claimedAtMs === null && !open.force && req.force) {
+          // force は、取れる状態 (pending) の依頼にだけ足せる。実行中の依頼は、取った agent がもう force 無しで走っている
+          if (open && phase(open, nowMs) === "pending" && !open.force && req.force) {
             tx.update(resumeRequests).set({ force: true }).where(eq(resumeRequests.id, open.id)).run();
             return toRequest({ ...open, force: true }, nowMs);
           }
@@ -182,7 +183,8 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
 
       return {
         $typeName: "ccx.v1.ListResumeRequestsResponse",
-        requests: rows.map((r) => toRequest(r, nowMs)),
+        // claim_token は取った agent だけが知っていればよい。一覧に出すと、読める人なら誰でも結果を書ける
+        requests: rows.map((r) => ({ ...toRequest(r, nowMs), claimToken: "" })),
       };
     },
 

@@ -73,18 +73,22 @@ A request is in one of four phases, decided in one place (`phase()` in `apps/hub
 | phase | when | claimed by an agent | blocks a new request for the session |
 |---|---|---|---|
 | pending | nobody took it, or the agent that took it went past its run limit; placed less than 10 min ago | yes | yes |
-| running | taken, and within its run limit (the wait + 120 s) | no | yes |
+| running | taken, and within its run limit (the wait + 180 s) | no | yes |
 | expired | neither of the above | no | no |
 | finished | a result came back | no | no |
 
 So a request nobody takes in ten minutes reads as `expired`, and putting the same session again
 makes a new request. A request taken at minute nine is `running` until its run limit, not expired
-at minute ten: the agent may still be opening it. The run limit is the agent's own limit on the
-command (the wait + 60 s) plus a minute, so a request is offered again only after the agent that
-had it has stopped trying. The wait a request carries is at most 600 s. Every claim mints a fresh
+at minute ten: the agent may still be opening it. The run limit covers the agent's longest path —
+the claim's answer (30 s), the command (the wait + 60 s), 5 s for its output after a kill, and the
+result's way back with retries (30 s) — with room to spare, so a request is offered again only
+after the agent that had it has stopped trying. The wait a request carries is at most 600 s. If a
+result never arrives (the agent died), the request can be taken again; a second resume of a
+session the first one opened is refused as running. Every claim mints a fresh
 `claim_token`, and a result that comes back under any other token is refused, so an agent that was
-overtaken after the center offered the request again cannot finish the newer attempt. `force=true`
-is added to a request only while nobody has taken it. `detail` is kept at its last 4096 bytes of
+overtaken after the center offered the request again cannot finish the newer attempt; the token
+is handed only to the claim and never listed. `force=true` is added to a request only while it is
+pending. `detail` is kept at its last 4096 bytes of
 UTF-8, cut on a character boundary.
 
 ccx-agent asks whether anything is to be opened every 5 s, takes the oldest request addressed to
@@ -93,9 +97,12 @@ request says so) and returns what that command said: its exit code as the outcom
 the detail. The wait the request carries is handed to that CLI as it is, and the caller waits for
 that wait plus two minutes — the agent still has to pick the request up, and its own command is
 bounded by the same wait plus a minute (stopped there, it answers 4: a workspace may be open). The
-caller sees that machine's own answer — exit 1 or 4 with its stderr, exit 5 if nothing answered
-within that wait, which says whether any agent took it, or if the request expired untaken. Each
-request the agent takes runs on its own, so one long resume does not leave the others to expire.
+caller sees that machine's own answer — exit 1 or 4 with its stderr, or exit 5 if nothing
+answered within that wait or the request expired, saying whether any agent took it. The agent
+runs up to four requests at once, each on its own, so one long resume does not hold the others
+back; past four, requests wait on the center (and expire if none is taken within ten minutes).
+When the agent stops, a request it took but had not started is left to be offered again, and a
+resume cut off partway answers 4 with that reason.
 
 Reporting what runs here and opening what the center asks for are two separate loops in the agent:
 a resume that takes longer than a poll must not hold the running list back, since a list that

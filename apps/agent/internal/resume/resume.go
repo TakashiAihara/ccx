@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -159,18 +160,32 @@ func (r *Resume) loadHomes() {
 	if r.opts.HomesFile == "" {
 		return
 	}
-	b, err := os.ReadFile(r.opts.HomesFile)
+	fi, err := os.Stat(r.opts.HomesFile)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			r.log("resume: could not read the learned Claude homes from %s: %v", r.opts.HomesFile, err)
 		}
 		return
 	}
+	// A home read from here becomes a CLAUDE_CONFIG_DIR a resume runs under, so the
+	// file has to be this user's own and writable by no one else (as saveHomes
+	// writes it).
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() || fi.Mode().Perm()&0o022 != 0 {
+		r.log("resume: ignoring %s: it must be owned by this user and writable only by them", r.opts.HomesFile)
+		return
+	}
+	b, err := os.ReadFile(r.opts.HomesFile)
+	if err != nil {
+		r.log("resume: could not read the learned Claude homes from %s: %v", r.opts.HomesFile, err)
+		return
+	}
 	for _, line := range strings.Split(string(b), "\n") {
 		home := strings.TrimSpace(line)
-		if home != "" && filepath.IsAbs(home) && !slices.Contains(r.learned, home) && len(r.learned) < maxLearnedHomes {
-			r.learned = append(r.learned, home)
+		if home == "" || home != filepath.Clean(home) || !filepath.IsAbs(home) || home == "/" ||
+			home == r.opts.DefaultHome || slices.Contains(r.learned, home) || len(r.learned) >= maxLearnedHomes {
+			continue
 		}
+		r.learned = append(r.learned, home)
 	}
 }
 
@@ -180,12 +195,21 @@ func (r *Resume) saveHomes() {
 	if r.opts.HomesFile == "" {
 		return
 	}
-	tmp := r.opts.HomesFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(r.learned, "\n")+"\n"), 0o600); err != nil {
+	// A temp name of its own: two agents of one user must not write the same temp file.
+	f, err := os.CreateTemp(filepath.Dir(r.opts.HomesFile), filepath.Base(r.opts.HomesFile)+".*.tmp")
+	if err != nil {
 		r.log("resume: could not save the learned Claude homes: %v", err)
 		return
 	}
-	if err := os.Rename(tmp, r.opts.HomesFile); err != nil {
+	_, werr := f.WriteString(strings.Join(r.learned, "\n") + "\n")
+	cerr := f.Close()
+	if err := errors.Join(werr, cerr); err != nil {
+		_ = os.Remove(f.Name())
+		r.log("resume: could not save the learned Claude homes: %v", err)
+		return
+	}
+	if err := os.Rename(f.Name(), r.opts.HomesFile); err != nil {
+		_ = os.Remove(f.Name())
 		r.log("resume: could not save the learned Claude homes: %v", err)
 	}
 }
@@ -209,7 +233,14 @@ type Resume struct {
 	// first tick always sends, an empty list included.
 	sent   []string
 	sentAt time.Time
+
+	// running counts the resumes Run has started and not finished.
+	running atomic.Int32
 }
+
+// maxRunning bounds the resumes running at once. Each is a CLI, a workspace and
+// a Claude Code session; past this the requests wait on the center.
+const maxRunning = 4
 
 // Name identifies the concern in logs and config (ADR 0002).
 func (r *Resume) Name() string { return "resume" }
@@ -245,10 +276,17 @@ func (r *Resume) Run(ctx context.Context) error {
 	}
 	every(func() { r.Report(ctx) })
 	every(func() {
+		// Full: leave the requests on the center, where another tick (or another
+		// agent) takes them, rather than start more than maxRunning at once.
+		if r.running.Load() >= maxRunning {
+			return
+		}
 		if req := r.claim(ctx); req != nil {
+			r.running.Add(1)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				defer r.running.Add(-1)
 				r.open(ctx, req)
 			}()
 		}
@@ -419,15 +457,28 @@ func (r *Resume) claim(ctx context.Context) *ccxv1.ResumeRequest {
 // looked for in the same order as the running list. "" when none does: the CLI
 // then says there is no transcript, which is the answer.
 func (r *Resume) homeWith(id string) string {
+	// Not filepath.Glob: a learned home is a path from a payload, and a '[' or
+	// '*' in it would be read as a pattern.
 	for _, h := range r.homes() {
-		if m, _ := filepath.Glob(filepath.Join(h, "projects", "*", id+".jsonl")); len(m) > 0 {
-			return h
+		dirs, err := os.ReadDir(filepath.Join(h, "projects"))
+		if err != nil {
+			continue
+		}
+		for _, d := range dirs {
+			if fi, err := os.Stat(filepath.Join(h, "projects", d.Name(), id+".jsonl")); err == nil && fi.Mode().IsRegular() {
+				return h
+			}
 		}
 	}
 	return ""
 }
 
 func (r *Resume) open(ctx context.Context, req *ccxv1.ResumeRequest) {
+	// Taken while the agent was stopping: run nothing and answer nothing. The
+	// center offers it again once its run limit is over (or lets it expire).
+	if ctx.Err() != nil {
+		return
+	}
 	id := req.GetKey().GetSessionId()
 	if !sessionID.MatchString(id) {
 		// Nothing is run for an id that cannot name a session: the CLI would
@@ -462,12 +513,31 @@ func (r *Resume) finish(ctx context.Context, id, claimToken string, outcome ccxv
 		ExitCode:   exitCode,
 		ClaimToken: claimToken,
 	}))
+	for try := 1; err != nil && try < finishTries; try++ {
+		// A refusal (the request was claimed again, or is not ours) does not
+		// change on a retry; only a center that did not answer is tried again.
+		if code := connect.CodeOf(err); code == connect.CodeFailedPrecondition || code == connect.CodeNotFound || code == connect.CodeInvalidArgument {
+			break
+		}
+		time.Sleep(finishRetryDelay)
+		_, err = r.opts.Center.FinishResume(context.WithoutCancel(ctx), connect.NewRequest(&ccxv1.FinishResumeRequest{
+			Id: id, Outcome: outcome, Detail: detail, ExitCode: exitCode, ClaimToken: claimToken,
+		}))
+	}
 	if err != nil {
-		// The request stays claimed and the center offers it again after its
-		// own deadline, so the loss is a repeat of the work, not a silent end.
+		// The request stays claimed and the center offers it again once its run
+		// limit is over (while it is still within its expiry). A second run of a
+		// session this one already opened is refused as running.
 		r.log("resume: finishing %s failed: %v", id, err)
 	}
 }
+
+// finishTries and finishRetryDelay bound how long a result is kept trying to
+// reach the center: well inside the center's run limit (wait + 180 s).
+const (
+	finishTries      = 3
+	finishRetryDelay = 2 * time.Second
+)
 
 func (r *Resume) log(format string, a ...any) { r.opts.Log(format, a...) }
 
@@ -518,9 +588,9 @@ func CommandRunner(ccxPath string, timeoutFor func(uint32) time.Duration) RunFun
 	if timeoutFor == nil {
 		timeoutFor = DefaultRunTimeout
 	}
-	return func(ctx context.Context, req RunRequest) (int, string) {
+	return func(parent context.Context, req RunRequest) (int, string) {
 		runTimeout := timeoutFor(req.WaitSeconds)
-		ctx, cancel := context.WithTimeout(ctx, runTimeout)
+		ctx, cancel := context.WithTimeout(parent, runTimeout)
 		defer cancel()
 
 		args := []string{"session", "resume", req.SessionID}
@@ -545,6 +615,10 @@ func CommandRunner(ccxPath string, timeoutFor func(uint32) time.Duration) RunFun
 		switch {
 		case err == nil:
 			return 0, string(out)
+		case parent.Err() != nil:
+			// The agent is stopping. The CLI was killed partway, so a workspace may
+			// be open: the CLI's exit 4, with the reason that is true.
+			return 4, fmt.Sprintf("%s\nccx-agent was stopped while ccx session resume ran; a workspace may be left open", strings.TrimSpace(string(out)))
 		case ctx.Err() != nil:
 			// What a killed process reports is the signal, which says nothing
 			// about the resume; the deadline is the reason. It may have opened a
@@ -663,7 +737,7 @@ func pidAlive(pid int, procStart string) bool {
 	// comm can hold spaces, so the fields are counted from the closing paren:
 	// starttime is the 20th after it.
 	i := strings.LastIndexByte(string(stat), ')')
-	if i < 0 {
+	if i < 0 || i+2 > len(stat) {
 		return true
 	}
 	fields := strings.Fields(string(stat)[i+2:])

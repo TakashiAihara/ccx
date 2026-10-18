@@ -86,7 +86,9 @@ export async function resumeRemote(o: {
     // 期限を過ぎた依頼は agent が取らない。もう一度置けば開く
     if (latest.expired) {
       throw new ResumeError(
-        `the request ${id} on ${machine} expired: it was not taken in time and will not be opened; put it again to try once more`,
+        latest.claimedAt
+          ? `the request ${id} on ${machine} expired: a ccx-agent took it but did not answer within its run limit, so whether it opened is not known; put it again to try once more (a session already open there is refused as running)`
+          : `the request ${id} on ${machine} expired: it was not taken in time and will not be opened; put it again to try once more`,
         5,
       );
     }

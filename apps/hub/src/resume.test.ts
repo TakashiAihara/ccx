@@ -19,8 +19,8 @@ import { ObjectStore } from "./objects.ts";
 import { createApp } from "./server.ts";
 import { claimLeaseMs, DETAIL_CAP, MAX_WAIT_SECONDS, REQUEST_TTL_MS } from "./resume.ts";
 
-/** 待ちを指定しない依頼の実行中の時間 (40 秒の待ち + 120 秒) */
-const CLAIM_TIMEOUT_MS = 160_000;
+/** 待ちを指定しない依頼の実行中の時間 (40 秒の待ち + 180 秒) */
+const CLAIM_TIMEOUT_MS = 220_000;
 
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -57,9 +57,9 @@ async function code(p: Promise<unknown>): Promise<Code | "ok"> {
   }
 }
 
-test("取られた依頼を実行中とみなす時間は、待ち (既定 40 秒) + 120 秒", () => {
-  expect(claimLeaseMs(0)).toBe(160_000);
-  expect(claimLeaseMs(300)).toBe(420_000);
+test("取られた依頼を実行中とみなす時間は、待ち (既定 40 秒) + 180 秒", () => {
+  expect(claimLeaseMs(0)).toBe(220_000);
+  expect(claimLeaseMs(300)).toBe(480_000);
   expect(MAX_WAIT_SECONDS).toBe(600);
 });
 
@@ -270,8 +270,8 @@ test("期限の直前に取られて実行中の依頼は、期限を過ぎて�
   const a = await client.requestResume({ key: key(A), waitSeconds: 300 });
   now += REQUEST_TTL_MS - 60_000;
   await client.claimResume({ machine: "m1", user: "dev" });
-  // 待ち 300 秒の実行中の長さは 420 秒。待ちを見ずに既定 (160 秒) で数えれば、ここではもう切れている
-  now += 180_000;
+  // 待ち 300 秒の実行中の長さは 480 秒。待ちを見ずに既定 (220 秒) で数えれば、ここではもう切れている
+  now += 240_000;
   expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(false);
   const b = await client.requestResume({ key: key(A) });
   expect(b.request?.id).toBe(a.request!.id);
@@ -344,4 +344,22 @@ test("Ingest は読めない動いている一覧を INVALID_ARGUMENT で断る"
   const ingest = createClient(IngestService, transport);
   const bad = { eventId: "r1", origin: { machine: "m1", user: "dev" }, seq: 0n, receivedAt: timestampFromMs(T0), producer: 3, payload: new TextEncoder().encode("{") };
   expect(await code(ingest.ingest({ events: [bad] }))).toBe(Code.InvalidArgument);
+});
+
+test("一覧は claim_token を出さない (取った agent だけが知る)", async () => {
+  await client.requestResume({ key: key(A) });
+  const claimed = await client.claimResume({ machine: "m1", user: "dev" });
+  expect(claimed.request?.claimToken).not.toBe("");
+  expect((await client.listResumeRequests({})).requests[0]?.claimToken).toBe("");
+});
+
+test("取られたが実行中の時間を過ぎた (取れる状態に戻った) 依頼には force=true を足せる", async () => {
+  await client.requestResume({ key: key(A) });
+  await client.claimResume({ machine: "m1", user: "dev" });
+  now += CLAIM_TIMEOUT_MS;
+  expect((await client.requestResume({ key: key(A), force: true })).request?.force).toBe(true);
+});
+
+test("待ちはちょうど 600 秒なら受ける", async () => {
+  expect(await code(client.requestResume({ key: key(B), waitSeconds: 600 }))).toBe("ok");
 });

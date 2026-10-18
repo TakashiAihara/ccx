@@ -188,8 +188,8 @@ machine's `ccx-agent` opens it (only a full id: a prefix is resolved from this m
 transcripts). It needs a center, and `--wait` plus two minutes, because the agent has to pick the
 request up and run its own resume (`--wait` is at most 600 for another machine). Exit `5` means the
 request is on the center but nothing answered in time — nothing is known about the workspace, so it
-may be open; the message says whether any `ccx-agent` took it — or that nothing took it within ten
-minutes, after which it expires and is never opened. `1` and `4` are the other machine's own
+may be open; the message says whether any `ccx-agent` took it — or that it expired: untaken within
+ten minutes it is never opened, taken but unanswered it may have been. `1` and `4` are the other machine's own
 `ccx session resume` exit codes, with
 its stderr. There is no Web UI over the same list yet. Anyone holding the center's token can open
 a stopped session on any machine and any user: the request carries only the id, `--force` and
