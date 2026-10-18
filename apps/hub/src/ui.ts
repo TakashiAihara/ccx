@@ -23,7 +23,7 @@ export const UI_SCRIPT = String.raw`(() => {
 
   // one row object per stopped session, kept across reloads so a click or focus survives a redraw
   const rowsByKey = new Map();
-  // a failed RequestResume shows on its row until that row's next RequestResume succeeds
+  // a failed RequestResume shows on its row until that row's next Open
   const rowErr = new Map();
   const busy = new Set();
   let sessions = [];
@@ -31,7 +31,7 @@ export const UI_SCRIPT = String.raw`(() => {
 
   // gen moves when the token changes or the gate comes back; a response from an older gen writes nothing
   let gen = 0;
-  // at most one list read and one request read per gen
+  // one list read and one request read in flight at a time; an answer from an older gen is dropped
   let listGen = -1;
   let reqGen = -1;
   let reqAgain = false;
@@ -71,7 +71,9 @@ export const UI_SCRIPT = String.raw`(() => {
     return Math.floor(sec / 86400) + "d";
   };
 
-  const rowKey = (k) => JSON.stringify([k.machine, k.user, k.sessionId]);
+  // the center stores a requested id lowercased; a listed id is as ingested
+  const rowKey = (k) => JSON.stringify([k.machine, k.user, (k.sessionId || "").toLowerCase()]);
+  const msOf = (t) => (t ? Date.parse(t) : NaN);
 
   // the text for one request, and whether Open may be pressed for its session
   function statusOf(r) {
@@ -79,7 +81,8 @@ export const UI_SCRIPT = String.raw`(() => {
       const detail = r.detail || "";
       if (r.outcome === "RESUME_OUTCOME_OPENED") return { text: "opened: " + detail, open: true };
       if (r.outcome === "RESUME_OUTCOME_FAILED") {
-        const code = r.exitCode === undefined ? "?" : r.exitCode;
+        // proto3 JSON leaves out a zero exit code
+        const code = r.exitCode === undefined ? 0 : r.exitCode;
         return { text: "failed (exit " + code + "): " + detail, open: true };
       }
       return { text: "finished, outcome unknown: " + detail, open: true };
@@ -132,6 +135,8 @@ export const UI_SCRIPT = String.raw`(() => {
     rows.textContent = "";
     sessions = [];
     requests = [];
+    listMsg.textContent = "";
+    reqMsg.textContent = "";
     render();
   }
 
@@ -159,7 +164,9 @@ export const UI_SCRIPT = String.raw`(() => {
 
   function fill(row, rk, s, q) {
     const st = s.state || {};
-    const latest = requests.find((r) => rowKey(r.key) === rk);
+    // a request put before the session was last seen belongs to an earlier stop of it (the session
+    // opened and ran since), so it no longer says anything about this row
+    const latest = requests.find((r) => rowKey(r.key) === rk && !(msOf(r.requestedAt) < msOf(s.lastSeen)));
     const status = latest ? statusOf(latest) : { text: "", open: true };
     const err = rowErr.get(rk) || "";
     row.s = s;
@@ -309,8 +316,10 @@ export const UI_SCRIPT = String.raw`(() => {
     rowErr.delete(rk);
     render();
     try {
-      await rpc("/ccx.v1.ResumeService/RequestResume", { key: s.key, waitSeconds: WAIT_SECONDS });
+      const data = await rpc("/ccx.v1.ResumeService/RequestResume", { key: s.key, waitSeconds: WAIT_SECONDS });
       if (g !== gen) return;
+      // show the request at once, so Open stays off until the next read of the list replaces it
+      if (data.request) requests = [data.request, ...requests.filter((r) => r.id !== data.request.id)];
       loadRequests();
     } catch (e) {
       if (g !== gen) return;
@@ -345,7 +354,11 @@ export const UI_SCRIPT = String.raw`(() => {
   });
   $("forget").addEventListener("click", () => {
     localStorage.removeItem(TOKEN_KEY);
-    showGate("");
+    newGen();
+    // a center without a token answers without one; the gate is only for a center that asks
+    showApp();
+    load();
+    loadRequests();
   });
   search.addEventListener("input", renderRows);
   document.addEventListener("visibilitychange", () => {
@@ -362,7 +375,10 @@ export const UI_SCRIPT = String.raw`(() => {
   showApp();
   load();
   loadRequests();
-})();`;
+})();`
+  // the browser hashes the script with its line breaks as LF; a CRLF checkout would otherwise
+  // hash differently and the page would stop running with no error shown
+  .replace(/\r\n?/g, "\n");
 
 export const UI_HTML = String.raw`<!doctype html>
 <html lang="en">

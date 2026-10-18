@@ -54,8 +54,9 @@ export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; 
   app.get("/healthz", (c) => c.text("ok\n"));
 
   // token は page に埋めず、人が入力欄に打つ。page 自身は token なしで取れるので、
-  // `/ui` は auth の例外 (GET / HEAD のみ)。CSP が止めるのは他 origin からの script / style /
-  // 画像などの読込と、他 origin への fetch / XHR。navigation や window.open は止めない
+  // `/ui` は auth の例外 (GET / HEAD のみ)。CSP は、ハッシュの合う 1 つの script と inline の style
+  // 以外の読込 (同じ origin のものも) と、他 origin への fetch / XHR と form の送信を止める。
+  // navigation や window.open は止めない
   app.get("/ui", (c) =>
     c.body(UI_HTML, 200, {
       "content-type": "text/html; charset=utf-8",

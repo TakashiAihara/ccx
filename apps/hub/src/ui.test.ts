@@ -98,6 +98,7 @@ test("the JSON the page sends is what the center reads", async () => {
   const { html } = await pageScript();
   const limit = Number(/const LIST_LIMIT = (\d+);/.exec(html)?.[1]);
   expect(limit).toBe(500);
+  expect(html).toContain("{ stoppedOnly: true, limit: LIST_LIMIT }");
   const list = await rpc("ccx.v1.FleetService/ListSessions", { stoppedOnly: true, limit }, TOKEN);
   expect(list.status).toBe(200);
   expect(await list.json()).toEqual({});
@@ -111,6 +112,7 @@ test("the JSON the page sends is what the center reads", async () => {
   // ページは条件を付けずに新しい順の依頼を読み、行の状態もそこから決める
   const recent = Number(/const RECENT_LIMIT = (\d+);/.exec(html)?.[1]);
   expect(recent).toBe(50);
+  expect(html).toContain("{ limit: RECENT_LIMIT }");
   const got = await rpc("ccx.v1.ResumeService/ListResumeRequests", { limit: recent }, TOKEN);
   const { requests } = (await got.json()) as { requests: { id: string; claimToken?: string }[] };
   expect(requests.map((r) => r.id)).toEqual([request.id]);
