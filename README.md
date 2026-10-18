@@ -2,6 +2,14 @@
 
 Integrated management for parallel AI coding sessions.
 
+[![CI](https://github.com/TakashiAihara/ccx/actions/workflows/ci.yml/badge.svg)](https://github.com/TakashiAihara/ccx/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/TakashiAihara/ccx?include_prereleases)](https://github.com/TakashiAihara/ccx/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+- **Repodirs** — a full, independent clone per session, made in a tenth of a second from a local mirror, and reclaimed safely when done.
+- **Sessions across machines** — a resident agent forwards each machine's Claude Code hook events to one center, so one CLI lists every session on every machine that runs the agent.
+- **Transcripts that travel** — push a finished session's transcript to the center, resume it on another machine, and search all of them with the DuckDB built into the binary.
+
 Running several AI coding agents at once needs several independent working copies of the same
 repository. The usual answer is `git worktree`, but a worktree binds one directory to one branch:
 you cannot check out the same branch twice, submodules are awkward, and every worktree stays
@@ -21,6 +29,38 @@ motivated this tool piled up. When it costs a tenth of a second, throwing one aw
 because getting it back costs nothing. **Reclamation is only credible because creation is nearly
 free.**
 
+## How it fits together
+
+| component | language | runs | does |
+|---|---|---|---|
+| `ccx` ([`apps/cli`](apps/cli)) | TypeScript on Bun, compiled to one binary | on demand | repodirs, session state, transcripts, search |
+| `ccx-agent` ([`apps/agent`](apps/agent/README.md)) | Go | one per machine, as your user | takes hook events over a local socket, spools them, forwards them; appends running sessions' transcripts; keeps opted-in idle sessions' prompt caches warm |
+| `ccx-center` ([`apps/hub`](apps/hub/README.md)) | TypeScript on Bun (Hono, Drizzle, SQLite) | one per fleet | stores events and session state, serves an S3-compatible object API for transcripts |
+
+`ccx` alone manages repodirs on one machine. Add `ccx-agent` and `ccx-center` to see across machines.
+
+```mermaid
+flowchart LR
+    subgraph machine["each machine"]
+        CC["Claude Code<br/>hooks"] -->|local socket| A["ccx-agent<br/>spool"]
+        CLI["ccx CLI"]
+    end
+    A -->|"Connect RPC: events, live transcripts"| C["ccx-center<br/>SQLite + object store"]
+    CLI -->|"Connect RPC: sessions, state"| C
+    CLI -->|transcripts: push / pull / DuckDB search| C
+```
+
+`ccx-agent` and `ccx` talk to the center over [Connect](https://connectrpc.com) RPC defined once in [`packages/proto`](packages/proto) (Go and TypeScript are generated from it). When the center is down, the agent keeps events in its spool and sends them in order once it is back; nothing on the machine waits for it.
+
+```text
+apps/cli        ccx — the CLI
+apps/agent      ccx-agent — the resident agent (Go)
+apps/hub        ccx-center — the data sink
+packages/core   repodir, mirror, config and transcript logic for the CLI; its Go config resolver is shared with ccx-agent
+packages/proto  the RPC schema and its generated Go / TypeScript
+docs/design     why it is built this way: scope, architecture, the transcript store
+```
+
 ## Install
 
 From source, which needs [Bun](https://bun.sh) but nothing else:
@@ -33,7 +73,7 @@ bun run install:local          # builds, then installs to ~/.local/bin/ccx
 
 Set `CCX_INSTALL_DIR` to put it somewhere else.
 
-Once a release is published, the compiled binary can be fetched directly — it carries no runtime
+Releases are published as release candidates (the badge above); the compiled binary can be fetched directly — it carries no runtime
 dependency, so Bun is not needed on the target machine:
 
 ```bash
@@ -290,15 +330,18 @@ mirrorMaxAge = "10m"
 
 [defaults]
 agent = "claude"
-model = "opus-4.8"
+model = "opus"
 ```
 
 With no configuration at all, `ccx rd new owner/repo` works.
 
 ## Status
 
-`ccx repodir new`, `ls`, `cd`, `rm` and `gc` work, and so do the resident agent (`ccx-agent`) and the
-center across machines. `open` is next.
+Pre-1.0 and used daily on the author's own machines; each CI-green push to `main` is released as the next release candidate (the newest commit wins).
+
+Working: `ccx repodir new` / `ls` / `cd` / `rm` / `gc`, `ccx session` (fleet view, declared state, `resume` into a herdr workspace), `ccx transcript` (push / pull / prune / search / stats), and `ccx-agent` with `ccx-center` across machines. Linux is the measured platform; macOS `tr search` is not yet expected to work (#125).
+
+Next: `ccx rd open` (start an agent in a repodir), and the agent's `persistence` and `carry` concerns (apps/agent/README.md).
 
 ## License
 
