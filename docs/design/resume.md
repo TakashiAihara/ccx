@@ -137,8 +137,19 @@ The center, the agents and the CLI of one release go together: no release before
 the resume concern, and the claim token and the request phases are new in the same change.
 
 The center serves a page at `/ui` over the same list: label, task, cwd, machine, user and age per
-stopped session, a filter, and an Open button per row that puts the request above and shows its
-phase until it ends (or 300 s pass). `GET /ui` is the one path besides `/healthz` that needs no
-token; the page asks for the token, keeps it in the browser's localStorage and sends it as Bearer.
-Its CSP lets it talk only to the center that served it. A session whose machine has no fresh
-running list is neither running nor stopped, so it is not on the page.
+stopped session, a filter, and an Open button per row. The list is the newest 500; when it comes
+back full the page says so, and the filter only searches those 500. A row's phase comes from the
+newest request for its session. Above the list, "Recent requests" shows the last 50 requests
+(`ListResumeRequests`), so a session that opened and left the list keeps its result there. The page
+rereads the requests every 2 s while one is unfinished and every 30 s otherwise, and only while the
+tab is visible; it rereads at once when the tab becomes visible again. It does not give up on a
+request: the center ends each one, untaken within ten minutes or within the run's own limit once
+taken. A failed reread shows its error, and the next one still runs. Each read runs one at a time,
+and an answer that arrives after the token or the page has changed is dropped. `GET /ui` needs no
+token, like `/healthz`. The page first reads the list without one, so a center with no token works
+as it is; on a 401 it asks for the token, keeps it in the browser's localStorage and sends it as
+Bearer. The CSP allows the one script on the page, by its hash, and nothing inline beyond it. It
+lets the page talk only to the center that served it (`connect-src 'self'`) and stops other
+origins' scripts, styles and images from loading into it. It does not stop navigation or
+`window.open`. A session whose machine has no fresh running list is neither running nor stopped,
+so it is not on the page.

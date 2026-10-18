@@ -42,9 +42,9 @@ const HINT =
   "missing or wrong token: set CCX_HUB_TOKEN (or ~/.config/ccx/hub-token) to the center's CCX_CENTER_TOKEN";
 
 /**
- * token が一致しない要求を 401 で返す。`GET /healthz` だけは生死の確認なので通す。
- * method まで見るのは、`/healthz` は bucket 名としても有効で、`PUT /healthz` が object API の
- * CreateBucket に届くから
+ * token が一致しない要求を 401 で返す。`GET` / `HEAD` の `/healthz` は生死の確認、`GET` / `HEAD` の
+ * `/ui` は token を入れる page そのものなので通す。method まで見るのは、`/healthz` と `/ui` は
+ * bucket 名としても有効で、`PUT /healthz` が object API の CreateBucket に届くから
  */
 export function requireToken(token: string): MiddlewareHandler {
   return async (c, next) => {
