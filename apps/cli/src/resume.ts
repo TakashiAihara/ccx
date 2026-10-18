@@ -1,52 +1,71 @@
 /**
- * `ccx session resume` の手元の部分 (#261): transcript が手元にあるのに止まっている session を、
- * その transcript が記録する cwd に herdr の workspace を作って開き直す。
+ * `ccx session resume` の手元の部分 (#261、docs/design/resume.md): transcript が手元にあるのに止まっている
+ * session を、その transcript が記録する cwd に herdr の workspace を作って開き直す。
  *
  * 判断は workspace を作る前に済ませる。作りかけてから止めると、ユーザーは自分の指示では
  * 選ばなかった workspace を放置することになる。exit code で分けるのは、workspace が残って
  * いるか (後始末が要るか) を呼び手が読み分けられるようにするため:
  *   1 = 開く前に止まった。何も作っていない
- *   3 = workspace は作ったが、agent として上がったことを確認できなかった
+ *   4 = workspace は作った (か、作られたかもしれない) が、agent として上がったことを確認できなかった
+ * 3 を使わないのは、`ccx session` の他のコマンドで 3 が「center が設定されていない」(何も起きていない) だから。
  *
  * herdr への命令は外から渡す runner にする。返答の形は herdr の書式に結びついているので、
  * 「どの引数を送り、どの返答をどこから読む」までをこのファイルの境界として持つ。
  */
 
 import type { Command } from "commander";
+import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 
-import { claudeHome, loadConfig, localTranscripts, readDeclared, runningSessionIds, transcriptFacts, UUID } from "@ccx/core";
+import {
+  claudeHome,
+  findLocalTranscript,
+  loadConfig,
+  localTranscripts,
+  readDeclared,
+  resolveSessionId,
+  runningSessionIds,
+  transcriptFacts,
+  UUID,
+} from "@ccx/core";
 
-export type Herdr = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+export type HerdrResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
+export type Herdr = (args: string[]) => Promise<HerdrResult>;
 
-/** 開かなかった理由。exitCode はどこまで進んだか (1 = 作っていない、3 = workspace はある) */
-export class ResumeRefused extends Error {
-  readonly exitCode: number;
+export type Created = { workspaceId: string; paneId: string };
 
-  constructor(message: string, exitCode: 1 | 3) {
+/** 開けなかった理由。exitCode はどこまで進んだか (1 = 作っていない、4 = workspace が残っている) */
+export class ResumeError extends Error {
+  readonly exitCode: 1 | 4;
+  /** exitCode 4 で、workspace の id が読めていればそれ (後始末に使う) */
+  readonly created?: Created;
+
+  constructor(message: string, exitCode: 1 | 4, created?: Created) {
     super(message);
-    this.name = "ResumeRefused";
+    this.name = "ResumeError";
     this.exitCode = exitCode;
+    this.created = created;
   }
 }
 
-/**
- * `{session_id}` を id に置き換える。replace の第 2 引数に文字列を渡すと `$&` や `$1` が
- * 置換文字列の中身として展開されてしまうので、切り貼りだけにする
- */
-export const expandCommand = (template: string, sessionId: string): string =>
-  template.split("{session_id}").join(sessionId);
+const PLACEHOLDER = "{session_id}";
+
+/** `{session_id}` を id に置き換える。id は UUID に限ってから渡すので、置き換えた結果に記号は増えない */
+export const expandCommand = (template: string, sessionId: string): string => template.split(PLACEHOLDER).join(sessionId);
 
 /** 宣言された label を添えるときの長さ。自由文なので、cwd を見失わない範囲で切る */
 const LABEL_LIMIT = 24;
 
 export type ResumeOptions = {
+  /** 完全な session id。先頭一致は呼び手が解く */
   sessionId: string;
   /** ~/.claude */
   home: string;
   /** pane で走らせるコマンドの雛形 (`{session_id}` がプレースホルダ) */
   command: string;
   herdr: Herdr;
+  /** pane の agent がこの名前になったら上がったとみなす (既定 claude) */
+  agent?: string;
   /** archived でも開けるようにする */
   force?: boolean;
   /** agent が上がるのを待つ時間 (既定 40 秒) */
@@ -55,14 +74,11 @@ export type ResumeOptions = {
   pollMs?: number;
 };
 
-export type ResumeResult = { workspaceId: string; paneId: string; cwd: string; label: string };
+export type ResumeResult = Created & { cwd: string; label: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * herdr の応答から 1 つの値を辿る。読めない JSON、辿れない途中、空文字は null。
- * 「読めなかった」を空文字や 0 として返すと、開いていない workspace を次の pane まで進めてしまう
- */
+/** herdr の応答から 1 つの値を辿る。読めない JSON、辿れない途中、空文字は null */
 function dig(stdout: string, ...keys: string[]): string | null {
   let v: unknown;
   try {
@@ -84,125 +100,160 @@ const lastLines = (s: string, lines: number) => s.trim().split("\n").slice(-line
 
 /**
  * workspace の label。cwd の末尾だけではどの session かが分からないので、宣言された label を
- * 添える。全角の縦棒は、label が先頭以外にあることを読み手が目で分かるようにするため
+ * 添える。改行や連続した空白は 1 つの空白にする (label は 1 行で出る)。全角の縦棒は、label が
+ * 先頭以外にあることを読み手が目で分かるようにするため
  */
 function labelFor(cwd: string, declared: string): string {
   const dir = basename(cwd);
-  if (!declared) return dir;
-  return `${dir}｜${[...declared].slice(0, LABEL_LIMIT).join("").trimEnd()}`;
+  const text = [...declared.replace(/\s+/g, " ").trim()].slice(0, LABEL_LIMIT).join("").trimEnd();
+  return text ? `${dir}｜${text}` : dir;
 }
+
+const closeHint = (c: Created) => `close it with: herdr workspace close ${c.workspaceId}`;
 
 export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   const waitMs = o.waitMs ?? 40_000;
   const pollMs = o.pollMs ?? 1_000;
+  const agent = o.agent ?? "claude";
 
   // Claude Code の id は小文字。大文字のままでは transcript を見つけられない
   const id = o.sessionId.toLowerCase();
-  if (!UUID.test(id)) throw new Error(`not a session id: ${o.sessionId}`);
+  if (!UUID.test(id)) throw new ResumeError(`not a session id: ${o.sessionId}`, 1);
+  // id の入らないコマンドは別の session を開くか何も開かないので、workspace を作る前に止める
+  if (!o.command.includes(PLACEHOLDER)) {
+    throw new ResumeError(`the resume command ${JSON.stringify(o.command)} has no ${PLACEHOLDER}; set [resume] command to one that does`, 1);
+  }
 
   if ((await runningSessionIds(o.home)).has(id)) {
-    throw new ResumeRefused(`${id} is running on this machine; there is nothing to reopen`, 1);
+    throw new ResumeError(`${id} is running on this machine; there is nothing to reopen`, 1);
   }
   const declared = await readDeclared(id, o.home);
   if (declared.archived && !o.force) {
-    throw new ResumeRefused(`${id} is archived — pass --force to open it anyway`, 1);
+    throw new ResumeError(`${id} is archived — pass --force to open it anyway`, 1);
   }
-  const t = (await localTranscripts(o.home)).find((x) => x.sessionId === id);
-  if (!t) {
-    throw new ResumeRefused(`no local transcript for ${id} under ${o.home}/projects — pull it from the store first`, 1);
+  const path = await findLocalTranscript(id, o.home);
+  if (!path) {
+    throw new ResumeError(`no local transcript for ${id} under ${o.home}/projects — pull it from the store first`, 1);
   }
-  // cwd は transcript が記録しているもの。宣言された状態には無い
-  const cwd = (await transcriptFacts(t.path)).cwd;
+  const cwd = (await transcriptFacts(path)).cwd;
   if (!cwd) {
-    throw new ResumeRefused(`${id}'s transcript records no cwd, so there is no directory to open it in`, 1);
+    throw new ResumeError(`${id}'s transcript records no cwd, so there is no directory to open it in`, 1);
+  }
+  // repodir は gc で消える。消えた cwd で開くと、claude は別の project として起動する
+  const dir = await stat(cwd).catch(() => null);
+  if (!dir?.isDirectory()) {
+    throw new ResumeError(`${id} ran in ${cwd}, which is no longer a directory here`, 1);
   }
   const label = labelFor(cwd, declared.label);
 
-  const created = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]);
-  if (created.code !== 0) throw new ResumeRefused(`herdr workspace create failed: ${said(created)}`, 1);
-  const workspaceId = dig(created.stdout, "result", "workspace", "workspace_id");
-  const paneId = dig(created.stdout, "result", "root_pane", "pane_id");
-  if (!workspaceId || !paneId) {
-    throw new ResumeRefused(`herdr workspace create answered without a workspace id and pane id: ${said(created)}`, 1);
+  const createdRes = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]);
+  if (createdRes.timedOut) {
+    throw new ResumeError(`herdr workspace create did not answer in time; a workspace may have been created (check herdr workspace list)`, 4);
   }
+  if (createdRes.code !== 0) throw new ResumeError(`herdr workspace create failed: ${said(createdRes)}`, 1);
+  const workspaceId = dig(createdRes.stdout, "result", "workspace", "workspace_id");
+  const paneId = dig(createdRes.stdout, "result", "root_pane", "pane_id");
+  if (!workspaceId || !paneId) {
+    // create は成功したと言っているので、workspace は在ると見る
+    throw new ResumeError(
+      `herdr workspace create succeeded but its answer has no workspace id and pane id, so a workspace is likely left (check herdr workspace list): ${said(createdRes)}`,
+      4,
+    );
+  }
+  const created = { workspaceId, paneId };
 
   // 1 引数で渡す。herdr に shell と同じ分解をさせないぶん、コマンドの中の記号の意味は
   // 利用者が書いたままになる
   const command = expandCommand(o.command, id);
   const ran = await o.herdr(["pane", "run", paneId, command]);
-  if (ran.code !== 0) {
-    throw new ResumeRefused(`workspace ${workspaceId} was created, but herdr pane run failed: ${said(ran)}`, 3);
+  if (ran.code !== 0 || ran.timedOut) {
+    throw new ResumeError(`workspace ${workspaceId} was created, but herdr pane run failed: ${said(ran)}\n${closeHint(created)}`, 4, created);
   }
 
-  // agent として上がったことは pane の情報でしか分からない。上がらないまま成功を返すと
-  // 開けたことにされるので、見えているものを添えて 3 で止める
+  // 2 回続けて見えたら上がったとみなす。起動してすぐ終わるコマンドを 1 回の観測で成功と読まないため
   const deadline = Date.now() + waitMs;
+  let seen = 0;
   for (;;) {
     const got = await o.herdr(["pane", "get", paneId]);
-    if (got.code === 0 && dig(got.stdout, "result", "pane", "agent") === "claude") {
-      return { workspaceId, paneId, cwd, label };
-    }
+    seen = dig(got.stdout, "result", "pane", "agent") === agent ? seen + 1 : 0;
+    if (seen >= 2) return { ...created, cwd, label };
     if (Date.now() >= deadline) break;
     await sleep(pollMs);
   }
 
   const shown = await o.herdr(["pane", "read", paneId, "--source", "visible"]);
-  const seen = lastLines(shown.code === 0 ? shown.stdout : shown.stderr, 20);
-  throw new ResumeRefused(
+  const visible = lastLines(shown.code === 0 ? shown.stdout : shown.stderr, 20);
+  throw new ResumeError(
     [
-      `workspace ${workspaceId} was created and ${command} was run in ${paneId}, but the pane did not report agent=claude within ${waitMs} ms`,
-      seen ? `what the pane shows:\n${seen}` : "",
+      `workspace ${workspaceId} was created and ${command} was run in ${paneId}, but the pane did not report agent=${agent} within ${waitMs} ms`,
+      visible ? `what the pane shows:\n${visible}` : "",
+      closeHint(created),
     ]
       .filter(Boolean)
       .join("\n\n"),
-    3,
+    4,
+    created,
   );
 }
 
-/** PATH に無ければ Bun.spawn が例外を投げる。握り潰さず、開かなかった理由として残す */
-async function runHerdr(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+/** 1 回の herdr の呼び出しの上限。止まった herdr で resume ごと止まらないようにする */
+const HERDR_TIMEOUT_MS = 15_000;
+
+/** 起動できなければ code 127 (shell が「無い」に返すのと同じ値) と理由を返す。呼び手が段階ごとに exit code を決める */
+async function runHerdr(args: string[]): Promise<HerdrResult> {
+  let proc: ReturnType<typeof Bun.spawn>;
   try {
-    const proc = Bun.spawn(["herdr", ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { code, stdout, stderr };
+    proc = Bun.spawn(["herdr", ...args], { stdout: "pipe", stderr: "pipe", timeout: HERDR_TIMEOUT_MS });
   } catch (e) {
-    throw new ResumeRefused(
-      `herdr is needed to open a session, and it could not be run: ${e instanceof Error ? e.message : String(e)}`,
-      1,
-    );
+    return { code: 127, stdout: "", stderr: `herdr is needed to open a session, and it could not be run: ${e instanceof Error ? e.message : String(e)}` };
   }
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout as ReadableStream).text(),
+    new Response(proc.stderr as ReadableStream).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr, timedOut: proc.signalCode === "SIGTERM" };
 }
+
+const parseWait = (v: string): number => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--wait must be a positive number of seconds: ${v}`);
+  return n * 1000;
+};
 
 export function registerResume(session: Command): void {
   session
     .command("resume")
     .description("Open a stopped session again in a herdr workspace, on the cwd its transcript records")
-    .argument("<session-id>", "session id (full, as printed by --json)")
+    .argument("<session-id>", "session id, or a unique prefix of one with a transcript here")
     .option("-f, --force", "open it even if it is archived")
-    .option("--json", "print the result as JSON")
-    .action(async (sessionId: string, o) => {
+    .option("--wait <seconds>", "how long to wait for the agent to come up (default 40)", parseWait)
+    .option("--json", "print the result (or the failure) as JSON")
+    .action(async (idOrPrefix: string, o) => {
       const cfg = await loadConfig();
+      const home = claudeHome();
       try {
+        const known = UUID.test(idOrPrefix.toLowerCase()) ? [] : (await localTranscripts(home)).map((t) => t.sessionId);
+        let sessionId: string;
+        try {
+          sessionId = resolveSessionId(idOrPrefix, known);
+        } catch (e) {
+          throw new ResumeError(e instanceof Error ? e.message : String(e), 1);
+        }
         const r = await resumeSession({
           sessionId,
-          home: claudeHome(),
+          home,
           command: cfg.resume.command,
           herdr: runHerdr,
+          agent: cfg.defaults.agent,
           force: Boolean(o.force),
+          waitMs: o.wait,
         });
         if (o.json) console.log(JSON.stringify(r, null, 2));
         else console.log(`opened ${r.workspaceId} pane=${r.paneId} ${r.label} (${r.cwd})`);
       } catch (e) {
-        // 拒否だけが持つ code を持って、それ以外はこのまま投げ直す。他のコマンドと
-        // 同じ扱い (parseAsync が message を出して 1 で終わる) になる
-        if (!(e instanceof ResumeRefused)) throw e;
+        if (!(e instanceof ResumeError)) throw e;
+        if (o.json) console.log(JSON.stringify({ error: e.message, exitCode: e.exitCode, ...e.created }, null, 2));
         console.error(e.message);
         process.exitCode = e.exitCode;
       }

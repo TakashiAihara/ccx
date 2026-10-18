@@ -197,7 +197,12 @@ async function pidAlive(pid: number, procStart: string | undefined): Promise<boo
  * があれば投げる (localTranscripts は読めない project ディレクトリを飛ばす)
  */
 export async function hasLocalTranscript(sessionId: string, home = claudeHome()): Promise<boolean> {
-  if (!UUID.test(sessionId)) return false;
+  return (await findLocalTranscript(sessionId, home)) !== null;
+}
+
+/** hasLocalTranscript と同じ探し方で、見つかった transcript のパスを返す。無ければ null */
+export async function findLocalTranscript(sessionId: string, home = claudeHome()): Promise<string | null> {
+  if (!UUID.test(sessionId)) return null;
   const projects = join(home, "projects");
   // 無いのは「無い」、読めない (EACCES 等) のは投げる。消えかけの transcript (先の無い symlink) は無い
   const absent = (e: unknown) => {
@@ -207,11 +212,13 @@ export async function hasLocalTranscript(sessionId: string, home = claudeHome())
   };
   const dirs = await readdir(projects).catch((e: unknown): string[] => (absent(e), []));
   // 見つかれば、他のディレクトリが読めなくても在る。どこにも無く、読めないものがあったときだけ投げる
-  const found = await Promise.allSettled(dirs.map((d) => stat(join(projects, d, `${sessionId}.jsonl`)).then((s) => s.isFile(), absent)));
-  if (found.some((r) => r.status === "fulfilled" && r.value)) return true;
+  const paths = dirs.map((d) => join(projects, d, `${sessionId}.jsonl`));
+  const found = await Promise.allSettled(paths.map((p) => stat(p).then((s) => s.isFile(), absent)));
+  const hit = found.findIndex((r) => r.status === "fulfilled" && r.value);
+  if (hit !== -1) return paths[hit]!;
   const failed = found.find((r) => r.status === "rejected");
   if (failed) throw failed.reason;
-  return false;
+  return null;
 }
 
 /**
