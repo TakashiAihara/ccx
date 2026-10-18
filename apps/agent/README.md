@@ -226,6 +226,13 @@ in the unit file. Where `systemctl --user` cannot reach a user manager, and on m
 for now, it installs both binaries, sets up no service, and tells you to keep
 `ccx-agent serve` running as your user under your own supervisor.
 
+The unit is given the PATH of the shell that ran the script (entries a unit cannot
+carry as is are left out and listed), because a resume the center asks for runs
+`ccx session resume`, which calls `herdr` by name. That copy is taken again on each
+rerun, so a rerun from a shell without herdr on PATH replaces it; the script warns
+when herdr is not on the PATH it wrote. Under your own supervisor, give `ccx-agent
+serve` a PATH that has herdr.
+
 From source, with Go: `bun run install:agent` builds `~/.local/bin/ccx-agent`; install
 the unit from `apps/agent/systemd/ccx-agent.service` by hand (its header says how).
 

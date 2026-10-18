@@ -170,16 +170,17 @@ set +f
 if [ -n "$dropped" ]; then
   echo "ccx: left out of the unit's PATH (not absolute, or characters a unit cannot carry as is):$dropped" >&2
 fi
+# Nothing usable left (not seen in practice: this script found sh and curl on PATH),
+# so the unit keeps its own default line; the herdr check reads that default.
+path_edit=""
 if [ -n "$unit_path" ]; then
-  unit_env="Environment=PATH=$unit_path"
-  unit_path_seen=$unit_path
+  path_edit="s|^Environment=PATH=.*|Environment=PATH=$unit_path|"
 else
-  unit_env='Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'
-  unit_path_seen="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+  unit_path="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 fi
-sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "s|^Environment=PATH=.*|$unit_env|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
-if ! PATH=$unit_path_seen command -v herdr >/dev/null 2>&1; then
-  echo "ccx: herdr is not on the PATH the unit was given ($unit_path_seen), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, or add its dir to the unit (systemctl --user edit ccx-agent)" >&2
+sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "$path_edit" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
+if ! PATH=$unit_path command -v herdr >/dev/null 2>&1; then
+  echo "ccx: herdr is not on the PATH the unit was given ($unit_path), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, or add its dir to the unit (systemctl --user edit ccx-agent)" >&2
 fi
 
 systemctl --user daemon-reload
