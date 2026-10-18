@@ -15,7 +15,7 @@ import { writeDeclared } from "@ccx/core";
 
 import { findLocalTranscript } from "@ccx/core";
 
-import { expandCommand, ResumeError, resumeSession, runHerdr, STABLE_MS, type Herdr, type HerdrResult } from "./resume.ts";
+import { expandCommand, paneClaudeConfigDir, ResumeError, resumeSession, runHerdr, STABLE_MS, type Herdr, type HerdrResult } from "./resume.ts";
 
 const ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
@@ -550,4 +550,12 @@ test("CLI: 別のマシン宛ての --wait は 600 秒までで、center に置�
   const r = await cli([ID, "--machine", "elsewhere", "--wait", "601"], `echo called >&2`, { CCX_HUB_URL: "http://127.0.0.1:9" });
   expect(r.code).toBe(1);
   expect(r.stderr).toContain("--wait is at most 600 seconds for another machine");
+});
+
+test("paneClaudeConfigDir は既定の home と同じなら渡さない (末尾の / も同じとみなす)", () => {
+  expect(paneClaudeConfigDir(undefined, "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/root/.claude", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/root/.claude/", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/acct/b", "/root/.claude")).toBe("/acct/b");
 });

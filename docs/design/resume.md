@@ -106,7 +106,12 @@ own account). The learned homes are kept in `claude-homes` next to the spool, so
 under one of them is still seen after the agent restarts; at most 16 are kept, and one that cannot
 be read is skipped with a line in the log. A resume runs with `CLAUDE_CONFIG_DIR` set to the home
 whose projects hold the session's transcript, and `ccx session resume` passes the same value to the
-pane (`herdr workspace create --env`), so the session opens under the account it ran in.
+pane (`herdr workspace create --env`), so the session opens under the account it ran in — but only
+when it differs from `~/.claude`. Measured on d1 with Claude Code 2.1.302: with `CLAUDE_CONFIG_DIR`
+set explicitly, even to `~/.claude` itself, Claude Code wrote no `sessions/<pid>.json` (3 tries;
+unset, it wrote one each time). A session opened that way does not read as running, and the next
+resume opens it again. Whether a session under another home writes its pid file there is not
+measured (d1 has no such session); if it does not, such a session reads as stopped while it runs.
 
 `ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
 longer running, minus what someone archived, minus what is running on this machine right now (the

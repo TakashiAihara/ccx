@@ -16,7 +16,8 @@
 
 import type { Command } from "commander";
 import { stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 
 import {
   claudeHome,
@@ -272,6 +273,16 @@ export async function runHerdr(args: string[], timeoutMs = HERDR_TIMEOUT_MS, bin
 }
 
 /** 1 時間を超える待ちは打ち間違いとみなす (1e306 秒は Infinity ms になり、永久に待つ) */
+/**
+ * pane に渡す CLAUDE_CONFIG_DIR。既定の ~/.claude と同じなら渡さない: d1 の Claude Code (2.1.302) は CLAUDE_CONFIG_DIR を
+ * 明示すると、既定と同じパスでも sessions/<pid>.json を書かなかった (2026-10-18、3 回)。書かれないと、開いた session が
+ * 「動いている」と見えず、次の resume が同じ session をもう一度開く
+ */
+export function paneClaudeConfigDir(value: string | undefined, defaultHome = join(homedir(), ".claude")): string | undefined {
+  if (!value) return undefined;
+  return resolve(value) === resolve(defaultHome) ? undefined : value;
+}
+
 const parseWait = (v: string): number => {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0 || n > 3600) throw new Error(`--wait must be a number of seconds in (0, 3600]: ${v}`);
@@ -356,7 +367,7 @@ export function registerResume(session: Command): void {
           command: cfg.resume.command,
           herdr: (args) => runHerdr(args),
           agent: cfg.resume.agent,
-          claudeConfigDir: process.env.CLAUDE_CONFIG_DIR || undefined,
+          claudeConfigDir: paneClaudeConfigDir(process.env.CLAUDE_CONFIG_DIR),
           force: Boolean(o.force),
           waitMs: o.wait,
         });
