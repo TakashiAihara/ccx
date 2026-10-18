@@ -203,11 +203,14 @@ test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent'
 test.skipIf(!linux)("entries a unit cannot carry are left out one by one, and a herdr only there is said to be missing", async () => {
   const odd = dirWithHerdr("Program Files");
   const kept = `${join(work, "fakebin")}:${SYSTEM_PATH}`;
-  const r = await install(["--with-agent"], { PATH: `${odd}:rel/bin::${kept}:` });
+  // g* would expand to gx if the loop globbed; it must be left out as written
+  mkdirSync(join(work, "gx"));
+  const glob = join(work, "g*");
+  const r = await install(["--with-agent"], { PATH: `${odd}:rel/bin::${glob}:${kept}:` });
   expect(r.code).toBe(0);
   // the install dir is not on this PATH, so it is put first
   const given = `${join(work, "bin")}:${kept}`;
   expect(unitOf(r.home)).toContain(`\nEnvironment=PATH=${given}\n`);
-  expect(r.out).toContain(`left out of the unit's PATH (not absolute, or characters a unit cannot carry as is): '${odd}' 'rel/bin' '' ''`);
+  expect(r.out).toContain(`left out of the unit's PATH (not absolute, or a character outside [A-Za-z0-9/._@+,~-]): '${odd}' 'rel/bin' '' '${glob}' ''`);
   expect(r.out).toContain(`herdr is not on the PATH the unit was given (${given})`);
 });

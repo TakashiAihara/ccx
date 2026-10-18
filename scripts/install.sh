@@ -150,9 +150,10 @@ fi
 
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
 # It also gets this shell's PATH, so the resumes ccx-agent runs find herdr as the
-# user does. Entries a unit would read differently are left out one by one: not
-# absolute (resolved against the service's cwd, not this shell's), or with a
-# character systemd or the sed below treats specially (space, %, quotes, \, &, |).
+# user does. Entries are left out one by one when not absolute (resolved against
+# the service's cwd, not this shell's) or with any character outside
+# [A-Za-z0-9/._@+,~-]: that keeps out what systemd or the sed below reads
+# differently (space, %, quotes, \, &, |), and, to be safe, everything else.
 unit_path=""
 dropped=""
 set -f
@@ -176,11 +177,11 @@ case ":$unit_path:" in
   *) unit_path="$DEST${unit_path:+:$unit_path}" ;;
 esac
 if [ -n "$dropped" ]; then
-  echo "ccx: left out of the unit's PATH (not absolute, or characters a unit cannot carry as is):$dropped" >&2
+  echo "ccx: left out of the unit's PATH (not absolute, or a character outside [A-Za-z0-9/._@+,~-]):$dropped" >&2
 fi
 sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "s|^Environment=PATH=.*|Environment=PATH=$unit_path|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
 if ! PATH=$unit_path command -v herdr >/dev/null 2>&1; then
-  echo "ccx: herdr is not on the PATH the unit was given ($unit_path), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, or add its dir to the unit (systemctl --user edit ccx-agent)" >&2
+  echo "ccx: herdr is not on the PATH the unit was given ($unit_path), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, rerun this from a shell that has it on PATH, or set PATH in a drop-in (systemctl --user edit ccx-agent; it then wins over what a rerun writes)" >&2
 fi
 
 systemctl --user daemon-reload
