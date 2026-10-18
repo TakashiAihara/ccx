@@ -339,7 +339,7 @@ With no configuration at all, `ccx rd new owner/repo` works.
 
 Pre-1.0 and used daily on the author's own machines; each CI-green push to `main` is released as the next release candidate (the newest commit wins).
 
-Working: `ccx repodir new` / `ls` / `cd` / `rm` / `gc`, `ccx session` (fleet view and declared state), `ccx transcript` (push / pull / prune / search / stats), and `ccx-agent` with `ccx-center` across machines. Linux is the measured platform; macOS `tr search` is not yet expected to work (#125).
+Working: `ccx repodir new` / `ls` / `cd` / `rm` / `gc`, `ccx session` (fleet view, declared state, `resume` into a herdr workspace), `ccx transcript` (push / pull / prune / search / stats), and `ccx-agent` with `ccx-center` across machines. Linux is the measured platform; macOS `tr search` is not yet expected to work (#125).
 
 Next: `ccx rd open` (start an agent in a repodir), and the agent's `persistence` and `carry` concerns (apps/agent/README.md).
 
