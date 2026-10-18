@@ -315,6 +315,15 @@ test("締め切りの時点で 1 回見えていれば、確かめの 1 回を�
   expect(calls.filter((c) => c[1] === "get").length).toBe(2);
 });
 
+test("締め切りの後に herdr が答えなくなっても、stableMs を過ぎたら止める", async () => {
+  await transcript();
+  const { herdr } = fakeHerdr({ agents: ["claude", "!"] });
+  const t0 = Date.now();
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0, stableMs: 30 }));
+  expect(e.exitCode).toBe(4);
+  expect(Date.now() - t0).toBeLessThan(1000);
+});
+
 test("締め切りの時点で 1 度も見えていなければ、そこで止める", async () => {
   await transcript();
   const { herdr, calls } = fakeHerdr({ agents: ["", "claude", "claude"] });

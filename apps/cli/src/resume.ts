@@ -187,7 +187,9 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
       else if (seen++ === 0) since = Date.now();
     }
     if (seen >= 2 && Date.now() - since >= stableMs) return { ...created, cwd, label };
-    if (Date.now() >= deadline && seen === 0) break;
+    // 締め切りの後に待つのは、見えている並びが続くかを確かめる stableMs と確かめの 1 回までで打ち切る
+    // (herdr が答えない間も終わる)
+    if (Date.now() >= deadline && (seen === 0 || Date.now() >= deadline + stableMs + pollMs)) break;
     await sleep(pollMs);
   }
 
