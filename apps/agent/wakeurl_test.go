@@ -30,3 +30,10 @@ func TestAdvertisedAPIURL(t *testing.T) {
 		t.Errorf("no url set: %q %q, want nothing and no complaint", url, why)
 	}
 }
+
+func TestAdvertisedAPIURLNamesARefusedToken(t *testing.T) {
+	_, why := advertisedAPIURL(config.Config{APIURL: "http://10.0.0.5:8792", APIListen: "0.0.0.0:8792", APITokenErr: errors.New("x")})
+	if !strings.Contains(why, "token error") {
+		t.Errorf("why %q, want the refused token named rather than read as a missing one", why)
+	}
+}

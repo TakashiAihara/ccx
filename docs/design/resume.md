@@ -132,7 +132,7 @@ whose running list is stale, is only polled. The trust cost: the center sends it
 whatever address a machine reports, and reporting goes through ingest, which the center token
 authorizes. Whoever holds the center token can therefore have the agent token sent to a host they
 name, so the two tokens carry one trust level. The address is not limited to other hosts: loopback
-or the center's own host can be named too. The call is an empty POST, and a redirect is not
+or the center's own host can be named too. The call is a POST with an empty JSON body (`{}`), and a redirect is not
 followed, so the token goes only to the reported origin. One agent token serves every agent, so if
 one agent leaks it, the API of every agent (state reads and `Wake`) opens to its holder.
 

@@ -147,6 +147,8 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         .run();
       // 宛先が読めないことは一覧を断る理由にしない。古い宛先を残すと別の場所へ起こしに行くので消す
       const apiUrl = apiURLOf(l);
+      // 送られてきたのに使えない宛先は、黙って消すと agent の側から理由が見えない
+      if (apiUrl === null && hasApiUrl(l)) console.error(`running list from ${l.machine}/${l.user}: api_url is not an origin-only http(s) URL; not waking it`);
       if (apiUrl === null) {
         tx.delete(agentEndpoints)
           .where(and(eq(agentEndpoints.machine, l.machine), eq(agentEndpoints.user, l.user)))
@@ -171,6 +173,12 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
  * center は RPC の path を足して token を送るので、path / query / fragment / userinfo があると送り先を一覧が決めてしまう。
  * 無い・文字列でない・不正なものは null。parseSessionIds の後に呼ぶので、payload は JSON と分かっている
  */
+/** 一覧が api_url のキーを持っているか (値が使えるかは問わない) */
+function hasApiUrl(l: IncomingEvent): boolean {
+  const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
+  return o.api_url !== undefined;
+}
+
 function apiURLOf(l: IncomingEvent): string | null {
   const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
   const raw = o.api_url;

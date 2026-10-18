@@ -262,10 +262,12 @@ func advertisedAPIURL(cfg config.Config) (url, why string) {
 	switch {
 	case cfg.APIListen == "":
 		reason = "no listen"
-	case cfg.APIToken == "":
-		reason = "no token"
+	// The error first: config empties the token when it refuses one, so checked
+	// the other way round a refused token would read as a missing one.
 	case cfg.APITokenErr != nil:
 		reason = "token error"
+	case cfg.APIToken == "":
+		reason = "no token"
 	default:
 		return cfg.APIURL, ""
 	}

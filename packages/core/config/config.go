@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -406,6 +407,14 @@ func apiURLFrom(raw string) (string, error) {
 	}
 	if u.User != nil || (u.Path != "" && u.Path != "/") || strings.ContainsAny(raw, "?#") {
 		return "", errors.New("api url must be an origin only (scheme://host[:port]): no path, query, fragment or userinfo")
+	}
+	// The center (WHATWG URL) refuses a port it cannot read and would drop this address
+	// without a word, so refuse here too, where the agent can log why.
+	if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 || strings.HasPrefix(p, "0") {
+			return "", errors.New("api url has a port that is not 1-65535")
+		}
 	}
 	return u.Scheme + "://" + u.Host, nil
 }

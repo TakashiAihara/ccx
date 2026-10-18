@@ -140,13 +140,13 @@ function wakeAgent(db: Db, machine: string, user: string, agentToken: string, no
       if (res.status >= 300 && res.status < 400) {
         console.error(`wake ${machine}: agent at ${url} answered ${res.status}; a redirect is not followed`);
       } else if (!res.ok) {
-        console.error(`wake ${machine}: agent answered ${res.status}`);
+        console.error(`wake ${machine}: agent at ${url} answered ${res.status}`);
       }
       // 本文は使わない。読まずに閉じて、接続を残さない
       res.body?.cancel().catch(() => undefined);
     },
     (err: unknown) => {
-      console.error(`wake ${machine}: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`wake ${machine}: agent at ${url}: ${err instanceof Error ? err.message : String(err)}`);
     },
   );
 }

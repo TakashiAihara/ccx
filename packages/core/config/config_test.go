@@ -436,3 +436,18 @@ func TestAPIURLIsAnOriginOnly(t *testing.T) {
 		}
 	}
 }
+
+// A port the center cannot read would be dropped there without a word; the agent
+// refuses it, where it can log why.
+func TestAPIURLPort(t *testing.T) {
+	for _, bad := range []string{"http://10.0.0.5:65536", "http://10.0.0.5:0", "http://10.0.0.5:01", "http://10.0.0.5:"} {
+		c, _ := load(env(map[string]string{"CCX_API_URL": bad}), noGit, fixedHost("h"))
+		if c.APIURL != "" || c.APIURLErr == nil {
+			t.Errorf("%q: url %q err %v, want unset with a reason", bad, c.APIURL, c.APIURLErr)
+		}
+	}
+	c, _ := load(env(map[string]string{"CCX_API_URL": "http://10.0.0.5:65535"}), noGit, fixedHost("h"))
+	if c.APIURL != "http://10.0.0.5:65535" {
+		t.Errorf("65535: %q %v", c.APIURL, c.APIURLErr)
+	}
+}
