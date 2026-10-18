@@ -17,7 +17,10 @@ import { ResumeOutcome, ResumeService } from "@ccx/proto/ccx/v1/resume_pb.ts";
 import { openDb, type Db } from "./db/open.ts";
 import { ObjectStore } from "./objects.ts";
 import { createApp } from "./server.ts";
-import { CLAIM_TIMEOUT_MS, DETAIL_CAP, REQUEST_TTL_MS } from "./resume.ts";
+import { claimLeaseMs, DETAIL_CAP, MAX_WAIT_SECONDS, REQUEST_TTL_MS } from "./resume.ts";
+
+/** 待ちを指定しない依頼の実行中の時間 (40 秒の待ち + 120 秒) */
+const CLAIM_TIMEOUT_MS = 160_000;
 
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -54,8 +57,10 @@ async function code(p: Promise<unknown>): Promise<Code | "ok"> {
   }
 }
 
-test("取り直しの窓は 5 分", () => {
-  expect(CLAIM_TIMEOUT_MS).toBe(300_000);
+test("取られた依頼を実行中とみなす時間は、待ち (既定 40 秒) + 120 秒", () => {
+  expect(claimLeaseMs(0)).toBe(160_000);
+  expect(claimLeaseMs(300)).toBe(420_000);
+  expect(MAX_WAIT_SECONDS).toBe(600);
 });
 
 test("依頼を置くと、まだ誰も取っていない依頼として返る", async () => {
@@ -261,12 +266,36 @@ test("期限を過ぎた依頼は取らず、expired と出し、同じ session 
   expect((await client.claimResume({ machine: "m1", user: "dev" })).request?.id).toBe(b.request!.id);
 });
 
-test("取ったまま期限を過ぎた依頼も、同じ session の次の依頼を塞がない", async () => {
+test("期限の直前に取られて実行中の依頼は、期限を過ぎても expired にせず、次の依頼を塞ぐ", async () => {
+  const a = await client.requestResume({ key: key(A), waitSeconds: 300 });
+  now += REQUEST_TTL_MS - 60_000;
+  await client.claimResume({ machine: "m1", user: "dev" });
+  // 待ち 300 秒の実行中の長さは 420 秒。待ちを見ずに既定 (160 秒) で数えれば、ここではもう切れている
+  now += 180_000;
+  expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(false);
+  const b = await client.requestResume({ key: key(A) });
+  expect(b.request?.id).toBe(a.request!.id);
+  expect((await client.claimResume({ machine: "m1", user: "dev" })).request).toBeUndefined();
+});
+
+test("取られた依頼も、実行中の時間と期限の両方を過ぎたら expired で、次の依頼を塞がない", async () => {
   const a = await client.requestResume({ key: key(A) });
   await client.claimResume({ machine: "m1", user: "dev" });
   now += REQUEST_TTL_MS;
+  expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(true);
   const b = await client.requestResume({ key: key(A) });
   expect(b.request?.id).not.toBe(a.request!.id);
+});
+
+test("待ちは 600 秒まで (超えたら InvalidArgument)", async () => {
+  expect(await code(client.requestResume({ key: key(A), waitSeconds: 601 }))).toBe(Code.InvalidArgument);
+  expect((await client.requestResume({ key: key(A), waitSeconds: 600 })).request?.waitSeconds).toBe(600);
+});
+
+test("取られた後の依頼に force=true が来ても force にしない (agent は force 無しで走っている)", async () => {
+  await client.requestResume({ key: key(A) });
+  await client.claimResume({ machine: "m1", user: "dev" });
+  expect((await client.requestResume({ key: key(A), force: true })).request?.force).toBe(false);
 });
 
 test("終わった依頼は期限を過ぎても expired にしない", async () => {
@@ -294,14 +323,18 @@ test("wait_seconds は依頼に残り、agent が取ったときにも返る", a
   expect((await client.claimResume({ machine: "m1", user: "dev" })).request?.waitSeconds).toBe(90);
 });
 
-test("長い detail は末尾の 4096 文字だけを持つ", async () => {
+test("長い detail は UTF-8 で末尾の 4096 バイト以下を持ち、文字の途中で切らない", async () => {
   const a = await client.requestResume({ key: key(A) });
   const c = await client.claimResume({ machine: "m1", user: "dev" });
-  const detail = "あ".repeat(5000) + "END";
+  // 4 バイトの絵文字を並べ、切り口が必ず文字の途中に来る長さにする (1 + 4n バイト)
+  const detail = "x" + "😀".repeat(1100) + "END";
   const fin = await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.FAILED, detail, exitCode: 4, claimToken: c.request!.claimToken });
-  expect([...fin.request!.detail].length).toBe(4096);
+  // 4404 バイトの末尾 4096 は 308 バイト目から。そこは絵文字の 4 バイト目なので、次の絵文字の頭 (309) から
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  expect(bytes(fin.request!.detail)).toBe(4095);
+  expect(fin.request!.detail.startsWith("😀")).toBe(true);
   expect(fin.request!.detail.endsWith("END")).toBe(true);
-  expect([...(await client.listResumeRequests({})).requests[0]!.detail].length).toBe(4096);
+  expect(bytes((await client.listResumeRequests({})).requests[0]!.detail)).toBe(4095);
 });
 
 test("Ingest は読めない動いている一覧を INVALID_ARGUMENT で断る", async () => {

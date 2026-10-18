@@ -95,7 +95,8 @@ func (s *Collect) Name() string { return "collect" }
 //
 // fn runs *after* the ack, never before it: a hook that already waits a second on
 // a busy disk (#194) must not also wait for whatever the observer does with the
-// bytes. Only one observer is kept — the live transcript is the one that needs it.
+// bytes. Only one observer is kept; main hands it one function that calls each
+// concern that reads the payloads (the live transcript, resume).
 func (s *Collect) Observe(fn func([]byte)) {
 	s.observer = fn
 }

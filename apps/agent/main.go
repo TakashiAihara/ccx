@@ -231,12 +231,14 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		Machine:     cfg.Machine,
 		User:        cfg.User,
 		DefaultHome: claudeHome(),
-		Center:      resume.NewCenter(cfg.HubURL, cfg.HubToken),
-		Run:         resume.CommandRunner(ccxPath, nil),
-		Interval:    time.Minute,
-		Poll:        5 * time.Second,
-		Now:         time.Now,
-		Log:         logger,
+		// Next to the spool: it is this agent's own state, kept across restarts the same way
+		HomesFile: filepath.Join(filepath.Dir(cfg.SpoolDir), "claude-homes"),
+		Center:    resume.NewCenter(cfg.HubURL, cfg.HubToken),
+		Run:       resume.CommandRunner(ccxPath, nil),
+		Interval:  time.Minute,
+		Poll:      5 * time.Second,
+		Now:       time.Now,
+		Log:       logger,
 	})
 }
 

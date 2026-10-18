@@ -92,7 +92,8 @@ type ResumeRequest struct {
 	ExitCode int32 `protobuf:"varint,9,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	// 最後に取った ccx-agent に渡した印。FinishResume で返してもらい、取り直された後の古い結果を断る。
 	ClaimToken string `protobuf:"bytes,10,opt,name=claim_token,json=claimToken,proto3" json:"claim_token,omitempty"`
-	// 終わらないまま期限 (置いてから一定時間) を過ぎた。agent はもう取らず、同じ session に新しい依頼を置ける。
+	// 誰にも取られないまま置いてから 10 分を過ぎた (取られた依頼なら、加えてその実行の上限も過ぎた)。agent はもう取らず、
+	// 同じ session に新しい依頼を置ける。
 	Expired bool `protobuf:"varint,11,opt,name=expired,proto3" json:"expired,omitempty"`
 	// 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
 	WaitSeconds   uint32 `protobuf:"varint,12,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
@@ -534,7 +535,7 @@ type FinishResumeRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Outcome ResumeOutcome          `protobuf:"varint,2,opt,name=outcome,proto3,enum=ccx.v1.ResumeOutcome" json:"outcome,omitempty"`
-	// 長ければ center が末尾の 4096 文字だけを持つ。
+	// 長ければ center が UTF-8 で末尾の 4096 バイト以下を、文字の境界で切って持つ。
 	Detail   string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
 	ExitCode int32  `protobuf:"varint,4,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	// ClaimResume で受け取った claim_token。

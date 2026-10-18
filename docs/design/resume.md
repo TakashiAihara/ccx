@@ -68,27 +68,45 @@ The rendezvous is the center's table of requests and nothing else. `claimed_at` 
 request, `finished_at` says it is done, and the center never connects out to a machine, so it
 never has to know where one is (the connection direction is ccx-agent → center, as in ingest).
 
-A request left unfinished is waited for ten minutes and then reads as `expired`: the agent stops
-claiming it, and putting the same session again makes a new request rather than handing back the
-one nothing will take. Every claim mints a fresh `claim_token`, and a result that comes back under
-any other token is refused, so an agent that was overtaken after the center offered the request
-again cannot finish the newer attempt. `detail` is kept at its last 4096 characters.
+A request is in one of four phases, decided in one place (`phase()` in `apps/hub/src/resume.ts`):
+
+| phase | when | claimed by an agent | blocks a new request for the session |
+|---|---|---|---|
+| pending | nobody took it, or the agent that took it went past its run limit; placed less than 10 min ago | yes | yes |
+| running | taken, and within its run limit (the wait + 120 s) | no | yes |
+| expired | neither of the above | no | no |
+| finished | a result came back | no | no |
+
+So a request nobody takes in ten minutes reads as `expired`, and putting the same session again
+makes a new request. A request taken at minute nine is `running` until its run limit, not expired
+at minute ten: the agent may still be opening it. The run limit is the agent's own limit on the
+command (the wait + 60 s) plus a minute, so a request is offered again only after the agent that
+had it has stopped trying. The wait a request carries is at most 600 s. Every claim mints a fresh
+`claim_token`, and a result that comes back under any other token is refused, so an agent that was
+overtaken after the center offered the request again cannot finish the newer attempt. `force=true`
+is added to a request only while nobody has taken it. `detail` is kept at its last 4096 bytes of
+UTF-8, cut on a character boundary.
 
 ccx-agent asks whether anything is to be opened every 5 s, takes the oldest request addressed to
 its own (machine, user), runs `ccx session resume <id>` (with `--force` and `--wait` when the
 request says so) and returns what that command said: its exit code as the outcome, its output as
 the detail. The wait the request carries is handed to that CLI as it is, and the caller waits for
 that wait plus two minutes — the agent still has to pick the request up, and its own command is
-bounded by the same wait plus a minute. The caller sees that machine's own answer — exit 1 or 4
-with its stderr, exit 5 if nothing answered within that wait, which says whether any agent took
-it. A request no one took stays on the center, and is opened when that machine's agent comes up.
+bounded by the same wait plus a minute (stopped there, it answers 4: a workspace may be open). The
+caller sees that machine's own answer — exit 1 or 4 with its stderr, exit 5 if nothing answered
+within that wait, which says whether any agent took it, or if the request expired untaken. Each
+request the agent takes runs on its own, so one long resume does not leave the others to expire.
 
 Reporting what runs here and opening what the center asks for are two separate loops in the agent:
 a resume that takes longer than a poll must not hold the running list back, since a list that
 stops arriving is how the center reads an agent as gone. That list is read from every Claude home
 the agent knows — its own, plus the ones hook payloads have shown it, where a transcript path
 under `<home>/projects/` is what names one (a session can run under a `CLAUDE_CONFIG_DIR` of its
-own account).
+own account). The learned homes are kept in `claude-homes` next to the spool, so an idle session
+under one of them is still seen after the agent restarts; at most 16 are kept, and one that cannot
+be read is skipped with a line in the log. A resume runs with `CLAUDE_CONFIG_DIR` set to the home
+whose projects hold the session's transcript, and `ccx session resume` passes the same value to the
+pane (`herdr workspace create --env`), so the session opens under the account it ran in.
 
 `ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
 longer running, minus what someone archived, minus what is running on this machine right now (the
@@ -100,5 +118,8 @@ says nothing about its rows rather than calling them stopped.
 Anyone holding the center's token can open a stopped session on any machine and any user: the
 request carries only an id, a force and a wait, and the command that runs is that machine's own
 configuration. Hand the token only to those who may open sessions elsewhere.
+
+The center, the agents and the CLI of one release go together: no release before this one had
+the resume concern, and the claim token and the request phases are new in the same change.
 
 There is no Web UI over this list yet; `ccx session ls --stopped` is what there is.

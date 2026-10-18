@@ -86,6 +86,8 @@ export type ResumeOptions = {
   stableMs?: number;
   /** archived でも開けるようにする */
   force?: boolean;
+  /** pane に渡す CLAUDE_CONFIG_DIR。手元の ccx が CLAUDE_CONFIG_DIR の下で走っているときに、その値 */
+  claudeConfigDir?: string;
   /** agent が上がるのを待つ時間 (既定 40 秒) */
   waitMs?: number;
   /** 待つあいだの間隔 (既定 1 秒) */
@@ -165,7 +167,9 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   }
   const label = labelFor(cwd, declared.label);
 
-  const createdRes = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]);
+  // 別の Claude home の session は、pane の claude も同じ home で開かないと transcript が見つからない
+  const env = o.claudeConfigDir ? ["--env", `CLAUDE_CONFIG_DIR=${o.claudeConfigDir}`] : [];
+  const createdRes = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, ...env, "--no-focus"]);
   if (createdRes.timedOut) {
     throw new ResumeError(`herdr workspace create did not answer in time; a workspace may have been created (check herdr workspace list)`, 4);
   }
@@ -284,6 +288,10 @@ type ResumeFlags = { force?: boolean; machine?: string; user?: string; wait?: nu
 async function resumeElsewhere(cfg: Config, me: Origin, idOrPrefix: string, o: ResumeFlags): Promise<ResumeRequest> {
   const hub = cfg.hub;
   if (!hub) throw new NoCenterConfigured();
+  // center が 600 秒を超える待ちを断る (resume.proto)。届かなかったように見せないよう、置く前に止める
+  if (o.wait !== undefined && o.wait > 600_000) {
+    throw new ResumeError(`--wait is at most 600 seconds for another machine: ${o.wait / 1000}`, 1);
+  }
   const sessionId = idOrPrefix.toLowerCase();
   if (!UUID.test(sessionId)) {
     throw new ResumeError(`${idOrPrefix} is not a full session id; another machine's session is named only by its full id (a prefix is resolved from this machine's transcripts)`, 1);
@@ -348,6 +356,7 @@ export function registerResume(session: Command): void {
           command: cfg.resume.command,
           herdr: (args) => runHerdr(args),
           agent: cfg.resume.agent,
+          claudeConfigDir: process.env.CLAUDE_CONFIG_DIR || undefined,
           force: Boolean(o.force),
           waitMs: o.wait,
         });

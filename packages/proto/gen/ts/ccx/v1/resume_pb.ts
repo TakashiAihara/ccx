@@ -85,7 +85,8 @@ export type ResumeRequest = Message<"ccx.v1.ResumeRequest"> & {
   claimToken: string;
 
   /**
-   * 終わらないまま期限 (置いてから一定時間) を過ぎた。agent はもう取らず、同じ session に新しい依頼を置ける。
+   * 誰にも取られないまま置いてから 10 分を過ぎた (取られた依頼なら、加えてその実行の上限も過ぎた)。agent はもう取らず、
+   * 同じ session に新しい依頼を置ける。
    *
    * @generated from field: bool expired = 11;
    */
@@ -261,7 +262,7 @@ export type FinishResumeRequest = Message<"ccx.v1.FinishResumeRequest"> & {
   outcome: ResumeOutcome;
 
   /**
-   * 長ければ center が末尾の 4096 文字だけを持つ。
+   * 長ければ center が UTF-8 で末尾の 4096 バイト以下を、文字の境界で切って持つ。
    *
    * @generated from field: string detail = 3;
    */
@@ -348,8 +349,9 @@ export const ResumeOutcomeSchema: GenEnum<ResumeOutcome> = /*@__PURE__*/
  */
 export const ResumeService: GenService<{
   /**
-   * 依頼を置く。同じ session に終わっていない (期限内の) 依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
-   * そのとき force が新しく true で来たら、その依頼を force にする。
+   * 依頼を置く。同じ session に、まだ取られていない期限内の依頼か、取られて実行中の依頼があれば、新しく作らずに
+   * それを返す (2 重に開かない)。取られる前の依頼に force が新しく true で来たら、その依頼を force にする。
+   * wait_seconds は 600 まで (超えれば INVALID_ARGUMENT)。
    *
    * @generated from rpc ccx.v1.ResumeService.RequestResume
    */
@@ -370,8 +372,8 @@ export const ResumeService: GenService<{
   },
   /**
    * ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
-   * 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。取るたびに
-   * 新しい claim_token が振られる。
+   * 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 120 秒) を過ぎて、まだ
+   * 期限内なら再び取れる。取るたびに新しい claim_token が振られる。
    *
    * @generated from rpc ccx.v1.ResumeService.ClaimResume
    */

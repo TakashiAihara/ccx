@@ -14,16 +14,17 @@ import "google/protobuf/timestamp.proto";
 // どの session を開くかを決めるのは依頼を置いた人で、ccx-agent ではない (docs/design/scope.md の START /
 // ORIGINATE)。ccx-agent は依頼を運んで起動するだけで、依頼の中身を見て判断しない。
 service ResumeService {
-  // 依頼を置く。同じ session に終わっていない (期限内の) 依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
-  // そのとき force が新しく true で来たら、その依頼を force にする。
+  // 依頼を置く。同じ session に、まだ取られていない期限内の依頼か、取られて実行中の依頼があれば、新しく作らずに
+  // それを返す (2 重に開かない)。取られる前の依頼に force が新しく true で来たら、その依頼を force にする。
+  // wait_seconds は 600 まで (超えれば INVALID_ARGUMENT)。
   rpc RequestResume(RequestResumeRequest) returns (RequestResumeResponse);
 
   // 依頼の一覧。requested_at の新しい順。
   rpc ListResumeRequests(ListResumeRequestsRequest) returns (ListResumeRequestsResponse);
 
   // ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
-  // 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。取るたびに
-  // 新しい claim_token が振られる。
+  // 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 120 秒) を過ぎて、まだ
+  // 期限内なら再び取れる。取るたびに新しい claim_token が振られる。
   rpc ClaimResume(ClaimResumeRequest) returns (ClaimResumeResponse);
 
   // 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
@@ -58,7 +59,8 @@ message ResumeRequest {
   int32 exit_code = 9;
   // 最後に取った ccx-agent に渡した印。FinishResume で返してもらい、取り直された後の古い結果を断る。
   string claim_token = 10;
-  // 終わらないまま期限 (置いてから一定時間) を過ぎた。agent はもう取らず、同じ session に新しい依頼を置ける。
+  // 誰にも取られないまま置いてから 10 分を過ぎた (取られた依頼なら、加えてその実行の上限も過ぎた)。agent はもう取らず、
+  // 同じ session に新しい依頼を置ける。
   bool expired = 11;
   // 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
   uint32 wait_seconds = 12;
@@ -101,7 +103,7 @@ message ClaimResumeResponse {
 message FinishResumeRequest {
   string id = 1;
   ResumeOutcome outcome = 2;
-  // 長ければ center が末尾の 4096 文字だけを持つ。
+  // 長ければ center が UTF-8 で末尾の 4096 バイト以下を、文字の境界で切って持つ。
   string detail = 3;
   int32 exit_code = 4;
   // ClaimResume で受け取った claim_token。

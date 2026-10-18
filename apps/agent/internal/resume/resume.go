@@ -84,11 +84,21 @@ func (c *connectCenter) FinishResume(ctx context.Context, r *connect.Request[ccx
 	return c.resume.FinishResume(ctx, r)
 }
 
-// RunFunc opens one session and says how it went. waitSeconds is what the
-// request asked the CLI to wait for; 0 means the CLI's own default. It is the
-// one thing this concern does not do itself, so a test can stand in for the
-// command.
-type RunFunc func(ctx context.Context, sessionID string, force bool, waitSeconds uint32) (exitCode int, output string)
+// RunRequest is one resume to run.
+type RunRequest struct {
+	SessionID string
+	Force     bool
+	// WaitSeconds is what the request asked the CLI to wait for; 0 means the
+	// CLI's own default.
+	WaitSeconds uint32
+	// Home is the Claude home the session's transcript is under, when it is not
+	// this process's own; "" leaves the CLI on its default.
+	Home string
+}
+
+// RunFunc opens one session and says how it went. It is the one thing this
+// concern does not do itself, so a test can stand in for the command.
+type RunFunc func(ctx context.Context, req RunRequest) (exitCode int, output string)
 
 // Options builds the concern. Machine and User are this agent's origin: the
 // center keys both the list and the requests by them.
@@ -99,8 +109,12 @@ type Options struct {
 	// another one (CLAUDE_CONFIG_DIR per account); Notice learns those from the
 	// hook payloads, and both are read.
 	DefaultHome string
-	Center      Center
-	Run         RunFunc
+	// HomesFile keeps the learned homes across restarts (one per line). An idle
+	// session under another home fires no hook after a restart, so without it
+	// the session would read as stopped until it did. "" keeps them in memory.
+	HomesFile string
+	Center    Center
+	Run       RunFunc
 	// Interval is how often the unchanged list is sent again.
 	Interval time.Duration
 	// Poll is how often the center is asked whether anything is to be opened.
@@ -129,7 +143,51 @@ func New(o Options) *Resume {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
-	return &Resume{opts: o}
+	r := &Resume{opts: o}
+	r.loadHomes()
+	return r
+}
+
+// maxLearnedHomes bounds what Notice keeps. Each home is read on every report,
+// and the payloads come from this user's own hooks, so a few accounts is the
+// expected size; past this a new home is not kept.
+const maxLearnedHomes = 16
+
+// loadHomes reads the homes an earlier run learned. A missing file is a first
+// run; anything else unreadable is logged and the concern starts with none.
+func (r *Resume) loadHomes() {
+	if r.opts.HomesFile == "" {
+		return
+	}
+	b, err := os.ReadFile(r.opts.HomesFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			r.log("resume: could not read the learned Claude homes from %s: %v", r.opts.HomesFile, err)
+		}
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		home := strings.TrimSpace(line)
+		if home != "" && filepath.IsAbs(home) && !slices.Contains(r.learned, home) && len(r.learned) < maxLearnedHomes {
+			r.learned = append(r.learned, home)
+		}
+	}
+}
+
+// saveHomes writes the learned homes next to the old file and renames it into
+// place, so a crash mid-write leaves the previous list. Called with r.mu held.
+func (r *Resume) saveHomes() {
+	if r.opts.HomesFile == "" {
+		return
+	}
+	tmp := r.opts.HomesFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(r.learned, "\n")+"\n"), 0o600); err != nil {
+		r.log("resume: could not save the learned Claude homes: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, r.opts.HomesFile); err != nil {
+		r.log("resume: could not save the learned Claude homes: %v", err)
+	}
 }
 
 // Resume is the concern. Report and Claim run in their own goroutines; only the
@@ -163,9 +221,13 @@ func (r *Resume) Name() string { return "resume" }
 // Reporting and claiming are separate loops on purpose: a resume that runs for
 // longer than a poll must not keep the running list from going out, since a
 // list that stops arriving is how the center reads this agent as gone.
+//
+// Each claimed request runs in its own goroutine, so one resume that waits long
+// for its agent does not leave the others to expire unclaimed. The center hands
+// a request to one claim at a time, so two goroutines never run the same one.
 func (r *Resume) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
-	for _, tick := range []func(context.Context){r.Report, r.Claim} {
+	every := func(tick func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -176,11 +238,21 @@ func (r *Resume) Run(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-t.C:
-					tick(ctx)
+					tick()
 				}
 			}
 		}()
 	}
+	every(func() { r.Report(ctx) })
+	every(func() {
+		if req := r.claim(ctx); req != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				r.open(ctx, req)
+			}()
+		}
+	})
 	wg.Wait()
 	return nil
 }
@@ -199,12 +271,27 @@ type runningList struct {
 }
 
 // Report sends what is running under every Claude home this agent knows.
+//
+// This process's own home has to be readable: without it the list would call
+// every session there stopped. A learned home that cannot be read is skipped
+// with a line in the log, so one bad home does not silence the whole list.
 func (r *Resume) Report(ctx context.Context) {
-	ids, err := RunningIDs(r.homes()...)
+	homes := r.homes()
+	ids, err := RunningIDs(homes[0])
 	if err != nil {
 		r.log("resume: could not read which sessions are running: %v", err)
 		return
 	}
+	for _, h := range homes[1:] {
+		more, err := RunningIDs(h)
+		if err != nil {
+			r.log("resume: skipping the Claude home %s: %v", h, err)
+			continue
+		}
+		ids = append(ids, more...)
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
 	now := r.opts.Now()
 	if slices.Equal(ids, r.sent) && now.Sub(r.sentAt) < r.opts.Interval {
 		return
@@ -264,9 +351,15 @@ func (r *Resume) Notice(payload []byte) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !slices.Contains(r.learned, home) {
-		r.learned = append(r.learned, home)
+	if home == r.opts.DefaultHome || slices.Contains(r.learned, home) {
+		return
 	}
+	if len(r.learned) >= maxLearnedHomes {
+		r.log("resume: already reading %d learned Claude homes; not adding %s", maxLearnedHomes, home)
+		return
+	}
+	r.learned = append(r.learned, home)
+	r.saveHomes()
 }
 
 // homeOf is the Claude home a transcript path belongs to, and whether the path
@@ -303,21 +396,38 @@ func (r *Resume) homes() []string {
 }
 
 // Claim opens the oldest request addressed to this machine and user, if there is
-// one. An answer without a request means there was nothing to take.
+// one, and waits for it. An answer without a request means there was nothing to take.
 func (r *Resume) Claim(ctx context.Context) {
+	if req := r.claim(ctx); req != nil {
+		r.open(ctx, req)
+	}
+}
+
+func (r *Resume) claim(ctx context.Context) *ccxv1.ResumeRequest {
 	res, err := r.opts.Center.ClaimResume(ctx, connect.NewRequest(&ccxv1.ClaimResumeRequest{
 		Machine: r.opts.Machine,
 		User:    r.opts.User,
 	}))
 	if err != nil {
 		r.log("resume: claiming a request failed: %v", err)
-		return
+		return nil
 	}
-	req := res.Msg.GetRequest()
-	if req == nil {
-		return
-	}
+	return res.Msg.GetRequest()
+}
 
+// homeWith is the Claude home whose projects hold this session's transcript,
+// looked for in the same order as the running list. "" when none does: the CLI
+// then says there is no transcript, which is the answer.
+func (r *Resume) homeWith(id string) string {
+	for _, h := range r.homes() {
+		if m, _ := filepath.Glob(filepath.Join(h, "projects", "*", id+".jsonl")); len(m) > 0 {
+			return h
+		}
+	}
+	return ""
+}
+
+func (r *Resume) open(ctx context.Context, req *ccxv1.ResumeRequest) {
 	id := req.GetKey().GetSessionId()
 	if !sessionID.MatchString(id) {
 		// Nothing is run for an id that cannot name a session: the CLI would
@@ -327,7 +437,11 @@ func (r *Resume) Claim(ctx context.Context) {
 		return
 	}
 
-	code, out := r.opts.Run(ctx, id, req.GetForce(), req.GetWaitSeconds())
+	run := RunRequest{SessionID: id, Force: req.GetForce(), WaitSeconds: req.GetWaitSeconds()}
+	if h := r.homeWith(id); h != "" && h != r.opts.DefaultHome {
+		run.Home = h
+	}
+	code, out := r.opts.Run(ctx, run)
 	outcome := ccxv1.ResumeOutcome_RESUME_OUTCOME_OPENED
 	if code != 0 {
 		outcome = ccxv1.ResumeOutcome_RESUME_OUTCOME_FAILED
@@ -337,8 +451,11 @@ func (r *Resume) Claim(ctx context.Context) {
 
 // finish returns the result under the token the claim handed out, so a result
 // that arrives after the center offered the request again is refused.
+//
+// It is sent even when the agent is shutting down: the session may be open by
+// now, and a lost result is a request the center offers again.
 func (r *Resume) finish(ctx context.Context, id, claimToken string, outcome ccxv1.ResumeOutcome, detail string, exitCode int32) {
-	_, err := r.opts.Center.FinishResume(ctx, connect.NewRequest(&ccxv1.FinishResumeRequest{
+	_, err := r.opts.Center.FinishResume(context.WithoutCancel(ctx), connect.NewRequest(&ccxv1.FinishResumeRequest{
 		Id:         id,
 		Outcome:    outcome,
 		Detail:     detail,
@@ -359,7 +476,9 @@ func (r *Resume) log(format string, a ...any) { r.opts.Log(format, a...) }
 const detailCap = 4096
 
 func detailOf(out string) string {
-	d := strings.TrimSpace(out)
+	// The output is whatever the command and the pane printed, not checked to be
+	// UTF-8; a proto string that is not would fail to marshal.
+	d := strings.TrimSpace(strings.ToValidUTF8(out, "�"))
 	if len(d) <= detailCap {
 		return d
 	}
@@ -399,28 +518,38 @@ func CommandRunner(ccxPath string, timeoutFor func(uint32) time.Duration) RunFun
 	if timeoutFor == nil {
 		timeoutFor = DefaultRunTimeout
 	}
-	return func(ctx context.Context, sessionID string, force bool, wait uint32) (int, string) {
-		runTimeout := timeoutFor(wait)
+	return func(ctx context.Context, req RunRequest) (int, string) {
+		runTimeout := timeoutFor(req.WaitSeconds)
 		ctx, cancel := context.WithTimeout(ctx, runTimeout)
 		defer cancel()
 
-		args := []string{"session", "resume", sessionID}
-		if force {
+		args := []string{"session", "resume", req.SessionID}
+		if req.Force {
 			args = append(args, "--force")
 		}
 		// The request's wait is the caller's, passed on as it is; 0 leaves the
 		// CLI on its own default.
-		if wait > 0 {
-			args = append(args, "--wait", strconv.FormatUint(uint64(wait), 10))
+		if req.WaitSeconds > 0 {
+			args = append(args, "--wait", strconv.FormatUint(uint64(req.WaitSeconds), 10))
 		}
-		out, err := exec.CommandContext(ctx, ccxPath, args...).CombinedOutput()
+		cmd := exec.CommandContext(ctx, ccxPath, args...)
+		// The CLI reads the transcript and the running sessions under its own
+		// CLAUDE_CONFIG_DIR, and passes it on to the pane it opens.
+		if req.Home != "" {
+			cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+req.Home)
+		}
+		// Without it a child that keeps the output pipe open (herdr starting a
+		// server, say) holds CombinedOutput past the kill.
+		cmd.WaitDelay = 5 * time.Second
+		out, err := cmd.CombinedOutput()
 		switch {
 		case err == nil:
 			return 0, string(out)
 		case ctx.Err() != nil:
 			// What a killed process reports is the signal, which says nothing
-			// about the resume; the deadline is the reason.
-			return 1, fmt.Sprintf("%s\nccx session resume did not finish in %s", strings.TrimSpace(string(out)), runTimeout)
+			// about the resume; the deadline is the reason. It may have opened a
+			// workspace before it was stopped, so this is the CLI's exit 4.
+			return 4, fmt.Sprintf("%s\nccx session resume did not finish in %s; a workspace may be left open", strings.TrimSpace(string(out)), runTimeout)
 		default:
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) {

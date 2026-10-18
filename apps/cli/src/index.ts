@@ -424,9 +424,12 @@ session
     // --stopped に出すのは「開き直せるもの」だけ。このマシンの行で今動いているものは
     // 入らない。center の一覧は毎分区のため遅れるので、手元で動いているものを候補に
     // すると、このマシンの resume が「動いている」と refuse する
+    // このマシンの行は手元のファイルが真実源。center の一覧が 1 分遅れても、手元で動いているものと
+    // 手元で archived にしたものは候補にしない
     const listed = o.stopped
       ? annotated.filter(
-          ({ s, lifecycle }) => lifecycle !== "running" || s.key?.machine !== me.machine || s.key?.user !== me.user,
+          ({ s, lifecycle, state }) =>
+            s.key?.machine !== me.machine || s.key?.user !== me.user || (lifecycle !== "running" && !state?.archived),
         )
       : annotated;
 

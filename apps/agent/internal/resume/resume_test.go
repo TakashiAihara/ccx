@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -178,7 +179,7 @@ func TestTickReportsTheRunningList(t *testing.T) {
 	writeSession(t, home, me, `{"pid":`+strconv.Itoa(me)+`,"sessionId":"`+idA+`"}`)
 	c := &fakeCenter{}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, home, c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 0, "" })
+	r := newConcern(t, home, c, &clock, func(context.Context, RunRequest) (int, string) { return 0, "" })
 
 	r.Tick(context.Background())
 
@@ -206,7 +207,7 @@ func TestTickReportsTheRunningList(t *testing.T) {
 func TestTickSendsAnEmptyListAsAnArray(t *testing.T) {
 	c := &fakeCenter{}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 0, "" })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { return 0, "" })
 	r.Tick(context.Background())
 	if len(c.ingested) != 1 || len(runningPayload(t, c.ingested[0])) != 0 {
 		t.Fatalf("want one event with session_ids = [], got %d events", len(c.ingested))
@@ -217,7 +218,7 @@ func TestTickResendsOnlyOnChangeOrAfterTheInterval(t *testing.T) {
 	home := t.TempDir()
 	c := &fakeCenter{}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, home, c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 0, "" })
+	r := newConcern(t, home, c, &clock, func(context.Context, RunRequest) (int, string) { return 0, "" })
 
 	r.Tick(context.Background())
 	clock = clock.Add(59 * time.Second)
@@ -244,7 +245,7 @@ func TestTickResendsOnlyOnChangeOrAfterTheInterval(t *testing.T) {
 func TestTickRetriesAFailedReportOnTheNextTick(t *testing.T) {
 	c := &fakeCenter{ingestErr: errors.New("center down")}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 0, "" })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { return 0, "" })
 
 	r.Tick(context.Background())
 	c.ingestErr = nil
@@ -260,8 +261,8 @@ func TestTickRunsAClaimedRequestAndFinishesIt(t *testing.T) {
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, Force: true, ClaimToken: "tok-1", WaitSeconds: 90}}}
 	clock := time.Unix(1_800_000_000, 0)
 	var calls []runCall
-	r := newConcern(t, t.TempDir(), c, &clock, func(_ context.Context, id string, force bool, wait uint32) (int, string) {
-		calls = append(calls, runCall{id, force, wait})
+	r := newConcern(t, t.TempDir(), c, &clock, func(_ context.Context, q RunRequest) (int, string) {
+		calls = append(calls, runCall{q.SessionID, q.Force, q.WaitSeconds})
 		return 0, "opened wRK pane=wRK:p1 x (/w)\n"
 	})
 
@@ -285,7 +286,7 @@ func TestTickRunsAClaimedRequestAndFinishesIt(t *testing.T) {
 func TestTickReportsAFailedResumeWithItsExitCode(t *testing.T) {
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-2", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}}}}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) {
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) {
 		return 3, "workspace wRK was created ..."
 	})
 
@@ -301,7 +302,7 @@ func TestTickWithNothingClaimedRunsNothing(t *testing.T) {
 	c := &fakeCenter{}
 	clock := time.Unix(1_800_000_000, 0)
 	ran := 0
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { ran++; return 0, "" })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { ran++; return 0, "" })
 	r.Tick(context.Background())
 	if ran != 0 || len(c.finished) != 0 || len(c.claims) != 1 {
 		t.Fatalf("ran %d, finished %d, claims %d; want 0, 0, 1", ran, len(c.finished), len(c.claims))
@@ -313,7 +314,7 @@ func TestTickRefusesARequestThatIsNotASessionID(t *testing.T) {
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-3", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: "--help"}}}}
 	clock := time.Unix(1_800_000_000, 0)
 	ran := 0
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { ran++; return 0, "" })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { ran++; return 0, "" })
 
 	r.Tick(context.Background())
 
@@ -329,7 +330,7 @@ func TestDetailKeepsTheLast4KiB(t *testing.T) {
 	long := strings.Repeat("a", 5000) + "END"
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-4", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}}}}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 1, long })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { return 1, long })
 
 	r.Tick(context.Background())
 
@@ -377,7 +378,7 @@ func TestNoticeLearnsTheHomeFromATranscriptPath(t *testing.T) {
 	c := &fakeCenter{}
 	clock := time.Unix(1_800_000_000, 0)
 	r := New(Options{Machine: "m1", User: "dev", DefaultHome: def, Center: c, Interval: time.Minute, Poll: time.Second,
-		Now: func() time.Time { return clock }, Log: t.Logf, Run: func(context.Context, string, bool, uint32) (int, string) { return 0, "" }})
+		Now: func() time.Time { return clock }, Log: t.Logf, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
 
 	r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(other, "projects", "-w", idA+".jsonl") + `"}`))
 	r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"/etc/passwd"}`))
@@ -399,7 +400,7 @@ func TestRunKeepsReportingWhileAResumeRuns(t *testing.T) {
 	release := make(chan struct{})
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-9", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}, ClaimToken: "t"}}}
 	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Interval: 20 * time.Millisecond, Poll: 5 * time.Millisecond, Log: t.Logf,
-		Run: func(context.Context, string, bool, uint32) (int, string) { <-release; return 0, "" }})
+		Run: func(context.Context, RunRequest) (int, string) { <-release; return 0, "" }})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = r.Run(ctx); close(done) }()
@@ -426,7 +427,7 @@ func TestDetailNeverSplitsAMultiByteCharacter(t *testing.T) {
 	long := strings.Repeat("あ", 2000) + "END"
 	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{{Id: "req-5", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}}}}
 	clock := time.Unix(1_800_000_000, 0)
-	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, string, bool, uint32) (int, string) { return 4, long })
+	r := newConcern(t, t.TempDir(), c, &clock, func(context.Context, RunRequest) (int, string) { return 4, long })
 
 	r.Tick(context.Background())
 
@@ -438,7 +439,7 @@ func TestDetailNeverSplitsAMultiByteCharacter(t *testing.T) {
 
 func TestNewDefaultsTheLog(t *testing.T) {
 	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: &fakeCenter{ingestErr: errors.New("down")},
-		Run: func(context.Context, string, bool, uint32) (int, string) { return 0, "" }})
+		Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
 	r.Tick(context.Background())
 }
 
@@ -454,11 +455,11 @@ func writeScript(t *testing.T, dir, name, body string) string {
 func TestCommandRunnerPassesTheArgumentsAndTheExitCode(t *testing.T) {
 	dir := t.TempDir()
 	ccx := writeScript(t, dir, "ccx", `echo "args: $*"; exit 4`)
-	code, out := CommandRunner(ccx, nil)(context.Background(), idA, true, 90)
+	code, out := CommandRunner(ccx, nil)(context.Background(), RunRequest{SessionID: idA, Force: true, WaitSeconds: 90})
 	if code != 4 || strings.TrimSpace(out) != "args: session resume "+idA+" --force --wait 90" {
 		t.Fatalf("code %d out %q", code, out)
 	}
-	code, out = CommandRunner(ccx, nil)(context.Background(), idA, false, 0)
+	code, out = CommandRunner(ccx, nil)(context.Background(), RunRequest{SessionID: idA})
 	if code != 4 || strings.TrimSpace(out) != "args: session resume "+idA {
 		t.Fatalf("without force and wait: code %d out %q", code, out)
 	}
@@ -467,14 +468,14 @@ func TestCommandRunnerPassesTheArgumentsAndTheExitCode(t *testing.T) {
 func TestCommandRunnerStopsAtItsTimeout(t *testing.T) {
 	ccx := writeScript(t, t.TempDir(), "ccx", `echo started; exec sleep 5`)
 	start := time.Now()
-	code, out := CommandRunner(ccx, func(uint32) time.Duration { return 200 * time.Millisecond })(context.Background(), idA, false, 0)
-	if code != 1 || !strings.Contains(out, "did not finish") || time.Since(start) > 3*time.Second {
+	code, out := CommandRunner(ccx, func(uint32) time.Duration { return 200 * time.Millisecond })(context.Background(), RunRequest{SessionID: idA})
+	if code != 4 || !strings.Contains(out, "did not finish") || time.Since(start) > 3*time.Second {
 		t.Fatalf("code %d out %q after %v", code, out, time.Since(start))
 	}
 }
 
 func TestCommandRunnerSaysWhenItCannotStart(t *testing.T) {
-	code, out := CommandRunner(filepath.Join(t.TempDir(), "no-ccx"), nil)(context.Background(), idA, false, 0)
+	code, out := CommandRunner(filepath.Join(t.TempDir(), "no-ccx"), nil)(context.Background(), RunRequest{SessionID: idA})
 	if code != 1 || !strings.Contains(out, "could not run") {
 		t.Fatalf("code %d out %q", code, out)
 	}
@@ -500,5 +501,170 @@ func TestFindCCXFallsBackToPATHAndSaysNothingWhenThereIsNone(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if got := FindCCX(); got != "" {
 		t.Fatalf("FindCCX() = %q, want empty", got)
+	}
+}
+
+// An idle session under another home fires no hook after a restart; the homes
+// an earlier run learned come back from the file.
+func TestLearnedHomesSurviveARestart(t *testing.T) {
+	def, other := t.TempDir(), t.TempDir()
+	file := filepath.Join(t.TempDir(), "claude-homes")
+	me := os.Getpid()
+	writeSession(t, other, me, `{"pid":`+strconv.Itoa(me)+`,"sessionId":"`+idA+`"}`)
+	opts := Options{Machine: "m1", User: "dev", DefaultHome: def, HomesFile: file, Center: &fakeCenter{}, Log: t.Logf,
+		Run: func(context.Context, RunRequest) (int, string) { return 0, "" }}
+
+	first := New(opts)
+	first.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(other, "projects", "-w", idA+".jsonl") + `"}`))
+
+	c := &fakeCenter{}
+	opts.Center = c
+	second := New(opts)
+	second.Report(context.Background())
+	if got := runningPayload(t, c.ingested[0]); len(got) != 1 || got[0] != idA {
+		t.Fatalf("after a restart: session_ids %v, want [%s]", got, idA)
+	}
+}
+
+func TestAnUnreadableLearnedHomeIsSkippedNotFatal(t *testing.T) {
+	def := t.TempDir()
+	me := os.Getpid()
+	writeSession(t, def, me, `{"pid":`+strconv.Itoa(me)+`,"sessionId":"`+idB+`"}`)
+	bad := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// sessions is a file, so reading it as a directory fails (not "does not exist")
+	if err := os.WriteFile(filepath.Join(bad, "sessions"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeCenter{}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: def, Center: c, Log: t.Logf, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(bad, "projects", "-w", idA+".jsonl") + `"}`))
+
+	r.Report(context.Background())
+
+	if len(c.ingested) != 1 {
+		t.Fatalf("sent %d lists, want 1 (the bad home skipped)", len(c.ingested))
+	}
+	if got := runningPayload(t, c.ingested[0]); len(got) != 1 || got[0] != idB {
+		t.Fatalf("session_ids %v, want [%s]", got, idB)
+	}
+}
+
+func TestLearnedHomesAreCappedAt16(t *testing.T) {
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: &fakeCenter{}, Run: func(context.Context, RunRequest) (int, string) { return 0, "" }})
+	base := t.TempDir()
+	for i := 0; i < 20; i++ {
+		home := filepath.Join(base, "h"+strconv.Itoa(i))
+		r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(home, "projects", "-w", idA+".jsonl") + `"}`))
+	}
+	if got := len(r.homes()); got != 17 {
+		t.Fatalf("%d homes, want 17 (the default and 16 learned)", got)
+	}
+}
+
+// The resume runs under the home whose projects hold the transcript.
+func TestClaimRunsUnderTheHomeThatHoldsTheTranscript(t *testing.T) {
+	def, other := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "projects", "-w"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "projects", "-w", idA+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var homes []string
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{
+		{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}},
+		{Id: "r2", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idB}},
+	}}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: def, Center: c, Log: t.Logf,
+		Run: func(_ context.Context, q RunRequest) (int, string) { homes = append(homes, q.Home); return 0, "" }})
+	r.Notice([]byte(`{"session_id":"` + idA + `","transcript_path":"` + filepath.Join(other, "projects", "-w", idA+".jsonl") + `"}`))
+
+	r.Claim(context.Background())
+	r.Claim(context.Background())
+
+	if len(homes) != 2 || homes[0] != other || homes[1] != "" {
+		t.Fatalf("homes %q, want [%q \"\"] (the one with the transcript, then the default)", homes, other)
+	}
+}
+
+func TestCommandRunnerSetsClaudeConfigDirForAnotherHome(t *testing.T) {
+	ccx := writeScript(t, t.TempDir(), "ccx", `echo "home=$CLAUDE_CONFIG_DIR"`)
+	t.Setenv("CLAUDE_CONFIG_DIR", "/from/agent")
+	_, out := CommandRunner(ccx, nil)(context.Background(), RunRequest{SessionID: idA, Home: "/other/home"})
+	if strings.TrimSpace(out) != "home=/other/home" {
+		t.Fatalf("out %q", out)
+	}
+	_, out = CommandRunner(ccx, nil)(context.Background(), RunRequest{SessionID: idA})
+	if strings.TrimSpace(out) != "home=/from/agent" {
+		t.Fatalf("without a home: out %q", out)
+	}
+}
+
+// A grandchild that keeps the output pipe open must not hold the runner past
+// its limit.
+func TestCommandRunnerDoesNotWaitForAGrandchildHoldingThePipe(t *testing.T) {
+	dir := t.TempDir()
+	ccx := writeScript(t, dir, "ccx", `sleep 30 & echo $! > "`+filepath.Join(dir, "gc.pid")+`"; exec sleep 30`)
+	start := time.Now()
+	code, _ := CommandRunner(ccx, func(uint32) time.Duration { return 200 * time.Millisecond })(context.Background(), RunRequest{SessionID: idA})
+	elapsed := time.Since(start)
+	if b, err := os.ReadFile(filepath.Join(dir, "gc.pid")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	if code != 4 || elapsed > 10*time.Second {
+		t.Fatalf("code %d after %v; want 4 within the wait delay", code, elapsed)
+	}
+}
+
+func TestDetailReplacesInvalidUTF8(t *testing.T) {
+	if d := detailOf("ok \xff\xfe end"); !utf8.ValidString(d) || !strings.HasSuffix(d, "end") {
+		t.Fatalf("detail %q is not valid UTF-8", d)
+	}
+}
+
+// Two requests are run side by side: the second is not held behind the first.
+func TestRunOpensClaimedRequestsSideBySide(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	started := 0
+	c := &fakeCenter{queue: []*ccxv1.ResumeRequest{
+		{Id: "r1", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idA}},
+		{Id: "r2", Key: &ccxv1.SessionKey{Machine: "m1", User: "dev", SessionId: idB}},
+	}}
+	r := New(Options{Machine: "m1", User: "dev", DefaultHome: t.TempDir(), Center: c, Interval: time.Hour, Poll: 5 * time.Millisecond, Log: t.Logf,
+		Run: func(context.Context, RunRequest) (int, string) {
+			mu.Lock()
+			started++
+			mu.Unlock()
+			<-release
+			return 0, ""
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = r.Run(ctx); close(done) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := started
+		mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of 2 resumes started while the first was still running", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	cancel()
+	<-done
+	if len(c.finished) != 2 {
+		t.Fatalf("finished %d, want 2", len(c.finished))
 	}
 }

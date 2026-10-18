@@ -112,7 +112,7 @@ export async function resumeRemote(o: {
   throw new ResumeError(
     latest?.claimedAt
       ? `the request ${id} on ${machine} was taken but has not answered within ${o.waitMs} ms`
-      : `no ccx-agent on ${machine} has taken it after ${o.waitMs} ms; it stays on the center and is opened when that machine's ccx-agent comes up`,
+      : `no ccx-agent on ${machine} has taken it after ${o.waitMs} ms; it stays on the center until it expires (10 minutes after it was placed), and is opened if that machine's ccx-agent takes it before then`,
     5,
   );
 }
