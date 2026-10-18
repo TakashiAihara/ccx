@@ -189,7 +189,8 @@ function dirWithHerdr(name: string) {
 }
 
 test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent's resumes find herdr", async () => {
-  const path = `${dirWithHerdr("node@22+x")}:${join(work, "fakebin")}:${SYSTEM_PATH}`;
+  // the install dir is already on PATH here, so it is not added a second time
+  const path = `${dirWithHerdr("node@22+x")}:${join(work, "bin")}:${join(work, "fakebin")}:${SYSTEM_PATH}`;
   const r = await install(["--with-agent"], { PATH: path });
   expect(r.code).toBe(0);
   const unit = unitOf(r.home);
@@ -202,9 +203,11 @@ test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent'
 test.skipIf(!linux)("entries a unit cannot carry are left out one by one, and a herdr only there is said to be missing", async () => {
   const odd = dirWithHerdr("Program Files");
   const kept = `${join(work, "fakebin")}:${SYSTEM_PATH}`;
-  const r = await install(["--with-agent"], { PATH: `${odd}:rel/bin::${kept}` });
+  const r = await install(["--with-agent"], { PATH: `${odd}:rel/bin::${kept}:` });
   expect(r.code).toBe(0);
-  expect(unitOf(r.home)).toContain(`\nEnvironment=PATH=${kept}\n`);
-  expect(r.out).toContain(`left out of the unit's PATH (not absolute, or characters a unit cannot carry as is): '${odd}' 'rel/bin' ''`);
-  expect(r.out).toContain(`herdr is not on the PATH the unit was given (${kept})`);
+  // the install dir is not on this PATH, so it is put first
+  const given = `${join(work, "bin")}:${kept}`;
+  expect(unitOf(r.home)).toContain(`\nEnvironment=PATH=${given}\n`);
+  expect(r.out).toContain(`left out of the unit's PATH (not absolute, or characters a unit cannot carry as is): '${odd}' 'rel/bin' '' ''`);
+  expect(r.out).toContain(`herdr is not on the PATH the unit was given (${given})`);
 });

@@ -167,18 +167,18 @@ for d in $PATH; do
 done
 IFS=$old_ifs
 set +f
+# Field splitting drops a trailing empty field, which in PATH means the cwd as well.
+case "$PATH" in *:) dropped="$dropped ''" ;; esac
+# A fresh install from a shell that does not have the install dir on PATH yet still
+# gives the unit that dir, where ccx and, often, herdr are.
+case ":$unit_path:" in
+  *":$DEST:"*) ;;
+  *) unit_path="$DEST${unit_path:+:$unit_path}" ;;
+esac
 if [ -n "$dropped" ]; then
   echo "ccx: left out of the unit's PATH (not absolute, or characters a unit cannot carry as is):$dropped" >&2
 fi
-# Nothing usable left (not seen in practice: this script found sh and curl on PATH),
-# so the unit keeps its own default line; the herdr check reads that default.
-path_edit=""
-if [ -n "$unit_path" ]; then
-  path_edit="s|^Environment=PATH=.*|Environment=PATH=$unit_path|"
-else
-  unit_path="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-fi
-sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "$path_edit" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
+sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "s|^Environment=PATH=.*|Environment=PATH=$unit_path|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
 if ! PATH=$unit_path command -v herdr >/dev/null 2>&1; then
   echo "ccx: herdr is not on the PATH the unit was given ($unit_path), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, or add its dir to the unit (systemctl --user edit ccx-agent)" >&2
 fi
