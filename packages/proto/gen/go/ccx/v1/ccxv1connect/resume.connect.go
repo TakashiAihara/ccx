@@ -56,7 +56,7 @@ type ResumeServiceClient interface {
 	// 依頼の一覧。requested_at の新しい順。
 	ListResumeRequests(context.Context, *connect.Request[v1.ListResumeRequestsRequest]) (*connect.Response[v1.ListResumeRequestsResponse], error)
 	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
-	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 120 秒) を過ぎて、まだ
+	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 180 秒) を過ぎて、まだ
 	// 期限内なら再び取れる。取るたびに新しい claim_token が振られる。
 	ClaimResume(context.Context, *connect.Request[v1.ClaimResumeRequest]) (*connect.Response[v1.ClaimResumeResponse], error)
 	// 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
@@ -139,7 +139,7 @@ type ResumeServiceHandler interface {
 	// 依頼の一覧。requested_at の新しい順。
 	ListResumeRequests(context.Context, *connect.Request[v1.ListResumeRequestsRequest]) (*connect.Response[v1.ListResumeRequestsResponse], error)
 	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
-	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 120 秒) を過ぎて、まだ
+	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 180 秒) を過ぎて、まだ
 	// 期限内なら再び取れる。取るたびに新しい claim_token が振られる。
 	ClaimResume(context.Context, *connect.Request[v1.ClaimResumeRequest]) (*connect.Response[v1.ClaimResumeResponse], error)
 	// 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
