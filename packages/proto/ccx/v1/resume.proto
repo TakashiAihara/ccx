@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+import "ccx/v1/fleet.proto";
+import "google/protobuf/timestamp.proto";
+
+// 止まった session を別のマシンから開き直す口 (#261)。
+//
+// 人 (ccx CLI / Web UI) が依頼を置き、そのマシンの ccx-agent が取りに来て、手元で
+// `ccx session resume <id>` を走らせ、結果を返す。center から ccx-agent へは繋がない: 接続の向きは
+// ingest と同じく ccx-agent → center だけで、center は各マシンの宛先を知らなくてよい。
+//
+// どの session を開くかを決めるのは依頼を置いた人で、ccx-agent ではない (docs/design/scope.md の START /
+// ORIGINATE)。ccx-agent は依頼を運んで起動するだけで、依頼の中身を見て判断しない。
+service ResumeService {
+  // 依頼を置く。同じ session に、まだ取られていない期限内の依頼か、取られて実行中の依頼があれば、新しく作らずに
+  // それを返す (2 重に開かない)。取られる前の依頼に force が新しく true で来たら、その依頼を force にする。
+  // wait_seconds は 600 まで (超えれば INVALID_ARGUMENT)。
+  rpc RequestResume(RequestResumeRequest) returns (RequestResumeResponse);
+
+  // 依頼の一覧。requested_at の新しい順。
+  rpc ListResumeRequests(ListResumeRequestsRequest) returns (ListResumeRequestsResponse);
+
+  // ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
+  // 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は、その実行の上限 (待ち + 180 秒) を過ぎて、まだ
+  // 期限内なら再び取れる。取るたびに新しい claim_token が振られる。
+  rpc ClaimResume(ClaimResumeRequest) returns (ClaimResumeResponse);
+
+  // 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
+  // 終わった依頼には FAILED_PRECONDITION。
+  rpc FinishResume(FinishResumeRequest) returns (FinishResumeResponse);
+}
+
+enum ResumeOutcome {
+  RESUME_OUTCOME_UNSPECIFIED = 0;
+  // pane が agent=claude を報告した (`ccx session resume` の exit 0)。
+  RESUME_OUTCOME_OPENED = 1;
+  // 開けなかった。理由は detail (`ccx session resume` の stderr)。
+  RESUME_OUTCOME_FAILED = 2;
+}
+
+message ResumeRequest {
+  // center が振る id (UUIDv7)。
+  string id = 1;
+  SessionKey key = 2;
+  // archived でも開く (`ccx session resume --force`)。
+  bool force = 3;
+
+  google.protobuf.Timestamp requested_at = 4;
+  // ccx-agent が最後に取った時刻。未設定なら誰も取っていない。
+  google.protobuf.Timestamp claimed_at = 5;
+  // 結果が返った時刻。未設定なら終わっていない。
+  google.protobuf.Timestamp finished_at = 6;
+  ResumeOutcome outcome = 7;
+  // FAILED の理由、OPENED なら開いた workspace と pane (`ccx session resume` の出力)。
+  string detail = 8;
+  // `ccx session resume` の exit code。終わっていなければ 0。
+  int32 exit_code = 9;
+  // 最後に取った ccx-agent に渡した印。FinishResume で返してもらい、取り直された後の古い結果を断る。
+  string claim_token = 10;
+  // 誰にも取られないまま置いてから 10 分を過ぎた (取られた依頼なら、加えてその実行の上限も過ぎた)。agent はもう取らず、
+  // 同じ session に新しい依頼を置ける。
+  bool expired = 11;
+  // 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+  uint32 wait_seconds = 12;
+}
+
+message RequestResumeRequest {
+  SessionKey key = 1;
+  bool force = 2;
+  // 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+  uint32 wait_seconds = 3;
+}
+
+message RequestResumeResponse {
+  ResumeRequest request = 1;
+}
+
+message ListResumeRequestsRequest {
+  // 空なら絞らない。すべて AND。
+  string machine = 1;
+  string user = 2;
+  string session_id = 3;
+  // 既定 100、上限 1000。
+  uint32 limit = 4;
+}
+
+message ListResumeRequestsResponse {
+  repeated ResumeRequest requests = 1;
+}
+
+message ClaimResumeRequest {
+  // ccx-agent 自身の環境から埋まる (ingest.proto の Origin と同じ)。
+  string machine = 1;
+  string user = 2;
+}
+
+message ClaimResumeResponse {
+  ResumeRequest request = 1;
+}
+
+message FinishResumeRequest {
+  string id = 1;
+  ResumeOutcome outcome = 2;
+  // 長ければ center が UTF-8 で末尾の 4096 バイト以下を、文字の境界で切って持つ。
+  string detail = 3;
+  int32 exit_code = 4;
+  // ClaimResume で受け取った claim_token。
+  string claim_token = 5;
+}
+
+message FinishResumeResponse {
+  ResumeRequest request = 1;
+}

@@ -3,8 +3,8 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 
 import type { Db } from "./db/open.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
-import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
-import { ingest, listEvents, listSessions, type IncomingEvent } from "./store.ts";
+import { FleetService, Liveness } from "@ccx/proto/ccx/v1/fleet_pb.ts";
+import { ingest, listEvents, listSessions, UnreadableRunningList, type IncomingEvent, type SessionRow } from "./store.ts";
 
 /** fleet.proto の既定と上限。0 は「指定なし」なので既定に落ちる。 */
 const DEFAULT_LIMIT = 100;
@@ -15,7 +15,14 @@ function clampLimit(v: number): number {
   return Math.min(v, MAX_LIMIT);
 }
 
-export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
+/** unknown は proto では「動いているとも止まっているとも言えない」の値 */
+function toLiveness(l: SessionRow["liveness"]): Liveness {
+  if (l === "running") return Liveness.RUNNING;
+  if (l === "stopped") return Liveness.STOPPED;
+  return Liveness.UNSPECIFIED;
+}
+
+export function ingestImpl(db: Db, now: () => number = Date.now): ServiceImpl<typeof IngestService> {
   return {
     ingest(req) {
       const batch: IncomingEvent[] = req.events.map((e) => {
@@ -37,19 +44,26 @@ export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
           seq: Number(e.seq),
           // ccx-agent が received_at を付けそこねた場合だけ center の時計に落ちる。
           // 時刻を持たない行を作るより、どちらの時計かが分かる形で埋めるほうがよい。
-          receivedAtMs: e.receivedAt ? timestampDate(e.receivedAt).getTime() : Date.now(),
+          receivedAtMs: e.receivedAt ? timestampDate(e.receivedAt).getTime() : now(),
           producer: e.producer,
           payload: e.payload,
         };
       });
 
       // ingest は 1 トランザクション。例外が出れば 1 件も保存されない。
-      return { accepted: ingest(db, batch) };
+      try {
+        return { accepted: ingest(db, batch, now()) };
+      } catch (e) {
+        // 読めない「動いている一覧」を「何も動いていない」として持つと、その (machine, user) の
+        // 全 session が止まったことになる (ingest.proto)
+        if (e instanceof UnreadableRunningList) throw new ConnectError(e.message, Code.InvalidArgument);
+        throw e;
+      }
     },
   };
 }
 
-export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
+export function fleetImpl(db: Db, now: () => number = Date.now): ServiceImpl<typeof FleetService> {
   return {
     listSessions(req) {
       const rows = listSessions(db, {
@@ -57,6 +71,8 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
         user: req.user || undefined,
         activeOnly: req.activeOnly,
         limit: clampLimit(req.limit),
+        nowMs: now(),
+        stoppedOnly: req.stoppedOnly,
       });
 
       return {
@@ -76,6 +92,7 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
           eventCount: BigInt(s.eventCount),
           lastHook: s.lastHook,
           state: s.state ? { $typeName: "ccx.v1.SessionState" as const, ...s.state } : undefined,
+          liveness: toLiveness(s.liveness),
         })),
       };
     },

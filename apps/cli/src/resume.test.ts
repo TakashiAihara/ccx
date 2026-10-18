@@ -15,7 +15,7 @@ import { writeDeclared } from "@ccx/core";
 
 import { findLocalTranscript } from "@ccx/core";
 
-import { expandCommand, ResumeError, resumeSession, runHerdr, STABLE_MS, type Herdr, type HerdrResult } from "./resume.ts";
+import { expandCommand, paneClaudeConfigDir, ResumeError, resumeSession, runHerdr, STABLE_MS, type Herdr, type HerdrResult } from "./resume.ts";
 
 const ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
@@ -522,4 +522,40 @@ test("CLI: 開く前に止めたら exit 1 で、herdr を呼ばない", async (
   expect(JSON.parse(r.stdout).error).toContain("no local transcript");
   expect(r.stderr).toContain("no local transcript");
   expect(r.stderr).not.toContain("called");
+});
+
+test("CLI: --machine で center が設定されていなければ exit 3 で、--json も 3 と言う", async () => {
+  const r = await cli([ID, "--machine", "elsewhere", "--json"], `echo called >&2`, { CCX_HUB_URL: "", XDG_CONFIG_HOME: join(home, "xdg") });
+  expect(r.code).toBe(3);
+  expect(JSON.parse(r.stdout)).toMatchObject({ exitCode: 3 });
+});
+
+test("claudeConfigDir があれば、workspace に CLAUDE_CONFIG_DIR を渡す", async () => {
+  await transcript();
+  const { herdr, calls } = fakeHerdr();
+  await resumeSession({ ...base, sessionId: ID, home, herdr, claudeConfigDir: "/acct/b" });
+  expect(calls[0]).toEqual(["workspace", "create", "--cwd", cwd, "--label", "01ABCDEF", "--env", "CLAUDE_CONFIG_DIR=/acct/b", "--no-focus"]);
+});
+
+test("CLI: CLAUDE_CONFIG_DIR の下で走ると、その値を pane に渡す", async () => {
+  await transcript();
+  const log = join(home, "herdr-args");
+  const r = await cli([ID, "--json"], `echo "$*" >> "${log}"; case "$1 $2" in "workspace create") echo '${CREATE_JSON}';; "pane get") echo '{"result":{"pane":{"agent":"claude"}}}';; *) echo '{}';; esac`);
+  expect(r.code).toBe(0);
+  const first = (await Bun.file(log).text()).split("\n")[0];
+  expect(first).toContain(`--env CLAUDE_CONFIG_DIR=${home}`);
+}, 15_000);
+
+test("CLI: 別のマシン宛ての --wait は 600 秒までで、center に置く前に exit 1 で止める", async () => {
+  const r = await cli([ID, "--machine", "elsewhere", "--wait", "601"], `echo called >&2`, { CCX_HUB_URL: "http://127.0.0.1:9" });
+  expect(r.code).toBe(1);
+  expect(r.stderr).toContain("--wait is at most 600 seconds for another machine");
+});
+
+test("paneClaudeConfigDir は既定の home と同じなら渡さない (末尾の / も同じとみなす)", () => {
+  expect(paneClaudeConfigDir(undefined, "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/root/.claude", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/root/.claude/", "/root/.claude")).toBeUndefined();
+  expect(paneClaudeConfigDir("/acct/b", "/root/.claude")).toBe("/acct/b");
 });

@@ -70,6 +70,20 @@ message Session {
   // いなければ未設定 — 「印が無い」ではなく「center は知らない」。真実源はその
   // マシンのファイルで、これは写し (#127)。
   SessionState state = 9;
+
+  // そのマシンの ccx-agent が送った、動いている session の一覧 (ingest.proto の PRODUCER_CCX_AGENT_RUNNING) から
+  // 読んだ状態。
+  Liveness liveness = 10;
+}
+
+// 動いているか。読むのは (machine, user) の最新の一覧だけで、hook の event からは推定しない。
+enum Liveness {
+  // 一覧が無いか古い (ccx-agent が送ってこない / 落ちている)。動いているとも止まっているとも言えない。
+  LIVENESS_UNSPECIFIED = 0;
+  // 最新の一覧に居る。
+  LIVENESS_RUNNING = 1;
+  // 最新の一覧が新しく、そこに居ない。
+  LIVENESS_STOPPED = 2;
 }
 
 // 宣言された状態。名前と意味は docs/design/session-state.md。
@@ -128,6 +142,9 @@ message ListSessionsRequest {
 
   // 既定 100、上限 1000。
   uint32 limit = 4;
+
+  // LIVENESS_STOPPED で、宣言状態が archived でないものだけ。開き直す候補 (#261)。
+  bool stopped_only = 5;
 }
 
 message ListSessionsResponse {

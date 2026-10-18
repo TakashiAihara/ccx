@@ -7,6 +7,7 @@
  * いるか (後始末が要るか) を呼び手が読み分けられるようにするため:
  *   1 = 開く前に止まった。何も作っていない
  *   4 = workspace は作った (か、作られたかもしれない) が、agent として上がったことを確認できなかった
+ *   5 = 別のマシンへ依頼は置いたが、待つあいだに結果が届かなかった
  * 3 を使わないのは、`ccx session` の他のコマンドで 3 が「center が設定されていない」(何も起きていない) だから。
  *
  * herdr への命令は外から渡す runner にする。返答の形は herdr の書式に結びついているので、
@@ -15,32 +16,48 @@
 
 import type { Command } from "commander";
 import { stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 
 import {
   claudeHome,
   findLocalTranscript,
   loadConfig,
+  localOrigin,
   localTranscripts,
   readDeclared,
   resolveSessionId,
   runningSessionIds,
   transcriptFacts,
   UUID,
+  type Config,
+  type Origin,
 } from "@ccx/core";
+
+import { createClient } from "@connectrpc/connect";
+
+import { toJson } from "@bufbuild/protobuf";
+
+import { ResumeRequestSchema, ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
+
+import { centerTransport, NoCenterConfigured, unreachable } from "./fleet.ts";
+import { resumeRemote, remoteWaitMs } from "./resume-remote.ts";
 
 export type HerdrResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
 export type Herdr = (args: string[]) => Promise<HerdrResult>;
 
 export type Created = { workspaceId: string; paneId: string };
 
-/** 開けなかった理由。exitCode はどこまで進んだか (1 = 作っていない、4 = workspace が残っている) */
+/**
+ * 開けなかった理由。exitCode はどこまで進んだか
+ * (1 = 作っていない、4 = workspace が残っている、5 = 別のマシンへの依頼の結果が届いていない)
+ */
 export class ResumeError extends Error {
-  readonly exitCode: 1 | 4;
+  readonly exitCode: 1 | 4 | 5;
   /** exitCode 4 で、workspace の id が読めていればそれ (後始末に使う) */
   readonly created?: Created;
 
-  constructor(message: string, exitCode: 1 | 4, created?: Created) {
+  constructor(message: string, exitCode: 1 | 4 | 5, created?: Created) {
     super(message);
     this.name = "ResumeError";
     this.exitCode = exitCode;
@@ -70,6 +87,8 @@ export type ResumeOptions = {
   stableMs?: number;
   /** archived でも開けるようにする */
   force?: boolean;
+  /** pane に渡す CLAUDE_CONFIG_DIR。手元の ccx が CLAUDE_CONFIG_DIR の下で走っているときに、その値 */
+  claudeConfigDir?: string;
   /** agent が上がるのを待つ時間 (既定 40 秒) */
   waitMs?: number;
   /** 待つあいだの間隔 (既定 1 秒) */
@@ -78,7 +97,7 @@ export type ResumeOptions = {
 
 export type ResumeResult = Created & { cwd: string; label: string };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** herdr の応答から 1 つの値を辿る。読めない JSON、辿れない途中、空文字は null */
 function dig(stdout: string, ...keys: string[]): string | null {
@@ -149,7 +168,9 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   }
   const label = labelFor(cwd, declared.label);
 
-  const createdRes = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]);
+  // 別の Claude home の session は、pane の claude も同じ home で開かないと transcript が見つからない
+  const env = o.claudeConfigDir ? ["--env", `CLAUDE_CONFIG_DIR=${o.claudeConfigDir}`] : [];
+  const createdRes = await o.herdr(["workspace", "create", "--cwd", cwd, "--label", label, ...env, "--no-focus"]);
   if (createdRes.timedOut) {
     throw new ResumeError(`herdr workspace create did not answer in time; a workspace may have been created (check herdr workspace list)`, 4);
   }
@@ -252,24 +273,87 @@ export async function runHerdr(args: string[], timeoutMs = HERDR_TIMEOUT_MS, bin
 }
 
 /** 1 時間を超える待ちは打ち間違いとみなす (1e306 秒は Infinity ms になり、永久に待つ) */
+/**
+ * pane に渡す CLAUDE_CONFIG_DIR。既定の ~/.claude と同じなら渡さない: d1 の Claude Code (2.1.302) は CLAUDE_CONFIG_DIR を
+ * 明示すると、既定と同じパスでも sessions/<pid>.json を書かなかった (2026-10-18、3 回)。書かれないと、開いた session が
+ * 「動いている」と見えず、次の resume が同じ session をもう一度開く
+ */
+export function paneClaudeConfigDir(value: string | undefined, defaultHome = join(homedir(), ".claude")): string | undefined {
+  if (!value) return undefined;
+  return resolve(value) === resolve(defaultHome) ? undefined : value;
+}
+
 const parseWait = (v: string): number => {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0 || n > 3600) throw new Error(`--wait must be a number of seconds in (0, 3600]: ${v}`);
   return n * 1000;
 };
 
+type ResumeFlags = { force?: boolean; machine?: string; user?: string; wait?: number; json?: boolean };
+
+/**
+ * 依頼を置き、その session のあるマシンの ccx-agent に開いてもらう。返るのは開いた依頼そのもの
+ *
+ * 先頭一致は解かない。他のマシンの transcript はこのマシンに無いので、候補を探す対象が無い
+ */
+async function resumeElsewhere(cfg: Config, me: Origin, idOrPrefix: string, o: ResumeFlags): Promise<ResumeRequest> {
+  const hub = cfg.hub;
+  if (!hub) throw new NoCenterConfigured();
+  // center が 600 秒を超える待ちを断る (resume.proto)。届かなかったように見せないよう、置く前に止める
+  if (o.wait !== undefined && o.wait > 600_000) {
+    throw new ResumeError(`--wait is at most 600 seconds for another machine: ${o.wait / 1000}`, 1);
+  }
+  const sessionId = idOrPrefix.toLowerCase();
+  if (!UUID.test(sessionId)) {
+    throw new ResumeError(`${idOrPrefix} is not a full session id; another machine's session is named only by its full id (a prefix is resolved from this machine's transcripts)`, 1);
+  }
+  try {
+    return await resumeRemote({
+      center: createClient(ResumeService, centerTransport(hub)),
+      key: { machine: o.machine ?? cfg.machine, user: o.user ?? me.user, sessionId },
+      force: Boolean(o.force),
+      // 相手に待つ時間をそのまま渡し、こっちはそれに自分の待ちを足して締める
+      waitSeconds: o.wait ? Math.ceil(o.wait / 1000) : undefined,
+      waitMs: remoteWaitMs(o.wait),
+    });
+  } catch (e) {
+    // 開けなかった (ResumeError) のは相手の話、届かなかったのは center の話。混ぜない
+    if (e instanceof ResumeError) throw e;
+    throw unreachable(hub.url, e);
+  }
+}
+
+/**
+ * 手元ではなく、別のマシン (または別のユーザー) に開いてもらうか。machine か user のどちらかが
+ * 名指しされていて、その origin が手元と違うなら別。名指しされていなければ手元 (前と同じ)
+ */
+export function isRemote(o: { machine?: string; user?: string }, me: { machine: string; user: string }): boolean {
+  if (o.machine && o.machine !== me.machine) return true;
+  return Boolean(o.user && o.user !== me.user);
+}
+
 export function registerResume(session: Command): void {
   session
     .command("resume")
-    .description("Open a stopped session again in a herdr workspace, on the cwd its transcript records")
-    .argument("<session-id>", "session id, or a unique prefix of one with a transcript here")
+    .description("Open a stopped session again in a herdr workspace, on the cwd its transcript records — here, or on another machine or user through the center")
+    .argument("<session-id>", "session id, or a unique prefix of one with a transcript here (another machine takes only a full id)")
     .option("-f, --force", "open it even if it is archived")
+    .option("-m, --machine <name>", "have that machine's ccx-agent open it there, through the center (default: here)")
+    .option("-u, --user <name>", "have that user's ccx-agent open it, through the center (with -m, or alone on this machine)")
     .option("--wait <seconds>", "how long to wait for the agent to come up (default 40)", parseWait)
     .option("--json", "print the result (or the failure) as JSON")
-    .action(async (idOrPrefix: string, o) => {
+    .action(async (idOrPrefix: string, o: ResumeFlags) => {
       const home = claudeHome();
       try {
         const cfg = await loadConfig();
+        const me = localOrigin(cfg.machine);
+        if (isRemote({ machine: o.machine, user: o.user }, me)) {
+          const asked = await resumeElsewhere(cfg, me, idOrPrefix, o);
+          // proto の JSON の形で出す (生成物の内部の欄 `$typeName` と、Timestamp の seconds / nanos の分解を出さない)
+          if (o.json) console.log(JSON.stringify(toJson(ResumeRequestSchema, asked), null, 2));
+          else console.log(`opened on ${asked.key?.machine}: ${asked.detail}`);
+          return;
+        }
         const known = UUID.test(idOrPrefix.toLowerCase()) ? [] : (await localTranscripts(home)).map((t) => t.sessionId);
         let sessionId: string;
         try {
@@ -283,6 +367,7 @@ export function registerResume(session: Command): void {
           command: cfg.resume.command,
           herdr: (args) => runHerdr(args),
           agent: cfg.resume.agent,
+          claudeConfigDir: paneClaudeConfigDir(process.env.CLAUDE_CONFIG_DIR),
           force: Boolean(o.force),
           waitMs: o.wait,
         });
@@ -291,7 +376,10 @@ export function registerResume(session: Command): void {
       } catch (e) {
         if (!(e instanceof ResumeError)) {
           // 他のコマンドと同じく index.ts が stderr と exit code を受け持つ。--json の読み手には失敗の形だけを渡す
-          if (o.json) console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), exitCode: 1 }, null, 2));
+          if (o.json) {
+            const exitCode = e instanceof NoCenterConfigured ? 3 : 1;
+            console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), exitCode }, null, 2));
+          }
           throw e;
         }
         if (o.json) console.log(JSON.stringify({ error: e.message, exitCode: e.exitCode, ...e.created }, null, 2));

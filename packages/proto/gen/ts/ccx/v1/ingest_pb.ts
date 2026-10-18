@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/ingest.proto.
  */
 export const file_ccx_v1_ingest: GenFile = /*@__PURE__*/
-  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qYwoIUHJvZHVjZXISGAoUUFJPRFVDRVJfVU5TUEVDSUZJRUQQABIdChlQUk9EVUNFUl9DTEFVREVfQ09ERV9IT09LEAESHgoaUFJPRFVDRVJfQ0NYX1NFU1NJT05fU1RBVEUQAjJICg1Jbmdlc3RTZXJ2aWNlEjcKBkluZ2VzdBIVLmNjeC52MS5Jbmdlc3RSZXF1ZXN0GhYuY2N4LnYxLkluZ2VzdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qgwEKCFByb2R1Y2VyEhgKFFBST0RVQ0VSX1VOU1BFQ0lGSUVEEAASHQoZUFJPRFVDRVJfQ0xBVURFX0NPREVfSE9PSxABEh4KGlBST0RVQ0VSX0NDWF9TRVNTSU9OX1NUQVRFEAISHgoaUFJPRFVDRVJfQ0NYX0FHRU5UX1JVTk5JTkcQAzJICg1Jbmdlc3RTZXJ2aWNlEjcKBkluZ2VzdBIVLmNjeC52MS5Jbmdlc3RSZXF1ZXN0GhYuY2N4LnYxLkluZ2VzdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.IngestRequest
@@ -197,6 +197,22 @@ export enum Producer {
    * @generated from enum value: PRODUCER_CCX_SESSION_STATE = 2;
    */
   CCX_SESSION_STATE = 2,
+
+  /**
+   * ccx-agent が送る「このマシンのこのユーザーで今動いている session の id の一覧」(#261)。payload は ccx 自身の
+   * JSON: `{"session_ids": ["...", ...]}`。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
+   * (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない)。ccx-agent は一覧が変わったときと、変わらなくても一定の
+   * 間隔で送る。間隔ごとに届くことが「一覧は今も新しい」ことの根拠で、届かなくなった (machine, user) の一覧は
+   * 古いとして読む (fleet.proto の Liveness)。
+   *
+   * これだけは events に積まない。一覧は「今」の写しで過去を読む用途が無く、毎分届くので積むと溜まり続ける。
+   * center は (machine, user) ごとに最新の 1 件だけを上書きで持ち、受け取った時刻を center の時計で記録する
+   * (鮮度を agent の時計と center の時計で比べない)。ListEvents にも出ない。payload が読めなければバッチごと
+   * INVALID_ARGUMENT で断る (読めない一覧を「何も動いていない」として持たない)。
+   *
+   * @generated from enum value: PRODUCER_CCX_AGENT_RUNNING = 3;
+   */
+  CCX_AGENT_RUNNING = 3,
 }
 
 /**

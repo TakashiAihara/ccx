@@ -163,13 +163,16 @@ empty.
 ### Opening a stopped session again
 
 ```bash
-ccx session resume <id>          # a new herdr workspace on the cwd its transcript records (a unique prefix works)
-ccx session resume <id> --force  # also when it is archived
+ccx session resume <id>                 # a new herdr workspace on the cwd its transcript records (a unique prefix works)
+ccx session resume <id> --force         # also when it is archived
 ccx session resume <id> --wait 90 --json
+ccx session resume <id> -m d1           # have that machine's ccx-agent open it there, through the center (full id only)
+ccx session resume <id> -m d1 -u alice  # ... for that user there
+ccx session ls --stopped                # what can be opened again, on any machine the center knows
 ```
 
-It needs [herdr](https://herdr.dev), the transcript on this machine (`ccx tr pull` it first if
-it is only in the store) and its cwd still in place, and neither a center nor `ccx-agent`. It
+Here it needs [herdr](https://herdr.dev), the transcript on this machine (`ccx tr pull` it first
+if it is only in the store) and its cwd still in place, and neither a center nor `ccx-agent`. It
 refuses a session that is running here; it cannot see one running on another machine. In the new
 pane it runs `claude --resume {session_id}`; put your own launcher in its place with
 `CCX_RESUME_COMMAND` / `git config ccx.resumeCommand` / `[resume] command` in `config.toml` (it
@@ -179,6 +182,18 @@ the pane has reported the agent named by `CCX_RESUME_AGENT` / `git config ccx.re
 Exit `0` means the agent came up; `1` means nothing was created; `4` means a workspace was created
 (or may have been) but the agent did not come up within `--wait` seconds (default 40) — what the
 pane shows and how to close the workspace are printed, and `--json` prints its id.
+
+With `-m` / `-u` naming another machine or user, the request goes to the center instead and that
+machine's `ccx-agent` opens it (only a full id: a prefix is resolved from this machine's
+transcripts). It needs a center, and `--wait` plus two minutes, because the agent has to pick the
+request up and run its own resume (`--wait` is at most 600 for another machine). Exit `5` means the
+request is on the center but nothing answered in time — nothing is known about the workspace, so it
+may be open; the message says whether any `ccx-agent` took it — or that it expired: untaken within
+ten minutes it is never opened, taken but unanswered it may have been. `1` and `4` are the other machine's own
+`ccx session resume` exit codes, with
+its stderr. There is no Web UI over the same list yet. Anyone holding the center's token can open
+a stopped session on any machine and any user: the request carries only the id, `--force` and
+`--wait`, and what runs there is that machine's own resume command.
 
 ### Taking a session's transcript with you
 

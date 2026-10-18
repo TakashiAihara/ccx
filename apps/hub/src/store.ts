@@ -3,7 +3,7 @@ import { and, desc, eq, gte, lt, sql, type SQL } from "drizzle-orm";
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
 import type { Db } from "./db/open.ts";
-import { events } from "./db/schema.ts";
+import { agentRunning, events } from "./db/schema.ts";
 import { derive } from "./derive.ts";
 
 export type IncomingEvent = {
@@ -44,6 +44,8 @@ export type SessionRow = {
   eventCount: number;
   /** 最後に届いた宣言状態 (Producer.CCX_SESSION_STATE)。1 件も無ければ null */
   state: SessionState | null;
+  /** その (machine, user) の最新の「動いている一覧」から読んだ状態 (#261) */
+  liveness: "running" | "stopped" | "unknown";
 };
 
 export type SessionState = {
@@ -55,7 +57,20 @@ export type SessionState = {
   metadata: Record<string, string>;
 };
 
+/** (machine, user) の、まだ新しい「動いている session の一覧」 (#261) */
+type RunningList = Set<string>;
 
+/**
+ * 読めない「動いている一覧」をバッチごと断る時に投げる。読めない一覧を「何も動いて
+ * いない」として持つのは、一覧の無い (machine, user) を unknown にするのと同じ扱い
+ * になってしまうから (ingest.proto)
+ */
+export class UnreadableRunningList extends Error {
+  constructor(eventId: string) {
+    super(`event ${eventId}: the running session list is not {"session_ids": ["..."]}`);
+    this.name = "UnreadableRunningList";
+  }
+}
 
 /**
  * SQLite のホスト変数の上限 (32766) に対する余裕を見た刻み幅。1 行 12 列なので
@@ -63,6 +78,14 @@ export type SessionState = {
  * いるので、送り手が変わっても壊れないところに置いておく。
  */
 const CHUNK = 500;
+
+/**
+ * 「動いている session の一覧」(Producer.CCX_AGENT_RUNNING) を新しいとみなす窓 (#261)。
+ *
+ * 一覧は ccx-agent が送る。送られなくなった (machine, user) については、session が
+ * 止まったとも動いているとも言えないので、stopped ではなく unknown に落とす。
+ */
+export const RUNNING_FRESH_MS = 5 * 60 * 1000;
 
 /**
  * バッチを 1 トランザクションで入れる。返すのは「新規に保存された件数」。
@@ -73,27 +96,33 @@ const CHUNK = 500;
  *
  * 既知の event_id は黙って捨てる。転送は at-least-once なので、二度届くのは
  * 異常ではなく正常系。
+ *
+ * 「動いている一覧」(Producer.CCX_AGENT_RUNNING) だけは events に入れない。1 件ごとに
+ * (machine, user) の行を上書きし、受け取った時刻は center の時計 (nowMs) で持つ。
  */
-export function ingest(db: Db, batch: IncomingEvent[]): number {
+export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): number {
   if (batch.length === 0) return 0;
 
-  const rows = batch.map((e) => {
-    const d = derive(e.payload);
-    return {
-      eventId: e.eventId,
-      machine: e.machine,
-      user: e.user,
-      seq: e.seq,
-      receivedAtMs: e.receivedAtMs,
-      producer: e.producer,
-      payload: Buffer.from(e.payload),
-      parsed: d.parsed,
-      sessionId: d.sessionId,
-      hookEventName: d.hookEventName,
-      cwd: d.cwd,
-      transcriptPath: d.transcriptPath,
-    };
-  });
+  const lists = batch.filter((e) => e.producer === Producer.CCX_AGENT_RUNNING);
+  const rows = batch
+    .filter((e) => e.producer !== Producer.CCX_AGENT_RUNNING)
+    .map((e) => {
+      const d = derive(e.payload);
+      return {
+        eventId: e.eventId,
+        machine: e.machine,
+        user: e.user,
+        seq: e.seq,
+        receivedAtMs: e.receivedAtMs,
+        producer: e.producer,
+        payload: Buffer.from(e.payload),
+        parsed: d.parsed,
+        sessionId: d.sessionId,
+        hookEventName: d.hookEventName,
+        cwd: d.cwd,
+        transcriptPath: d.transcriptPath,
+      };
+    });
 
   return db.transaction((tx) => {
     let accepted = 0;
@@ -106,8 +135,33 @@ export function ingest(db: Db, batch: IncomingEvent[]): number {
         .all();
       accepted += inserted.length;
     }
+    // 同じ (machine, user) が同じバッチに 2 つあれば、後のものが残る
+    for (const l of lists) {
+      const ids = JSON.stringify(parseSessionIds(l));
+      tx.insert(agentRunning)
+        .values({ machine: l.machine, user: l.user, sessionIds: ids, receivedAtMs: nowMs })
+        .onConflictDoUpdate({
+          target: [agentRunning.machine, agentRunning.user],
+          set: { sessionIds: ids, receivedAtMs: nowMs },
+        })
+        .run();
+      accepted += 1;
+    }
     return accepted;
   });
+}
+
+/** 一覧は `{"session_ids": ["...", ...]}` で、それ以外の形は読めていないとみなす */
+function parseSessionIds(l: IncomingEvent): string[] {
+  try {
+    const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { session_ids?: unknown };
+    if (Array.isArray(o?.session_ids) && o.session_ids.every((v) => typeof v === "string")) {
+      return o.session_ids;
+    }
+  } catch {
+    // 下の Error に落とす
+  }
+  throw new UnreadableRunningList(l.eventId);
 }
 
 export type ListSessionsFilter = {
@@ -115,6 +169,10 @@ export type ListSessionsFilter = {
   user?: string;
   activeOnly?: boolean;
   limit: number;
+  /** liveness の判定に使う時計。既定は center の時計 */
+  nowMs?: number;
+  /** stopped で archived でないものだけを返す */
+  stoppedOnly?: boolean;
 };
 
 /**
@@ -131,6 +189,10 @@ export type ListSessionsFilter = {
  * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
  * center が一覧するのは hook が観測した session で、印はその属性 (ccx-agent が配線されて
  * いないマシンの印は届いても見えない)。印が後から立っても last_seen は動かない。
+ *
+ * 「動いているか」(#261) も同じ考え方で別に引く。宣言状態と同じく hook の集計には
+ * 混ぜない — 動いている一覧は session の状態であって、その session が何をした記録
+ * ではない。件数も last_seen も動かさない。
  */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
   const where: SQL[] = [sql`session_id != ''`, sql`producer = ${Producer.CLAUDE_CODE_HOOK}`];
@@ -139,6 +201,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
 
   // 外側の rn = 1 に続けるので AND。ここを WHERE にすると SQL が二重になる。
   const activeOnly = f.activeOnly ? sql`AND ended_at_ms IS NULL` : sql``;
+
+  // stoppedOnly を絞るには宣言状態 (下のクエリ) が要る。SQL 側で limit を効かせると、
+  // 開かない session が枠を占めたまま「候補が無い」ことになるので、このときだけ limit
+  // を外して全部読み、JS で絞ってから limit を切る。
+  const limit = f.stoppedOnly ? sql`` : sql`LIMIT ${f.limit}`;
 
   const rows = db.all<{
     machine: string;
@@ -172,11 +239,13 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     )
     WHERE rn = 1 ${activeOnly}
     ORDER BY last_seen_ms DESC
-    LIMIT ${f.limit}
+    ${limit}
   `);
 
+  const nowMs = f.nowMs ?? Date.now();
   const states = latestStates(db, rows);
-  return rows.map((r) => ({
+  const lists = freshRunning(db, rows, nowMs);
+  const sessions = rows.map((r) => ({
     machine: r.machine,
     user: r.os_user,
     sessionId: r.session_id,
@@ -188,7 +257,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     lastHook: r.last_hook,
     eventCount: r.event_count,
     state: states.get(`${r.machine}\0${r.os_user}\0${r.session_id}`) ?? null,
+    liveness: livenessOf(lists.get(`${r.machine}\0${r.os_user}`), r.session_id),
   }));
+
+  if (!f.stoppedOnly) return sessions;
+  return sessions.filter((s) => s.liveness === "stopped" && s.state?.archived !== true).slice(0, f.limit);
 }
 
 /**
@@ -204,29 +277,79 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
 function latestStates(db: Db, keys: { machine: string; os_user: string; session_id: string }[]): Map<string, SessionState> {
   const out = new Map<string, SessionState>();
   if (keys.length === 0) return out;
-  const tuples = keys.map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`);
-  const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: string }>(sql`
-    SELECT machine, os_user, session_id, payload
-    FROM (
-      SELECT machine, os_user, session_id, doc AS payload,
-             ROW_NUMBER() OVER (
-               PARTITION BY machine, os_user, session_id
-               ORDER BY coalesce(json_extract(doc, '$.rev'), 0) DESC, rid DESC
-             ) AS rn
+  // stoppedOnly では全件がここに来るので、IN (...) を 1 つにまとめない。bun の SQLite は 1 文に 25 万個まで
+  // 変数を受けた (2026-10-18 実測、250001 個で too many SQL variables)。1 件に 3 個使うので、約 8.3 万 session で届く
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const tuples = keys.slice(i, i + CHUNK).map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`);
+    const rows = db.all<{ machine: string; os_user: string; session_id: string; payload: string }>(sql`
+      SELECT machine, os_user, session_id, payload
       FROM (
-        SELECT machine, os_user, session_id, rowid AS rid, CAST(payload AS TEXT) AS doc
-        FROM events
-        WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+        SELECT machine, os_user, session_id, doc AS payload,
+               ROW_NUMBER() OVER (
+                 PARTITION BY machine, os_user, session_id
+                 ORDER BY coalesce(json_extract(doc, '$.rev'), 0) DESC, rid DESC
+               ) AS rn
+        FROM (
+          SELECT machine, os_user, session_id, rowid AS rid, CAST(payload AS TEXT) AS doc
+          FROM events
+          WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+        )
+        WHERE json_valid(doc) AND json_type(doc, '$.state') = 'object'
       )
-      WHERE json_valid(doc) AND json_type(doc, '$.state') = 'object'
-    )
-    WHERE rn = 1
-  `);
-  for (const r of rows) {
-    const s = parseState(new TextEncoder().encode(r.payload));
-    if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
+      WHERE rn = 1
+    `);
+    for (const r of rows) {
+      const s = parseState(new TextEncoder().encode(r.payload));
+      if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
+    }
   }
   return out;
+}
+
+/**
+ * (machine, user) ごとに、まだ新しい「動いている一覧」を 1 件だけ返す (古いのは読まない)。
+ *
+ * agent_running は 1 行が最新の写しなので、履歴を辿る必要は無い。鮮度は SQL 側で切る。
+ * 返り値に無い (machine, user) には一覧が届いていないので unknown になる
+ */
+function freshRunning(db: Db, keys: { machine: string; os_user: string }[], nowMs: number): Map<string, RunningList> {
+  const out = new Map<string, RunningList>();
+  const tuples: SQL[] = [];
+  const seen = new Set<string>();
+  for (const k of keys) {
+    const key = `${k.machine}\0${k.os_user}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tuples.push(sql`(${k.machine}, ${k.os_user})`);
+  }
+  // (machine, user) は重複を除いてあるので数はマシンとユーザーの数だけだが、latestStates と同じく分けて引く
+  for (let i = 0; i < tuples.length; i += CHUNK) {
+    const rows = db.all<{ machine: string; os_user: string; session_ids: string }>(sql`
+      SELECT machine, os_user, session_ids
+      FROM agent_running
+      WHERE received_at_ms >= ${nowMs - RUNNING_FRESH_MS}
+        AND (machine, os_user) IN (${sql.join(tuples.slice(i, i + CHUNK), sql`, `)})
+    `);
+    for (const r of rows) {
+      out.set(`${r.machine}\0${r.os_user}`, new Set(parseIds(r.session_ids)));
+    }
+  }
+  return out;
+}
+
+/** 一覧は center が JSON の配列として書き込んだ値。読めないものを「何もない」とは言わない */
+function parseIds(sessionIds: string): string[] {
+  const v = JSON.parse(sessionIds) as unknown;
+  if (!Array.isArray(v) || !v.every((id) => typeof id === "string")) {
+    throw new Error(`agent_running.session_ids is not an array of strings: ${sessionIds}`);
+  }
+  return v;
+}
+
+/** 一覧が無い (machine, user) のときは unknown。止まったとは言わない */
+function livenessOf(ids: RunningList | undefined, sessionId: string): SessionRow["liveness"] {
+  if (!ids) return "unknown";
+  return ids.has(sessionId) ? "running" : "stopped";
 }
 
 /**
