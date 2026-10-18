@@ -43,6 +43,7 @@ import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
+import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { registerTranscript } from "./transcript.ts";
 
@@ -497,6 +498,7 @@ session
   });
 
 registerSessionState(session);
+registerResume(session);
 registerTranscript(program, VERSION);
 
 const agent = program.command("agent").description("Inspect the local resident agent (ccx-agent)");

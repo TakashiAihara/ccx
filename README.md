@@ -120,6 +120,20 @@ Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_U
 `hub.url`). With none set, `ccx session` exits `3` and says so; it does not pretend the fleet is
 empty.
 
+### Opening a stopped session again
+
+```bash
+ccx session resume <id>          # a new herdr workspace on the cwd its transcript records
+ccx session resume <id> --force  # also when it is archived
+```
+
+It needs [herdr](https://herdr.dev) and the transcript on this machine (`ccx tr pull` it first if
+it is only in the store), and neither a center nor `ccx-agent`. It refuses a session that is running
+here. In the new pane it runs `claude --resume {session_id}`; put your own launcher in its place with
+`CCX_RESUME_COMMAND` / `git config ccx.resumeCommand` / `[resume] command` in `config.toml`.
+Exit `0` means the pane reported `agent=claude`; `1` means nothing was created; `3` means the
+workspace was created but the agent did not come up within 40 s (what the pane shows is printed).
+
 ### Taking a session's transcript with you
 
 A session's memory is its transcript — the JSONL that `claude --resume <id>` reads. `ccx transcript`
