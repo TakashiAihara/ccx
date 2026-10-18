@@ -35,6 +35,7 @@ import {
   type Lifecycle,
 } from "@ccx/core";
 
+import { Liveness, type Session } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
 import pkg from "../package.json" with { type: "json" };
@@ -341,12 +342,30 @@ const session = program
   .command("session")
   .description("Sessions: what the center has collected, and the state ccx holds for each");
 
+/**
+ * このマシンの行以外に出す lifecycle。core の Lifecycle は手元の観察の型なので、他のマシンの
+ * observer の結果 (stopped) を混ぜない
+ */
+type RowLifecycle = Lifecycle | "stopped" | "";
+
+/**
+ * 他のマシンの行。動いているかどうかは、そのマシンの ccx-agent が送った一覧から center が
+ * 導いた値 (#261、fleet.proto の liveness)。UNSPECIFIED はその一覧が無いか古いということ
+ * だけで、止まったことを意味しない — なので何も言わず、SessionEnd の観測だけを見る
+ */
+function remoteLifecycle(s: Session): RowLifecycle {
+  if (s.liveness === Liveness.RUNNING) return "running";
+  if (s.liveness === Liveness.STOPPED) return "stopped";
+  return s.endedAt ? "ended" : "";
+}
+
 session
   .command("ls")
   .description("List sessions across every machine the center knows about")
   .option("-m, --machine <name>", "only this machine")
   .option("-u, --user <name>", "only this user")
   .option("-a, --active", "only sessions with no SessionEnd observed")
+  .option("--stopped", "only sessions that stopped on their machine and are not archived (what can be opened again)")
   .option("-n, --limit <count>", "how many to list (default 100)", parseLimit)
   .option("--json", "print as JSON")
   .action(async (o) => {
@@ -358,6 +377,7 @@ session
         machine: o.machine ?? "",
         user: o.user ?? "",
         activeOnly: Boolean(o.active),
+        stoppedOnly: Boolean(o.stopped),
         limit: o.limit ?? 0,
       })
       .catch((e: unknown) => {
@@ -384,7 +404,7 @@ session
       res.sessions.map(async (s) => {
         const id = s.key?.sessionId ?? "";
         const origin = { machine: s.key?.machine ?? "", user: s.key?.user ?? "" };
-        let lifecycle: Lifecycle | "";
+        let lifecycle: RowLifecycle;
         let state: DeclaredState | null;
         if (origin.machine === me.machine && origin.user === me.user) {
           lifecycle = await lifecycleOf(id, running, hasTranscript.has(id), store, origin);
@@ -394,8 +414,7 @@ session
             return null;
           });
         } else {
-          // 他のマシン: SessionEnd を観測したかどうかだけ。動いているかの判定はしない
-          lifecycle = s.endedAt ? "ended" : "";
+          lifecycle = remoteLifecycle(s);
           state = s.state ? normalizeDeclared(s.state) : null;
         }
         return { s, lifecycle, state };
@@ -432,10 +451,11 @@ session
     });
     for (const line of table(rows)) console.log(line);
 
-    // 「ended でない」は「動いている」ではない。ccx-agent が落ちていても hook が
-    // 配線されていなくても SessionEnd は来ない。読み手が取り違えないよう明示する
+    // 「ended でない」は「動いている」ではない。他のマシンの「stopped でない」も「動いている」
+    // ではない。ccx-agent が落ちていても hook が配線されていなくても SessionEnd は来ない。
+    // 読み手が取り違えないよう、それぞれの出どころを明示する
     console.error(
-      `\n${me.machine} (${me.user}): running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines and users: ended = a SessionEnd was observed;\nits absence is not proof a session is alive — read the age column too.`,
+      `\n${me.machine} (${me.user}): running / ended read here (pid, transcript)${store ? ", remote (only in the store)" : "; no store configured, so a pruned session shows unknown"}. Other machines and users: running / stopped = what that machine's ccx-agent listed (with no list, or a stale one, it says neither),\nended = a SessionEnd was observed; its absence is not proof a session is alive — read the age column too.`,
     );
   });
 

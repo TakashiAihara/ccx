@@ -3,7 +3,7 @@
 GitHub ccx#261. A session whose process is gone but whose transcript is still on the machine can be
 opened again in a herdr workspace, on the directory it ran in, with the conversation restored
 (`claude --resume`). This is the local part; opening one on another machine through the center and
-`ccx-agent`, and a Web UI over the same list, come next and are added here when they land.
+`ccx-agent` is below.
 
 ## What it does
 
@@ -53,5 +53,32 @@ because `ccx session` already uses it for "no center configured", where nothing 
 - choosing between two copies of one transcript in different project directories: the first found
   is used. On d1 none of 407 transcripts had a second copy
 - two resumes of the same session at the same moment: nothing locks between the running check and
-  claude writing its pid file. The center's request queue (the next part of #261) is to keep one
-  open request per session
+  claude writing its pid file. The center's request queue (below) keeps one open request per
+  session
+
+## Another machine
+
+`ccx session resume <id> -m <machine>` (or `-u <user>` for another user) does not touch this
+machine's files at all. It puts the request on the center and reads that table until the request
+finishes; the resume itself is the same command, run by the machine the session is on. Which
+machine or user to name is the caller's, and only a full id is accepted — a prefix is resolved
+from this machine's transcripts, so there is nothing here to resolve it against.
+
+The rendezvous is the center's table of requests and nothing else. `claimed_at` says who took a
+request, `finished_at` says it is done, and the center never connects out to a machine, so it
+never has to know where one is (the connection direction is ccx-agent → center, as in ingest).
+
+ccx-agent asks whether anything is to be opened every 5 s, takes the oldest request addressed to
+its own (machine, user), runs `ccx session resume <id>` (with `--force` when the request says so)
+and returns what that command said: its exit code as the outcome, its output as the detail. The
+caller sees that machine's own answer — exit 1 or 4 with its stderr, exit 5 if nothing answered
+within `--wait` plus a minute, which says whether any agent took it. A request no one took stays
+on the center, and is opened when that machine's agent comes up.
+
+`ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
+longer running, minus what someone archived. That list is what the agent sends every minute (and
+again whenever it changes), and the center reads a list older than 5 minutes as neither running nor
+stopped — so a machine whose agent is gone says nothing about its rows rather than calling them
+stopped.
+
+There is no Web UI over this list yet; `ccx session ls --stopped` is what there is.

@@ -7,6 +7,7 @@
  * いるか (後始末が要るか) を呼び手が読み分けられるようにするため:
  *   1 = 開く前に止まった。何も作っていない
  *   4 = workspace は作った (か、作られたかもしれない) が、agent として上がったことを確認できなかった
+ *   5 = 別のマシンへ依頼は置いたが、待つあいだに結果が届かなかった
  * 3 を使わないのは、`ccx session` の他のコマンドで 3 が「center が設定されていない」(何も起きていない) だから。
  *
  * herdr への命令は外から渡す runner にする。返答の形は herdr の書式に結びついているので、
@@ -21,26 +22,39 @@ import {
   claudeHome,
   findLocalTranscript,
   loadConfig,
+  localOrigin,
   localTranscripts,
   readDeclared,
   resolveSessionId,
   runningSessionIds,
   transcriptFacts,
   UUID,
+  type Config,
+  type Origin,
 } from "@ccx/core";
+
+import { createClient } from "@connectrpc/connect";
+
+import { ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
+
+import { centerTransport, NoCenterConfigured, unreachable } from "./fleet.ts";
+import { resumeRemote } from "./resume-remote.ts";
 
 export type HerdrResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
 export type Herdr = (args: string[]) => Promise<HerdrResult>;
 
 export type Created = { workspaceId: string; paneId: string };
 
-/** 開けなかった理由。exitCode はどこまで進んだか (1 = 作っていない、4 = workspace が残っている) */
+/**
+ * 開けなかった理由。exitCode はどこまで進んだか
+ * (1 = 作っていない、4 = workspace が残っている、5 = 別のマシンへの依頼の結果が届いていない)
+ */
 export class ResumeError extends Error {
-  readonly exitCode: 1 | 4;
+  readonly exitCode: 1 | 4 | 5;
   /** exitCode 4 で、workspace の id が読めていればそれ (後始末に使う) */
   readonly created?: Created;
 
-  constructor(message: string, exitCode: 1 | 4, created?: Created) {
+  constructor(message: string, exitCode: 1 | 4 | 5, created?: Created) {
     super(message);
     this.name = "ResumeError";
     this.exitCode = exitCode;
@@ -78,7 +92,7 @@ export type ResumeOptions = {
 
 export type ResumeResult = Created & { cwd: string; label: string };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** herdr の応答から 1 つの値を辿る。読めない JSON、辿れない途中、空文字は null */
 function dig(stdout: string, ...keys: string[]): string | null {
@@ -258,18 +272,65 @@ const parseWait = (v: string): number => {
   return n * 1000;
 };
 
+type ResumeFlags = { force?: boolean; machine?: string; user?: string; wait?: number; json?: boolean };
+
+/**
+ * 依頼を置き、その session のあるマシンの ccx-agent に開いてもらう。返るのは開いた依頼そのもの
+ *
+ * 先頭一致は解かない。他のマシンの transcript はこのマシンに無いので、候補を探す対象が無い
+ */
+async function resumeElsewhere(cfg: Config, me: Origin, idOrPrefix: string, o: ResumeFlags): Promise<ResumeRequest> {
+  const hub = cfg.hub;
+  if (!hub) throw new NoCenterConfigured();
+  const sessionId = idOrPrefix.toLowerCase();
+  if (!UUID.test(sessionId)) {
+    throw new ResumeError(`${idOrPrefix} is not a full session id; another machine's session is named only by its full id (a prefix is resolved from this machine's transcripts)`, 1);
+  }
+  try {
+    return await resumeRemote({
+      center: createClient(ResumeService, centerTransport(hub)),
+      key: { machine: o.machine ?? cfg.machine, user: o.user ?? me.user, sessionId },
+      force: Boolean(o.force),
+      // 相手の ccx-agent が取りに来るまでの数秒と、相手が agent を待つ時間を足す
+      waitMs: (o.wait ?? 40_000) + 60_000,
+    });
+  } catch (e) {
+    // 開けなかった (ResumeError) のは相手の話、届かなかったのは center の話。混ぜない
+    if (e instanceof ResumeError) throw e;
+    throw unreachable(hub.url, e);
+  }
+}
+
+/**
+ * 手元ではなく、別のマシン (または別のユーザー) に開いてもらうか。machine か user のどちらかが
+ * 名指しされていて、その origin が手元と違うなら別。名指しされていなければ手元 (前と同じ)
+ */
+export function isRemote(o: { machine?: string; user?: string }, me: { machine: string; user: string }): boolean {
+  if (o.machine && o.machine !== me.machine) return true;
+  return Boolean(o.user && o.user !== me.user);
+}
+
 export function registerResume(session: Command): void {
   session
     .command("resume")
-    .description("Open a stopped session again in a herdr workspace, on the cwd its transcript records")
-    .argument("<session-id>", "session id, or a unique prefix of one with a transcript here")
+    .description("Open a stopped session again in a herdr workspace, on the cwd its transcript records — here, or on another machine or user through the center")
+    .argument("<session-id>", "session id, or a unique prefix of one with a transcript here (another machine takes only a full id)")
     .option("-f, --force", "open it even if it is archived")
+    .option("-m, --machine <name>", "have that machine's ccx-agent open it there, through the center (default: here)")
+    .option("-u, --user <name>", "have that user's ccx-agent open it, through the center (with -m, or alone on this machine)")
     .option("--wait <seconds>", "how long to wait for the agent to come up (default 40)", parseWait)
     .option("--json", "print the result (or the failure) as JSON")
-    .action(async (idOrPrefix: string, o) => {
+    .action(async (idOrPrefix: string, o: ResumeFlags) => {
       const home = claudeHome();
       try {
         const cfg = await loadConfig();
+        const me = localOrigin(cfg.machine);
+        if (isRemote({ machine: o.machine, user: o.user }, me)) {
+          const asked = await resumeElsewhere(cfg, me, idOrPrefix, o);
+          if (o.json) console.log(JSON.stringify(asked, (_k, v) => (typeof v === "bigint" ? String(v) : v), 2));
+          else console.log(`opened on ${asked.key?.machine}: ${asked.detail}`);
+          return;
+        }
         const known = UUID.test(idOrPrefix.toLowerCase()) ? [] : (await localTranscripts(home)).map((t) => t.sessionId);
         let sessionId: string;
         try {
@@ -291,7 +352,10 @@ export function registerResume(session: Command): void {
       } catch (e) {
         if (!(e instanceof ResumeError)) {
           // 他のコマンドと同じく index.ts が stderr と exit code を受け持つ。--json の読み手には失敗の形だけを渡す
-          if (o.json) console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), exitCode: 1 }, null, 2));
+          if (o.json) {
+            const exitCode = e instanceof NoCenterConfigured ? 3 : 1;
+            console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), exitCode }, null, 2));
+          }
           throw e;
         }
         if (o.json) console.log(JSON.stringify({ error: e.message, exitCode: e.exitCode, ...e.created }, null, 2));

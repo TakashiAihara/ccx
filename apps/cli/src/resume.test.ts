@@ -523,3 +523,9 @@ test("CLI: 開く前に止めたら exit 1 で、herdr を呼ばない", async (
   expect(r.stderr).toContain("no local transcript");
   expect(r.stderr).not.toContain("called");
 });
+
+test("CLI: --machine で center が設定されていなければ exit 3 で、--json も 3 と言う", async () => {
+  const r = await cli([ID, "--machine", "elsewhere", "--json"], `echo called >&2`, { CCX_HUB_URL: "", XDG_CONFIG_HOME: join(home, "xdg") });
+  expect(r.code).toBe(3);
+  expect(JSON.parse(r.stdout)).toMatchObject({ exitCode: 3 });
+});
