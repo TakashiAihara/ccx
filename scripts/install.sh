@@ -150,17 +150,36 @@ fi
 
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
 # It also gets this shell's PATH, so the resumes ccx-agent runs find herdr as the
-# user does. A PATH that systemd would read differently (spaces, %) keeps the default.
-case "$PATH" in
-  *[!A-Za-z0-9/._:-]*)
-    echo "ccx: this shell's PATH has characters a unit cannot carry as is; the unit keeps its default PATH (~/.local/bin and the system dirs)" >&2
-    unit_env='Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'
-    unit_path_seen="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" ;;
-  *) unit_env="Environment=PATH=$PATH"; unit_path_seen=$PATH ;;
-esac
+# user does. Entries a unit would read differently are left out one by one: not
+# absolute (resolved against the service's cwd, not this shell's), or with a
+# character systemd or the sed below treats specially (space, %, quotes, \, &, |).
+unit_path=""
+dropped=""
+set -f
+old_ifs=$IFS
+IFS=:
+for d in $PATH; do
+  case "$d" in
+    /*[!A-Za-z0-9/._@+,~-]*) dropped="$dropped '$d'" ;;
+    /*) unit_path="${unit_path:+$unit_path:}$d" ;;
+    *) dropped="$dropped '$d'" ;;
+  esac
+done
+IFS=$old_ifs
+set +f
+if [ -n "$dropped" ]; then
+  echo "ccx: left out of the unit's PATH (not absolute, or characters a unit cannot carry as is):$dropped" >&2
+fi
+if [ -n "$unit_path" ]; then
+  unit_env="Environment=PATH=$unit_path"
+  unit_path_seen=$unit_path
+else
+  unit_env='Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'
+  unit_path_seen="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+fi
 sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "s|^Environment=PATH=.*|$unit_env|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
 if ! PATH=$unit_path_seen command -v herdr >/dev/null 2>&1; then
-  echo "ccx: herdr is not on the PATH the unit was given, so a resume through ccx-center cannot open a session here; install herdr, or rerun this from a shell that has it on PATH" >&2
+  echo "ccx: herdr is not on the PATH the unit was given ($unit_path_seen), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, or add its dir to the unit (systemctl --user edit ccx-agent)" >&2
 fi
 
 systemctl --user daemon-reload
