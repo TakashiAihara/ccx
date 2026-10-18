@@ -12,6 +12,9 @@
 //
 // In #90 only the collect concern is built (hooks → center). Carry (#23) and
 // persistence (#20) slot into the same runner when built.
+//
+// One concern is not a toggle: resume (#261) runs whenever collect does, a hub
+// is http(s), and the ccx CLI is there to open a session with.
 package main
 
 import (
@@ -34,6 +37,7 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/livetranscript"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/resume"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
@@ -127,6 +131,11 @@ func cmdServe() int {
 		if lt := startLiveTranscript(cfg, c, logger); lt != nil {
 			concerns = append(concerns, lt)
 		}
+		// Resume (#261): what runs here is a fact only this machine knows, and
+		// the center's ask is answered by the same ccx CLI a person would run.
+		if rs := startResume(cfg, logger); rs != nil {
+			concerns = append(concerns, rs)
+		}
 	}
 	if cfg.Heartbeat.Err != nil {
 		logger("heartbeat off: %v", cfg.Heartbeat.Err)
@@ -179,6 +188,41 @@ func startLiveTranscript(cfg config.Config, c *collect.Collect, logger func(stri
 	)
 	c.Observe(lt.Notify)
 	return lt
+}
+
+// startResume builds the resume concern (#261): it reports which of this user's
+// sessions run on this machine, and opens the ones the center asks for by
+// running `ccx session resume`.
+//
+// It needs collect's origin — the center keys the list and the requests by
+// machine and user, so without them it would wedge the way collect would — and
+// an http(s) hub. Without the ccx CLI there is nothing to resume with, so the
+// concern stays off with the reason in the log rather than failing every
+// request the center sends.
+func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume {
+	switch {
+	case cfg.HubURL == "":
+		return nil
+	case !config.IsHTTP(cfg.HubURL):
+		logger("resume off: the hub is not http(s), so there is no center to report the running sessions to or claim resumes from")
+		return nil
+	}
+	ccxPath := resume.FindCCX()
+	if ccxPath == "" {
+		logger("resume off: no ccx beside ccx-agent and none on PATH, so there is nothing to run `ccx session resume` with")
+		return nil
+	}
+	return resume.New(resume.Options{
+		Machine:    cfg.Machine,
+		User:       cfg.User,
+		ClaudeHome: claudeHome(),
+		Center:     resume.NewCenter(cfg.HubURL, cfg.HubToken),
+		Run:        resume.CommandRunner(ccxPath),
+		Interval:   time.Minute,
+		Poll:       5 * time.Second,
+		Now:        time.Now,
+		Log:        logger,
+	})
 }
 
 // cmdChannel is the per-session MCP channel server Claude Code spawns over
@@ -278,5 +322,8 @@ usage:
   ccx-agent version  print the version
 
 ccx-agent runs as your user, never root. See docs for the systemd user unit.
+
+serve's concerns: collect, the live transcript, resume (report the sessions
+running here, open the stopped ones the center asks for), the heartbeat, the API.
 `)
 }

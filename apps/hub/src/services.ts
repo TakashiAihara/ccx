@@ -3,8 +3,8 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 
 import type { Db } from "./db/open.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
-import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
-import { ingest, listEvents, listSessions, type IncomingEvent } from "./store.ts";
+import { FleetService, Liveness } from "@ccx/proto/ccx/v1/fleet_pb.ts";
+import { ingest, listEvents, listSessions, type IncomingEvent, type SessionRow } from "./store.ts";
 
 /** fleet.proto の既定と上限。0 は「指定なし」なので既定に落ちる。 */
 const DEFAULT_LIMIT = 100;
@@ -13,6 +13,13 @@ const MAX_LIMIT = 1000;
 function clampLimit(v: number): number {
   if (!v) return DEFAULT_LIMIT;
   return Math.min(v, MAX_LIMIT);
+}
+
+/** unknown は proto では「動いているとも止まっているとも言えない」の値 */
+function toLiveness(l: SessionRow["liveness"]): Liveness {
+  if (l === "running") return Liveness.RUNNING;
+  if (l === "stopped") return Liveness.STOPPED;
+  return Liveness.UNSPECIFIED;
 }
 
 export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
@@ -49,7 +56,7 @@ export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
   };
 }
 
-export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
+export function fleetImpl(db: Db, now: () => number = Date.now): ServiceImpl<typeof FleetService> {
   return {
     listSessions(req) {
       const rows = listSessions(db, {
@@ -57,6 +64,8 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
         user: req.user || undefined,
         activeOnly: req.activeOnly,
         limit: clampLimit(req.limit),
+        nowMs: now(),
+        stoppedOnly: req.stoppedOnly,
       });
 
       return {
@@ -76,6 +85,7 @@ export function fleetImpl(db: Db): ServiceImpl<typeof FleetService> {
           eventCount: BigInt(s.eventCount),
           lastHook: s.lastHook,
           state: s.state ? { $typeName: "ccx.v1.SessionState" as const, ...s.state } : undefined,
+          liveness: toLiveness(s.liveness),
         })),
       };
     },

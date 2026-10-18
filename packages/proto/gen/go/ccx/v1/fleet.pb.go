@@ -22,6 +22,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 動いているか。読むのは (machine, user) の最新の一覧だけで、hook の event からは推定しない。
+type Liveness int32
+
+const (
+	// 一覧が無いか古い (ccx-agent が送ってこない / 落ちている)。動いているとも止まっているとも言えない。
+	Liveness_LIVENESS_UNSPECIFIED Liveness = 0
+	// 最新の一覧に居る。
+	Liveness_LIVENESS_RUNNING Liveness = 1
+	// 最新の一覧が新しく、そこに居ない。
+	Liveness_LIVENESS_STOPPED Liveness = 2
+)
+
+// Enum value maps for Liveness.
+var (
+	Liveness_name = map[int32]string{
+		0: "LIVENESS_UNSPECIFIED",
+		1: "LIVENESS_RUNNING",
+		2: "LIVENESS_STOPPED",
+	}
+	Liveness_value = map[string]int32{
+		"LIVENESS_UNSPECIFIED": 0,
+		"LIVENESS_RUNNING":     1,
+		"LIVENESS_STOPPED":     2,
+	}
+)
+
+func (x Liveness) Enum() *Liveness {
+	p := new(Liveness)
+	*p = x
+	return p
+}
+
+func (x Liveness) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Liveness) Descriptor() protoreflect.EnumDescriptor {
+	return file_ccx_v1_fleet_proto_enumTypes[0].Descriptor()
+}
+
+func (Liveness) Type() protoreflect.EnumType {
+	return &file_ccx_v1_fleet_proto_enumTypes[0]
+}
+
+func (x Liveness) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Liveness.Descriptor instead.
+func (Liveness) EnumDescriptor() ([]byte, []int) {
+	return file_ccx_v1_fleet_proto_rawDescGZIP(), []int{0}
+}
+
 // 鍵は (user, machine, session_id) の 3 つ。
 //
 // machine だけでは足りないのは、1 台に複数ユーザが居るとき、それぞれが自分の ccx-agent
@@ -116,7 +169,10 @@ type Session struct {
 	// 最後に届いた宣言状態 (ingest.proto の PRODUCER_CCX_SESSION_STATE)。1 件も届いて
 	// いなければ未設定 — 「印が無い」ではなく「center は知らない」。真実源はその
 	// マシンのファイルで、これは写し (#127)。
-	State         *SessionState `protobuf:"bytes,9,opt,name=state,proto3" json:"state,omitempty"`
+	State *SessionState `protobuf:"bytes,9,opt,name=state,proto3" json:"state,omitempty"`
+	// そのマシンの ccx-agent が送った、動いている session の一覧 (ingest.proto の PRODUCER_CCX_AGENT_RUNNING) から
+	// 読んだ状態。
+	Liveness      Liveness `protobuf:"varint,10,opt,name=liveness,proto3,enum=ccx.v1.Liveness" json:"liveness,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -212,6 +268,13 @@ func (x *Session) GetState() *SessionState {
 		return x.State
 	}
 	return nil
+}
+
+func (x *Session) GetLiveness() Liveness {
+	if x != nil {
+		return x.Liveness
+	}
+	return Liveness_LIVENESS_UNSPECIFIED
 }
 
 // 宣言された状態。名前と意味は docs/design/session-state.md。
@@ -438,7 +501,9 @@ type ListSessionsRequest struct {
 	// SessionEnd を観測していないものだけ。時間による判定はしない (Session.ended_at)。
 	ActiveOnly bool `protobuf:"varint,3,opt,name=active_only,json=activeOnly,proto3" json:"active_only,omitempty"`
 	// 既定 100、上限 1000。
-	Limit         uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	// LIVENESS_STOPPED で、宣言状態が archived でないものだけ。開き直す候補 (#261)。
+	StoppedOnly   bool `protobuf:"varint,5,opt,name=stopped_only,json=stoppedOnly,proto3" json:"stopped_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -499,6 +564,13 @@ func (x *ListSessionsRequest) GetLimit() uint32 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *ListSessionsRequest) GetStoppedOnly() bool {
+	if x != nil {
+		return x.StoppedOnly
+	}
+	return false
 }
 
 type ListSessionsResponse struct {
@@ -705,7 +777,7 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\"\xff\x02\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\"\xad\x03\n" +
 	"\aSession\x12$\n" +
 	"\x03key\x18\x01 \x01(\v2\x12.ccx.v1.SessionKeyR\x03key\x129\n" +
 	"\n" +
@@ -717,7 +789,9 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\vevent_count\x18\a \x01(\x04R\n" +
 	"eventCount\x12\x1b\n" +
 	"\tlast_hook\x18\b \x01(\tR\blastHook\x12*\n" +
-	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\"\xe5\x01\n" +
+	"\x05state\x18\t \x01(\v2\x14.ccx.v1.SessionStateR\x05state\x12,\n" +
+	"\bliveness\x18\n" +
+	" \x01(\x0e2\x10.ccx.v1.LivenessR\bliveness\"\xe5\x01\n" +
 	"\fSessionState\x12\x1a\n" +
 	"\barchived\x18\x01 \x01(\bR\barchived\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x12\n" +
@@ -741,13 +815,14 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\x0fhook_event_name\x18\b \x01(\tR\rhookEventName\x12\x10\n" +
 	"\x03cwd\x18\t \x01(\tR\x03cwd\x12\x18\n" +
 	"\apayload\x18\n" +
-	" \x01(\fR\apayload\"z\n" +
+	" \x01(\fR\apayload\"\x9d\x01\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\x12\x1f\n" +
 	"\vactive_only\x18\x03 \x01(\bR\n" +
 	"activeOnly\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\rR\x05limit\"C\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\x12!\n" +
+	"\fstopped_only\x18\x05 \x01(\bR\vstoppedOnly\"C\n" +
 	"\x14ListSessionsResponse\x12+\n" +
 	"\bsessions\x18\x01 \x03(\v2\x0f.ccx.v1.SessionR\bsessions\"\xab\x02\n" +
 	"\x11ListEventsRequest\x12\x18\n" +
@@ -761,7 +836,11 @@ const file_ccx_v1_fleet_proto_rawDesc = "" +
 	"\x05limit\x18\a \x01(\rR\x05limit\x12'\n" +
 	"\x0finclude_payload\x18\b \x01(\bR\x0eincludePayload\"A\n" +
 	"\x12ListEventsResponse\x12+\n" +
-	"\x06events\x18\x01 \x03(\v2\x13.ccx.v1.EventRecordR\x06events2\x9e\x01\n" +
+	"\x06events\x18\x01 \x03(\v2\x13.ccx.v1.EventRecordR\x06events*P\n" +
+	"\bLiveness\x12\x18\n" +
+	"\x14LIVENESS_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10LIVENESS_RUNNING\x10\x01\x12\x14\n" +
+	"\x10LIVENESS_STOPPED\x10\x022\x9e\x01\n" +
 	"\fFleetService\x12I\n" +
 	"\fListSessions\x12\x1b.ccx.v1.ListSessionsRequest\x1a\x1c.ccx.v1.ListSessionsResponse\x12C\n" +
 	"\n" +
@@ -782,42 +861,45 @@ func file_ccx_v1_fleet_proto_rawDescGZIP() []byte {
 	return file_ccx_v1_fleet_proto_rawDescData
 }
 
+var file_ccx_v1_fleet_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_ccx_v1_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_ccx_v1_fleet_proto_goTypes = []any{
-	(*SessionKey)(nil),            // 0: ccx.v1.SessionKey
-	(*Session)(nil),               // 1: ccx.v1.Session
-	(*SessionState)(nil),          // 2: ccx.v1.SessionState
-	(*EventRecord)(nil),           // 3: ccx.v1.EventRecord
-	(*ListSessionsRequest)(nil),   // 4: ccx.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),  // 5: ccx.v1.ListSessionsResponse
-	(*ListEventsRequest)(nil),     // 6: ccx.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),    // 7: ccx.v1.ListEventsResponse
-	nil,                           // 8: ccx.v1.SessionState.MetadataEntry
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
-	(Producer)(0),                 // 10: ccx.v1.Producer
+	(Liveness)(0),                 // 0: ccx.v1.Liveness
+	(*SessionKey)(nil),            // 1: ccx.v1.SessionKey
+	(*Session)(nil),               // 2: ccx.v1.Session
+	(*SessionState)(nil),          // 3: ccx.v1.SessionState
+	(*EventRecord)(nil),           // 4: ccx.v1.EventRecord
+	(*ListSessionsRequest)(nil),   // 5: ccx.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),  // 6: ccx.v1.ListSessionsResponse
+	(*ListEventsRequest)(nil),     // 7: ccx.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),    // 8: ccx.v1.ListEventsResponse
+	nil,                           // 9: ccx.v1.SessionState.MetadataEntry
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(Producer)(0),                 // 11: ccx.v1.Producer
 }
 var file_ccx_v1_fleet_proto_depIdxs = []int32{
-	0,  // 0: ccx.v1.Session.key:type_name -> ccx.v1.SessionKey
-	9,  // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
-	9,  // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
-	9,  // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
-	2,  // 4: ccx.v1.Session.state:type_name -> ccx.v1.SessionState
-	8,  // 5: ccx.v1.SessionState.metadata:type_name -> ccx.v1.SessionState.MetadataEntry
-	9,  // 6: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
-	10, // 7: ccx.v1.EventRecord.producer:type_name -> ccx.v1.Producer
-	1,  // 8: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
-	9,  // 9: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	9,  // 10: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
-	3,  // 11: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
-	4,  // 12: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
-	6,  // 13: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
-	5,  // 14: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
-	7,  // 15: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
-	14, // [14:16] is the sub-list for method output_type
-	12, // [12:14] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	1,  // 0: ccx.v1.Session.key:type_name -> ccx.v1.SessionKey
+	10, // 1: ccx.v1.Session.first_seen:type_name -> google.protobuf.Timestamp
+	10, // 2: ccx.v1.Session.last_seen:type_name -> google.protobuf.Timestamp
+	10, // 3: ccx.v1.Session.ended_at:type_name -> google.protobuf.Timestamp
+	3,  // 4: ccx.v1.Session.state:type_name -> ccx.v1.SessionState
+	0,  // 5: ccx.v1.Session.liveness:type_name -> ccx.v1.Liveness
+	9,  // 6: ccx.v1.SessionState.metadata:type_name -> ccx.v1.SessionState.MetadataEntry
+	10, // 7: ccx.v1.EventRecord.received_at:type_name -> google.protobuf.Timestamp
+	11, // 8: ccx.v1.EventRecord.producer:type_name -> ccx.v1.Producer
+	2,  // 9: ccx.v1.ListSessionsResponse.sessions:type_name -> ccx.v1.Session
+	10, // 10: ccx.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	10, // 11: ccx.v1.ListEventsRequest.until:type_name -> google.protobuf.Timestamp
+	4,  // 12: ccx.v1.ListEventsResponse.events:type_name -> ccx.v1.EventRecord
+	5,  // 13: ccx.v1.FleetService.ListSessions:input_type -> ccx.v1.ListSessionsRequest
+	7,  // 14: ccx.v1.FleetService.ListEvents:input_type -> ccx.v1.ListEventsRequest
+	6,  // 15: ccx.v1.FleetService.ListSessions:output_type -> ccx.v1.ListSessionsResponse
+	8,  // 16: ccx.v1.FleetService.ListEvents:output_type -> ccx.v1.ListEventsResponse
+	15, // [15:17] is the sub-list for method output_type
+	13, // [13:15] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_fleet_proto_init() }
@@ -831,13 +913,14 @@ func file_ccx_v1_fleet_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_fleet_proto_rawDesc), len(file_ccx_v1_fleet_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_ccx_v1_fleet_proto_goTypes,
 		DependencyIndexes: file_ccx_v1_fleet_proto_depIdxs,
+		EnumInfos:         file_ccx_v1_fleet_proto_enumTypes,
 		MessageInfos:      file_ccx_v1_fleet_proto_msgTypes,
 	}.Build()
 	File_ccx_v1_fleet_proto = out.File

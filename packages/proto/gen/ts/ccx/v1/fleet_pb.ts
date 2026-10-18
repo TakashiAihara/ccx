@@ -2,8 +2,8 @@
 // @generated from file ccx/v1/fleet.proto (package ccx.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Producer } from "./ingest_pb";
 import { file_ccx_v1_ingest } from "./ingest_pb";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/fleet.proto.
  */
 export const file_ccx_v1_fleet: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvZmxlZXQucHJvdG8SBmNjeC52MSI/CgpTZXNzaW9uS2V5Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJIqoCCgdTZXNzaW9uEh8KA2tleRgBIAEoCzISLmNjeC52MS5TZXNzaW9uS2V5Ei4KCmZpcnN0X3NlZW4YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KCWxhc3Rfc2VlbhgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZW5kZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA2N3ZBgFIAEoCRIXCg90cmFuc2NyaXB0X3BhdGgYBiABKAkSEwoLZXZlbnRfY291bnQYByABKAQSEQoJbGFzdF9ob29rGAggASgJEiMKBXN0YXRlGAkgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZSKyAQoMU2Vzc2lvblN0YXRlEhAKCGFyY2hpdmVkGAEgASgIEg0KBWxhYmVsGAIgASgJEgwKBHRhc2sYAyABKAkSNAoIbWV0YWRhdGEYBCADKAsyIi5jY3gudjEuU2Vzc2lvblN0YXRlLk1ldGFkYXRhRW50cnkSDAoEcm9sZRgFIAEoCRovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEi+wEKC0V2ZW50UmVjb3JkEhAKCGV2ZW50X2lkGAEgASgJEg8KB21hY2hpbmUYAiABKAkSDAoEdXNlchgDIAEoCRILCgNzZXEYBCABKAQSLwoLcmVjZWl2ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnBhcnNlZBgGIAEoCBIiCghwcm9kdWNlchgLIAEoDjIQLmNjeC52MS5Qcm9kdWNlchISCgpzZXNzaW9uX2lkGAcgASgJEhcKD2hvb2tfZXZlbnRfbmFtZRgIIAEoCRILCgNjd2QYCSABKAkSDwoHcGF5bG9hZBgKIAEoDCJYChNMaXN0U2Vzc2lvbnNSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRITCgthY3RpdmVfb25seRgDIAEoCBINCgVsaW1pdBgEIAEoDSI5ChRMaXN0U2Vzc2lvbnNSZXNwb25zZRIhCghzZXNzaW9ucxgBIAMoCzIPLmNjeC52MS5TZXNzaW9uIt0BChFMaXN0RXZlbnRzUmVxdWVzdBIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRIXCg9ob29rX2V2ZW50X25hbWUYBCABKAkSKQoFc2luY2UYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEikKBXVudGlsGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBINCgVsaW1pdBgHIAEoDRIXCg9pbmNsdWRlX3BheWxvYWQYCCABKAgiOQoSTGlzdEV2ZW50c1Jlc3BvbnNlEiMKBmV2ZW50cxgBIAMoCzITLmNjeC52MS5FdmVudFJlY29yZDKeAQoMRmxlZXRTZXJ2aWNlEkkKDExpc3RTZXNzaW9ucxIbLmNjeC52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0GhwuY2N4LnYxLkxpc3RTZXNzaW9uc1Jlc3BvbnNlEkMKCkxpc3RFdmVudHMSGS5jY3gudjEuTGlzdEV2ZW50c1JlcXVlc3QaGi5jY3gudjEuTGlzdEV2ZW50c1Jlc3BvbnNlYgZwcm90bzM", [file_ccx_v1_ingest, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvZmxlZXQucHJvdG8SBmNjeC52MSI/CgpTZXNzaW9uS2V5Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJIs4CCgdTZXNzaW9uEh8KA2tleRgBIAEoCzISLmNjeC52MS5TZXNzaW9uS2V5Ei4KCmZpcnN0X3NlZW4YAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KCWxhc3Rfc2VlbhgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLAoIZW5kZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgsKA2N3ZBgFIAEoCRIXCg90cmFuc2NyaXB0X3BhdGgYBiABKAkSEwoLZXZlbnRfY291bnQYByABKAQSEQoJbGFzdF9ob29rGAggASgJEiMKBXN0YXRlGAkgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIiCghsaXZlbmVzcxgKIAEoDjIQLmNjeC52MS5MaXZlbmVzcyKyAQoMU2Vzc2lvblN0YXRlEhAKCGFyY2hpdmVkGAEgASgIEg0KBWxhYmVsGAIgASgJEgwKBHRhc2sYAyABKAkSNAoIbWV0YWRhdGEYBCADKAsyIi5jY3gudjEuU2Vzc2lvblN0YXRlLk1ldGFkYXRhRW50cnkSDAoEcm9sZRgFIAEoCRovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEi+wEKC0V2ZW50UmVjb3JkEhAKCGV2ZW50X2lkGAEgASgJEg8KB21hY2hpbmUYAiABKAkSDAoEdXNlchgDIAEoCRILCgNzZXEYBCABKAQSLwoLcmVjZWl2ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnBhcnNlZBgGIAEoCBIiCghwcm9kdWNlchgLIAEoDjIQLmNjeC52MS5Qcm9kdWNlchISCgpzZXNzaW9uX2lkGAcgASgJEhcKD2hvb2tfZXZlbnRfbmFtZRgIIAEoCRILCgNjd2QYCSABKAkSDwoHcGF5bG9hZBgKIAEoDCJuChNMaXN0U2Vzc2lvbnNSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRITCgthY3RpdmVfb25seRgDIAEoCBINCgVsaW1pdBgEIAEoDRIUCgxzdG9wcGVkX29ubHkYBSABKAgiOQoUTGlzdFNlc3Npb25zUmVzcG9uc2USIQoIc2Vzc2lvbnMYASADKAsyDy5jY3gudjEuU2Vzc2lvbiLdAQoRTGlzdEV2ZW50c1JlcXVlc3QSDwoHbWFjaGluZRgBIAEoCRIMCgR1c2VyGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSFwoPaG9va19ldmVudF9uYW1lGAQgASgJEikKBXNpbmNlGAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIpCgV1bnRpbBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDQoFbGltaXQYByABKA0SFwoPaW5jbHVkZV9wYXlsb2FkGAggASgIIjkKEkxpc3RFdmVudHNSZXNwb25zZRIjCgZldmVudHMYASADKAsyEy5jY3gudjEuRXZlbnRSZWNvcmQqUAoITGl2ZW5lc3MSGAoUTElWRU5FU1NfVU5TUEVDSUZJRUQQABIUChBMSVZFTkVTU19SVU5OSU5HEAESFAoQTElWRU5FU1NfU1RPUFBFRBACMp4BCgxGbGVldFNlcnZpY2USSQoMTGlzdFNlc3Npb25zEhsuY2N4LnYxLkxpc3RTZXNzaW9uc1JlcXVlc3QaHC5jY3gudjEuTGlzdFNlc3Npb25zUmVzcG9uc2USQwoKTGlzdEV2ZW50cxIZLmNjeC52MS5MaXN0RXZlbnRzUmVxdWVzdBoaLmNjeC52MS5MaXN0RXZlbnRzUmVzcG9uc2ViBnByb3RvMw", [file_ccx_v1_ingest, file_google_protobuf_timestamp]);
 
 /**
  * 鍵は (user, machine, session_id) の 3 つ。
@@ -122,6 +122,14 @@ export type Session = Message<"ccx.v1.Session"> & {
    * @generated from field: ccx.v1.SessionState state = 9;
    */
   state?: SessionState | undefined;
+
+  /**
+   * そのマシンの ccx-agent が送った、動いている session の一覧 (ingest.proto の PRODUCER_CCX_AGENT_RUNNING) から
+   * 読んだ状態。
+   *
+   * @generated from field: ccx.v1.Liveness liveness = 10;
+   */
+  liveness: Liveness;
 };
 
 /**
@@ -288,6 +296,13 @@ export type ListSessionsRequest = Message<"ccx.v1.ListSessionsRequest"> & {
    * @generated from field: uint32 limit = 4;
    */
   limit: number;
+
+  /**
+   * LIVENESS_STOPPED で、宣言状態が archived でないものだけ。開き直す候補 (#261)。
+   *
+   * @generated from field: bool stopped_only = 5;
+   */
+  stoppedOnly: boolean;
 };
 
 /**
@@ -394,6 +409,40 @@ export type ListEventsResponse = Message<"ccx.v1.ListEventsResponse"> & {
  */
 export const ListEventsResponseSchema: GenMessage<ListEventsResponse> = /*@__PURE__*/
   messageDesc(file_ccx_v1_fleet, 7);
+
+/**
+ * 動いているか。読むのは (machine, user) の最新の一覧だけで、hook の event からは推定しない。
+ *
+ * @generated from enum ccx.v1.Liveness
+ */
+export enum Liveness {
+  /**
+   * 一覧が無いか古い (ccx-agent が送ってこない / 落ちている)。動いているとも止まっているとも言えない。
+   *
+   * @generated from enum value: LIVENESS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * 最新の一覧に居る。
+   *
+   * @generated from enum value: LIVENESS_RUNNING = 1;
+   */
+  RUNNING = 1,
+
+  /**
+   * 最新の一覧が新しく、そこに居ない。
+   *
+   * @generated from enum value: LIVENESS_STOPPED = 2;
+   */
+  STOPPED = 2,
+}
+
+/**
+ * Describes the enum ccx.v1.Liveness.
+ */
+export const LivenessSchema: GenEnum<Liveness> = /*@__PURE__*/
+  enumDesc(file_ccx_v1_fleet, 0);
 
 /**
  * 集めたものを読み返す口。ingest.proto が「運ぶ形」を定めるのに対し、こちらは

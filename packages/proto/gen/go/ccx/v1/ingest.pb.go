@@ -38,6 +38,12 @@ const (
 	// 持つ。ccx-agent を経由せず ccx が直接送る (印を書いたプロセスが送るのが一番近い)。
 	// 届かなければ印はローカルにだけ残り、次の mark で送り直される。
 	Producer_PRODUCER_CCX_SESSION_STATE Producer = 2
+	// ccx-agent が送る「このマシンのこのユーザーで今動いている session の id の一覧」(#261)。payload は ccx 自身の
+	// JSON: `{"session_ids": ["...", ...]}`。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
+	// (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない) で、center は (machine, user) ごとの最新 1 件だけを
+	// 読む。ccx-agent は一覧が変わったときと、変わらなくても一定の間隔で送る。間隔ごとに届くことが「一覧は今も
+	// 新しい」ことの根拠で、届かなくなった (machine, user) の一覧は古いとして読む (fleet.proto の Liveness)。
+	Producer_PRODUCER_CCX_AGENT_RUNNING Producer = 3
 )
 
 // Enum value maps for Producer.
@@ -46,11 +52,13 @@ var (
 		0: "PRODUCER_UNSPECIFIED",
 		1: "PRODUCER_CLAUDE_CODE_HOOK",
 		2: "PRODUCER_CCX_SESSION_STATE",
+		3: "PRODUCER_CCX_AGENT_RUNNING",
 	}
 	Producer_value = map[string]int32{
 		"PRODUCER_UNSPECIFIED":       0,
 		"PRODUCER_CLAUDE_CODE_HOOK":  1,
 		"PRODUCER_CCX_SESSION_STATE": 2,
+		"PRODUCER_CCX_AGENT_RUNNING": 3,
 	}
 )
 
@@ -369,11 +377,12 @@ const file_ccx_v1_ingest_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\",\n" +
 	"\x0eIngestResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\rR\baccepted*c\n" +
+	"\baccepted\x18\x01 \x01(\rR\baccepted*\x83\x01\n" +
 	"\bProducer\x12\x18\n" +
 	"\x14PRODUCER_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19PRODUCER_CLAUDE_CODE_HOOK\x10\x01\x12\x1e\n" +
-	"\x1aPRODUCER_CCX_SESSION_STATE\x10\x022H\n" +
+	"\x1aPRODUCER_CCX_SESSION_STATE\x10\x02\x12\x1e\n" +
+	"\x1aPRODUCER_CCX_AGENT_RUNNING\x10\x032H\n" +
 	"\rIngestService\x127\n" +
 	"\x06Ingest\x12\x15.ccx.v1.IngestRequest\x1a\x16.ccx.v1.IngestResponseB\x93\x01\n" +
 	"\n" +

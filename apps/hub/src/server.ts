@@ -7,7 +7,9 @@ import type { Db } from "./db/open.ts";
 import { mountObjects, type ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+import { ResumeService } from "@ccx/proto/ccx/v1/resume_pb.ts";
 import { TranscriptService } from "@ccx/proto/ccx/v1/transcript_pb.ts";
+import { resumeImpl } from "./resume.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
 import { transcriptImpl } from "./transcript.ts";
 
@@ -18,10 +20,15 @@ import { transcriptImpl } from "./transcript.ts";
  * createFetchHandler が UniversalHandler を Request → Response に変換してくれる
  * ので、それを Hono の route に載せる。
  */
-export function createApp(db: Db, objects: ObjectStore, opts: { token?: string } = {}): Hono {
+export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; now?: () => number } = {}): Hono {
+  // 「動いているか」と「もう一度取れるか」はどちらも何分前の比較。読む側 (テスト) が
+  // 差し替えられるよう、1 つの時計を両方に渡す
+  const now = opts.now ?? Date.now;
+
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db));
-  router.service(FleetService, fleetImpl(db));
+  router.service(FleetService, fleetImpl(db, now));
+  router.service(ResumeService, resumeImpl(db, now));
   router.service(TranscriptService, transcriptImpl(objects));
 
   const app = new Hono();

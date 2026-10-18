@@ -44,6 +44,8 @@ export type SessionRow = {
   eventCount: number;
   /** 最後に届いた宣言状態 (Producer.CCX_SESSION_STATE)。1 件も無ければ null */
   state: SessionState | null;
+  /** その (machine, user) の最新の「動いている一覧」から読んだ状態 (#261) */
+  liveness: "running" | "stopped" | "unknown";
 };
 
 export type SessionState = {
@@ -55,6 +57,14 @@ export type SessionState = {
   metadata: Record<string, string>;
 };
 
+/** (machine, user) の「動いている session の一覧」1 件 (#261) */
+type RunningList = {
+  /** 一覧が届いた時刻 (ccx-agent の時計) */
+  receivedAtMs: number;
+  /** 一覧に居る session の id */
+  ids: Set<string>;
+};
+
 
 
 /**
@@ -63,6 +73,14 @@ export type SessionState = {
  * いるので、送り手が変わっても壊れないところに置いておく。
  */
 const CHUNK = 500;
+
+/**
+ * 「動いている session の一覧」(Producer.CCX_AGENT_RUNNING) を新しいとみなす窓 (#261)。
+ *
+ * 一覧は ccx-agent が送る。送られなくなった (machine, user) については、session が
+ * 止まったとも動いているとも言えないので、stopped ではなく unknown に落とす。
+ */
+export const RUNNING_FRESH_MS = 5 * 60 * 1000;
 
 /**
  * バッチを 1 トランザクションで入れる。返すのは「新規に保存された件数」。
@@ -115,6 +133,10 @@ export type ListSessionsFilter = {
   user?: string;
   activeOnly?: boolean;
   limit: number;
+  /** liveness の判定に使う時計。既定は center の時計 */
+  nowMs?: number;
+  /** stopped で archived でないものだけを返す */
+  stoppedOnly?: boolean;
 };
 
 /**
@@ -131,6 +153,10 @@ export type ListSessionsFilter = {
  * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
  * center が一覧するのは hook が観測した session で、印はその属性 (ccx-agent が配線されて
  * いないマシンの印は届いても見えない)。印が後から立っても last_seen は動かない。
+ *
+ * 「動いているか」(#261) も同じ考え方で別に引く。宣言状態と同じく hook の集計には
+ * 混ぜない — 動いている一覧は session の状態であって、その session が何をした記録
+ * ではない。件数も last_seen も動かさない。
  */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
   const where: SQL[] = [sql`session_id != ''`, sql`producer = ${Producer.CLAUDE_CODE_HOOK}`];
@@ -139,6 +165,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
 
   // 外側の rn = 1 に続けるので AND。ここを WHERE にすると SQL が二重になる。
   const activeOnly = f.activeOnly ? sql`AND ended_at_ms IS NULL` : sql``;
+
+  // stoppedOnly を絞るには宣言状態 (下のクエリ) が要る。SQL 側で limit を効かせると、
+  // 開かない session が枠を占めたまま「候補が無い」ことになるので、このときだけ limit
+  // を外して全部読み、JS で絞ってから limit を切る。
+  const limit = f.stoppedOnly ? sql`` : sql`LIMIT ${f.limit}`;
 
   const rows = db.all<{
     machine: string;
@@ -172,11 +203,13 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     )
     WHERE rn = 1 ${activeOnly}
     ORDER BY last_seen_ms DESC
-    LIMIT ${f.limit}
+    ${limit}
   `);
 
+  const nowMs = f.nowMs ?? Date.now();
   const states = latestStates(db, rows);
-  return rows.map((r) => ({
+  const lists = latestRunning(db, rows);
+  const sessions = rows.map((r) => ({
     machine: r.machine,
     user: r.os_user,
     sessionId: r.session_id,
@@ -188,7 +221,11 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
     lastHook: r.last_hook,
     eventCount: r.event_count,
     state: states.get(`${r.machine}\0${r.os_user}\0${r.session_id}`) ?? null,
+    liveness: livenessOf(lists.get(`${r.machine}\0${r.os_user}`), r.session_id, nowMs),
   }));
+
+  if (!f.stoppedOnly) return sessions;
+  return sessions.filter((s) => s.liveness === "stopped" && s.state?.archived !== true).slice(0, f.limit);
 }
 
 /**
@@ -227,6 +264,53 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
     if (s) out.set(`${r.machine}\0${r.os_user}\0${r.session_id}`, s);
   }
   return out;
+}
+
+/**
+ * (machine, user) ごとに最新の「読める」動いている一覧を 1 件だけ返す (履歴は全部読まない)。
+ *
+ * 一覧は毎回全部が届く差分ではない写しなので、古い一覧に居たことは今の根拠にならない。
+ * 読めない payload は無いものとして、その前の読める 1 件に落ちる (latestStates と同じ)。
+ * 「最新」は ccx-agent の時計 (received_at_ms)。同じ ms で 2 つ来たときは後から届いた方。
+ *
+ * 一覧は ccx-agent ごとに毎分届いて溜まり続けるので、(machine, user) ごとに新しい方から
+ * 辿って最初に読めた 1 件で止める (events_machine_time_idx を逆に辿る)。全件を並べ替えない
+ */
+function latestRunning(db: Db, keys: { machine: string; os_user: string }[]): Map<string, RunningList> {
+  const out = new Map<string, RunningList>();
+  const seen = new Set<string>();
+  for (const k of keys) {
+    const key = `${k.machine}\0${k.os_user}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const [r] = db.all<{ received_at_ms: number; payload: string }>(sql`
+      SELECT received_at_ms, CAST(payload AS TEXT) AS payload
+      FROM events
+      WHERE machine = ${k.machine} AND os_user = ${k.os_user} AND producer = ${Producer.CCX_AGENT_RUNNING}
+        AND json_valid(CAST(payload AS TEXT)) AND json_type(CAST(payload AS TEXT), '$.session_ids') = 'array'
+      ORDER BY received_at_ms DESC, rowid DESC
+      LIMIT 1
+    `);
+    const ids = r ? parseRunning(new TextEncoder().encode(r.payload)) : null;
+    if (r && ids) out.set(key, { receivedAtMs: r.received_at_ms, ids });
+  }
+  return out;
+}
+
+/** 一覧が無い (machine, user)、またはその一覧が古いときは unknown。止まったとは言わない */
+function livenessOf(list: RunningList | undefined, sessionId: string, nowMs: number): SessionRow["liveness"] {
+  if (!list || list.receivedAtMs < nowMs - RUNNING_FRESH_MS) return "unknown";
+  return list.ids.has(sessionId) ? "running" : "stopped";
+}
+
+function parseRunning(payload: Uint8Array): Set<string> | null {
+  try {
+    const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload)) as { session_ids?: unknown };
+    if (!Array.isArray(o?.session_ids)) return null;
+    return new Set(o.session_ids.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return null;
+  }
 }
 
 /**

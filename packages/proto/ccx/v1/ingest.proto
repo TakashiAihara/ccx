@@ -116,6 +116,13 @@ enum Producer {
   // 持つ。ccx-agent を経由せず ccx が直接送る (印を書いたプロセスが送るのが一番近い)。
   // 届かなければ印はローカルにだけ残り、次の mark で送り直される。
   PRODUCER_CCX_SESSION_STATE = 2;
+
+  // ccx-agent が送る「このマシンのこのユーザーで今動いている session の id の一覧」(#261)。payload は ccx 自身の
+  // JSON: `{"session_ids": ["...", ...]}`。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
+  // (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない) で、center は (machine, user) ごとの最新 1 件だけを
+  // 読む。ccx-agent は一覧が変わったときと、変わらなくても一定の間隔で送る。間隔ごとに届くことが「一覧は今も
+  // 新しい」ことの根拠で、届かなくなった (machine, user) の一覧は古いとして読む (fleet.proto の Liveness)。
+  PRODUCER_CCX_AGENT_RUNNING = 3;
 }
 
 message IngestResponse {
