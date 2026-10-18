@@ -122,6 +122,17 @@ unset, it wrote one each time). A session opened that way does not read as runni
 resume opens it again. Whether a session under another home writes its pid file there is not
 measured (d1 has no such session); if it does not, such a session reads as stopped while it runs.
 
+Waking is an optimization, not a requirement. When a new resume request is put on the center, and
+the machine's agent has reported a wake address (`api_url` in its running list, from `[api] url`),
+the center makes one `ccx.v1.AgentService/Wake` call there with `CCX_CENTER_AGENT_TOKEN` as a Bearer
+token. The call is not awaited, and a request for a session that already has one waiting sends
+nothing. The agent then runs its loop at once instead of at its next 5 s poll. If the call fails or
+never arrives, the agent still finds the request by polling. A machine with no wake address, or
+whose running list is stale, is only polled. The trust cost: the center sends its agent token to
+whatever address a machine reports, and reporting goes through ingest, which the center token
+authorizes. Whoever holds the center token can therefore have the agent token sent to a host they
+name, so the two tokens carry one trust level.
+
 `ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
 longer running, minus what someone archived, minus what is running on this machine right now (the
 center's copy of that lags a minute behind, and a running session is refused anyway). The center

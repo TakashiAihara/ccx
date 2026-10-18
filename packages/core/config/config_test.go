@@ -378,3 +378,41 @@ func TestAPIToken_EnvThenFile_ApartFromHub(t *testing.T) {
 		t.Errorf("api-token equal to hub-token: api %q reason %v (%v), want refused", c.APIToken, c.APITokenErr, err)
 	}
 }
+
+// The URL the center reaches this agent's API at (#261, D-12): env, then git,
+// then the file, like [api] listen. Only an absolute http(s) URL is taken; any
+// other value is left unset with the reason in APIURLErr, so the agent does not
+// advertise a URL the center cannot use.
+func TestAPIURL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	_ = os.WriteFile(cfgPath, []byte("[api]\nurl = \"http://10.0.0.5:8792\"\n"), 0o644)
+	git := func(k string) string {
+		if k == "ccx.apiUrl" {
+			return "http://10.0.0.6:8792"
+		}
+		return ""
+	}
+	c, _ := load(env(map[string]string{"CCX_CONFIG": cfgPath}), noGit, fixedHost("h"))
+	if c.APIURL != "http://10.0.0.5:8792" {
+		t.Errorf("file: %q", c.APIURL)
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath}), git, fixedHost("h"))
+	if c.APIURL != "http://10.0.0.6:8792" {
+		t.Errorf("git should beat file: %q", c.APIURL)
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": cfgPath, "CCX_API_URL": "https://agent.example:9"}), git, fixedHost("h"))
+	if c.APIURL != "https://agent.example:9" {
+		t.Errorf("env should beat git: %q", c.APIURL)
+	}
+	c, _ = load(env(map[string]string{}), noGit, fixedHost("h"))
+	if c.APIURL != "" || c.APIURLErr != nil {
+		t.Errorf("unset: %q %v", c.APIURL, c.APIURLErr)
+	}
+	for _, bad := range []string{"10.0.0.5:8792", "ftp://10.0.0.5", "http://", "/relative"} {
+		c, _ = load(env(map[string]string{"CCX_API_URL": bad}), noGit, fixedHost("h"))
+		if c.APIURL != "" || c.APIURLErr == nil {
+			t.Errorf("%q: url %q err %v, want unset with a reason", bad, c.APIURL, c.APIURLErr)
+		}
+	}
+}

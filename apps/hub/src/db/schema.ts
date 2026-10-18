@@ -87,6 +87,23 @@ export const agentRunning = sqliteTable(
 );
 
 /**
+ * 各 (machine, user) の ccx-agent が一覧に載せて送ってきた、起こしの合図の宛先 (#261)。
+ *
+ * agent_running に列を足さないのは、動いている center の DB に ALTER が要らないように。
+ * 宛先は一覧と同じ時に入れ替わるので、received_at_ms も一覧と同じ center の時計で持つ。
+ */
+export const agentEndpoints = sqliteTable(
+  "agent_endpoints",
+  {
+    machine: text("machine").notNull(),
+    user: text("os_user").notNull(),
+    apiUrl: text("api_url").notNull(),
+    receivedAtMs: integer("received_at_ms").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.machine, t.user] })],
+);
+
+/**
  * 人が置いた「開き直して」の依頼 (#261)。その session のあるマシンの ccx-agent が取りに
  * 行って、開いた結果を返す。
  *
@@ -134,8 +151,9 @@ export const resumeRequests = sqliteTable(
 );
 
 /**
- * スキーマの DDL。drizzle-kit の migration ファイルを使わないのは、テーブルが
- * 3 つで、center が起動時に自分で用意できる範囲だから。増えたらそのとき入れる。
+ * スキーマの DDL。drizzle-kit の migration ファイルを使わないのは、どれも CREATE ... IF NOT EXISTS で
+ * center が起動時に自分で用意できる範囲だから。既存の表に列を足す変更が要るようになったらそのとき入れる
+ * (agent_endpoints を agent_running の列にしなかったのはこのため)。
  */
 export const ddl = [
   sql`
@@ -164,6 +182,15 @@ export const ddl = [
       machine TEXT NOT NULL,
       os_user TEXT NOT NULL,
       session_ids TEXT NOT NULL,
+      received_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (machine, os_user)
+    )
+  `,
+  sql`
+    CREATE TABLE IF NOT EXISTS agent_endpoints (
+      machine TEXT NOT NULL,
+      os_user TEXT NOT NULL,
+      api_url TEXT NOT NULL,
       received_at_ms INTEGER NOT NULL,
       PRIMARY KEY (machine, os_user)
     )

@@ -22,6 +22,80 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// 中身は無い。宛先は叩かれた agent 自身で、どの依頼かは ClaimResume が決める。
+type WakeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WakeRequest) Reset() {
+	*x = WakeRequest{}
+	mi := &file_ccx_v1_agent_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WakeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WakeRequest) ProtoMessage() {}
+
+func (x *WakeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_agent_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WakeRequest.ProtoReflect.Descriptor instead.
+func (*WakeRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{0}
+}
+
+// 合図を受け取ったことだけを返す。依頼を取れたか・開けたかは返さない (それは ResumeRequest に残る)。
+type WakeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WakeResponse) Reset() {
+	*x = WakeResponse{}
+	mi := &file_ccx_v1_agent_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WakeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WakeResponse) ProtoMessage() {}
+
+func (x *WakeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_agent_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WakeResponse.ProtoReflect.Descriptor instead.
+func (*WakeResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{1}
+}
+
 type GetSessionStatusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Claude Code の session id (8-4-4-4-12、小文字)。先頭一致は受けない。
@@ -38,7 +112,7 @@ type GetSessionStatusRequest struct {
 
 func (x *GetSessionStatusRequest) Reset() {
 	*x = GetSessionStatusRequest{}
-	mi := &file_ccx_v1_agent_proto_msgTypes[0]
+	mi := &file_ccx_v1_agent_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +124,7 @@ func (x *GetSessionStatusRequest) String() string {
 func (*GetSessionStatusRequest) ProtoMessage() {}
 
 func (x *GetSessionStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_agent_proto_msgTypes[0]
+	mi := &file_ccx_v1_agent_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +137,7 @@ func (x *GetSessionStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionStatusRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{0}
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetSessionStatusRequest) GetSessionId() string {
@@ -92,7 +166,7 @@ type GetSessionStatusResponse struct {
 
 func (x *GetSessionStatusResponse) Reset() {
 	*x = GetSessionStatusResponse{}
-	mi := &file_ccx_v1_agent_proto_msgTypes[1]
+	mi := &file_ccx_v1_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -104,7 +178,7 @@ func (x *GetSessionStatusResponse) String() string {
 func (*GetSessionStatusResponse) ProtoMessage() {}
 
 func (x *GetSessionStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_agent_proto_msgTypes[1]
+	mi := &file_ccx_v1_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -117,7 +191,7 @@ func (x *GetSessionStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionStatusResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{1}
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetSessionStatusResponse) GetDeclared() *SessionState {
@@ -167,7 +241,7 @@ type HeartbeatStatus struct {
 
 func (x *HeartbeatStatus) Reset() {
 	*x = HeartbeatStatus{}
-	mi := &file_ccx_v1_agent_proto_msgTypes[2]
+	mi := &file_ccx_v1_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -179,7 +253,7 @@ func (x *HeartbeatStatus) String() string {
 func (*HeartbeatStatus) ProtoMessage() {}
 
 func (x *HeartbeatStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_agent_proto_msgTypes[2]
+	mi := &file_ccx_v1_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -192,7 +266,7 @@ func (x *HeartbeatStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatStatus.ProtoReflect.Descriptor instead.
 func (*HeartbeatStatus) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HeartbeatStatus) GetEnabled() bool {
@@ -273,7 +347,7 @@ type CollectStatus struct {
 
 func (x *CollectStatus) Reset() {
 	*x = CollectStatus{}
-	mi := &file_ccx_v1_agent_proto_msgTypes[3]
+	mi := &file_ccx_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -285,7 +359,7 @@ func (x *CollectStatus) String() string {
 func (*CollectStatus) ProtoMessage() {}
 
 func (x *CollectStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_agent_proto_msgTypes[3]
+	mi := &file_ccx_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -298,7 +372,7 @@ func (x *CollectStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectStatus.ProtoReflect.Descriptor instead.
 func (*CollectStatus) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_ccx_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CollectStatus) GetEnabled() bool {
@@ -354,7 +428,9 @@ var File_ccx_v1_agent_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x12ccx/v1/agent.proto\x12\x06ccx.v1\x1a\x12ccx/v1/fleet.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"Y\n" +
+	"\x12ccx/v1/agent.proto\x12\x06ccx.v1\x1a\x12ccx/v1/fleet.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\r\n" +
+	"\vWakeRequest\"\x0e\n" +
+	"\fWakeResponse\"Y\n" +
 	"\x17GetSessionStatusRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
@@ -385,9 +461,10 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"last_error\x18\x06 \x01(\tR\tlastError\x12\x1f\n" +
 	"\vspool_error\x18\a \x01(\tR\n" +
-	"spoolError2e\n" +
+	"spoolError2\x98\x01\n" +
 	"\fAgentService\x12U\n" +
-	"\x10GetSessionStatus\x12\x1f.ccx.v1.GetSessionStatusRequest\x1a .ccx.v1.GetSessionStatusResponseB\x92\x01\n" +
+	"\x10GetSessionStatus\x12\x1f.ccx.v1.GetSessionStatusRequest\x1a .ccx.v1.GetSessionStatusResponse\x121\n" +
+	"\x04Wake\x12\x13.ccx.v1.WakeRequest\x1a\x14.ccx.v1.WakeResponseB\x92\x01\n" +
 	"\n" +
 	"com.ccx.v1B\n" +
 	"AgentProtoP\x01Z?github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1;ccxv1\xa2\x02\x03CXX\xaa\x02\x06Ccx.V1\xca\x02\x06Ccx\\V1\xe2\x02\x12Ccx\\V1\\GPBMetadata\xea\x02\aCcx::V1b\x06proto3"
@@ -404,27 +481,31 @@ func file_ccx_v1_agent_proto_rawDescGZIP() []byte {
 	return file_ccx_v1_agent_proto_rawDescData
 }
 
-var file_ccx_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_ccx_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_ccx_v1_agent_proto_goTypes = []any{
-	(*GetSessionStatusRequest)(nil),  // 0: ccx.v1.GetSessionStatusRequest
-	(*GetSessionStatusResponse)(nil), // 1: ccx.v1.GetSessionStatusResponse
-	(*HeartbeatStatus)(nil),          // 2: ccx.v1.HeartbeatStatus
-	(*CollectStatus)(nil),            // 3: ccx.v1.CollectStatus
-	(*SessionState)(nil),             // 4: ccx.v1.SessionState
-	(*timestamppb.Timestamp)(nil),    // 5: google.protobuf.Timestamp
+	(*WakeRequest)(nil),              // 0: ccx.v1.WakeRequest
+	(*WakeResponse)(nil),             // 1: ccx.v1.WakeResponse
+	(*GetSessionStatusRequest)(nil),  // 2: ccx.v1.GetSessionStatusRequest
+	(*GetSessionStatusResponse)(nil), // 3: ccx.v1.GetSessionStatusResponse
+	(*HeartbeatStatus)(nil),          // 4: ccx.v1.HeartbeatStatus
+	(*CollectStatus)(nil),            // 5: ccx.v1.CollectStatus
+	(*SessionState)(nil),             // 6: ccx.v1.SessionState
+	(*timestamppb.Timestamp)(nil),    // 7: google.protobuf.Timestamp
 }
 var file_ccx_v1_agent_proto_depIdxs = []int32{
-	4, // 0: ccx.v1.GetSessionStatusResponse.declared:type_name -> ccx.v1.SessionState
-	2, // 1: ccx.v1.GetSessionStatusResponse.heartbeat:type_name -> ccx.v1.HeartbeatStatus
-	3, // 2: ccx.v1.GetSessionStatusResponse.collect:type_name -> ccx.v1.CollectStatus
-	5, // 3: ccx.v1.HeartbeatStatus.next_at:type_name -> google.protobuf.Timestamp
-	5, // 4: ccx.v1.HeartbeatStatus.last_sent_at:type_name -> google.protobuf.Timestamp
-	5, // 5: ccx.v1.CollectStatus.last_forwarded_at:type_name -> google.protobuf.Timestamp
-	5, // 6: ccx.v1.CollectStatus.last_error_at:type_name -> google.protobuf.Timestamp
-	0, // 7: ccx.v1.AgentService.GetSessionStatus:input_type -> ccx.v1.GetSessionStatusRequest
-	1, // 8: ccx.v1.AgentService.GetSessionStatus:output_type -> ccx.v1.GetSessionStatusResponse
-	8, // [8:9] is the sub-list for method output_type
-	7, // [7:8] is the sub-list for method input_type
+	6, // 0: ccx.v1.GetSessionStatusResponse.declared:type_name -> ccx.v1.SessionState
+	4, // 1: ccx.v1.GetSessionStatusResponse.heartbeat:type_name -> ccx.v1.HeartbeatStatus
+	5, // 2: ccx.v1.GetSessionStatusResponse.collect:type_name -> ccx.v1.CollectStatus
+	7, // 3: ccx.v1.HeartbeatStatus.next_at:type_name -> google.protobuf.Timestamp
+	7, // 4: ccx.v1.HeartbeatStatus.last_sent_at:type_name -> google.protobuf.Timestamp
+	7, // 5: ccx.v1.CollectStatus.last_forwarded_at:type_name -> google.protobuf.Timestamp
+	7, // 6: ccx.v1.CollectStatus.last_error_at:type_name -> google.protobuf.Timestamp
+	2, // 7: ccx.v1.AgentService.GetSessionStatus:input_type -> ccx.v1.GetSessionStatusRequest
+	0, // 8: ccx.v1.AgentService.Wake:input_type -> ccx.v1.WakeRequest
+	3, // 9: ccx.v1.AgentService.GetSessionStatus:output_type -> ccx.v1.GetSessionStatusResponse
+	1, // 10: ccx.v1.AgentService.Wake:output_type -> ccx.v1.WakeResponse
+	9, // [9:11] is the sub-list for method output_type
+	7, // [7:9] is the sub-list for method input_type
 	7, // [7:7] is the sub-list for extension type_name
 	7, // [7:7] is the sub-list for extension extendee
 	0, // [0:7] is the sub-list for field type_name
@@ -442,7 +523,7 @@ func file_ccx_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_agent_proto_rawDesc), len(file_ccx_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

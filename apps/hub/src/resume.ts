@@ -3,7 +3,8 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
-import { resumeRequests } from "./db/schema.ts";
+import { agentEndpoints, resumeRequests } from "./db/schema.ts";
+import { RUNNING_FRESH_MS } from "./store.ts";
 import { ResumeOutcome, ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 /**
@@ -111,7 +112,39 @@ function unfinished(tx: Pick<Db, "select">, machine: string, user: string, sessi
     .all();
 }
 
-export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof ResumeService> {
+/**
+ * 起こしの合図 (#261)。agent は次の polling を待たずに依頼を取りに行くためだけに使い、届かなくても
+ * polling が拾う。待たせると依頼の応答が遅れるので、結果は見ずに投げて、失敗は machine と理由をログに残す。
+ */
+const WAKE_TIMEOUT_MS = 3000;
+
+function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
+  const ep = db
+    .select()
+    .from(agentEndpoints)
+    .where(and(eq(agentEndpoints.machine, machine), eq(agentEndpoints.user, user)))
+    .get();
+  // 一覧が途絶えた宛先は古い。そこへ起こしに行くと、別の機械に当たるかもしれない
+  if (!ep || ep.receivedAtMs < nowMs - RUNNING_FRESH_MS) return;
+
+  // 末尾の / は path と二重にならないように 1 つに揃える
+  const url = `${ep.apiUrl.replace(/\/+$/, "")}/ccx.v1.AgentService/Wake`;
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${agentToken}` },
+    body: "{}",
+    signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
+  }).then(
+    (res) => {
+      if (!res.ok) console.error(`wake ${machine}: agent answered ${res.status}`);
+    },
+    (err: unknown) => {
+      console.error(`wake ${machine}: ${err instanceof Error ? err.message : String(err)}`);
+    },
+  );
+}
+
+export function resumeImpl(db: Db, now: () => number, agentToken?: string): ServiceImpl<typeof ResumeService> {
   return {
     requestResume(req) {
       const key = req.key;
@@ -129,6 +162,7 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       // 探して作るまでを 1 トランザクションにする。別のプロセスが同じ DB を開いているときにも、
       // 読んでから書くまでのあいだに割り込まれないようにする (immediate は書き込む前に write ロックを取る)。
       // 同じ session を 2 度開かないためのもの
+      let inserted = false;
       const request = db.transaction(
         (tx) => {
           const open = unfinished(tx, key.machine, key.user, sessionId).find((r) => {
@@ -158,10 +192,14 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
             waitSeconds: req.waitSeconds,
           };
           tx.insert(resumeRequests).values(row).run();
+          inserted = true;
           return toRequest(row, nowMs);
         },
         { behavior: "immediate" },
       );
+
+      // 新しい依頼を置いたときだけ起こす。既にある依頼を返したときは、起こしは最初の依頼で済んでいる
+      if (inserted && agentToken) wakeAgent(db, key.machine, key.user, agentToken, nowMs);
 
       return { $typeName: "ccx.v1.RequestResumeResponse", request };
     },

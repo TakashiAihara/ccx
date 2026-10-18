@@ -616,7 +616,11 @@ func TestTCPListener(t *testing.T) {
 		c.Close()
 		t.Error("TCP listener opened with the token refused")
 	}
-	said := func(s string) bool { mu.Lock(); defer mu.Unlock(); return strings.Contains(strings.Join(logs, "\n"), s) }
+	said := func(s string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(strings.Join(logs, "\n"), s)
+	}
 	for i := 0; i < 100 && !said("readable by other users"); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -642,7 +646,11 @@ func TestTCPListener(t *testing.T) {
 	}()
 	waitDial(t, "unix", cfg4.APISocketPath)
 	// The decision is logged; once it is, TCP would already be open if it were going to be.
-	said4 := func() bool { mu4.Lock(); defer mu4.Unlock(); return strings.Contains(strings.Join(logs4, "\n"), "no API token") }
+	said4 := func() bool {
+		mu4.Lock()
+		defer mu4.Unlock()
+		return strings.Contains(strings.Join(logs4, "\n"), "no API token")
+	}
 	for i := 0; i < 100 && !said4(); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -652,5 +660,29 @@ func TestTCPListener(t *testing.T) {
 	if c, err := net.Dial("tcp", addr4); err == nil {
 		c.Close()
 		t.Error("TCP listener opened with no API token")
+	}
+}
+
+type countingWaker struct{ n int }
+
+func (w *countingWaker) Wake() { w.n++ }
+
+// Wake hands the signal to the resume concern and answers at once (#261, D-11).
+func TestWakeSignalsTheWaker(t *testing.T) {
+	w := &countingWaker{}
+	if _, err := (&Server{ClaudeHome: t.TempDir(), Waker: w}).Wake(context.Background(), connect.NewRequest(&ccxv1.WakeRequest{})); err != nil {
+		t.Fatal(err)
+	}
+	if w.n != 1 {
+		t.Fatalf("woke %d times, want 1", w.n)
+	}
+}
+
+// With the resume concern off there is nothing to wake; the caller hears that
+// rather than a success that did nothing.
+func TestWakeWithResumeOffIsFailedPrecondition(t *testing.T) {
+	_, err := (&Server{ClaudeHome: t.TempDir()}).Wake(context.Background(), connect.NewRequest(&ccxv1.WakeRequest{}))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("got %v (code %v), want FailedPrecondition", err, connect.CodeOf(err))
 	}
 }

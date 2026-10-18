@@ -16,6 +16,8 @@ export type CenterConfig = {
   objectsDir: string;
   /** 設定されていれば `/healthz` 以外の全口がこれを要求する (#158) */
   token?: string;
+  /** 起こしの合図 (#261) で各 agent に送る token。agent の CCX_API_TOKEN と同じ値 */
+  agentToken?: string;
 };
 
 /**
@@ -46,6 +48,15 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
     throw new Error(
       "CCX_CENTER_TOKEN must be 16+ characters of A-Z a-z 0-9 . _ ~ - (S3 clients carry it inside " +
         "`Credential=<token>/...`, so `/`, `,` or spaces break it). Generate one with: openssl rand -hex 32",
+    );
+  }
+
+  // 空文字は未設定。CCX_CENTER_TOKEN と同じ扱い
+  const agentToken = env.CCX_CENTER_AGENT_TOKEN || undefined;
+  if (agentToken !== undefined && !TOKEN_SHAPE.test(agentToken)) {
+    throw new Error(
+      "CCX_CENTER_AGENT_TOKEN must be 16+ characters of A-Z a-z 0-9 . _ ~ - (it is sent in an Authorization header). " +
+        "Generate one with: openssl rand -hex 32",
     );
   }
 
@@ -82,5 +93,5 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
   const dbPath = env.CCX_CENTER_DB ?? join(ccxRoot, "center.db");
   const objectsDir = env.CCX_CENTER_OBJECTS ?? join(ccxRoot, "center-objects");
 
-  return { host, port, dbPath, objectsDir, token };
+  return { host, port, dbPath, objectsDir, token, agentToken };
 }

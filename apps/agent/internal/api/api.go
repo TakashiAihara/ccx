@@ -66,6 +66,20 @@ type Server struct {
 	// know this host's CLAUDE_CONFIG_DIR, and honouring it would let any token
 	// holder point the agent's reads at any directory.
 	Remote bool
+	// Waker is the resume concern's wake. nil when resume is off, and then the
+	// Wake RPC says so.
+	Waker interface{ Wake() }
+}
+
+// Wake makes the resume concern claim now. The center calls it when a resume is
+// requested for a session on this agent; it answers at once and does not wait for
+// the claim.
+func (s *Server) Wake(_ context.Context, _ *connect.Request[ccxv1.WakeRequest]) (*connect.Response[ccxv1.WakeResponse], error) {
+	if s.Waker == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("resume is off on this agent"))
+	}
+	s.Waker.Wake()
+	return connect.NewResponse(&ccxv1.WakeResponse{}), nil
 }
 
 func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.GetSessionStatusRequest]) (*connect.Response[ccxv1.GetSessionStatusResponse], error) {

@@ -200,7 +200,9 @@ export enum Producer {
 
   /**
    * ccx-agent が送る「このマシンのこのユーザーで今動いている session の id の一覧」(#261)。payload は ccx 自身の
-   * JSON: `{"session_ids": ["...", ...]}`。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
+   * JSON: `{"session_ids": ["...", ...], "api_url": "http://..."}`。api_url は center からその agent の API に
+   * 届く URL (CCX_API_URL / [api] url)。設定していない agent は送らず、center はそのマシンを起こさない
+   * (AgentService.Wake)。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
    * (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない)。ccx-agent は一覧が変わったときと、変わらなくても一定の
    * 間隔で送る。間隔ごとに届くことが「一覧は今も新しい」ことの根拠で、届かなくなった (machine, user) の一覧は
    * 古いとして読む (fleet.proto の Liveness)。

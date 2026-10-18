@@ -18,6 +18,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -82,6 +83,12 @@ type Config struct {
 	// AgentService, for agents on other hosts. Empty (the default) is off. It
 	// requires APIToken: serve refuses to open it without one.
 	APIListen string
+
+	// APIURL is the address the center reaches this agent's API at. The agent
+	// reports it in the running list so the center can wake the agent (#261).
+	// Empty is off. APIURLErr is why a value was dropped.
+	APIURL    string
+	APIURLErr error
 
 	// APIToken is the Bearer the TCP listener requires (kaneo ccx#34). Apart from
 	// HubToken on purpose: a caller that only reads an agent must not hold the
@@ -169,6 +176,7 @@ type fileShape struct {
 	Persistence struct{ Enabled *bool } `toml:"persistence"`
 	API         struct {
 		Listen string `toml:"listen"`
+		URL    string `toml:"url"`
 	} `toml:"api"`
 	Heartbeat struct {
 		Enabled  *bool  `toml:"enabled"`
@@ -227,6 +235,8 @@ func load(
 		// A copy of hub-token would hand the center's write credential to readers.
 		apiToken, apiTokenErr = "", errors.New("the API token is the hub token; give the agent API its own (CCX_API_TOKEN or api-token)")
 	}
+
+	apiURL, apiURLErr := apiURLFrom(pick(getenv("CCX_API_URL"), gitcfg("ccx.apiUrl"), file.API.URL))
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
 	if machine == "" {
@@ -287,6 +297,8 @@ func load(
 		ChannelSocketPath: channelSocketPath(getenv),
 		APISocketPath:     apiSocketPath(getenv),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
+		APIURL:            apiURL,
+		APIURLErr:         apiURLErr,
 		APIToken:          apiToken,
 		APITokenErr:       apiTokenErr,
 		Transcript: Transcript{
@@ -374,6 +386,22 @@ func normalizePrefix(raw string) string {
 		return p + "/"
 	}
 	return p
+}
+
+// apiURLFrom keeps only an absolute http(s) URL with a host. The center calls it
+// as it is, so a value it cannot use would be advertised and then fail there.
+func apiURLFrom(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("api url %q: %w", raw, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("api url %q is not an absolute http(s) URL", raw)
+	}
+	return raw, nil
 }
 
 // IsHTTP is whether the hub URL can be the transcript store: the center's

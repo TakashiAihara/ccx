@@ -139,6 +139,7 @@ func cmdServe() int {
 		if r := startResume(cfg, logger); r != nil {
 			concerns = append(concerns, r)
 			rs = r
+			srv.Waker = r
 		}
 		// One observer, both of them: the live transcript follows each running
 		// session's transcript, and resume learns the Claude home a session runs
@@ -154,6 +155,9 @@ func cmdServe() int {
 	}
 	if cfg.Heartbeat.Err != nil {
 		logger("heartbeat off: %v", cfg.Heartbeat.Err)
+	}
+	if cfg.APIURLErr != nil {
+		logger("api url ignored: %v", cfg.APIURLErr)
 	}
 	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
 		h := heartbeat.New(cfg, logger)
@@ -227,10 +231,18 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		logger("resume off: no ccx beside ccx-agent and none on PATH, so there is nothing to run `ccx session resume` with")
 		return nil
 	}
+	// The center wakes this agent through its API, so an api url with nothing
+	// listening would advertise an address that cannot be reached.
+	apiURL := cfg.APIURL
+	if apiURL != "" && cfg.APIListen == "" {
+		logger("[api] url is set but [api] listen is not, so the center cannot wake this agent")
+		apiURL = ""
+	}
 	return resume.New(resume.Options{
 		Machine:     cfg.Machine,
 		User:        cfg.User,
 		DefaultHome: claudeHome(),
+		APIURL:      apiURL,
 		// Next to the spool: it is this agent's own state, kept across restarts the same way
 		HomesFile: filepath.Join(filepath.Dir(cfg.SpoolDir), "claude-homes"),
 		Center:    resume.NewCenter(cfg.HubURL, cfg.HubToken),

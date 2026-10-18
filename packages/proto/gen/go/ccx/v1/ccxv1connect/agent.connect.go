@@ -36,6 +36,8 @@ const (
 	// AgentServiceGetSessionStatusProcedure is the fully-qualified name of the AgentService's
 	// GetSessionStatus RPC.
 	AgentServiceGetSessionStatusProcedure = "/ccx.v1.AgentService/GetSessionStatus"
+	// AgentServiceWakeProcedure is the fully-qualified name of the AgentService's Wake RPC.
+	AgentServiceWakeProcedure = "/ccx.v1.AgentService/Wake"
 )
 
 // AgentServiceClient is a client for the ccx.v1.AgentService service.
@@ -43,6 +45,11 @@ type AgentServiceClient interface {
 	// 1 session の、表示に要る状態。agent しか持たないもの (heartbeat の登録・次回・回数、
 	// spool の滞留、center への到達) と、そのマシンのファイルにある宣言状態を 1 回で返す。
 	GetSessionStatus(context.Context, *connect.Request[v1.GetSessionStatusRequest]) (*connect.Response[v1.GetSessionStatusResponse], error)
+	// center が「このマシン宛ての再開依頼を置いた」ときに叩く起こしの合図 (#261)。agent は次の polling を
+	// 待たずに ClaimResume を 1 回打つ。依頼そのものは運ばない (受け取りの経路は ClaimResume の 1 本だけ)。
+	// 合図が届かなくても、次の polling が同じ依頼を拾う。center が叩けるのは、agent が実行中一覧の報告に
+	// api_url を載せた (CCX_API_URL / [api] url を設定した) マシンだけで、TCP の口と同じ API token が要る。
+	Wake(context.Context, *connect.Request[v1.WakeRequest]) (*connect.Response[v1.WakeResponse], error)
 }
 
 // NewAgentServiceClient constructs a client for the ccx.v1.AgentService service. By default, it
@@ -62,12 +69,19 @@ func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(agentServiceMethods.ByName("GetSessionStatus")),
 			connect.WithClientOptions(opts...),
 		),
+		wake: connect.NewClient[v1.WakeRequest, v1.WakeResponse](
+			httpClient,
+			baseURL+AgentServiceWakeProcedure,
+			connect.WithSchema(agentServiceMethods.ByName("Wake")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // agentServiceClient implements AgentServiceClient.
 type agentServiceClient struct {
 	getSessionStatus *connect.Client[v1.GetSessionStatusRequest, v1.GetSessionStatusResponse]
+	wake             *connect.Client[v1.WakeRequest, v1.WakeResponse]
 }
 
 // GetSessionStatus calls ccx.v1.AgentService.GetSessionStatus.
@@ -75,11 +89,21 @@ func (c *agentServiceClient) GetSessionStatus(ctx context.Context, req *connect.
 	return c.getSessionStatus.CallUnary(ctx, req)
 }
 
+// Wake calls ccx.v1.AgentService.Wake.
+func (c *agentServiceClient) Wake(ctx context.Context, req *connect.Request[v1.WakeRequest]) (*connect.Response[v1.WakeResponse], error) {
+	return c.wake.CallUnary(ctx, req)
+}
+
 // AgentServiceHandler is an implementation of the ccx.v1.AgentService service.
 type AgentServiceHandler interface {
 	// 1 session の、表示に要る状態。agent しか持たないもの (heartbeat の登録・次回・回数、
 	// spool の滞留、center への到達) と、そのマシンのファイルにある宣言状態を 1 回で返す。
 	GetSessionStatus(context.Context, *connect.Request[v1.GetSessionStatusRequest]) (*connect.Response[v1.GetSessionStatusResponse], error)
+	// center が「このマシン宛ての再開依頼を置いた」ときに叩く起こしの合図 (#261)。agent は次の polling を
+	// 待たずに ClaimResume を 1 回打つ。依頼そのものは運ばない (受け取りの経路は ClaimResume の 1 本だけ)。
+	// 合図が届かなくても、次の polling が同じ依頼を拾う。center が叩けるのは、agent が実行中一覧の報告に
+	// api_url を載せた (CCX_API_URL / [api] url を設定した) マシンだけで、TCP の口と同じ API token が要る。
+	Wake(context.Context, *connect.Request[v1.WakeRequest]) (*connect.Response[v1.WakeResponse], error)
 }
 
 // NewAgentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -95,10 +119,18 @@ func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(agentServiceMethods.ByName("GetSessionStatus")),
 		connect.WithHandlerOptions(opts...),
 	)
+	agentServiceWakeHandler := connect.NewUnaryHandler(
+		AgentServiceWakeProcedure,
+		svc.Wake,
+		connect.WithSchema(agentServiceMethods.ByName("Wake")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ccx.v1.AgentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AgentServiceGetSessionStatusProcedure:
 			agentServiceGetSessionStatusHandler.ServeHTTP(w, r)
+		case AgentServiceWakeProcedure:
+			agentServiceWakeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -110,4 +142,8 @@ type UnimplementedAgentServiceHandler struct{}
 
 func (UnimplementedAgentServiceHandler) GetSessionStatus(context.Context, *connect.Request[v1.GetSessionStatusRequest]) (*connect.Response[v1.GetSessionStatusResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.AgentService.GetSessionStatus is not implemented"))
+}
+
+func (UnimplementedAgentServiceHandler) Wake(context.Context, *connect.Request[v1.WakeRequest]) (*connect.Response[v1.WakeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.AgentService.Wake is not implemented"))
 }
