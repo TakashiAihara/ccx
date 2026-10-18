@@ -49,6 +49,7 @@ const HINT =
 export function requireToken(token: string): MiddlewareHandler {
   return async (c, next) => {
     if (c.req.path === "/healthz" && (c.req.method === "GET" || c.req.method === "HEAD")) return next();
+    if (c.req.path === "/ui" && (c.req.method === "GET" || c.req.method === "HEAD")) return next();
     const auth = c.req.header("authorization");
     const got = presentedToken(auth);
     if (got !== undefined && same(got, token)) return next();

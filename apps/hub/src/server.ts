@@ -12,6 +12,10 @@ import { TranscriptService } from "@ccx/proto/ccx/v1/transcript_pb.ts";
 import { resumeImpl } from "./resume.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
 import { transcriptImpl } from "./transcript.ts";
+import { UI_HTML } from "./ui.ts";
+
+const UI_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /**
  * Hono の上に Connect の handler を貼る。
@@ -45,6 +49,15 @@ export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; 
   // 生きているかだけを返す。ccx-agent はここを見ない (見なくても spool するので)。
   // 人と、この先の `ccx agent` 用。
   app.get("/healthz", (c) => c.text("ok\n"));
+
+  // token は page に埋めず、人が入力欄に打つ。page 自身は token なしで取れるので、
+  // `/ui` は auth の例外 (GET / HEAD のみ)。CSP は外部への送信と他 origin からの読込を止める
+  app.get("/ui", (c) =>
+    c.body(UI_HTML, 200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": UI_CSP,
+    }),
+  );
 
   // S3 互換の object API (#121)。`/:bucket` と `/:bucket/*` を取るので、上の route
   // (`/healthz` と Connect) より後に載せる。Hono は登録順に照合する。`healthz` は
