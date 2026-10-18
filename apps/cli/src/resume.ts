@@ -35,7 +35,9 @@ import {
 
 import { createClient } from "@connectrpc/connect";
 
-import { ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
+import { toJson } from "@bufbuild/protobuf";
+
+import { ResumeRequestSchema, ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 import { centerTransport, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { resumeRemote } from "./resume-remote.ts";
@@ -327,7 +329,8 @@ export function registerResume(session: Command): void {
         const me = localOrigin(cfg.machine);
         if (isRemote({ machine: o.machine, user: o.user }, me)) {
           const asked = await resumeElsewhere(cfg, me, idOrPrefix, o);
-          if (o.json) console.log(JSON.stringify(asked, (_k, v) => (typeof v === "bigint" ? String(v) : v), 2));
+          // proto の JSON の形で出す (生成物の内部の欄 `$typeName` と、Timestamp の seconds / nanos の分解を出さない)
+          if (o.json) console.log(JSON.stringify(toJson(ResumeRequestSchema, asked), null, 2));
           else console.log(`opened on ${asked.key?.machine}: ${asked.detail}`);
           return;
         }
