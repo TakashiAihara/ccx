@@ -175,3 +175,28 @@ test("an unknown option is refused before anything is downloaded", async () => {
   expect(r.code).toBe(2);
   expect(requests).toBe(0);
 });
+
+test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent's resumes find herdr", async () => {
+  const tools = join(work, "tools");
+  mkdirSync(tools);
+  writeFileSync(join(tools, "herdr"), "#!/bin/sh\n");
+  chmodSync(join(tools, "herdr"), 0o755);
+  const path = `${tools}:${join(work, "fakebin")}:${process.env.PATH}`;
+  const r = await install(["--with-agent"], { PATH: path });
+  expect(r.code).toBe(0);
+  const unit = readFileSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"), "utf8");
+  expect(unit).toContain(`\nEnvironment=PATH=${path}\n`);
+  expect(unit.match(/^Environment=PATH=/gm)).toHaveLength(1);
+  expect(r.out).not.toContain("herdr is not on the PATH");
+});
+
+test.skipIf(!linux)("a PATH a unit cannot carry keeps the default, and a missing herdr is said", async () => {
+  const odd = join(work, "has space");
+  mkdirSync(odd);
+  const r = await install(["--with-agent"], { PATH: `${odd}:${join(work, "fakebin")}:${process.env.PATH}` });
+  expect(r.code).toBe(0);
+  const unit = readFileSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"), "utf8");
+  expect(unit).toContain("\nEnvironment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n");
+  expect(r.out).toContain("this shell's PATH has characters a unit cannot carry");
+  expect(r.out).toContain("herdr is not on the PATH the unit was given");
+});

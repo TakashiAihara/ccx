@@ -40,7 +40,9 @@ because `ccx session` already uses it for "no center configured", where nothing 
   that one is the agent for new repodirs, and changing it must not change what a resume waits for
 - The wait (`--wait`, default 40 s, at most 3600)
 - Not herdr: sessions run on herdr (architecture.md); without it the command fails at the first
-  herdr call with exit 1
+  herdr call with exit 1. herdr is found on PATH; a resume ccx-agent runs gets the agent's PATH,
+  which `install.sh --with-agent` sets in the unit to the PATH of the shell that installed it
+  (a user unit is otherwise given only the user manager's PATH, without `~/.local/bin`)
 
 ## Not here
 
