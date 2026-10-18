@@ -241,8 +241,9 @@ export const CollectStatusSchema: GenMessage<CollectStatus> = /*@__PURE__*/
  * 要求。center への書き込み権限を持つ hub token とは分ける)。プロトコルを 1 つにするのは、
  * 項目を足すたびに 2 か所を変えないため。
  *
- * 読むだけの口。ここから agent の状態を変える RPC は置かない。Wake も状態は変えず、「center に今取りに行け」
- * という合図だけを受ける (取りに行く先と取ったものの扱いは、合図が無いときの polling と同じ)。
+ * 読むだけの口。ここから agent の状態を変える RPC は置かない。Wake は agent の状態を書き換えないが、
+ * center への ClaimResume を 1 回起こす (依頼があればその先で session が開く)。叩く回数は制限していないので、
+ * API token を持つ人は ClaimResume を何度でも起こせる。
  *
  * @generated from service ccx.v1.AgentService
  */

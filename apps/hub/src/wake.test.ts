@@ -118,6 +118,58 @@ test("only the machine the request is for is woken", async () => {
   ingest(db, [running({ session_ids: [], api_url: agentUrl() }, "m2")], now);
   await client.requestResume({ key: key(A, "m1") });
   expect(await hitsAfter(300)).toEqual([]);
+  await client.requestResume({ key: key(A, "m2") });
+  expect((await hitsAfter()).map((h) => h.path)).toEqual(["/ccx.v1.AgentService/Wake"]);
+});
+
+test("an api_url inside the freshness window is still used after time passes", async () => {
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  now += RUNNING_FRESH_MS;
+  await client.requestResume({ key: key() });
+  expect((await hitsAfter()).map((h) => h.path)).toEqual(["/ccx.v1.AgentService/Wake"]);
+});
+
+test("an api_url with a path, query, fragment or userinfo is not kept", async () => {
+  startCenter(AGENT_TOKEN);
+  const kept = () => db.$client.query("SELECT api_url FROM agent_endpoints").all();
+  for (const bad of [`${agentUrl()}/evil`, `${agentUrl()}?q=`, `${agentUrl()}#f`, agentUrl().replace("http://", "http://u:p@")]) {
+    ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+    ingest(db, [running({ session_ids: [], api_url: bad })], now);
+    expect(kept()).toEqual([]);
+  }
+  // 末尾の / だけは origin と同じ
+  ingest(db, [running({ session_ids: [], api_url: `${agentUrl()}/` })], now);
+  expect(kept()).toEqual([{ api_url: agentUrl() }]);
+});
+
+test("the center does not follow a redirect from the agent's address", async () => {
+  const elsewhere: string[] = [];
+  const other = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      elsewhere.push(new URL(req.url).pathname);
+      return Response.json({});
+    },
+  });
+  void agent!.stop(true);
+  agent = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      hits.push({ path: new URL(req.url).pathname, auth: req.headers.get("authorization"), method: req.method });
+      return new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${other.port}/internal` } });
+    },
+  });
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  await client.requestResume({ key: key() });
+  await hitsAfter();
+  await Bun.sleep(200);
+  void other.stop(true);
+  expect(hits).toHaveLength(1);
+  expect(elsewhere).toEqual([]);
 });
 
 test("without an agent token the center wakes no one", async () => {

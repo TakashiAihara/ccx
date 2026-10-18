@@ -416,3 +416,23 @@ func TestAPIURL(t *testing.T) {
 		}
 	}
 }
+
+// Only an origin is taken: the center appends the RPC path itself, so a path, a
+// query, a fragment or userinfo would let the configured value choose where the
+// center's agent token goes. Spaces around the value are trimmed, as for listen.
+func TestAPIURLIsAnOriginOnly(t *testing.T) {
+	c, _ := load(env(map[string]string{"CCX_API_URL": "  http://10.0.0.5:8792  "}), noGit, fixedHost("h"))
+	if c.APIURL != "http://10.0.0.5:8792" || c.APIURLErr != nil {
+		t.Errorf("trimmed: %q %v", c.APIURL, c.APIURLErr)
+	}
+	c, _ = load(env(map[string]string{"CCX_API_URL": "http://10.0.0.5:8792/"}), noGit, fixedHost("h"))
+	if c.APIURL != "http://10.0.0.5:8792" || c.APIURLErr != nil {
+		t.Errorf("a bare trailing slash is the origin: %q %v", c.APIURL, c.APIURLErr)
+	}
+	for _, bad := range []string{"http://10.0.0.5:8792/x", "http://10.0.0.5:8792?q=1", "http://10.0.0.5:8792#f", "http://u:p@10.0.0.5:8792"} {
+		c, _ = load(env(map[string]string{"CCX_API_URL": bad}), noGit, fixedHost("h"))
+		if c.APIURL != "" || c.APIURLErr == nil {
+			t.Errorf("%q: url %q err %v, want unset with a reason", bad, c.APIURL, c.APIURLErr)
+		}
+	}
+}

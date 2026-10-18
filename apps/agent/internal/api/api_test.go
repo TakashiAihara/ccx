@@ -686,3 +686,45 @@ func TestWakeWithResumeOffIsFailedPrecondition(t *testing.T) {
 		t.Fatalf("got %v (code %v), want FailedPrecondition", err, connect.CodeOf(err))
 	}
 }
+
+// The wake as the center sends it: a raw JSON POST with a Bearer, through the real
+// TCP listener and RequireBearer, reaches the Waker once; without the token it does not.
+func TestWakeOverTCPAsTheCenterSendsIt(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	work := shortDir(t)
+	w := &countingWaker{}
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: addr, APIToken: "tok-tok-tok-tok-tok"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = New(cfg, &Server{ClaudeHome: work, Waker: w}, t.Logf).Run(ctx) }()
+	waitDial(t, "tcp", addr)
+
+	post := func(auth string) int {
+		req, _ := http.NewRequest("POST", "http://"+addr+"/ccx.v1.AgentService/Wake", strings.NewReader("{}"))
+		req.Header.Set("content-type", "application/json")
+		if auth != "" {
+			req.Header.Set("authorization", auth)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post(""); code != 401 {
+		t.Errorf("no token: %d, want 401", code)
+	}
+	if code := post("Bearer tok-tok-tok-tok-tok"); code != 200 {
+		t.Errorf("with token: %d, want 200", code)
+	}
+	if w.n != 1 {
+		t.Errorf("woke %d times, want 1", w.n)
+	}
+}

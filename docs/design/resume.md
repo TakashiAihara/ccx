@@ -131,7 +131,10 @@ never arrives, the agent still finds the request by polling. A machine with no w
 whose running list is stale, is only polled. The trust cost: the center sends its agent token to
 whatever address a machine reports, and reporting goes through ingest, which the center token
 authorizes. Whoever holds the center token can therefore have the agent token sent to a host they
-name, so the two tokens carry one trust level.
+name, so the two tokens carry one trust level. The address is not limited to other hosts: loopback
+or the center's own host can be named too. The call is an empty POST, and a redirect is not
+followed, so the token goes only to the reported origin. One agent token serves every agent, so if
+one agent leaks it, the API of every agent (state reads and `Wake`) opens to its holder.
 
 `ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
 longer running, minus what someone archived, minus what is running on this machine right now (the

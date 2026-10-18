@@ -59,6 +59,10 @@ export function loadCenterConfig(env: NodeJS.ProcessEnv = process.env): CenterCo
         "Generate one with: openssl rand -hex 32",
     );
   }
+  // agent へ送る token が center の書き込み用と同じだと、agent の API を持つ者が center の書き込みも持つことになる
+  if (agentToken !== undefined && agentToken === token) {
+    throw new Error("CCX_CENTER_AGENT_TOKEN must differ from CCX_CENTER_TOKEN (the agent token is sent to agent hosts)");
+  }
 
   // 設定だけで越えられる線にしない。README に書いてあることは、環境変数を 1 つ
   // 足した人には届かない。踏むときに手が止まる形にしておく。

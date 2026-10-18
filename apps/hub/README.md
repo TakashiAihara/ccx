@@ -146,7 +146,7 @@ AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url http://127.0.0.1:
 | sqlite file | `CCX_CENTER_DB` | `$CCX_ROOT/center.db` (既定 `~/.ccx/center.db`) |
 | object API の置き場所 | `CCX_CENTER_OBJECTS` | `$CCX_ROOT/center-objects` (既定 `~/.ccx/center-objects`) |
 | 共有 token | `CCX_CENTER_TOKEN` | 未設定 = 認証なし |
-| 起こしの合図で agent に送る token | `CCX_CENTER_AGENT_TOKEN` | 未設定 = agent を起こさない (同じ値を各 agent の `CCX_API_TOKEN` に入れる) |
+| 起こしの合図で agent に送る token | `CCX_CENTER_AGENT_TOKEN` | 未設定 = agent を起こさない (同じ値を各 agent の `CCX_API_TOKEN` に入れる。`CCX_CENTER_TOKEN` と同じ値は起動時に断る) |
 | 非 loopback bind を許す (token 無しで) | `CCX_CENTER_ALLOW_INSECURE_BIND` | 未設定 = 許さない |
 
 ### 共有 token (#158)

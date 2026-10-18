@@ -83,3 +83,20 @@ describe("非 loopback bind", () => {
     expect(loadCenterConfig({}).host).toBe("127.0.0.1");
   });
 });
+
+describe("CCX_CENTER_AGENT_TOKEN", () => {
+  const T = "a".repeat(32);
+  const U = "b".repeat(32);
+
+  test("is read, and an empty one is unset", () => {
+    expect(loadCenterConfig({ CCX_CENTER_AGENT_TOKEN: U }).agentToken).toBe(U);
+    expect(loadCenterConfig({ CCX_CENTER_AGENT_TOKEN: "" }).agentToken).toBeUndefined();
+  });
+
+  // the center sends the agent token to whatever address an agent reports; if it were the
+  // center token too, the center would hand out its own write token
+  test("refuses the same value as CCX_CENTER_TOKEN", () => {
+    expect(() => loadCenterConfig({ CCX_CENTER_TOKEN: T, CCX_CENTER_AGENT_TOKEN: T })).toThrow(/CCX_CENTER_AGENT_TOKEN/);
+    expect(loadCenterConfig({ CCX_CENTER_TOKEN: T, CCX_CENTER_AGENT_TOKEN: U }).agentToken).toBe(U);
+  });
+});

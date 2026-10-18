@@ -231,12 +231,9 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		logger("resume off: no ccx beside ccx-agent and none on PATH, so there is nothing to run `ccx session resume` with")
 		return nil
 	}
-	// The center wakes this agent through its API, so an api url with nothing
-	// listening would advertise an address that cannot be reached.
-	apiURL := cfg.APIURL
-	if apiURL != "" && cfg.APIListen == "" {
-		logger("[api] url is set but [api] listen is not, so the center cannot wake this agent")
-		apiURL = ""
+	apiURL, why := advertisedAPIURL(cfg)
+	if why != "" {
+		logger("%s", why)
 	}
 	return resume.New(resume.Options{
 		Machine:     cfg.Machine,
@@ -252,6 +249,27 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		Now:       time.Now,
 		Log:       logger,
 	})
+}
+
+// advertisedAPIURL is the api url the running list gives the center, or "" with
+// the reason. The center wakes this agent at that url with the agent token, so
+// it is advertised only when the TCP side it names will actually open.
+func advertisedAPIURL(cfg config.Config) (url, why string) {
+	if cfg.APIURL == "" {
+		return "", ""
+	}
+	var reason string
+	switch {
+	case cfg.APIListen == "":
+		reason = "no listen"
+	case cfg.APIToken == "":
+		reason = "no token"
+	case cfg.APITokenErr != nil:
+		reason = "token error"
+	default:
+		return cfg.APIURL, ""
+	}
+	return "", fmt.Sprintf("[api] url is set but the API's TCP side will not open (%s), so the center cannot wake this agent", reason)
 }
 
 // cmdChannel is the per-session MCP channel server Claude Code spawns over

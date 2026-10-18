@@ -127,16 +127,23 @@ function wakeAgent(db: Db, machine: string, user: string, agentToken: string, no
   // 一覧が途絶えた宛先は古い。そこへ起こしに行くと、別の機械に当たるかもしれない
   if (!ep || ep.receivedAtMs < nowMs - RUNNING_FRESH_MS) return;
 
-  // 末尾の / は path と二重にならないように 1 つに揃える
-  const url = `${ep.apiUrl.replace(/\/+$/, "")}/ccx.v1.AgentService/Wake`;
+  // 宛先は origin として保存している (store.ts)。転送は追わない: token を別の場所へ運ばないため
+  const url = `${ep.apiUrl}/ccx.v1.AgentService/Wake`;
   fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${agentToken}` },
     body: "{}",
+    redirect: "manual",
     signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
   }).then(
     (res) => {
-      if (!res.ok) console.error(`wake ${machine}: agent answered ${res.status}`);
+      if (res.status >= 300 && res.status < 400) {
+        console.error(`wake ${machine}: agent at ${url} answered ${res.status}; a redirect is not followed`);
+      } else if (!res.ok) {
+        console.error(`wake ${machine}: agent answered ${res.status}`);
+      }
+      // 本文は使わない。読まずに閉じて、接続を残さない
+      res.body?.cancel().catch(() => undefined);
     },
     (err: unknown) => {
       console.error(`wake ${machine}: ${err instanceof Error ? err.message : String(err)}`);

@@ -167,16 +167,26 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
 }
 
 /**
- * 一覧が名指しする起こしの宛先 (#261)。絶対の http / https で host のあるものだけを通す。
+ * 一覧が名指しする起こしの宛先 (#261)。origin (scheme://host[:port]) だけを通し、正規化した形で返す。
+ * center は RPC の path を足して token を送るので、path / query / fragment / userinfo があると送り先を一覧が決めてしまう。
  * 無い・文字列でない・不正なものは null。parseSessionIds の後に呼ぶので、payload は JSON と分かっている
  */
 function apiURLOf(l: IncomingEvent): string | null {
   const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
   const raw = o.api_url;
   if (typeof raw !== "string") return null;
+  // new URL は "http://host?" の空の query を捨てるので、記号は文字列で見る
+  if (/[?#]/.test(raw)) return null;
   try {
     const u = new URL(raw);
-    if ((u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "") return raw;
+    if (
+      (u.protocol === "http:" || u.protocol === "https:") &&
+      u.pathname === "/" &&
+      u.username === "" &&
+      u.password === ""
+    ) {
+      return `${u.protocol}//${u.host}`;
+    }
   } catch {
     // 相対や scheme の無い文字列は URL にならない。下で null
   }

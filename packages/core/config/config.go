@@ -388,20 +388,26 @@ func normalizePrefix(raw string) string {
 	return p
 }
 
-// apiURLFrom keeps only an absolute http(s) URL with a host. The center calls it
-// as it is, so a value it cannot use would be advertised and then fail there.
+// apiURLFrom keeps only an origin (scheme://host[:port]). The center appends the
+// RPC path to it and sends the agent token there, so a path, query, fragment or
+// userinfo in the configured value would choose where the token goes.
 func apiURLFrom(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", nil
 	}
+	// The messages leave the value out: it may carry userinfo (a password), and they go to the log.
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("api url %q: %w", raw, err)
+		return "", errors.New("api url does not parse as a URL")
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("api url %q is not an absolute http(s) URL", raw)
+		return "", errors.New("api url is not an absolute http(s) URL")
 	}
-	return raw, nil
+	if u.User != nil || (u.Path != "" && u.Path != "/") || strings.ContainsAny(raw, "?#") {
+		return "", errors.New("api url must be an origin only (scheme://host[:port]): no path, query, fragment or userinfo")
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // IsHTTP is whether the hub URL can be the transcript store: the center's
