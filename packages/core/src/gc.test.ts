@@ -54,6 +54,7 @@ beforeAll(async () => {
     protocol: "https",
     mirrorMaxAgeMs: 600_000,
     defaults: { agent: "claude" },
+    resume: { command: "claude --resume {session_id}", agent: "claude" },
   };
 });
 
