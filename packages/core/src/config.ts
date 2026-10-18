@@ -51,9 +51,10 @@ export type Config = {
   transcript?: { endpoint: string; bucket: string; prefix: string; token?: string };
   /**
    * 止まった session を herdr の pane で開き直すときに走らせるコマンド (#261)。
-   * `{session_id}` がプレースホルダ。起動に自分の wrapper (channel のフラグ等) を挟む人が置き換える
+   * `{session_id}` がプレースホルダ。起動に自分の wrapper (channel のフラグ等) を挟む人が置き換える。
+   * agent は、そのコマンドが上げる agent の名前 (herdr の pane が報告する名前)。上がったかをこれで見る
    */
-  resume: { command: string };
+  resume: { command: string; agent: string };
 };
 
 const DEFAULT_MIRROR_MAX_AGE_MS = 10 * 60 * 1000;
@@ -120,7 +121,7 @@ export function defaultConfig(): Config {
     protocol: "https",
     mirrorMaxAgeMs: DEFAULT_MIRROR_MAX_AGE_MS,
     defaults: { agent: "claude" },
-    resume: { command: "claude --resume {session_id}" },
+    resume: { command: "claude --resume {session_id}", agent: "claude" },
   };
 }
 
@@ -206,6 +207,7 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
   // [resume] テーブルも [transcript] と同じ 3 段で引く
   const r: Sources = { ...s, file: (file.resume ?? {}) as Record<string, unknown> };
   const resumeCommand = (await pick(r, "CCX_RESUME_COMMAND", "ccx.resumeCommand", "command")) ?? base.resume.command;
+  const resumeAgent = (await pick(r, "CCX_RESUME_AGENT", "ccx.resumeAgent", "agent")) ?? base.resume.agent;
 
   return {
     root,
@@ -228,6 +230,6 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
           ...(hubToken ? { token: hubToken } : {}),
         }
       : undefined,
-    resume: { command: resumeCommand },
+    resume: { command: resumeCommand, agent: resumeAgent },
   };
 }

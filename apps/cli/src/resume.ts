@@ -64,8 +64,10 @@ export type ResumeOptions = {
   /** pane で走らせるコマンドの雛形 (`{session_id}` がプレースホルダ) */
   command: string;
   herdr: Herdr;
-  /** pane の agent がこの名前になったら上がったとみなす (既定 claude) */
+  /** pane の agent がこの名前で stableMs 続いたら上がったとみなす (既定 claude) */
   agent?: string;
+  /** agent が途切れずに見え続けるべき時間 (既定 5 秒) */
+  stableMs?: number;
   /** archived でも開けるようにする */
   force?: boolean;
   /** agent が上がるのを待つ時間 (既定 40 秒) */
@@ -115,6 +117,7 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   const waitMs = o.waitMs ?? 40_000;
   const pollMs = o.pollMs ?? 1_000;
   const agent = o.agent ?? "claude";
+  const stableMs = o.stableMs ?? STABLE_MS;
 
   // Claude Code の id は小文字。大文字のままでは transcript を見つけられない
   const id = o.sessionId.toLowerCase();
@@ -139,7 +142,7 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   if (!cwd) {
     throw new ResumeError(`${id}'s transcript records no cwd, so there is no directory to open it in`, 1);
   }
-  // repodir は gc で消える。消えた cwd で開くと、claude は別の project として起動する
+  // repodir は gc で消える。消えた cwd の代わりの場所で開くと、session は走っていなかった場所で続くことになる
   const dir = await stat(cwd).catch(() => null);
   if (!dir?.isDirectory()) {
     throw new ResumeError(`${id} ran in ${cwd}, which is no longer a directory here`, 1);
@@ -166,27 +169,31 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   // 利用者が書いたままになる
   const command = expandCommand(o.command, id);
   const ran = await o.herdr(["pane", "run", paneId, command]);
-  if (ran.code !== 0 || ran.timedOut) {
+  if (ran.code !== 0) {
     throw new ResumeError(`workspace ${workspaceId} was created, but herdr pane run failed: ${said(ran)}\n${closeHint(created)}`, 4, created);
   }
 
-  // 2 回続けて見えたら上がったとみなす。起動してすぐ終わるコマンドを 1 回の観測で成功と読まないため
+  // 見えた瞬間ではなく、途切れずに stableMs 見え続けたら上がったとみなす (STABLE_MS)。
+  // 締め切りの時点で見えていれば、続くか途切れるかが分かるまで待つ
   const deadline = Date.now() + waitMs;
   let seen = 0;
+  let since = 0;
   for (;;) {
     const got = await o.herdr(["pane", "get", paneId]);
-    seen = dig(got.stdout, "result", "pane", "agent") === agent ? seen + 1 : 0;
-    if (seen >= 2) return { ...created, cwd, label };
-    if (Date.now() >= deadline) break;
+    const up = got.code === 0 && dig(got.stdout, "result", "pane", "agent") === agent;
+    if (!up) seen = 0;
+    else if (seen++ === 0) since = Date.now();
+    if (seen >= 2 && Date.now() - since >= stableMs) return { ...created, cwd, label };
+    if (Date.now() >= deadline && seen === 0) break;
     await sleep(pollMs);
   }
 
   const shown = await o.herdr(["pane", "read", paneId, "--source", "visible"]);
-  const visible = lastLines(shown.code === 0 ? shown.stdout : shown.stderr, 20);
+  const visible = shown.code === 0 ? lastLines(shown.stdout, 20) : "";
   throw new ResumeError(
     [
       `workspace ${workspaceId} was created and ${command} was run in ${paneId}, but the pane did not report agent=${agent} within ${waitMs} ms`,
-      visible ? `what the pane shows:\n${visible}` : "",
+      shown.code === 0 ? (visible ? `what the pane shows:\n${visible}` : "") : `the pane could not be read: ${said(shown)}`,
       closeHint(created),
     ]
       .filter(Boolean)
@@ -196,28 +203,51 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   );
 }
 
+/**
+ * agent が見え続けるべき時間。d1 で存在しない id を `claude --resume` したところ、pane は約 1.5〜2 秒
+ * agent=claude を報告してから shell に戻った (2 回測った)。その 2 倍を超える長さにして、すぐ終わる
+ * 起動を上がったと読まない
+ */
+export const STABLE_MS = 5_000;
+
 /** 1 回の herdr の呼び出しの上限。止まった herdr で resume ごと止まらないようにする */
 const HERDR_TIMEOUT_MS = 15_000;
 
-/** 起動できなければ code 127 (shell が「無い」に返すのと同じ値) と理由を返す。呼び手が段階ごとに exit code を決める */
-async function runHerdr(args: string[]): Promise<HerdrResult> {
+/**
+ * 起動できなければ code 127 (shell が「無い」に返すのと同じ値) と理由を返す。呼び手が段階ごとに exit code を決める。
+ * 時間切れは自分のタイマーで決める: 子が TERM を握ったり、孫が stdout を持ち続けたりしても止まるように、
+ * SIGKILL を送り、出力は待たずに返す
+ */
+export async function runHerdr(args: string[], timeoutMs = HERDR_TIMEOUT_MS, bin = "herdr"): Promise<HerdrResult> {
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    proc = Bun.spawn(["herdr", ...args], { stdout: "pipe", stderr: "pipe", timeout: HERDR_TIMEOUT_MS });
+    proc = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe" });
   } catch (e) {
     return { code: 127, stdout: "", stderr: `herdr is needed to open a session, and it could not be run: ${e instanceof Error ? e.message : String(e)}` };
   }
-  const [stdout, stderr, code] = await Promise.all([
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<HerdrResult>((resolve) => {
+    timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      resolve({ code: 137, stdout: "", stderr: `herdr ${args.slice(0, 2).join(" ")} did not answer within ${timeoutMs} ms`, timedOut: true });
+    }, timeoutMs);
+  });
+  const done = Promise.all([
     new Response(proc.stdout as ReadableStream).text(),
     new Response(proc.stderr as ReadableStream).text(),
     proc.exited,
-  ]);
-  return { code, stdout, stderr, timedOut: proc.signalCode === "SIGTERM" };
+  ]).then(([stdout, stderr, code]): HerdrResult => ({ code, stdout, stderr }));
+  try {
+    return await Promise.race([done, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
+/** 1 時間を超える待ちは打ち間違いとみなす (1e306 秒は Infinity ms になり、永久に待つ) */
 const parseWait = (v: string): number => {
   const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`--wait must be a positive number of seconds: ${v}`);
+  if (!Number.isFinite(n) || n <= 0 || n > 3600) throw new Error(`--wait must be a number of seconds in (0, 3600]: ${v}`);
   return n * 1000;
 };
 
@@ -244,15 +274,19 @@ export function registerResume(session: Command): void {
           sessionId,
           home,
           command: cfg.resume.command,
-          herdr: runHerdr,
-          agent: cfg.defaults.agent,
+          herdr: (args) => runHerdr(args),
+          agent: cfg.resume.agent,
           force: Boolean(o.force),
           waitMs: o.wait,
         });
         if (o.json) console.log(JSON.stringify(r, null, 2));
         else console.log(`opened ${r.workspaceId} pane=${r.paneId} ${r.label} (${r.cwd})`);
       } catch (e) {
-        if (!(e instanceof ResumeError)) throw e;
+        if (!(e instanceof ResumeError)) {
+          // 他のコマンドと同じく index.ts が stderr と exit code を受け持つ。--json の読み手には失敗の形だけを渡す
+          if (o.json) console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e), exitCode: 1 }, null, 2));
+          throw e;
+        }
         if (o.json) console.log(JSON.stringify({ error: e.message, exitCode: e.exitCode, ...e.created }, null, 2));
         console.error(e.message);
         process.exitCode = e.exitCode;

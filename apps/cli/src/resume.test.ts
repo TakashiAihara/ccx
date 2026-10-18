@@ -13,7 +13,9 @@ import { join } from "node:path";
 
 import { writeDeclared } from "@ccx/core";
 
-import { expandCommand, ResumeError, resumeSession, type Herdr, type HerdrResult } from "./resume.ts";
+import { findLocalTranscript } from "@ccx/core";
+
+import { expandCommand, ResumeError, resumeSession, runHerdr, STABLE_MS, type Herdr, type HerdrResult } from "./resume.ts";
 
 const ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
@@ -59,7 +61,7 @@ const CREATED = ok({ result: { workspace: { workspace_id: "wZZ" }, root_pane: { 
  * herdr の偽物。`pane get` の応答を `agents` の順に返す (尽きたら最後の値を繰り返す)。
  * 値が "!" なら code 1 で失敗を返す
  */
-function fakeHerdr(o: { agents?: string[]; create?: HerdrResult; run?: HerdrResult } = {}) {
+function fakeHerdr(o: { agents?: string[]; create?: HerdrResult; run?: HerdrResult; readFails?: boolean } = {}) {
   const calls: Call[] = [];
   const agents = o.agents ?? ["claude"];
   let gets = 0;
@@ -70,18 +72,23 @@ function fakeHerdr(o: { agents?: string[]; create?: HerdrResult; run?: HerdrResu
     if (a === "pane" && b === "run") return o.run ?? ok({});
     if (a === "pane" && b === "get") {
       const agent = agents[Math.min(gets++, agents.length - 1)]!;
-      if (agent === "!") return { code: 1, stdout: "", stderr: "busy" };
+      // 失敗した呼び出しが agent=claude を含む stdout を返しても、数えないことを見るため
+      if (agent === "!") return { code: 1, stdout: JSON.stringify({ result: { pane: { agent: "claude" } } }), stderr: "busy" };
       const pane: Record<string, unknown> = { pane_id: "wZZ:p1" };
       if (agent) pane.agent = agent;
       return ok({ result: { pane } });
     }
-    if (a === "pane" && b === "read") return { code: 0, stdout: "line1\nzsh: command not found: claude-resume\n", stderr: "" };
+    if (a === "pane" && b === "read") {
+      if (o.readFails) return { code: 1, stdout: "", stderr: "pane gone" };
+      const lines = Array.from({ length: 24 }, (_, i) => `line${i + 1}`);
+      return { code: 0, stdout: [...lines, "zsh: command not found: claude-resume", ""].join("\n"), stderr: "" };
+    }
     return { code: 2, stdout: "", stderr: `unexpected ${args.join(" ")}` };
   };
   return { herdr, calls };
 }
 
-const base = { command: "claude --resume {session_id}", waitMs: 200, pollMs: 5 };
+const base = { command: "claude --resume {session_id}", waitMs: 200, pollMs: 5, stableMs: 0 };
 
 async function failure(p: Promise<unknown>): Promise<ResumeError> {
   const e = await p.then(
@@ -146,6 +153,10 @@ test("label の改行・連続した空白は 1 つの空白にし、空白だ�
   await writeDeclared(ID, { label: "  a\n\tb  " }, home);
   const one = fakeHerdr();
   expect((await resumeSession({ ...base, sessionId: ID, home, herdr: one.herdr })).label).toBe("01ABCDEF｜a b");
+
+  await writeFile(join(home, "sessions", ID, "label"), " \n\t ");
+  const two = fakeHerdr();
+  expect((await resumeSession({ ...base, sessionId: ID, home, herdr: two.herdr })).label).toBe("01ABCDEF");
 });
 
 test("動いている session は開かない (exit 1、herdr を呼ばない)", async () => {
@@ -249,6 +260,16 @@ test("create が成功したのに id が読めなければ、workspace は残�
   expect(calls.length).toBe(1);
 });
 
+test("create の答えに pane id だけ / workspace id だけが無くても exit 4", async () => {
+  await transcript();
+  for (const result of [{ workspace: { workspace_id: "wZZ" } }, { root_pane: { pane_id: "wZZ:p1" } }]) {
+    const { herdr } = fakeHerdr({ create: ok({ result }) });
+    const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr }));
+    expect(e.exitCode).toBe(4);
+  }
+});
+
+
 test("create が時間内に答えなければ exit 4 (作られたかもしれない)", async () => {
   await transcript();
   const { herdr } = fakeHerdr({ create: { code: 143, stdout: "", stderr: "", timedOut: true } });
@@ -280,11 +301,99 @@ test("待っても agent=claude にならなければ exit 4 で、pane に見�
   expect(calls.at(-1)).toEqual(["pane", "read", "wZZ:p1", "--source", "visible"]);
 });
 
-test("1 回だけ agent=claude が見えて消えたら、上がったとは読まない", async () => {
+test("続かずに 2 回見えても、上がったとは読まない", async () => {
   await transcript();
-  const { herdr } = fakeHerdr({ agents: ["claude", ""] });
+  const { herdr } = fakeHerdr({ agents: ["claude", "", "claude", ""] });
   const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 60, pollMs: 5 }));
   expect(e.exitCode).toBe(4);
+});
+
+test("締め切りの時点で 1 回見えていれば、確かめの 1 回を待って開けたとする", async () => {
+  await transcript();
+  const { herdr, calls } = fakeHerdr({ agents: ["claude", "claude"] });
+  await resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0, pollMs: 5 });
+  expect(calls.filter((c) => c[1] === "get").length).toBe(2);
+});
+
+test("締め切りの時点で 1 度も見えていなければ、そこで止める", async () => {
+  await transcript();
+  const { herdr, calls } = fakeHerdr({ agents: ["", "claude", "claude"] });
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0, pollMs: 5 }));
+  expect(e.exitCode).toBe(4);
+  expect(calls.filter((c) => c[1] === "get").length).toBe(1);
+});
+
+test("pane に見えているものは末尾の 20 行", async () => {
+  await transcript();
+  const { herdr } = fakeHerdr({ agents: [""] });
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0 }));
+  expect(e.message).toContain("line6\n");
+  expect(e.message).not.toContain("line5\n");
+  expect(e.message).toContain("command not found: claude-resume");
+});
+
+test("pane を読めなければ、herdr の答えを pane の中身としては出さない", async () => {
+  await transcript();
+  const { herdr } = fakeHerdr({ agents: [""], readFails: true });
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0 }));
+  expect(e.message).toContain("the pane could not be read: pane gone");
+  expect(e.message).not.toContain("what the pane shows");
+});
+
+test("見え続ける時間は 5 秒", () => {
+  expect(STABLE_MS).toBe(5000);
+});
+
+test("見えてから stableMs 経つまでは開けたとしない", async () => {
+  await transcript();
+  const t0 = Date.now();
+  const { herdr, calls } = fakeHerdr({ agents: ["claude"] });
+  await resumeSession({ ...base, sessionId: ID, home, herdr, stableMs: 60 });
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(60);
+  expect(calls.filter((c) => c[1] === "get").length).toBeGreaterThan(2);
+});
+
+test("stableMs の間に途切れたら、締め切り後でも開けたとしない", async () => {
+  await transcript();
+  const { herdr } = fakeHerdr({ agents: ["claude", "claude", "claude", ""] });
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0, stableMs: 1000 }));
+  expect(e.exitCode).toBe(4);
+});
+
+test("cwd がディレクトリでなくファイルなら開かない (exit 1)", async () => {
+  const file = join(home, "afile");
+  await writeFile(file, "x");
+  await transcript(ID, file);
+  const { herdr, calls } = fakeHerdr();
+  const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr }));
+  expect(e.exitCode).toBe(1);
+  expect(calls).toEqual([]);
+});
+
+test("findLocalTranscript は見つけた transcript のパスを返し、無ければ null", async () => {
+  await mkdir(join(home, "projects", "-a"), { recursive: true });
+  await transcript();
+  expect(await findLocalTranscript(ID, home)).toBe(join(home, "projects", "-work-01ABCDEF", `${ID}.jsonl`));
+  expect(await findLocalTranscript("ffffffff-ffff-4fff-8fff-ffffffffffff", home)).toBeNull();
+});
+
+test("runHerdr は TERM を握る子も時間で止め、timedOut を返す", async () => {
+  const bin = join(home, "slow");
+  await writeFile(bin, `#!/bin/sh\necho $$ > "${join(home, "slow.pid")}"\ntrap '' TERM\nexec sleep 5\n`);
+  await chmod(bin, 0o755);
+  const t0 = Date.now();
+  const r = await runHerdr(["workspace", "create"], 200, bin);
+  expect(r.timedOut).toBe(true);
+  expect(Date.now() - t0).toBeLessThan(2000);
+  const pid = Number(await Bun.file(join(home, "slow.pid")).text());
+  await Bun.sleep(100);
+  expect(() => process.kill(pid, 0)).toThrow();
+});
+
+test("runHerdr は起動できなければ code 127", async () => {
+  const r = await runHerdr(["x"], 200, join(home, "no-such-herdr"));
+  expect(r.code).toBe(127);
+  expect(r.timedOut).toBeUndefined();
 });
 
 test("expandCommand は {session_id} を全部置き換える", () => {
@@ -295,7 +404,7 @@ test("expandCommand は {session_id} を全部置き換える", () => {
 
 const CLI = join(import.meta.dir, "index.ts");
 
-async function cli(args: string[], herdrScript: string) {
+async function cli(args: string[], herdrScript: string, extraEnv: Record<string, string> = {}) {
   const bin = join(home, "bin");
   await mkdir(bin, { recursive: true });
   await writeFile(join(bin, "herdr"), `#!/bin/sh\n${herdrScript}\n`);
@@ -309,6 +418,11 @@ async function cli(args: string[], herdrScript: string) {
       XDG_CONFIG_HOME: join(home, "xdg"),
       CCX_RESUME_COMMAND: "",
       CCX_HUB_URL: "",
+      CCX_AGENT: "",
+      // 手元の git config (ccx.resumeCommand / ccx.agent) を読ませない
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -324,7 +438,15 @@ test("CLI: 開けたら exit 0、先頭一致の id を解いて開く", async (
   const r = await cli([ID.slice(0, 8), "--json"], `case "$1 $2" in "workspace create") echo '${CREATE_JSON}';; "pane get") echo '{"result":{"pane":{"agent":"claude"}}}';; *) echo '{}';; esac`);
   expect(r.code).toBe(0);
   expect(JSON.parse(r.stdout)).toEqual({ workspaceId: "wZZ", paneId: "wZZ:p1", cwd, label: "01ABCDEF" });
-});
+}, 15_000);
+
+test("CLI: --force で archived を開き、--json が無ければ 1 行で言う", async () => {
+  await transcript();
+  await writeDeclared(ID, { archived: true }, home);
+  const r = await cli([ID, "--force"], `case "$1 $2" in "workspace create") echo '${CREATE_JSON}';; "pane get") echo '{"result":{"pane":{"agent":"claude"}}}';; *) echo '{}';; esac`);
+  expect(r.code).toBe(0);
+  expect(r.stdout).toBe(`opened wZZ pane=wZZ:p1 01ABCDEF (${cwd})\n`);
+}, 15_000);
 
 test("CLI: agent が上がらなければ exit 4 で、--json は workspace の id を出す", async () => {
   await transcript();
@@ -332,6 +454,20 @@ test("CLI: agent が上がらなければ exit 4 で、--json は workspace の 
   expect(r.code).toBe(4);
   expect(JSON.parse(r.stdout)).toMatchObject({ exitCode: 4, workspaceId: "wZZ", paneId: "wZZ:p1" });
   expect(r.stderr).toContain("herdr workspace close wZZ");
+});
+
+test("CLI: 待つ agent の名前は [resume] agent (CCX_RESUME_AGENT) から読む", async () => {
+  await transcript();
+  const r = await cli([ID, "--wait", "0.05"], `case "$1 $2" in "workspace create") echo '${CREATE_JSON}';; "pane get") echo '{"result":{"pane":{"agent":"claude"}}}';; *) echo '{}';; esac`, { CCX_RESUME_AGENT: "codex" });
+  expect(r.code).toBe(4);
+  expect(r.stderr).toContain("agent=codex");
+});
+
+test("CLI: --wait は 3600 秒まで", async () => {
+  const r = await cli([ID, "--wait", "3601"], `echo called >&2`);
+  expect(r.code).not.toBe(0);
+  expect(r.stderr).toContain("--wait must be");
+  expect(r.stderr).not.toContain("called");
 });
 
 test("CLI: 開く前に止めたら exit 1 で、herdr を呼ばない", async () => {

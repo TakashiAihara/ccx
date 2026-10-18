@@ -133,8 +133,8 @@ it is only in the store) and its cwd still in place, and neither a center nor `c
 refuses a session that is running here; it cannot see one running on another machine. In the new
 pane it runs `claude --resume {session_id}`; put your own launcher in its place with
 `CCX_RESUME_COMMAND` / `git config ccx.resumeCommand` / `[resume] command` in `config.toml` (it
-must contain `{session_id}`, e.g. `IS_SANDBOX=1 my-claude-wrapper {session_id}`). It waits for the
-pane to report the agent named by `defaults.agent` (`claude`) twice in a row.
+must contain `{session_id}`, e.g. `IS_SANDBOX=1 my-claude-wrapper {session_id}`). It waits until
+the pane has reported the agent named by `[resume] agent` (`claude`) without a gap for 5 s.
 Exit `0` means the agent came up; `1` means nothing was created; `4` means a workspace was created
 (or may have been) but the agent did not come up within `--wait` seconds (default 40) — what the
 pane shows and how to close the workspace are printed, and `--json` prints its id.

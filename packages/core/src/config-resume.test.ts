@@ -48,3 +48,18 @@ test("CCX_RESUME_COMMAND が git config に勝つ", async () => {
   const cfg = await loadConfig({ env: { CCX_CONFIG: withFile, CCX_RESUME_COMMAND: "from-env {session_id}" }, git });
   expect(cfg.resume.command).toBe("from-env {session_id}");
 });
+
+test("[resume] agent は既定 claude で、env > git > ファイルの順", async () => {
+  expect((await loadConfig({ env: { CCX_CONFIG: withoutFile }, git: noGit })).resume.agent).toBe("claude");
+  await Bun.write(withFile, '[resume]\ncommand = "from-file {session_id}"\nagent = "file-agent"\n');
+  expect((await loadConfig({ env: { CCX_CONFIG: withFile }, git: noGit })).resume.agent).toBe("file-agent");
+  const git = async (k: string) => (k === "ccx.resumeAgent" ? "git-agent" : null);
+  expect((await loadConfig({ env: { CCX_CONFIG: withFile }, git })).resume.agent).toBe("git-agent");
+  expect((await loadConfig({ env: { CCX_CONFIG: withFile, CCX_RESUME_AGENT: "env-agent" }, git })).resume.agent).toBe("env-agent");
+});
+
+test("[resume] agent は defaults.agent とは別 (新しい repodir の agent を変えても待つ名前は変わらない)", async () => {
+  const cfg = await loadConfig({ env: { CCX_CONFIG: withoutFile, CCX_AGENT: "copilot" }, git: noGit });
+  expect(cfg.defaults.agent).toBe("copilot");
+  expect(cfg.resume.agent).toBe("claude");
+});
