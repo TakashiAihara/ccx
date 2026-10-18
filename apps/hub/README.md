@@ -129,7 +129,7 @@ DELETE /<bucket>/<key>?uploadId=             multipart 中止
 - 実装しているのは transcript の push / pull / 検索が使う範囲だけ。versioning / ACL / 署名検証は無い。署名は受け取るが見ない — 認証は center 全体で持つべきもので (「非 loopback bind は既定で拒む」)、ここだけ先に持たせても塞がらない
 - ファイルシステムの上に置くことから来る制約: `a` と `a/b` は両立しない (S3 では両方置ける。後から来た方を 409 `KeyConflict` で断る) / `/` で終わる key (ディレクトリ marker) は置けない (400) / 1 セグメント 255 バイト超は 400 `KeyTooLongError` / Content-Type と `x-amz-meta-*` は保存しない / 一覧の `Contents` に ETag は載らない (載せるには全 object を読むことになる)
 - 動かして確かめたクライアント: Bun.S3Client (`objects.test.ts`) / DuckDB httpfs (`ccx transcript search`、`apps/cli/src/search.test.ts`) / aws cli (`s3 ls` / `cp`、レビュー時)
-- `/healthz` と `/ccx.v1.*` の route が先に照合されるので、`healthz` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
+- `/healthz` と `/ui` と `/ccx.v1.*` の route が先に照合されるので、`healthz` と `ui` という名前の bucket は使えない (`ccx.v1.*` は大文字を含むので bucket 名として元から無効)
 - 1 回の PUT で置ける大きさは 1 GB (`maxRequestBodySize`)。それより大きいものは multipart で
 
 ```bash
@@ -150,7 +150,7 @@ AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url http://127.0.0.1:
 
 ### 共有 token (#158)
 
-`CCX_CENTER_TOKEN` を設定すると、`/healthz` 以外の全口 (Connect の RPC と S3 互換 object API) が
+`CCX_CENTER_TOKEN` を設定すると、`GET` / `HEAD` の `/healthz` と `/ui` 以外の全口 (Connect の RPC と S3 互換 object API) が
 token を要求し、合わなければ 401 を返す。受ける形は 3 つ。
 
 - `Authorization: Bearer <token>` — ccx-agent と ccx CLI の Connect 呼び出し
@@ -159,7 +159,7 @@ token を要求し、合わなければ 401 を返す。受ける形は 3 つ。
 S3 の署名そのものは検証しない。access key id は平文で流れるので、強さは Bearer と同じ。
 presigned URL は受けない (署名も期限も見ないので、受けると URL が無期限の鍵になる)。受けなくても、
 presigned URL の `X-Amz-Credential` には token がそのまま入るので、作って人に渡さない。
-`GET` / `HEAD /healthz` だけは token 無しで答える。
+`GET` / `HEAD` の `/healthz` と `/ui` だけは token 無しで答える。`/ui` は token を入れる page そのものなので通す。
 
 token は 16 文字以上の `A-Z a-z 0-9 . _ ~ -` に限る (S3 は `Credential=<token>/...` の形で運ぶので、
 `/` や `,` を含むと切れる)。作るなら `openssl rand -hex 32`。
@@ -219,6 +219,6 @@ ccx-agent 側は center の URL を設定する (`CCX_HUB_URL` / `ccx.hubUrl` / 
 - 認証と TLS。だから非 loopback bind は明示の opt-in がなければ拒む (上記)
 - 保持期間。`events` は無限に増える。ccx-agent 側の spool にも上限が無い (#90 から続く)。object API も同じで、置いたものは消すまで残る。完了も中止もされなかった multipart (`<objects dir>/.multipart/<uploadId>/`) も同じで、誰も掃かない
 - object API の一覧は index を持たず、ページごとに prefix 配下を歩き直す。実測で 2 万 key のとき 1 ページ 0.55 s、全部で 15 s (レビュー時の計測)。transcript の数がそこに届いたら index を足す
-- Web UI (#46)。ここは事実を返すだけで、描かない
+- Web UI (#46)。描くのは `/ui` の 1 枚 (止まった session を選んで開く、#261) だけで、それ以外は事実を返すだけ
 - 会話としての読み方 (#63)、budget 集計 (#83)、group 解決 (#78)。すべてこのデータの
   上のクエリ

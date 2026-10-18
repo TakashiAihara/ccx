@@ -191,7 +191,8 @@ request is on the center but nothing answered in time — nothing is known about
 may be open; the message says whether any `ccx-agent` took it — or that it expired: untaken within
 ten minutes it is never opened, taken but unanswered it may have been. `1` and `4` are the other machine's own
 `ccx session resume` exit codes, with
-its stderr. There is no Web UI over the same list yet. Anyone holding the center's token can open
+its stderr. The center's page at `http://<center>:8791/ui` shows the same list, with an Open
+button per session (it asks for the center's token once). The token stays in the browser's localStorage, and the center speaks plain http, so use the page only inside the LAN. Anyone holding the center's token can open
 a stopped session on any machine and any user: the request carries only the id, `--force` and
 `--wait`, and what runs there is that machine's own resume command.
 
