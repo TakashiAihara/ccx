@@ -185,11 +185,13 @@ pane shows and how to close the workspace are printed, and `--json` prints its i
 
 With `-m` / `-u` naming another machine or user, the request goes to the center instead and that
 machine's `ccx-agent` opens it (only a full id: a prefix is resolved from this machine's
-transcripts). It needs a center, and `--wait` plus a minute, because the agent has to pick the
+transcripts). It needs a center, and `--wait` plus two minutes, because the agent has to pick the
 request up and run its own resume. Exit `5` means the request is on the center but nothing answered
 in time — nothing is known about the workspace, so it may be open; the message says whether any
 `ccx-agent` took it. `1` and `4` are the other machine's own `ccx session resume` exit codes, with
-its stderr. There is no Web UI over the same list yet.
+its stderr. There is no Web UI over the same list yet. Anyone holding the center's token can open
+a stopped session on any machine and any user: the request carries only the id, `--force` and
+`--wait`, and what runs there is that machine's own resume command.
 
 ### Taking a session's transcript with you
 

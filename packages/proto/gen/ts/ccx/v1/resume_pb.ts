@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/resume.proto.
  */
 export const file_ccx_v1_resume: GenFile = /*@__PURE__*/
-  fileDesc("ChNjY3gvdjEvcmVzdW1lLnByb3RvEgZjY3gudjEiqQIKDVJlc3VtZVJlcXVlc3QSCgoCaWQYASABKAkSHwoDa2V5GAIgASgLMhIuY2N4LnYxLlNlc3Npb25LZXkSDQoFZm9yY2UYAyABKAgSMAoMcmVxdWVzdGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjbGFpbWVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJgoHb3V0Y29tZRgHIAEoDjIVLmNjeC52MS5SZXN1bWVPdXRjb21lEg4KBmRldGFpbBgIIAEoCRIRCglleGl0X2NvZGUYCSABKAUiRgoUUmVxdWVzdFJlc3VtZVJlcXVlc3QSHwoDa2V5GAEgASgLMhIuY2N4LnYxLlNlc3Npb25LZXkSDQoFZm9yY2UYAiABKAgiPwoVUmVxdWVzdFJlc3VtZVJlc3BvbnNlEiYKB3JlcXVlc3QYASABKAsyFS5jY3gudjEuUmVzdW1lUmVxdWVzdCJdChlMaXN0UmVzdW1lUmVxdWVzdHNSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCRISCgpzZXNzaW9uX2lkGAMgASgJEg0KBWxpbWl0GAQgASgNIkUKGkxpc3RSZXN1bWVSZXF1ZXN0c1Jlc3BvbnNlEicKCHJlcXVlc3RzGAEgAygLMhUuY2N4LnYxLlJlc3VtZVJlcXVlc3QiMwoSQ2xhaW1SZXN1bWVSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCSI9ChNDbGFpbVJlc3VtZVJlc3BvbnNlEiYKB3JlcXVlc3QYASABKAsyFS5jY3gudjEuUmVzdW1lUmVxdWVzdCJsChNGaW5pc2hSZXN1bWVSZXF1ZXN0EgoKAmlkGAEgASgJEiYKB291dGNvbWUYAiABKA4yFS5jY3gudjEuUmVzdW1lT3V0Y29tZRIOCgZkZXRhaWwYAyABKAkSEQoJZXhpdF9jb2RlGAQgASgFIj4KFEZpbmlzaFJlc3VtZVJlc3BvbnNlEiYKB3JlcXVlc3QYASABKAsyFS5jY3gudjEuUmVzdW1lUmVxdWVzdCplCg1SZXN1bWVPdXRjb21lEh4KGlJFU1VNRV9PVVRDT01FX1VOU1BFQ0lGSUVEEAASGQoVUkVTVU1FX09VVENPTUVfT1BFTkVEEAESGQoVUkVTVU1FX09VVENPTUVfRkFJTEVEEAIyzQIKDVJlc3VtZVNlcnZpY2USTAoNUmVxdWVzdFJlc3VtZRIcLmNjeC52MS5SZXF1ZXN0UmVzdW1lUmVxdWVzdBodLmNjeC52MS5SZXF1ZXN0UmVzdW1lUmVzcG9uc2USWwoSTGlzdFJlc3VtZVJlcXVlc3RzEiEuY2N4LnYxLkxpc3RSZXN1bWVSZXF1ZXN0c1JlcXVlc3QaIi5jY3gudjEuTGlzdFJlc3VtZVJlcXVlc3RzUmVzcG9uc2USRgoLQ2xhaW1SZXN1bWUSGi5jY3gudjEuQ2xhaW1SZXN1bWVSZXF1ZXN0GhsuY2N4LnYxLkNsYWltUmVzdW1lUmVzcG9uc2USSQoMRmluaXNoUmVzdW1lEhsuY2N4LnYxLkZpbmlzaFJlc3VtZVJlcXVlc3QaHC5jY3gudjEuRmluaXNoUmVzdW1lUmVzcG9uc2ViBnByb3RvMw", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChNjY3gvdjEvcmVzdW1lLnByb3RvEgZjY3gudjEi5QIKDVJlc3VtZVJlcXVlc3QSCgoCaWQYASABKAkSHwoDa2V5GAIgASgLMhIuY2N4LnYxLlNlc3Npb25LZXkSDQoFZm9yY2UYAyABKAgSMAoMcmVxdWVzdGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjbGFpbWVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtmaW5pc2hlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASJgoHb3V0Y29tZRgHIAEoDjIVLmNjeC52MS5SZXN1bWVPdXRjb21lEg4KBmRldGFpbBgIIAEoCRIRCglleGl0X2NvZGUYCSABKAUSEwoLY2xhaW1fdG9rZW4YCiABKAkSDwoHZXhwaXJlZBgLIAEoCBIUCgx3YWl0X3NlY29uZHMYDCABKA0iXAoUUmVxdWVzdFJlc3VtZVJlcXVlc3QSHwoDa2V5GAEgASgLMhIuY2N4LnYxLlNlc3Npb25LZXkSDQoFZm9yY2UYAiABKAgSFAoMd2FpdF9zZWNvbmRzGAMgASgNIj8KFVJlcXVlc3RSZXN1bWVSZXNwb25zZRImCgdyZXF1ZXN0GAEgASgLMhUuY2N4LnYxLlJlc3VtZVJlcXVlc3QiXQoZTGlzdFJlc3VtZVJlcXVlc3RzUmVxdWVzdBIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRINCgVsaW1pdBgEIAEoDSJFChpMaXN0UmVzdW1lUmVxdWVzdHNSZXNwb25zZRInCghyZXF1ZXN0cxgBIAMoCzIVLmNjeC52MS5SZXN1bWVSZXF1ZXN0IjMKEkNsYWltUmVzdW1lUmVxdWVzdBIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiPQoTQ2xhaW1SZXN1bWVSZXNwb25zZRImCgdyZXF1ZXN0GAEgASgLMhUuY2N4LnYxLlJlc3VtZVJlcXVlc3QigQEKE0ZpbmlzaFJlc3VtZVJlcXVlc3QSCgoCaWQYASABKAkSJgoHb3V0Y29tZRgCIAEoDjIVLmNjeC52MS5SZXN1bWVPdXRjb21lEg4KBmRldGFpbBgDIAEoCRIRCglleGl0X2NvZGUYBCABKAUSEwoLY2xhaW1fdG9rZW4YBSABKAkiPgoURmluaXNoUmVzdW1lUmVzcG9uc2USJgoHcmVxdWVzdBgBIAEoCzIVLmNjeC52MS5SZXN1bWVSZXF1ZXN0KmUKDVJlc3VtZU91dGNvbWUSHgoaUkVTVU1FX09VVENPTUVfVU5TUEVDSUZJRUQQABIZChVSRVNVTUVfT1VUQ09NRV9PUEVORUQQARIZChVSRVNVTUVfT1VUQ09NRV9GQUlMRUQQAjLNAgoNUmVzdW1lU2VydmljZRJMCg1SZXF1ZXN0UmVzdW1lEhwuY2N4LnYxLlJlcXVlc3RSZXN1bWVSZXF1ZXN0Gh0uY2N4LnYxLlJlcXVlc3RSZXN1bWVSZXNwb25zZRJbChJMaXN0UmVzdW1lUmVxdWVzdHMSIS5jY3gudjEuTGlzdFJlc3VtZVJlcXVlc3RzUmVxdWVzdBoiLmNjeC52MS5MaXN0UmVzdW1lUmVxdWVzdHNSZXNwb25zZRJGCgtDbGFpbVJlc3VtZRIaLmNjeC52MS5DbGFpbVJlc3VtZVJlcXVlc3QaGy5jY3gudjEuQ2xhaW1SZXN1bWVSZXNwb25zZRJJCgxGaW5pc2hSZXN1bWUSGy5jY3gudjEuRmluaXNoUmVzdW1lUmVxdWVzdBocLmNjeC52MS5GaW5pc2hSZXN1bWVSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.ResumeRequest
@@ -76,6 +76,27 @@ export type ResumeRequest = Message<"ccx.v1.ResumeRequest"> & {
    * @generated from field: int32 exit_code = 9;
    */
   exitCode: number;
+
+  /**
+   * 最後に取った ccx-agent に渡した印。FinishResume で返してもらい、取り直された後の古い結果を断る。
+   *
+   * @generated from field: string claim_token = 10;
+   */
+  claimToken: string;
+
+  /**
+   * 終わらないまま期限 (置いてから一定時間) を過ぎた。agent はもう取らず、同じ session に新しい依頼を置ける。
+   *
+   * @generated from field: bool expired = 11;
+   */
+  expired: boolean;
+
+  /**
+   * 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+   *
+   * @generated from field: uint32 wait_seconds = 12;
+   */
+  waitSeconds: number;
 };
 
 /**
@@ -98,6 +119,13 @@ export type RequestResumeRequest = Message<"ccx.v1.RequestResumeRequest"> & {
    * @generated from field: bool force = 2;
    */
   force: boolean;
+
+  /**
+   * 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+   *
+   * @generated from field: uint32 wait_seconds = 3;
+   */
+  waitSeconds: number;
 };
 
 /**
@@ -233,6 +261,8 @@ export type FinishResumeRequest = Message<"ccx.v1.FinishResumeRequest"> & {
   outcome: ResumeOutcome;
 
   /**
+   * 長ければ center が末尾の 4096 文字だけを持つ。
+   *
    * @generated from field: string detail = 3;
    */
   detail: string;
@@ -241,6 +271,13 @@ export type FinishResumeRequest = Message<"ccx.v1.FinishResumeRequest"> & {
    * @generated from field: int32 exit_code = 4;
    */
   exitCode: number;
+
+  /**
+   * ClaimResume で受け取った claim_token。
+   *
+   * @generated from field: string claim_token = 5;
+   */
+  claimToken: string;
 };
 
 /**
@@ -311,7 +348,8 @@ export const ResumeOutcomeSchema: GenEnum<ResumeOutcome> = /*@__PURE__*/
  */
 export const ResumeService: GenService<{
   /**
-   * 依頼を置く。同じ session に終わっていない依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+   * 依頼を置く。同じ session に終わっていない (期限内の) 依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+   * そのとき force が新しく true で来たら、その依頼を force にする。
    *
    * @generated from rpc ccx.v1.ResumeService.RequestResume
    */
@@ -331,8 +369,9 @@ export const ResumeService: GenService<{
     output: typeof ListResumeRequestsResponseSchema;
   },
   /**
-   * ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない最古の依頼を 1 件取る。無ければ request は未設定。
-   * 取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。
+   * ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
+   * 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。取るたびに
+   * 新しい claim_token が振られる。
    *
    * @generated from rpc ccx.v1.ResumeService.ClaimResume
    */
@@ -342,7 +381,8 @@ export const ResumeService: GenService<{
     output: typeof ClaimResumeResponseSchema;
   },
   /**
-   * 取った依頼の結果を返す。取っていない依頼・終わった依頼には FAILED_PRECONDITION。
+   * 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
+   * 終わった依頼には FAILED_PRECONDITION。
    *
    * @generated from rpc ccx.v1.ResumeService.FinishResume
    */

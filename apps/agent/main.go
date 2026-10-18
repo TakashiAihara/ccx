@@ -128,14 +128,29 @@ func cmdServe() int {
 		// running session's transcript.jsonl to the store through the center.
 		// collect hands it the hook payloads after the ack, so the hook's own path
 		// is unchanged.
-		if lt := startLiveTranscript(cfg, c, logger); lt != nil {
-			concerns = append(concerns, lt)
+		var lt *livetranscript.Sync
+		if l := startLiveTranscript(cfg, logger); l != nil {
+			concerns = append(concerns, l)
+			lt = l
 		}
 		// Resume (#261): what runs here is a fact only this machine knows, and
 		// the center's ask is answered by the same ccx CLI a person would run.
-		if rs := startResume(cfg, logger); rs != nil {
-			concerns = append(concerns, rs)
+		var rs *resume.Resume
+		if r := startResume(cfg, logger); r != nil {
+			concerns = append(concerns, r)
+			rs = r
 		}
+		// One observer, both of them: the live transcript follows each running
+		// session's transcript, and resume learns the Claude home a session runs
+		// under. Each only needs the payload, and either may be off.
+		c.Observe(func(p []byte) {
+			if lt != nil {
+				lt.Notify(p)
+			}
+			if rs != nil {
+				rs.Notice(p)
+			}
+		})
 	}
 	if cfg.Heartbeat.Err != nil {
 		logger("heartbeat off: %v", cfg.Heartbeat.Err)
@@ -169,8 +184,10 @@ func cmdServe() int {
 // It needs collect — the hook events are what say which sessions are running —
 // and an http(s) hub, because the store is the center's object API (#210).
 // Returns nil when either is missing; a hub that is not http(s) says why in the
-// log, no hub at all stays quiet (there is nothing to sync to).
-func startLiveTranscript(cfg config.Config, c *collect.Collect, logger func(string, ...any)) *livetranscript.Sync {
+// log, no hub at all stays quiet (there is nothing to sync to). The caller wires
+// the payload observer: collect keeps one, and the resume concern wants the same
+// payloads.
+func startLiveTranscript(cfg config.Config, logger func(string, ...any)) *livetranscript.Sync {
 	switch {
 	case !cfg.Transcript.Live:
 		return nil
@@ -181,13 +198,11 @@ func startLiveTranscript(cfg config.Config, c *collect.Collect, logger func(stri
 		return nil
 	}
 	origin := &ccxv1.Origin{Machine: cfg.Machine, User: cfg.User}
-	lt := livetranscript.New(
+	return livetranscript.New(
 		livetranscript.NewClient(cfg.HubURL, cfg.HubToken, origin, cfg.Transcript.Bucket, cfg.Transcript.Prefix),
 		livetranscript.Options{},
 		logger,
 	)
-	c.Observe(lt.Notify)
-	return lt
 }
 
 // startResume builds the resume concern (#261): it reports which of this user's
@@ -213,15 +228,15 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		return nil
 	}
 	return resume.New(resume.Options{
-		Machine:    cfg.Machine,
-		User:       cfg.User,
-		ClaudeHome: claudeHome(),
-		Center:     resume.NewCenter(cfg.HubURL, cfg.HubToken),
-		Run:        resume.CommandRunner(ccxPath),
-		Interval:   time.Minute,
-		Poll:       5 * time.Second,
-		Now:        time.Now,
-		Log:        logger,
+		Machine:     cfg.Machine,
+		User:        cfg.User,
+		DefaultHome: claudeHome(),
+		Center:      resume.NewCenter(cfg.HubURL, cfg.HubToken),
+		Run:         resume.CommandRunner(ccxPath, nil),
+		Interval:    time.Minute,
+		Poll:        5 * time.Second,
+		Now:         time.Now,
+		Log:         logger,
 	})
 }
 

@@ -421,10 +421,19 @@ session
       }),
     );
 
+    // --stopped に出すのは「開き直せるもの」だけ。このマシンの行で今動いているものは
+    // 入らない。center の一覧は毎分区のため遅れるので、手元で動いているものを候補に
+    // すると、このマシンの resume が「動いている」と refuse する
+    const listed = o.stopped
+      ? annotated.filter(
+          ({ s, lifecycle }) => lifecycle !== "running" || s.key?.machine !== me.machine || s.key?.user !== me.user,
+        )
+      : annotated;
+
     if (o.json) {
       console.log(
         JSON.stringify(
-          annotated.map(({ s, lifecycle, state }) => ({ ...s, lifecycle: lifecycle || null, state })),
+          listed.map(({ s, lifecycle, state }) => ({ ...s, lifecycle: lifecycle || null, state })),
           (_k, v) => (typeof v === "bigint" ? String(v) : v),
           2,
         ),
@@ -432,7 +441,7 @@ session
       return;
     }
 
-    const rows = annotated.map(({ s, lifecycle, state }) => {
+    const rows = listed.map(({ s, lifecycle, state }) => {
       const last = s.lastSeen ? Number(s.lastSeen.seconds) * 1000 : 0;
       return [
         shortId(s.key?.sessionId ?? "?"),

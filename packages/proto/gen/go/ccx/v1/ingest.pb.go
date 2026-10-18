@@ -40,9 +40,14 @@ const (
 	Producer_PRODUCER_CCX_SESSION_STATE Producer = 2
 	// ccx-agent が送る「このマシンのこのユーザーで今動いている session の id の一覧」(#261)。payload は ccx 自身の
 	// JSON: `{"session_ids": ["...", ...]}`。動いているかを知っているのはそのマシンだけなので、事実として運ぶ
-	// (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない) で、center は (machine, user) ごとの最新 1 件だけを
-	// 読む。ccx-agent は一覧が変わったときと、変わらなくても一定の間隔で送る。間隔ごとに届くことが「一覧は今も
-	// 新しい」ことの根拠で、届かなくなった (machine, user) の一覧は古いとして読む (fleet.proto の Liveness)。
+	// (ccx-agent の COLLECT)。一覧は毎回全部 (差分ではない)。ccx-agent は一覧が変わったときと、変わらなくても一定の
+	// 間隔で送る。間隔ごとに届くことが「一覧は今も新しい」ことの根拠で、届かなくなった (machine, user) の一覧は
+	// 古いとして読む (fleet.proto の Liveness)。
+	//
+	// これだけは events に積まない。一覧は「今」の写しで過去を読む用途が無く、毎分届くので積むと溜まり続ける。
+	// center は (machine, user) ごとに最新の 1 件だけを上書きで持ち、受け取った時刻を center の時計で記録する
+	// (鮮度を agent の時計と center の時計で比べない)。ListEvents にも出ない。payload が読めなければバッチごと
+	// INVALID_ARGUMENT で断る (読めない一覧を「何も動いていない」として持たない)。
 	Producer_PRODUCER_CCX_AGENT_RUNNING Producer = 3
 )
 

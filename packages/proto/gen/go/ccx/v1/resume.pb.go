@@ -89,7 +89,13 @@ type ResumeRequest struct {
 	// FAILED の理由、OPENED なら開いた workspace と pane (`ccx session resume` の出力)。
 	Detail string `protobuf:"bytes,8,opt,name=detail,proto3" json:"detail,omitempty"`
 	// `ccx session resume` の exit code。終わっていなければ 0。
-	ExitCode      int32 `protobuf:"varint,9,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	ExitCode int32 `protobuf:"varint,9,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// 最後に取った ccx-agent に渡した印。FinishResume で返してもらい、取り直された後の古い結果を断る。
+	ClaimToken string `protobuf:"bytes,10,opt,name=claim_token,json=claimToken,proto3" json:"claim_token,omitempty"`
+	// 終わらないまま期限 (置いてから一定時間) を過ぎた。agent はもう取らず、同じ session に新しい依頼を置ける。
+	Expired bool `protobuf:"varint,11,opt,name=expired,proto3" json:"expired,omitempty"`
+	// 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+	WaitSeconds   uint32 `protobuf:"varint,12,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -187,10 +193,33 @@ func (x *ResumeRequest) GetExitCode() int32 {
 	return 0
 }
 
+func (x *ResumeRequest) GetClaimToken() string {
+	if x != nil {
+		return x.ClaimToken
+	}
+	return ""
+}
+
+func (x *ResumeRequest) GetExpired() bool {
+	if x != nil {
+		return x.Expired
+	}
+	return false
+}
+
+func (x *ResumeRequest) GetWaitSeconds() uint32 {
+	if x != nil {
+		return x.WaitSeconds
+	}
+	return 0
+}
+
 type RequestResumeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           *SessionKey            `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Force         bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   *SessionKey            `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Force bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	// 相手の `ccx session resume --wait` に渡す秒数。0 なら相手の既定。
+	WaitSeconds   uint32 `protobuf:"varint,3,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -237,6 +266,13 @@ func (x *RequestResumeRequest) GetForce() bool {
 		return x.Force
 	}
 	return false
+}
+
+func (x *RequestResumeRequest) GetWaitSeconds() uint32 {
+	if x != nil {
+		return x.WaitSeconds
+	}
+	return 0
 }
 
 type RequestResumeResponse struct {
@@ -495,11 +531,14 @@ func (x *ClaimResumeResponse) GetRequest() *ResumeRequest {
 }
 
 type FinishResumeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Outcome       ResumeOutcome          `protobuf:"varint,2,opt,name=outcome,proto3,enum=ccx.v1.ResumeOutcome" json:"outcome,omitempty"`
-	Detail        string                 `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,4,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Outcome ResumeOutcome          `protobuf:"varint,2,opt,name=outcome,proto3,enum=ccx.v1.ResumeOutcome" json:"outcome,omitempty"`
+	// 長ければ center が末尾の 4096 文字だけを持つ。
+	Detail   string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	ExitCode int32  `protobuf:"varint,4,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// ClaimResume で受け取った claim_token。
+	ClaimToken    string `protobuf:"bytes,5,opt,name=claim_token,json=claimToken,proto3" json:"claim_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -562,6 +601,13 @@ func (x *FinishResumeRequest) GetExitCode() int32 {
 	return 0
 }
 
+func (x *FinishResumeRequest) GetClaimToken() string {
+	if x != nil {
+		return x.ClaimToken
+	}
+	return ""
+}
+
 type FinishResumeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Request       *ResumeRequest         `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`
@@ -610,7 +656,7 @@ var File_ccx_v1_resume_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_resume_proto_rawDesc = "" +
 	"\n" +
-	"\x13ccx/v1/resume.proto\x12\x06ccx.v1\x1a\x12ccx/v1/fleet.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf8\x02\n" +
+	"\x13ccx/v1/resume.proto\x12\x06ccx.v1\x1a\x12ccx/v1/fleet.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd6\x03\n" +
 	"\rResumeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
 	"\x03key\x18\x02 \x01(\v2\x12.ccx.v1.SessionKeyR\x03key\x12\x14\n" +
@@ -622,10 +668,16 @@ const file_ccx_v1_resume_proto_rawDesc = "" +
 	"finishedAt\x12/\n" +
 	"\aoutcome\x18\a \x01(\x0e2\x15.ccx.v1.ResumeOutcomeR\aoutcome\x12\x16\n" +
 	"\x06detail\x18\b \x01(\tR\x06detail\x12\x1b\n" +
-	"\texit_code\x18\t \x01(\x05R\bexitCode\"R\n" +
+	"\texit_code\x18\t \x01(\x05R\bexitCode\x12\x1f\n" +
+	"\vclaim_token\x18\n" +
+	" \x01(\tR\n" +
+	"claimToken\x12\x18\n" +
+	"\aexpired\x18\v \x01(\bR\aexpired\x12!\n" +
+	"\fwait_seconds\x18\f \x01(\rR\vwaitSeconds\"u\n" +
 	"\x14RequestResumeRequest\x12$\n" +
 	"\x03key\x18\x01 \x01(\v2\x12.ccx.v1.SessionKeyR\x03key\x12\x14\n" +
-	"\x05force\x18\x02 \x01(\bR\x05force\"H\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\x12!\n" +
+	"\fwait_seconds\x18\x03 \x01(\rR\vwaitSeconds\"H\n" +
 	"\x15RequestResumeResponse\x12/\n" +
 	"\arequest\x18\x01 \x01(\v2\x15.ccx.v1.ResumeRequestR\arequest\"~\n" +
 	"\x19ListResumeRequestsRequest\x12\x18\n" +
@@ -640,12 +692,14 @@ const file_ccx_v1_resume_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\"F\n" +
 	"\x13ClaimResumeResponse\x12/\n" +
-	"\arequest\x18\x01 \x01(\v2\x15.ccx.v1.ResumeRequestR\arequest\"\x8b\x01\n" +
+	"\arequest\x18\x01 \x01(\v2\x15.ccx.v1.ResumeRequestR\arequest\"\xac\x01\n" +
 	"\x13FinishResumeRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12/\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x15.ccx.v1.ResumeOutcomeR\aoutcome\x12\x16\n" +
 	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x1b\n" +
-	"\texit_code\x18\x04 \x01(\x05R\bexitCode\"G\n" +
+	"\texit_code\x18\x04 \x01(\x05R\bexitCode\x12\x1f\n" +
+	"\vclaim_token\x18\x05 \x01(\tR\n" +
+	"claimToken\"G\n" +
 	"\x14FinishResumeResponse\x12/\n" +
 	"\arequest\x18\x01 \x01(\v2\x15.ccx.v1.ResumeRequestR\arequest*e\n" +
 	"\rResumeOutcome\x12\x1e\n" +

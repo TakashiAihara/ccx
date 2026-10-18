@@ -49,14 +49,17 @@ const (
 
 // ResumeServiceClient is a client for the ccx.v1.ResumeService service.
 type ResumeServiceClient interface {
-	// 依頼を置く。同じ session に終わっていない依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+	// 依頼を置く。同じ session に終わっていない (期限内の) 依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+	// そのとき force が新しく true で来たら、その依頼を force にする。
 	RequestResume(context.Context, *connect.Request[v1.RequestResumeRequest]) (*connect.Response[v1.RequestResumeResponse], error)
 	// 依頼の一覧。requested_at の新しい順。
 	ListResumeRequests(context.Context, *connect.Request[v1.ListResumeRequestsRequest]) (*connect.Response[v1.ListResumeRequestsResponse], error)
-	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない最古の依頼を 1 件取る。無ければ request は未設定。
-	// 取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。
+	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
+	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。取るたびに
+	// 新しい claim_token が振られる。
 	ClaimResume(context.Context, *connect.Request[v1.ClaimResumeRequest]) (*connect.Response[v1.ClaimResumeResponse], error)
-	// 取った依頼の結果を返す。取っていない依頼・終わった依頼には FAILED_PRECONDITION。
+	// 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
+	// 終わった依頼には FAILED_PRECONDITION。
 	FinishResume(context.Context, *connect.Request[v1.FinishResumeRequest]) (*connect.Response[v1.FinishResumeResponse], error)
 }
 
@@ -128,14 +131,17 @@ func (c *resumeServiceClient) FinishResume(ctx context.Context, req *connect.Req
 
 // ResumeServiceHandler is an implementation of the ccx.v1.ResumeService service.
 type ResumeServiceHandler interface {
-	// 依頼を置く。同じ session に終わっていない依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+	// 依頼を置く。同じ session に終わっていない (期限内の) 依頼があれば、新しく作らずにそれを返す (2 重に開かない)。
+	// そのとき force が新しく true で来たら、その依頼を force にする。
 	RequestResume(context.Context, *connect.Request[v1.RequestResumeRequest]) (*connect.Response[v1.RequestResumeResponse], error)
 	// 依頼の一覧。requested_at の新しい順。
 	ListResumeRequests(context.Context, *connect.Request[v1.ListResumeRequestsRequest]) (*connect.Response[v1.ListResumeRequestsResponse], error)
-	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない最古の依頼を 1 件取る。無ければ request は未設定。
-	// 取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。
+	// ccx-agent が自分宛て (machine, user) の、まだ誰も取っていない期限内の最古の依頼を 1 件取る。無ければ request は
+	// 未設定。取ったまま結果が返らない依頼 (ccx-agent が途中で落ちた) は claimed_at から一定時間で再び取れる。取るたびに
+	// 新しい claim_token が振られる。
 	ClaimResume(context.Context, *connect.Request[v1.ClaimResumeRequest]) (*connect.Response[v1.ClaimResumeResponse], error)
-	// 取った依頼の結果を返す。取っていない依頼・終わった依頼には FAILED_PRECONDITION。
+	// 取った依頼の結果を返す。claim_token が最後に取ったときのものと違う (取り直された後の古い結果)、取っていない、
+	// 終わった依頼には FAILED_PRECONDITION。
 	FinishResume(context.Context, *connect.Request[v1.FinishResumeRequest]) (*connect.Response[v1.FinishResumeResponse], error)
 }
 

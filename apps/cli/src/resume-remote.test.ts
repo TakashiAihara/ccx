@@ -11,7 +11,7 @@ import { expect, test } from "bun:test";
 import { ResumeOutcome, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 import { isRemote, ResumeError } from "./resume.ts";
-import { resumeRemote, type ResumeCenter } from "./resume-remote.ts";
+import { remoteWaitMs, resumeRemote, type ResumeCenter } from "./resume-remote.ts";
 
 const ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 const KEY = { machine: "m2", user: "dev", sessionId: ID };
@@ -26,6 +26,9 @@ function req(over: Partial<ResumeRequest> = {}): ResumeRequest {
     outcome: ResumeOutcome.UNSPECIFIED,
     detail: "",
     exitCode: 0,
+    claimToken: "",
+    expired: false,
+    waitSeconds: 0,
     ...over,
   };
 }
@@ -56,10 +59,10 @@ const base = { key: KEY, waitMs: 200, pollMs: 5 };
 test("依頼を置き、同じ依頼が終わるまで読み、開けたら結果を返す", async () => {
   const { center, calls } = fakeCenter([req(), req({ claimedAt: timestampFromMs(1) }), finished(ResumeOutcome.OPENED, 0, "opened wRK pane=wRK:p1")]);
 
-  const r = await resumeRemote({ ...base, center, force: true });
+  const r = await resumeRemote({ ...base, center, force: true, waitSeconds: 90 });
 
   expect(r.detail).toBe("opened wRK pane=wRK:p1");
-  expect(calls[0]).toEqual({ op: "request", arg: { key: KEY, force: true } });
+  expect(calls[0]).toEqual({ op: "request", arg: { key: KEY, force: true, waitSeconds: 90 } });
   expect(calls.slice(1).map((c) => c.op)).toEqual(["list", "list", "list"]);
   expect(calls[1]?.arg).toMatchObject({ machine: "m2", user: "dev", sessionId: ID });
 });
@@ -92,6 +95,48 @@ test("待っても終わらなければ exit 5 で、誰も取っていないか
   const b = (await resumeRemote({ ...base, center: claimed.center, waitMs: 30 }).catch((x: unknown) => x)) as ResumeError;
   expect(b.exitCode).toBe(5);
   expect(b.message).toContain("taken but has not answered");
+});
+
+test("期限が切れたら exit 5 で、開かれないことを言う", async () => {
+  const { center } = fakeCenter([req(), req({ expired: true })]);
+  const e = (await resumeRemote({ ...base, center }).catch((x: unknown) => x)) as ResumeError;
+  expect(e).toBeInstanceOf(ResumeError);
+  expect(e.exitCode).toBe(5);
+  expect(e.message).toContain("expired");
+});
+
+test("依頼を置いた後に center へ届かなくなっても、待つ間は読み直し、最後まで届かなければ exit 5 で理由を添える", async () => {
+  let lists = 0;
+  const flaky: ResumeCenter = {
+    async requestResume() {
+      return { request: req() };
+    },
+    async listResumeRequests() {
+      lists++;
+      if (lists === 1) throw new Error("ECONNRESET");
+      if (lists === 2) return { requests: [finished(ResumeOutcome.OPENED, 0, "opened")] };
+      return { requests: [] };
+    },
+  };
+  expect((await resumeRemote({ ...base, center: flaky })).detail).toBe("opened");
+
+  const down: ResumeCenter = {
+    async requestResume() {
+      return { request: req() };
+    },
+    async listResumeRequests() {
+      throw new Error("ECONNREFUSED");
+    },
+  };
+  const e = (await resumeRemote({ ...base, center: down, waitMs: 30 }).catch((x: unknown) => x)) as ResumeError;
+  expect(e).toBeInstanceOf(ResumeError);
+  expect(e.exitCode).toBe(5);
+  expect(e.message).toContain("ECONNREFUSED");
+});
+
+test("CLI が待つ時間は、相手に渡す待ち (既定 40 秒) に 2 分を足したもの", () => {
+  expect(remoteWaitMs(undefined)).toBe(160_000);
+  expect(remoteWaitMs(300_000)).toBe(420_000);
 });
 
 test("一覧に依頼が見つからなければ exit 1 (0 件を「まだ」と読まない)", async () => {

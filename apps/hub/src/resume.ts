@@ -1,6 +1,6 @@
 import { timestampFromMs } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
-import { and, asc, desc, eq, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
 import { resumeRequests } from "./db/schema.ts";
@@ -27,6 +27,19 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 export const CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * 依頼の期限。終わらないままこれを過ぎた依頼は agent が取らず、同じ session に新しい
+ * 依頼を置ける。期限が無いと、置きっぱなしの一件がその後の依頼を塞ぎ続け、相手のマシンが
+ * 何日も後に上がった時点で開かれる
+ */
+export const REQUEST_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * detail が持つ上限 (resume.proto)。何が起きたかは末尾にあるので、古いところから切る。
+ * 数えるのは Unicode のコードポイント: 折り返すのは文字で、バイトの途中ではない
+ */
+export const DETAIL_CAP = 4096;
+
 const invalid = (why: string): ConnectError => new ConnectError(why, Code.InvalidArgument);
 
 function clampLimit(v: number): number {
@@ -35,7 +48,7 @@ function clampLimit(v: number): number {
 }
 
 /** NOT NULL の行をそのまま proto の依頼に写す。時刻の NULL は「その段階に居ない」 */
-function toRequest(r: typeof resumeRequests.$inferSelect): ResumeRequest {
+function toRequest(r: typeof resumeRequests.$inferSelect, nowMs: number): ResumeRequest {
   return {
     $typeName: "ccx.v1.ResumeRequest",
     id: r.id,
@@ -47,7 +60,17 @@ function toRequest(r: typeof resumeRequests.$inferSelect): ResumeRequest {
     outcome: r.outcome as ResumeOutcome,
     detail: r.detail,
     exitCode: r.exitCode,
+    claimToken: r.claimToken,
+    // 期限は保存しない。置いた時刻と「今の時計」から読み手ごとに計算する
+    expired: r.finishedAtMs === null && r.requestedAtMs <= nowMs - REQUEST_TTL_MS,
+    waitSeconds: r.waitSeconds,
   };
+}
+
+/** 詳細が上限を超えたら末尾だけを残す。文字の途中で切らない */
+function capDetail(detail: string): string {
+  const points = [...detail];
+  return points.length > DETAIL_CAP ? points.slice(points.length - DETAIL_CAP).join("") : detail;
 }
 
 export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof ResumeService> {
@@ -60,9 +83,11 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       if (!SESSION_ID.test(sessionId)) {
         throw invalid(`key.session_id is not a session id: ${key.sessionId}`);
       }
+      const nowMs = now();
 
-      // 2 人同時に置いても 1 つだけにする。読む前に write ロックを取る immediate で、
-      // 探して作るまでを 1 トランザクションにして、見つからなかったときだけ挿入する。
+      // 探して作るまでを 1 トランザクションにする。別のプロセスが同じ DB を開いている
+      // ときにも、読んでから書くまでのあいだに割り込まれないようにする (immediate は
+      // 書き込む前に write ロックを取る)。同じ session を 2 度開かないためのもの
       const request = db.transaction(
         (tx) => {
           const open = tx
@@ -73,14 +98,18 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
                 eq(resumeRequests.machine, key.machine),
                 eq(resumeRequests.user, key.user),
                 eq(resumeRequests.sessionId, sessionId),
-                isNull(resumeRequests.finishedAtMs),
+                and(isNull(resumeRequests.finishedAtMs), gt(resumeRequests.requestedAtMs, nowMs - REQUEST_TTL_MS)),
               ),
             )
             .get();
-          if (open) return toRequest(open);
+          // 既に force で開いている依頼に force 無しで置かれても、force は戻さない
+          if (open && !open.force && req.force) {
+            tx.update(resumeRequests).set({ force: true }).where(eq(resumeRequests.id, open.id)).run();
+            return toRequest({ ...open, force: true }, nowMs);
+          }
+          if (open) return toRequest(open, nowMs);
 
           const id = Bun.randomUUIDv7();
-          const requestedAtMs = now();
           tx.insert(resumeRequests)
             .values({
               id,
@@ -88,22 +117,28 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
               user: key.user,
               sessionId,
               force: req.force,
-              requestedAtMs,
+              requestedAtMs: nowMs,
+              waitSeconds: req.waitSeconds,
             })
             .run();
-          return toRequest({
-            id,
-            machine: key.machine,
-            user: key.user,
-            sessionId,
-            force: req.force,
-            requestedAtMs,
-            claimedAtMs: null,
-            finishedAtMs: null,
-            outcome: ResumeOutcome.UNSPECIFIED,
-            detail: "",
-            exitCode: 0,
-          });
+          return toRequest(
+            {
+              id,
+              machine: key.machine,
+              user: key.user,
+              sessionId,
+              force: req.force,
+              requestedAtMs: nowMs,
+              claimedAtMs: null,
+              finishedAtMs: null,
+              outcome: ResumeOutcome.UNSPECIFIED,
+              detail: "",
+              exitCode: 0,
+              claimToken: "",
+              waitSeconds: req.waitSeconds,
+            },
+            nowMs,
+          );
         },
         { behavior: "immediate" },
       );
@@ -117,6 +152,7 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       if (req.user) where.push(eq(resumeRequests.user, req.user));
       if (req.sessionId) where.push(eq(resumeRequests.sessionId, req.sessionId.toLowerCase()));
 
+      const nowMs = now();
       const rows = db
         .select()
         .from(resumeRequests)
@@ -127,7 +163,7 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
 
       return {
         $typeName: "ccx.v1.ListResumeRequestsResponse",
-        requests: rows.map(toRequest),
+        requests: rows.map((r) => toRequest(r, nowMs)),
       };
     },
 
@@ -135,8 +171,8 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       if (!req.machine || !req.user) throw invalid("machine and user are required");
       const nowMs = now();
 
-      // 選ぶのと claimed_at を付けるのを 1 トランザクションにする。挟むと 2 つの
-      // ccx-agent に同じ依頼を渡す。読む前に write ロックを取ってから選ぶ immediate。
+      // 選ぶのと claim_token を振って claimed_at を付けるのを 1 トランザクションにする。別のプロセスが
+      // 同じ DB を開いているときにも、選んでから書くまでのあいだに割り込まれないようにする (immediate)
       const claimed = db.transaction(
         (tx) => {
           const row = tx
@@ -146,23 +182,32 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
               and(
                 eq(resumeRequests.machine, req.machine),
                 eq(resumeRequests.user, req.user),
-                isNull(resumeRequests.finishedAtMs),
-                or(isNull(resumeRequests.claimedAtMs), lte(resumeRequests.claimedAtMs, nowMs - CLAIM_TIMEOUT_MS)),
+                and(
+                  isNull(resumeRequests.finishedAtMs),
+                  // 期限を過ぎた依頼は取らない。置いた人が期限切れとして読む
+                  gt(resumeRequests.requestedAtMs, nowMs - REQUEST_TTL_MS),
+                  or(isNull(resumeRequests.claimedAtMs), lte(resumeRequests.claimedAtMs, nowMs - CLAIM_TIMEOUT_MS)),
+                ),
               ),
             )
             .orderBy(asc(resumeRequests.requestedAtMs), asc(sql`rowid`))
             .limit(1)
             .get();
           if (!row) return undefined;
-          tx.update(resumeRequests).set({ claimedAtMs: nowMs }).where(eq(resumeRequests.id, row.id)).run();
-          return { ...row, claimedAtMs: nowMs };
+          // 取るたびに振り直す。取り直された後に返ってきた古い結果を断るため
+          const claimToken = crypto.randomUUID();
+          tx.update(resumeRequests)
+            .set({ claimedAtMs: nowMs, claimToken })
+            .where(eq(resumeRequests.id, row.id))
+            .run();
+          return { ...row, claimedAtMs: nowMs, claimToken };
         },
         { behavior: "immediate" },
       );
 
       return {
         $typeName: "ccx.v1.ClaimResumeResponse",
-        request: claimed ? toRequest(claimed) : undefined,
+        request: claimed ? toRequest(claimed, nowMs) : undefined,
       };
     },
 
@@ -179,21 +224,29 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       if (row.claimedAtMs === null || row.finishedAtMs !== null) {
         throw new ConnectError(`the resume request is not claimed: ${req.id}`, Code.FailedPrecondition);
       }
+      // 取り直された後に返ってきた古い結果は、最後の token が違うので断る
+      if (row.claimToken !== "" && row.claimToken !== req.claimToken) {
+        throw new ConnectError(`the resume request ${req.id} was claimed again; this result is stale`, Code.FailedPrecondition);
+      }
 
+      const detail = capDetail(req.detail);
       db.update(resumeRequests)
-        .set({ finishedAtMs: nowMs, outcome: req.outcome, detail: req.detail, exitCode: req.exitCode })
+        .set({ finishedAtMs: nowMs, outcome: req.outcome, detail, exitCode: req.exitCode })
         .where(eq(resumeRequests.id, req.id))
         .run();
 
       return {
         $typeName: "ccx.v1.FinishResumeResponse",
-        request: toRequest({
-          ...row,
-          finishedAtMs: nowMs,
-          outcome: req.outcome,
-          detail: req.detail,
-          exitCode: req.exitCode,
-        }),
+        request: toRequest(
+          {
+            ...row,
+            finishedAtMs: nowMs,
+            outcome: req.outcome,
+            detail,
+            exitCode: req.exitCode,
+          },
+          nowMs,
+        ),
       };
     },
   };

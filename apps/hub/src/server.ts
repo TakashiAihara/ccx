@@ -21,12 +21,12 @@ import { transcriptImpl } from "./transcript.ts";
  * ので、それを Hono の route に載せる。
  */
 export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; now?: () => number } = {}): Hono {
-  // 「動いているか」と「もう一度取れるか」はどちらも何分前の比較。読む側 (テスト) が
-  // 差し替えられるよう、1 つの時計を両方に渡す
+  // 「動いている一覧」の鮮度も「もう一度取れるか」も「依頼の期限」も、center の時計で
+  // 比べる。読む側 (テスト) が差し替えられるよう、1 つの時計を渡す
   const now = opts.now ?? Date.now;
 
   const router = createConnectRouter();
-  router.service(IngestService, ingestImpl(db));
+  router.service(IngestService, ingestImpl(db, now));
   router.service(FleetService, fleetImpl(db, now));
   router.service(ResumeService, resumeImpl(db, now));
   router.service(TranscriptService, transcriptImpl(objects));

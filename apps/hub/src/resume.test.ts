@@ -17,7 +17,7 @@ import { ResumeOutcome, ResumeService } from "@ccx/proto/ccx/v1/resume_pb.ts";
 import { openDb, type Db } from "./db/open.ts";
 import { ObjectStore } from "./objects.ts";
 import { createApp } from "./server.ts";
-import { CLAIM_TIMEOUT_MS } from "./resume.ts";
+import { CLAIM_TIMEOUT_MS, DETAIL_CAP, REQUEST_TTL_MS } from "./resume.ts";
 
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -87,8 +87,8 @@ test("大文字で置かれた id は小文字で持ち、小文字の依頼と�
 
 test("終わった依頼の後なら、同じ session でも新しく作る", async () => {
   const first = await client.requestResume({ key: key() });
-  await client.claimResume({ machine: "m1", user: "dev" });
-  await client.finishResume({ id: first.request!.id, outcome: ResumeOutcome.FAILED, detail: "x", exitCode: 1 });
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
+  await client.finishResume({ id: first.request!.id, outcome: ResumeOutcome.FAILED, detail: "x", exitCode: 1, claimToken: c.request!.claimToken });
   const second = await client.requestResume({ key: key() });
   expect(second.request?.id).not.toBe(first.request!.id);
 });
@@ -140,10 +140,10 @@ test("Claim の machine / user が空なら InvalidArgument", async () => {
 
 test("Finish は結果を記録し、終わった依頼は Claim に出ない", async () => {
   const a = await client.requestResume({ key: key(A) });
-  await client.claimResume({ machine: "m1", user: "dev" });
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
   now += 5000;
 
-  const fin = await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, detail: "opened wRK pane=wRK:p1", exitCode: 0 });
+  const fin = await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, detail: "opened wRK pane=wRK:p1", exitCode: 0, claimToken: c.request!.claimToken });
 
   expect(fin.request?.outcome).toBe(ResumeOutcome.OPENED);
   expect(fin.request?.detail).toBe("opened wRK pane=wRK:p1");
@@ -160,9 +160,10 @@ test("取っていない依頼の Finish は FailedPrecondition", async () => {
 
 test("終わった依頼の 2 度目の Finish は FailedPrecondition で、最初の結果を変えない", async () => {
   const a = await client.requestResume({ key: key(A) });
-  await client.claimResume({ machine: "m1", user: "dev" });
-  await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.FAILED, detail: "first", exitCode: 3 });
-  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, detail: "second" }))).toBe(Code.FailedPrecondition);
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
+  const claimToken = c.request!.claimToken;
+  await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.FAILED, detail: "first", exitCode: 3, claimToken });
+  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, detail: "second", claimToken }))).toBe(Code.FailedPrecondition);
   const [r] = (await client.listResumeRequests({})).requests;
   expect(r?.detail).toBe("first");
   expect(r?.exitCode).toBe(3);
@@ -171,8 +172,8 @@ test("終わった依頼の 2 度目の Finish は FailedPrecondition で、最�
 test("知らない id の Finish は NotFound、outcome の無い Finish は InvalidArgument", async () => {
   expect(await code(client.finishResume({ id: "0199aaaa-0000-7000-8000-000000000000", outcome: ResumeOutcome.OPENED }))).toBe(Code.NotFound);
   const a = await client.requestResume({ key: key(A) });
-  await client.claimResume({ machine: "m1", user: "dev" });
-  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.UNSPECIFIED }))).toBe(Code.InvalidArgument);
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
+  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.UNSPECIFIED, claimToken: c.request!.claimToken }))).toBe(Code.InvalidArgument);
 });
 
 test("一覧は requested_at の新しい順で、machine / user / session_id で絞れ、limit が効く", async () => {
@@ -226,4 +227,88 @@ test("FleetService.ListSessions は liveness を返し、stopped_only で絞る 
 
   now += 300_001;
   expect((await fleet.listSessions({})).sessions.map((s) => s.liveness)).toEqual([Liveness.UNSPECIFIED, Liveness.UNSPECIFIED]);
+});
+
+test("依頼の期限は 10 分、detail の上限は 4096 文字", () => {
+  expect(REQUEST_TTL_MS).toBe(600_000);
+  expect(DETAIL_CAP).toBe(4096);
+});
+
+test("取るたびに新しい claim_token が振られ、取り直された後の古い結果は断る", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  const first = (await client.claimResume({ machine: "m1", user: "dev" })).request!;
+  now += CLAIM_TIMEOUT_MS;
+  const second = (await client.claimResume({ machine: "m1", user: "dev" })).request!;
+  expect(first.claimToken).not.toBe("");
+  expect(second.claimToken).not.toBe(first.claimToken);
+
+  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, claimToken: first.claimToken }))).toBe(Code.FailedPrecondition);
+  expect(await code(client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED }))).toBe(Code.FailedPrecondition);
+  const fin = await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, claimToken: second.claimToken });
+  expect(fin.request?.outcome).toBe(ResumeOutcome.OPENED);
+});
+
+test("期限を過ぎた依頼は取らず、expired と出し、同じ session に新しい依頼を作れる", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  now += REQUEST_TTL_MS - 1;
+  expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(false);
+  now += 1;
+  expect((await client.claimResume({ machine: "m1", user: "dev" })).request).toBeUndefined();
+  expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(true);
+
+  const b = await client.requestResume({ key: key(A) });
+  expect(b.request?.id).not.toBe(a.request!.id);
+  expect((await client.claimResume({ machine: "m1", user: "dev" })).request?.id).toBe(b.request!.id);
+});
+
+test("取ったまま期限を過ぎた依頼も、同じ session の次の依頼を塞がない", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  await client.claimResume({ machine: "m1", user: "dev" });
+  now += REQUEST_TTL_MS;
+  const b = await client.requestResume({ key: key(A) });
+  expect(b.request?.id).not.toBe(a.request!.id);
+});
+
+test("終わった依頼は期限を過ぎても expired にしない", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
+  await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.OPENED, claimToken: c.request!.claimToken });
+  now += REQUEST_TTL_MS * 2;
+  expect((await client.listResumeRequests({})).requests[0]?.expired).toBe(false);
+});
+
+test("終わっていない依頼に force=true が来たら、その依頼を force にする (false では戻さない)", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  expect(a.request?.force).toBe(false);
+  const b = await client.requestResume({ key: key(A), force: true });
+  expect(b.request?.id).toBe(a.request!.id);
+  expect(b.request?.force).toBe(true);
+  const c = await client.requestResume({ key: key(A), force: false });
+  expect(c.request?.force).toBe(true);
+  expect((await client.claimResume({ machine: "m1", user: "dev" })).request?.force).toBe(true);
+});
+
+test("wait_seconds は依頼に残り、agent が取ったときにも返る", async () => {
+  const a = await client.requestResume({ key: key(A), waitSeconds: 90 });
+  expect(a.request?.waitSeconds).toBe(90);
+  expect((await client.claimResume({ machine: "m1", user: "dev" })).request?.waitSeconds).toBe(90);
+});
+
+test("長い detail は末尾の 4096 文字だけを持つ", async () => {
+  const a = await client.requestResume({ key: key(A) });
+  const c = await client.claimResume({ machine: "m1", user: "dev" });
+  const detail = "あ".repeat(5000) + "END";
+  const fin = await client.finishResume({ id: a.request!.id, outcome: ResumeOutcome.FAILED, detail, exitCode: 4, claimToken: c.request!.claimToken });
+  expect([...fin.request!.detail].length).toBe(4096);
+  expect(fin.request!.detail.endsWith("END")).toBe(true);
+  expect([...(await client.listResumeRequests({})).requests[0]!.detail].length).toBe(4096);
+});
+
+test("Ingest は読めない動いている一覧を INVALID_ARGUMENT で断る", async () => {
+  const { IngestService } = await import("@ccx/proto/ccx/v1/ingest_pb.ts");
+  const { timestampFromMs } = await import("@bufbuild/protobuf/wkt");
+  const transport = createConnectTransport({ baseUrl: `http://127.0.0.1:${server.port}`, httpVersion: "1.1" });
+  const ingest = createClient(IngestService, transport);
+  const bad = { eventId: "r1", origin: { machine: "m1", user: "dev" }, seq: 0n, receivedAt: timestampFromMs(T0), producer: 3, payload: new TextEncoder().encode("{") };
+  expect(await code(ingest.ingest({ events: [bad] }))).toBe(Code.InvalidArgument);
 });

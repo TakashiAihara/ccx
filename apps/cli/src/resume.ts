@@ -40,7 +40,7 @@ import { toJson } from "@bufbuild/protobuf";
 import { ResumeRequestSchema, ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 import { centerTransport, NoCenterConfigured, unreachable } from "./fleet.ts";
-import { resumeRemote } from "./resume-remote.ts";
+import { resumeRemote, remoteWaitMs } from "./resume-remote.ts";
 
 export type HerdrResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
 export type Herdr = (args: string[]) => Promise<HerdrResult>;
@@ -293,8 +293,9 @@ async function resumeElsewhere(cfg: Config, me: Origin, idOrPrefix: string, o: R
       center: createClient(ResumeService, centerTransport(hub)),
       key: { machine: o.machine ?? cfg.machine, user: o.user ?? me.user, sessionId },
       force: Boolean(o.force),
-      // 相手の ccx-agent が取りに来るまでの数秒と、相手が agent を待つ時間を足す
-      waitMs: (o.wait ?? 40_000) + 60_000,
+      // 相手に待つ時間をそのまま渡し、こっちはそれに自分の待ちを足して締める
+      waitSeconds: o.wait ? Math.ceil(o.wait / 1000) : undefined,
+      waitMs: remoteWaitMs(o.wait),
     });
   } catch (e) {
     // 開けなかった (ResumeError) のは相手の話、届かなかったのは center の話。混ぜない

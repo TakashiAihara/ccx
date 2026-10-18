@@ -68,17 +68,37 @@ The rendezvous is the center's table of requests and nothing else. `claimed_at` 
 request, `finished_at` says it is done, and the center never connects out to a machine, so it
 never has to know where one is (the connection direction is ccx-agent → center, as in ingest).
 
+A request left unfinished is waited for ten minutes and then reads as `expired`: the agent stops
+claiming it, and putting the same session again makes a new request rather than handing back the
+one nothing will take. Every claim mints a fresh `claim_token`, and a result that comes back under
+any other token is refused, so an agent that was overtaken after the center offered the request
+again cannot finish the newer attempt. `detail` is kept at its last 4096 characters.
+
 ccx-agent asks whether anything is to be opened every 5 s, takes the oldest request addressed to
-its own (machine, user), runs `ccx session resume <id>` (with `--force` when the request says so)
-and returns what that command said: its exit code as the outcome, its output as the detail. The
-caller sees that machine's own answer — exit 1 or 4 with its stderr, exit 5 if nothing answered
-within `--wait` plus a minute, which says whether any agent took it. A request no one took stays
-on the center, and is opened when that machine's agent comes up.
+its own (machine, user), runs `ccx session resume <id>` (with `--force` and `--wait` when the
+request says so) and returns what that command said: its exit code as the outcome, its output as
+the detail. The wait the request carries is handed to that CLI as it is, and the caller waits for
+that wait plus two minutes — the agent still has to pick the request up, and its own command is
+bounded by the same wait plus a minute. The caller sees that machine's own answer — exit 1 or 4
+with its stderr, exit 5 if nothing answered within that wait, which says whether any agent took
+it. A request no one took stays on the center, and is opened when that machine's agent comes up.
+
+Reporting what runs here and opening what the center asks for are two separate loops in the agent:
+a resume that takes longer than a poll must not hold the running list back, since a list that
+stops arriving is how the center reads an agent as gone. That list is read from every Claude home
+the agent knows — its own, plus the ones hook payloads have shown it, where a transcript path
+under `<home>/projects/` is what names one (a session can run under a `CLAUDE_CONFIG_DIR` of its
+own account).
 
 `ccx session ls --stopped` is the list to work from: what each machine's agent reported as no
-longer running, minus what someone archived. That list is what the agent sends every minute (and
-again whenever it changes), and the center reads a list older than 5 minutes as neither running nor
-stopped — so a machine whose agent is gone says nothing about its rows rather than calling them
-stopped.
+longer running, minus what someone archived, minus what is running on this machine right now (the
+center's copy of that lags a minute behind, and a running session is refused anyway). The center
+keeps one row per (machine, user) for that list and stamps it with its own clock when it arrives,
+so a list older than 5 minutes says neither running nor stopped — a machine whose agent is gone
+says nothing about its rows rather than calling them stopped.
+
+Anyone holding the center's token can open a stopped session on any machine and any user: the
+request carries only an id, a force and a wait, and the command that runs is that machine's own
+configuration. Hand the token only to those who may open sessions elsewhere.
 
 There is no Web UI over this list yet; `ccx session ls --stopped` is what there is.

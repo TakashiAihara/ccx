@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { blob, check, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { blob, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
  * 集めた event を 1 行 1 件で持つテーブル。
@@ -66,6 +66,27 @@ export const events = sqliteTable(
 );
 
 /**
+ * (machine, user) の「動いている session の一覧」 (#261)。producer が 3 の event はここに上書きで入る。
+ *
+ * events に積まないのは、一覧が「今」の写しだから (ingest.proto)。積むと行が増えて、
+ * 過去の一覧まで「動いていた証拠」として読めてしまう。received_at_ms は center が受け取った
+ * 時刻 (center の時計) で、agent が送ってきた時刻は使わない。
+ */
+export const agentRunning = sqliteTable(
+  "agent_running",
+  {
+    machine: text("machine").notNull(),
+    // "user" は events と同じ理由で列名を分ける
+    user: text("os_user").notNull(),
+    // JSON 配列 ("[\"<session id>\", ...]")。id を 1 行に分けないのは、1 行が 1 つの写しだから
+    sessionIds: text("session_ids").notNull(),
+    // center が受け取った時刻 (center の時計)
+    receivedAtMs: integer("received_at_ms").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.machine, t.user] })],
+);
+
+/**
  * 人が置いた「開き直して」の依頼 (#261)。その session のあるマシンの ccx-agent が取りに
  * 行って、開いた結果を返す。
  *
@@ -98,6 +119,11 @@ export const resumeRequests = sqliteTable(
     // FAILED の理由、OPENED なら開いた workspace と pane。
     detail: text("detail").notNull().default(""),
     exitCode: integer("exit_code").notNull().default(0),
+
+    // 最後に取った ccx-agent に渡した印。取るたびに振り直し、取り直された後の古い結果を断る
+    claimToken: text("claim_token").notNull().default(""),
+    // 相手に `ccx session resume --wait` へ渡す秒数。0 なら相手の既定
+    waitSeconds: integer("wait_seconds").notNull().default(0),
   },
   (t) => [
     // Claim が「まだ誰にも渡っていない最古の 1 件」を探す窓。
@@ -109,7 +135,7 @@ export const resumeRequests = sqliteTable(
 
 /**
  * スキーマの DDL。drizzle-kit の migration ファイルを使わないのは、テーブルが
- * 2 つで、center が起動時に自分で用意できる範囲だから。増えたらそのとき入れる。
+ * 3 つで、center が起動時に自分で用意できる範囲だから。増えたらそのとき入れる。
  */
 export const ddl = [
   sql`
@@ -134,6 +160,15 @@ export const ddl = [
   sql`CREATE INDEX IF NOT EXISTS events_hook_idx ON events (hook_event_name, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_time_idx ON events (received_at_ms)`,
   sql`
+    CREATE TABLE IF NOT EXISTS agent_running (
+      machine TEXT NOT NULL,
+      os_user TEXT NOT NULL,
+      session_ids TEXT NOT NULL,
+      received_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (machine, os_user)
+    )
+  `,
+  sql`
     CREATE TABLE IF NOT EXISTS resume_requests (
       id TEXT PRIMARY KEY,
       machine TEXT NOT NULL,
@@ -145,7 +180,9 @@ export const ddl = [
       finished_at_ms INTEGER,
       outcome INTEGER NOT NULL DEFAULT 0,
       detail TEXT NOT NULL DEFAULT '',
-      exit_code INTEGER NOT NULL DEFAULT 0
+      exit_code INTEGER NOT NULL DEFAULT 0,
+      claim_token TEXT NOT NULL DEFAULT '',
+      wait_seconds INTEGER NOT NULL DEFAULT 0
     )
   `,
   sql`CREATE INDEX IF NOT EXISTS resume_requests_pending_idx ON resume_requests (machine, os_user, finished_at_ms, requested_at_ms)`,

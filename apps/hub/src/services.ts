@@ -4,7 +4,7 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import type { Db } from "./db/open.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { FleetService, Liveness } from "@ccx/proto/ccx/v1/fleet_pb.ts";
-import { ingest, listEvents, listSessions, type IncomingEvent, type SessionRow } from "./store.ts";
+import { ingest, listEvents, listSessions, UnreadableRunningList, type IncomingEvent, type SessionRow } from "./store.ts";
 
 /** fleet.proto の既定と上限。0 は「指定なし」なので既定に落ちる。 */
 const DEFAULT_LIMIT = 100;
@@ -22,7 +22,7 @@ function toLiveness(l: SessionRow["liveness"]): Liveness {
   return Liveness.UNSPECIFIED;
 }
 
-export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
+export function ingestImpl(db: Db, now: () => number = Date.now): ServiceImpl<typeof IngestService> {
   return {
     ingest(req) {
       const batch: IncomingEvent[] = req.events.map((e) => {
@@ -44,14 +44,21 @@ export function ingestImpl(db: Db): ServiceImpl<typeof IngestService> {
           seq: Number(e.seq),
           // ccx-agent が received_at を付けそこねた場合だけ center の時計に落ちる。
           // 時刻を持たない行を作るより、どちらの時計かが分かる形で埋めるほうがよい。
-          receivedAtMs: e.receivedAt ? timestampDate(e.receivedAt).getTime() : Date.now(),
+          receivedAtMs: e.receivedAt ? timestampDate(e.receivedAt).getTime() : now(),
           producer: e.producer,
           payload: e.payload,
         };
       });
 
       // ingest は 1 トランザクション。例外が出れば 1 件も保存されない。
-      return { accepted: ingest(db, batch) };
+      try {
+        return { accepted: ingest(db, batch, now()) };
+      } catch (e) {
+        // 読めない「動いている一覧」を「何も動いていない」として持つと、その (machine, user) の
+        // 全 session が止まったことになる (ingest.proto)
+        if (e instanceof UnreadableRunningList) throw new ConnectError(e.message, Code.InvalidArgument);
+        throw e;
+      }
     },
   };
 }
