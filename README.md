@@ -134,7 +134,8 @@ refuses a session that is running here; it cannot see one running on another mac
 pane it runs `claude --resume {session_id}`; put your own launcher in its place with
 `CCX_RESUME_COMMAND` / `git config ccx.resumeCommand` / `[resume] command` in `config.toml` (it
 must contain `{session_id}`, e.g. `IS_SANDBOX=1 my-claude-wrapper {session_id}`). It waits until
-the pane has reported the agent named by `[resume] agent` (`claude`) without a gap for 5 s.
+the pane has reported the agent named by `CCX_RESUME_AGENT` / `git config ccx.resumeAgent` /
+`[resume] agent` (default `claude`) on every poll (one a second) for 5 s.
 Exit `0` means the agent came up; `1` means nothing was created; `4` means a workspace was created
 (or may have been) but the agent did not come up within `--wait` seconds (default 40) — what the
 pane shows and how to close the workspace are printed, and `--json` prints its id.
@@ -267,6 +268,8 @@ config file lives.
 | model to run | `CCX_MODEL` | `ccx.model` | `defaults.model` |
 | hub to report to | `CCX_HUB_URL` | `ccx.hubUrl` | `hub.url` |
 | the hub's token | `CCX_HUB_TOKEN` | — | `hub-token` file next to `config.toml` |
+| command to resume a session | `CCX_RESUME_COMMAND` | `ccx.resumeCommand` | `resume.command` |
+| agent that command brings up | `CCX_RESUME_AGENT` | `ccx.resumeAgent` | `resume.agent` |
 
 Setting `defaultOwner` is what lets you write `ccx rd new myrepo` instead of spelling out the owner.
 `mirrorRoot` follows `root` unless you set it separately.

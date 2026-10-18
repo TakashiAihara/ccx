@@ -207,7 +207,8 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
   // [resume] テーブルも [transcript] と同じ 3 段で引く
   const r: Sources = { ...s, file: (file.resume ?? {}) as Record<string, unknown> };
   const resumeCommand = (await pick(r, "CCX_RESUME_COMMAND", "ccx.resumeCommand", "command")) ?? base.resume.command;
-  const resumeAgent = (await pick(r, "CCX_RESUME_AGENT", "ccx.resumeAgent", "agent")) ?? base.resume.agent;
+  // 空の agent は一致する pane が無く、どの resume も exit 4 になるだけなので未設定として扱う
+  const resumeAgent = (await pick(r, "CCX_RESUME_AGENT", "ccx.resumeAgent", "agent")) || base.resume.agent;
 
   return {
     root,

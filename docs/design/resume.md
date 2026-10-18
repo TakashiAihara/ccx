@@ -18,12 +18,13 @@ opened again in a herdr workspace, on the directory it ran in, with the conversa
 | there is no local transcript, it records no cwd, or that cwd is gone | the session would continue somewhere it did not run; repodirs are reclaimed by `gc` |
 
 Then it runs `herdr workspace create --cwd <cwd> --label <label> --no-focus`, `herdr pane run <pane>
-"<command>"`, and polls `herdr pane get <pane>` until the pane has reported the agent (`[resume]
-agent`, `claude`) without a gap for 5 s. Measured on d1: `claude --resume` of an id that does not
-exist shows as `agent=claude` for about 1.5–2 s, and in one of those samples also wrote its
-`sessions/<pid>.json`, before the shell came back; 5 s is more than twice that. The pid file is not
-used as the signal because a launcher may run Claude Code under another `CLAUDE_CONFIG_DIR`. Every
-herdr call has its own 15 s limit, enforced with SIGKILL by ccx's own timer.
+"<command>"`, and polls `herdr pane get <pane>` (every second) until the pane has reported the agent
+(`[resume] agent`, `claude`) on every poll for 5 s; a poll herdr could not answer is not counted
+either way. Measured on d1: `claude --resume` of an id that does not exist shows as `agent=claude`
+for about 1.5–2 s before the shell comes back; 5 s is more than twice that. The pid file in
+`~/.claude/sessions/` does not tell success apart: the failing resume wrote one too, in one sample.
+Every herdr call has its own 15 s limit on ccx's own timer: the direct child gets SIGKILL and its
+output is no longer read (a grandchild it left holding the pipe is not killed, and not waited for).
 
 Exit 4 means a workspace was created, or may have been (create succeeded but its answer could not be
 read, or create did not answer in time), and the agent was not confirmed. The message carries what
@@ -46,8 +47,11 @@ because `ccx session` already uses it for "no center configured", where nothing 
 - waiting for the shell prompt before `pane run`: the pane's tty holds what is typed before the
   shell is ready; on d1 the command ran in a fresh pane with no wait (measured on d1's zsh only)
 - skipping a workspace that already has the same label: a session running in a workspace is refused
-  above. A workspace left by an earlier exit 4 (or one whose claude has exited) is not running, so a
-  second resume makes a second workspace; the exit-4 message says how to close the first
+  above. A workspace left by an earlier exit 4 whose claude never came up (or has exited) is not
+  running, so a second resume makes a second workspace; the exit-4 message says how to close the
+  first. (If claude came up after the wait, it is running and the second resume is refused.)
+- choosing between two copies of one transcript in different project directories: the first found
+  is used. On d1 none of 407 transcripts had a second copy
 - two resumes of the same session at the same moment: nothing locks between the running check and
   claude writing its pid file. The center's request queue (the next part of #261) is to keep one
   open request per session

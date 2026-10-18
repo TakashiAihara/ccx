@@ -112,11 +112,11 @@ test("transcript の cwd で workspace を作り、id を埋めたコマンド�
   expect(calls.slice(2).every((c) => c.join(" ") === "pane get wZZ:p1")).toBe(true);
 });
 
-test("pane get の失敗は 2 回続けての数を切る", async () => {
+test("pane get が答えられなかった回は数えず、並びも切らない", async () => {
   await transcript();
   const { herdr, calls } = fakeHerdr({ agents: ["claude", "!", "claude", "claude"] });
   await resumeSession({ ...base, sessionId: ID, home, herdr });
-  expect(calls.filter((c) => c[1] === "get").length).toBe(4);
+  expect(calls.filter((c) => c[1] === "get").length).toBe(3);
 });
 
 test("待つ agent の名前は agent で変えられる", async () => {
@@ -355,9 +355,18 @@ test("見えてから stableMs 経つまでは開けたとしない", async () =
 
 test("stableMs の間に途切れたら、締め切り後でも開けたとしない", async () => {
   await transcript();
-  const { herdr } = fakeHerdr({ agents: ["claude", "claude", "claude", ""] });
+  const { herdr, calls } = fakeHerdr({ agents: ["claude", "claude", "claude", ""] });
   const e = await failure(resumeSession({ ...base, sessionId: ID, home, herdr, waitMs: 0, stableMs: 1000 }));
   expect(e.exitCode).toBe(4);
+  expect(calls.filter((c) => c[1] === "get").length).toBe(4);
+});
+
+test("途切れたら、見え続ける時間は見え直したところから数え直す", async () => {
+  await transcript();
+  const { herdr, calls } = fakeHerdr({ agents: ["claude", "claude", "", "claude"] });
+  await resumeSession({ ...base, sessionId: ID, home, herdr, pollMs: 10, stableMs: 25 });
+  // 見え直した 4 回目から 25ms 以上: 最初から数えていれば 5 回目で開けたことになる
+  expect(calls.filter((c) => c[1] === "get").length).toBeGreaterThanOrEqual(6);
 });
 
 test("cwd がディレクトリでなくファイルなら開かない (exit 1)", async () => {
@@ -390,6 +399,18 @@ test("runHerdr は TERM を握る子も時間で止め、timedOut を返す", as
   expect(() => process.kill(pid, 0)).toThrow();
 });
 
+test("runHerdr は stdout を持ったままの孫を待たずに返る", async () => {
+  const bin = join(home, "forks");
+  await writeFile(bin, `#!/bin/sh\nsleep 5 &\necho $! > "${join(home, "grandchild.pid")}"\nexec sleep 5\n`);
+  await chmod(bin, 0o755);
+  const t0 = Date.now();
+  const r = await runHerdr(["workspace", "create"], 200, bin);
+  const grandchild = Number(await Bun.file(join(home, "grandchild.pid")).text());
+  process.kill(grandchild, "SIGKILL");
+  expect(r.timedOut).toBe(true);
+  expect(Date.now() - t0).toBeLessThan(2000);
+});
+
 test("runHerdr は起動できなければ code 127", async () => {
   const r = await runHerdr(["x"], 200, join(home, "no-such-herdr"));
   expect(r.code).toBe(127);
@@ -419,11 +440,14 @@ async function cli(args: string[], herdrScript: string, extraEnv: Record<string,
       CCX_RESUME_COMMAND: "",
       CCX_HUB_URL: "",
       CCX_AGENT: "",
+      CCX_RESUME_AGENT: "",
       // 手元の git config (ccx.resumeCommand / ccx.agent) を読ませない
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
       ...extraEnv,
     },
+    // repo の checkout の外で走らせる (repo の .git/config の ccx.* を読ませない)
+    cwd: home,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -435,8 +459,11 @@ const CREATE_JSON = `{"result":{"workspace":{"workspace_id":"wZZ"},"root_pane":{
 
 test("CLI: 開けたら exit 0、先頭一致の id を解いて開く", async () => {
   await transcript();
+  const t0 = Date.now();
   const r = await cli([ID.slice(0, 8), "--json"], `case "$1 $2" in "workspace create") echo '${CREATE_JSON}';; "pane get") echo '{"result":{"pane":{"agent":"claude"}}}';; *) echo '{}';; esac`);
   expect(r.code).toBe(0);
+  // 既定の STABLE_MS (5 秒) を待ってから開けたとする
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(5000);
   expect(JSON.parse(r.stdout)).toEqual({ workspaceId: "wZZ", paneId: "wZZ:p1", cwd, label: "01ABCDEF" });
 }, 15_000);
 
@@ -463,6 +490,15 @@ test("CLI: 待つ agent の名前は [resume] agent (CCX_RESUME_AGENT) から読
   expect(r.stderr).toContain("agent=codex");
 });
 
+test("CLI: 設定が読めなくても --json は失敗の形を出す", async () => {
+  const bad = join(home, "bad.toml");
+  await writeFile(bad, "[resume\n");
+  const r = await cli([ID, "--json"], `echo called >&2`, { CCX_CONFIG: bad });
+  expect(r.code).toBe(1);
+  expect(JSON.parse(r.stdout)).toMatchObject({ exitCode: 1 });
+  expect(r.stderr).not.toContain("called");
+});
+
 test("CLI: --wait は 3600 秒まで", async () => {
   const r = await cli([ID, "--wait", "3601"], `echo called >&2`);
   expect(r.code).not.toBe(0);
@@ -474,5 +510,7 @@ test("CLI: 開く前に止めたら exit 1 で、herdr を呼ばない", async (
   const r = await cli([ID, "--json"], `echo called >&2; exit 9`);
   expect(r.code).toBe(1);
   expect(JSON.parse(r.stdout)).toMatchObject({ exitCode: 1 });
+  expect(JSON.parse(r.stdout).error).toContain("no local transcript");
+  expect(r.stderr).toContain("no local transcript");
   expect(r.stderr).not.toContain("called");
 });

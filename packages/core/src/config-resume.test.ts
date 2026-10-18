@@ -63,3 +63,9 @@ test("[resume] agent は defaults.agent とは別 (新しい repodir の agent �
   expect(cfg.defaults.agent).toBe("copilot");
   expect(cfg.resume.agent).toBe("claude");
 });
+
+test("空の [resume] agent は未設定として claude に落ちる", async () => {
+  const empty = join(tmp, "empty-agent.toml");
+  await Bun.write(empty, '[resume]\nagent = ""\n');
+  expect((await loadConfig({ env: { CCX_CONFIG: empty }, git: noGit })).resume.agent).toBe("claude");
+});

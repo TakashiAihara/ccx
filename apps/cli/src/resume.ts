@@ -180,9 +180,12 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   let since = 0;
   for (;;) {
     const got = await o.herdr(["pane", "get", paneId]);
-    const up = got.code === 0 && dig(got.stdout, "result", "pane", "agent") === agent;
-    if (!up) seen = 0;
-    else if (seen++ === 0) since = Date.now();
+    // 答えられなかった回は「上がっていない」とは数えない。見えていた並びを切らず、増やしもしない
+    if (got.code === 0) {
+      const up = dig(got.stdout, "result", "pane", "agent") === agent;
+      if (!up) seen = 0;
+      else if (seen++ === 0) since = Date.now();
+    }
     if (seen >= 2 && Date.now() - since >= stableMs) return { ...created, cwd, label };
     if (Date.now() >= deadline && seen === 0) break;
     await sleep(pollMs);
@@ -192,7 +195,7 @@ export async function resumeSession(o: ResumeOptions): Promise<ResumeResult> {
   const visible = shown.code === 0 ? lastLines(shown.stdout, 20) : "";
   throw new ResumeError(
     [
-      `workspace ${workspaceId} was created and ${command} was run in ${paneId}, but the pane did not report agent=${agent} within ${waitMs} ms`,
+      `workspace ${workspaceId} was created and ${command} was run in ${paneId}, but the pane did not keep reporting agent=${agent} for ${stableMs} ms within the ${waitMs} ms wait`,
       shown.code === 0 ? (visible ? `what the pane shows:\n${visible}` : "") : `the pane could not be read: ${said(shown)}`,
       closeHint(created),
     ]
@@ -215,8 +218,8 @@ const HERDR_TIMEOUT_MS = 15_000;
 
 /**
  * 起動できなければ code 127 (shell が「無い」に返すのと同じ値) と理由を返す。呼び手が段階ごとに exit code を決める。
- * 時間切れは自分のタイマーで決める: 子が TERM を握ったり、孫が stdout を持ち続けたりしても止まるように、
- * SIGKILL を送り、出力は待たずに返す
+ * 時間切れは自分のタイマーで決める: 子が TERM を握っても止まるよう直接の子に SIGKILL を送り、出力の読み取りを
+ * 打ち切って返す。子が残した孫 (stdout を持ったまま) までは止めないが、resume はそれを待たない
  */
 export async function runHerdr(args: string[], timeoutMs = HERDR_TIMEOUT_MS, bin = "herdr"): Promise<HerdrResult> {
   let proc: ReturnType<typeof Bun.spawn>;
@@ -229,6 +232,8 @@ export async function runHerdr(args: string[], timeoutMs = HERDR_TIMEOUT_MS, bin
   const timedOut = new Promise<HerdrResult>((resolve) => {
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
+      void (proc.stdout as ReadableStream).cancel().catch(() => {});
+      void (proc.stderr as ReadableStream).cancel().catch(() => {});
       resolve({ code: 137, stdout: "", stderr: `herdr ${args.slice(0, 2).join(" ")} did not answer within ${timeoutMs} ms`, timedOut: true });
     }, timeoutMs);
   });
@@ -260,9 +265,9 @@ export function registerResume(session: Command): void {
     .option("--wait <seconds>", "how long to wait for the agent to come up (default 40)", parseWait)
     .option("--json", "print the result (or the failure) as JSON")
     .action(async (idOrPrefix: string, o) => {
-      const cfg = await loadConfig();
       const home = claudeHome();
       try {
+        const cfg = await loadConfig();
         const known = UUID.test(idOrPrefix.toLowerCase()) ? [] : (await localTranscripts(home)).map((t) => t.sessionId);
         let sessionId: string;
         try {
