@@ -25,6 +25,11 @@ Documentation=https://github.com/TakashiAihara/ccx
 Type=simple
 # %h is the user's home. install.sh --with-agent rewrites this path to its install dir.
 ExecStart=%h/.local/bin/ccx-agent serve
+# A user unit is given the user manager's PATH, which by default lacks ~/.local/bin; the
+# resumes ccx-agent runs call herdr by name. install.sh --with-agent rewrites this
+# line to the PATH of the shell that ran it, less the entries a unit should not carry,
+# with its install dir added.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 RestartSec=2
 

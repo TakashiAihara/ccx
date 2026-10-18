@@ -149,7 +149,40 @@ fi
 # A user unit, never a system one: it runs as whoever ran this script (#90).
 
 # The unit starts %h/.local/bin/ccx-agent; point it at where this install put it.
-sed "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
+# It also gets this shell's PATH, so the resumes ccx-agent runs find herdr as the
+# user does. Entries are left out one by one when not absolute (resolved against
+# the service's cwd, not this shell's) or with any character outside
+# [A-Za-z0-9/._@+,~-]: that keeps out what systemd or the sed below reads
+# differently (space, %, quotes, \, &, |), and, to be safe, everything else.
+unit_path=""
+dropped=""
+set -f
+old_ifs=$IFS
+IFS=:
+for d in $PATH; do
+  case "$d" in
+    /*[!A-Za-z0-9/._@+,~-]*) dropped="$dropped '$d'" ;;
+    /*) unit_path="${unit_path:+$unit_path:}$d" ;;
+    *) dropped="$dropped '$d'" ;;
+  esac
+done
+IFS=$old_ifs
+set +f
+# Field splitting drops a trailing empty field, which in PATH means the cwd as well.
+case "$PATH" in *:) dropped="$dropped ''" ;; esac
+# A fresh install from a shell that does not have the install dir on PATH yet still
+# gives the unit that dir, where ccx and, often, herdr are.
+case ":$unit_path:" in
+  *":$DEST:"*) ;;
+  *) unit_path="$DEST${unit_path:+:$unit_path}" ;;
+esac
+if [ -n "$dropped" ]; then
+  echo "ccx: left out of the unit's PATH (not absolute, or a character outside [A-Za-z0-9/._@+,~-]):$dropped" >&2
+fi
+sed -e "s|%h/.local/bin/ccx-agent|$DEST/ccx-agent|" -e "s|^Environment=PATH=.*|Environment=PATH=$unit_path|" "$stage/ccx-agent.service" > "$unit_dir/ccx-agent.service"
+if ! PATH=$unit_path command -v herdr >/dev/null 2>&1; then
+  echo "ccx: herdr is not on the PATH the unit was given ($unit_path), so a resume through ccx-center cannot open a session here; install herdr into one of those dirs, rerun this from a shell that has it on PATH, or set PATH in a drop-in (systemctl --user edit ccx-agent; it then wins over what a rerun writes)" >&2
+fi
 
 systemctl --user daemon-reload
 systemctl --user enable ccx-agent
