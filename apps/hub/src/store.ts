@@ -3,7 +3,7 @@ import { and, desc, eq, gte, lt, sql, type SQL } from "drizzle-orm";
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
 import type { Db } from "./db/open.ts";
-import { agentRunning, events } from "./db/schema.ts";
+import { agentEndpoints, agentRunning, events } from "./db/schema.ts";
 import { derive } from "./derive.ts";
 
 export type IncomingEvent = {
@@ -145,10 +145,60 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
           set: { sessionIds: ids, receivedAtMs: nowMs },
         })
         .run();
+      // 宛先が読めないことは一覧を断る理由にしない。古い宛先を残すと別の場所へ起こしに行くので消す
+      const apiUrl = apiURLOf(l);
+      // 送られてきたのに使えない宛先は、黙って消すと agent の側から理由が見えない
+      if (apiUrl === null && hasApiUrl(l)) console.error(`running list from ${l.machine}/${l.user}: api_url is not an origin-only http(s) URL; not waking it`);
+      if (apiUrl === null) {
+        tx.delete(agentEndpoints)
+          .where(and(eq(agentEndpoints.machine, l.machine), eq(agentEndpoints.user, l.user)))
+          .run();
+      } else {
+        tx.insert(agentEndpoints)
+          .values({ machine: l.machine, user: l.user, apiUrl, receivedAtMs: nowMs })
+          .onConflictDoUpdate({
+            target: [agentEndpoints.machine, agentEndpoints.user],
+            set: { apiUrl, receivedAtMs: nowMs },
+          })
+          .run();
+      }
       accepted += 1;
     }
     return accepted;
   });
+}
+
+/**
+ * 一覧が名指しする起こしの宛先 (#261)。origin (scheme://host[:port]) だけを通し、正規化した形で返す。
+ * center は RPC の path を足して token を送るので、path / query / fragment / userinfo があると送り先を一覧が決めてしまう。
+ * 無い・文字列でない・不正なものは null。parseSessionIds の後に呼ぶので、payload は JSON と分かっている
+ */
+/** 一覧が api_url のキーを持っているか (値が使えるかは問わない) */
+function hasApiUrl(l: IncomingEvent): boolean {
+  const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
+  return o.api_url !== undefined;
+}
+
+function apiURLOf(l: IncomingEvent): string | null {
+  const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
+  const raw = o.api_url;
+  if (typeof raw !== "string") return null;
+  // new URL は "http://host?" の空の query を捨てるので、記号は文字列で見る
+  if (/[?#]/.test(raw)) return null;
+  try {
+    const u = new URL(raw);
+    if (
+      (u.protocol === "http:" || u.protocol === "https:") &&
+      u.pathname === "/" &&
+      u.username === "" &&
+      u.password === ""
+    ) {
+      return `${u.protocol}//${u.host}`;
+    }
+  } catch {
+    // 相対や scheme の無い文字列は URL にならない。下で null
+  }
+  return null;
 }
 
 /** 一覧は `{"session_ids": ["...", ...]}` で、それ以外の形は読めていないとみなす */

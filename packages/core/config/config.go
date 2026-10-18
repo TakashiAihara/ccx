@@ -18,10 +18,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +84,12 @@ type Config struct {
 	// AgentService, for agents on other hosts. Empty (the default) is off. It
 	// requires APIToken: serve refuses to open it without one.
 	APIListen string
+
+	// APIURL is the address the center reaches this agent's API at. The agent
+	// reports it in the running list so the center can wake the agent (#261).
+	// Empty is off. APIURLErr is why a value was dropped.
+	APIURL    string
+	APIURLErr error
 
 	// APIToken is the Bearer the TCP listener requires (kaneo ccx#34). Apart from
 	// HubToken on purpose: a caller that only reads an agent must not hold the
@@ -169,6 +177,7 @@ type fileShape struct {
 	Persistence struct{ Enabled *bool } `toml:"persistence"`
 	API         struct {
 		Listen string `toml:"listen"`
+		URL    string `toml:"url"`
 	} `toml:"api"`
 	Heartbeat struct {
 		Enabled  *bool  `toml:"enabled"`
@@ -227,6 +236,8 @@ func load(
 		// A copy of hub-token would hand the center's write credential to readers.
 		apiToken, apiTokenErr = "", errors.New("the API token is the hub token; give the agent API its own (CCX_API_TOKEN or api-token)")
 	}
+
+	apiURL, apiURLErr := apiURLFrom(pick(getenv("CCX_API_URL"), gitcfg("ccx.apiUrl"), file.API.URL))
 
 	machine := pick(getenv("CCX_MACHINE"), gitcfg("ccx.machine"), file.Machine)
 	if machine == "" {
@@ -287,6 +298,8 @@ func load(
 		ChannelSocketPath: channelSocketPath(getenv),
 		APISocketPath:     apiSocketPath(getenv),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
+		APIURL:            apiURL,
+		APIURLErr:         apiURLErr,
 		APIToken:          apiToken,
 		APITokenErr:       apiTokenErr,
 		Transcript: Transcript{
@@ -374,6 +387,36 @@ func normalizePrefix(raw string) string {
 		return p + "/"
 	}
 	return p
+}
+
+// apiURLFrom keeps only an origin (scheme://host[:port]). The center appends the
+// RPC path to it and sends the agent token there, so a path, query, fragment or
+// userinfo in the configured value would choose where the token goes.
+func apiURLFrom(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	// The messages leave the value out: it may carry userinfo (a password), and they go to the log.
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("api url does not parse as a URL")
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("api url is not an absolute http(s) URL")
+	}
+	if u.User != nil || (u.Path != "" && u.Path != "/") || strings.ContainsAny(raw, "?#") {
+		return "", errors.New("api url must be an origin only (scheme://host[:port]): no path, query, fragment or userinfo")
+	}
+	// The center (WHATWG URL) refuses a port it cannot read and would drop this address
+	// without a word, so refuse here too, where the agent can log why.
+	if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 || strings.HasPrefix(p, "0") {
+			return "", errors.New("api url has a port that is not 1-65535")
+		}
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // IsHTTP is whether the hub URL can be the transcript store: the center's

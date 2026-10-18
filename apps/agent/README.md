@@ -174,8 +174,11 @@ it simply has no center to forward to.
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
 | status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
 | status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the API token) |
+| wake address (reported to the center) | `CCX_API_URL` | `ccx.apiUrl` | `[api] url` | none (the center does not wake this agent) |
 | status API token (TCP) | `CCX_API_TOKEN` | — | — (file `api-token` next to config.toml, 0600) | none |
 | live transcript on/off | `CCX_TRANSCRIPT_LIVE` | — | `[transcript] live` | on (only with an http(s) hub) |
+
+The wake address is where the center calls `Wake` on this agent when a new resume request arrives. It is separate from `[api] listen`, since the address the center reaches may not be the one the agent binds. Unset, the agent is only polled. Waking also needs `[api] listen` and the API token (the same value as the center's `CCX_CENTER_AGENT_TOKEN`). If either is missing, the agent does not report the address and logs the reason, so the center keeps only polling it.
 
 Toggle values accept `1/true/on/yes` and `0/false/off/no`.
 

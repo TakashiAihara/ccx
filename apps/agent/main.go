@@ -139,6 +139,7 @@ func cmdServe() int {
 		if r := startResume(cfg, logger); r != nil {
 			concerns = append(concerns, r)
 			rs = r
+			srv.Waker = r
 		}
 		// One observer, both of them: the live transcript follows each running
 		// session's transcript, and resume learns the Claude home a session runs
@@ -154,6 +155,9 @@ func cmdServe() int {
 	}
 	if cfg.Heartbeat.Err != nil {
 		logger("heartbeat off: %v", cfg.Heartbeat.Err)
+	}
+	if cfg.APIURLErr != nil {
+		logger("api url ignored: %v", cfg.APIURLErr)
 	}
 	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
 		h := heartbeat.New(cfg, logger)
@@ -227,10 +231,15 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		logger("resume off: no ccx beside ccx-agent and none on PATH, so there is nothing to run `ccx session resume` with")
 		return nil
 	}
+	apiURL, why := advertisedAPIURL(cfg)
+	if why != "" {
+		logger("%s", why)
+	}
 	return resume.New(resume.Options{
 		Machine:     cfg.Machine,
 		User:        cfg.User,
 		DefaultHome: claudeHome(),
+		APIURL:      apiURL,
 		// Next to the spool: it is this agent's own state, kept across restarts the same way
 		HomesFile: filepath.Join(filepath.Dir(cfg.SpoolDir), "claude-homes"),
 		Center:    resume.NewCenter(cfg.HubURL, cfg.HubToken),
@@ -240,6 +249,29 @@ func startResume(cfg config.Config, logger func(string, ...any)) *resume.Resume 
 		Now:       time.Now,
 		Log:       logger,
 	})
+}
+
+// advertisedAPIURL is the api url the running list gives the center, or "" with
+// the reason. The center wakes this agent at that url with the agent token, so
+// it is advertised only when the TCP side it names will actually open.
+func advertisedAPIURL(cfg config.Config) (url, why string) {
+	if cfg.APIURL == "" {
+		return "", ""
+	}
+	var reason string
+	switch {
+	case cfg.APIListen == "":
+		reason = "no listen"
+	// The error first: config empties the token when it refuses one, so checked
+	// the other way round a refused token would read as a missing one.
+	case cfg.APITokenErr != nil:
+		reason = "token error"
+	case cfg.APIToken == "":
+		reason = "no token"
+	default:
+		return cfg.APIURL, ""
+	}
+	return "", fmt.Sprintf("[api] url is set but the API's TCP side will not open (%s), so the center cannot wake this agent", reason)
 }
 
 // cmdChannel is the per-session MCP channel server Claude Code spawns over

@@ -27,7 +27,11 @@ const UI_CSP = `default-src 'none'; script-src 'sha256-${UI_SCRIPT_HASH}'; style
  * createFetchHandler が UniversalHandler を Request → Response に変換してくれる
  * ので、それを Hono の route に載せる。
  */
-export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; now?: () => number } = {}): Hono {
+export function createApp(
+  db: Db,
+  objects: ObjectStore,
+  opts: { token?: string; agentToken?: string; now?: () => number } = {},
+): Hono {
   // 「動いている一覧」の鮮度も「もう一度取れるか」も「依頼の期限」も、center の時計で
   // 比べる。読む側 (テスト) が差し替えられるよう、1 つの時計を渡す
   const now = opts.now ?? Date.now;
@@ -35,7 +39,7 @@ export function createApp(db: Db, objects: ObjectStore, opts: { token?: string; 
   const router = createConnectRouter();
   router.service(IngestService, ingestImpl(db, now));
   router.service(FleetService, fleetImpl(db, now));
-  router.service(ResumeService, resumeImpl(db, now));
+  router.service(ResumeService, resumeImpl(db, now, opts.agentToken));
   router.service(TranscriptService, transcriptImpl(objects));
 
   const app = new Hono();

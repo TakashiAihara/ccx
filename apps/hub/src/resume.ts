@@ -3,7 +3,8 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
-import { resumeRequests } from "./db/schema.ts";
+import { agentEndpoints, resumeRequests } from "./db/schema.ts";
+import { RUNNING_FRESH_MS } from "./store.ts";
 import { ResumeOutcome, ResumeService, type ResumeRequest } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 /**
@@ -111,7 +112,46 @@ function unfinished(tx: Pick<Db, "select">, machine: string, user: string, sessi
     .all();
 }
 
-export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof ResumeService> {
+/**
+ * 起こしの合図 (#261)。agent は次の polling を待たずに依頼を取りに行くためだけに使い、届かなくても
+ * polling が拾う。待たせると依頼の応答が遅れるので、結果は見ずに投げて、失敗は machine と理由をログに残す。
+ */
+const WAKE_TIMEOUT_MS = 3000;
+
+function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
+  const ep = db
+    .select()
+    .from(agentEndpoints)
+    .where(and(eq(agentEndpoints.machine, machine), eq(agentEndpoints.user, user)))
+    .get();
+  // 一覧が途絶えた宛先は古い。そこへ起こしに行くと、別の機械に当たるかもしれない
+  if (!ep || ep.receivedAtMs < nowMs - RUNNING_FRESH_MS) return;
+
+  // 宛先は origin として保存している (store.ts)。転送は追わない: token を別の場所へ運ばないため
+  const url = `${ep.apiUrl}/ccx.v1.AgentService/Wake`;
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${agentToken}` },
+    body: "{}",
+    redirect: "manual",
+    signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
+  }).then(
+    (res) => {
+      if (res.status >= 300 && res.status < 400) {
+        console.error(`wake ${machine}: agent at ${url} answered ${res.status}; a redirect is not followed`);
+      } else if (!res.ok) {
+        console.error(`wake ${machine}: agent at ${url} answered ${res.status}`);
+      }
+      // 本文は使わない。読まずに閉じて、接続を残さない
+      res.body?.cancel().catch(() => undefined);
+    },
+    (err: unknown) => {
+      console.error(`wake ${machine}: agent at ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    },
+  );
+}
+
+export function resumeImpl(db: Db, now: () => number, agentToken?: string): ServiceImpl<typeof ResumeService> {
   return {
     requestResume(req) {
       const key = req.key;
@@ -129,6 +169,7 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
       // 探して作るまでを 1 トランザクションにする。別のプロセスが同じ DB を開いているときにも、
       // 読んでから書くまでのあいだに割り込まれないようにする (immediate は書き込む前に write ロックを取る)。
       // 同じ session を 2 度開かないためのもの
+      let inserted = false;
       const request = db.transaction(
         (tx) => {
           const open = unfinished(tx, key.machine, key.user, sessionId).find((r) => {
@@ -158,10 +199,21 @@ export function resumeImpl(db: Db, now: () => number): ServiceImpl<typeof Resume
             waitSeconds: req.waitSeconds,
           };
           tx.insert(resumeRequests).values(row).run();
+          inserted = true;
           return toRequest(row, nowMs);
         },
         { behavior: "immediate" },
       );
+
+      // 新しい依頼を置いたときだけ起こす。既にある依頼を返したときは、起こしは最初の依頼で済んでいる。
+      // 依頼はもう保存してあるので、起こしの失敗 (宛先を読む DB の例外も) で RPC を失敗にしない
+      if (inserted && agentToken) {
+        try {
+          wakeAgent(db, key.machine, key.user, agentToken, nowMs);
+        } catch (err: unknown) {
+          console.error(`wake ${key.machine}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       return { $typeName: "ccx.v1.RequestResumeResponse", request };
     },

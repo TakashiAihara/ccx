@@ -22,6 +22,8 @@ env:
                     (default $CCX_ROOT/center-objects, or ~/.ccx/center-objects)
   CCX_CENTER_TOKEN  shared token every endpoint but /healthz requires; clients send
                     it as CCX_HUB_TOKEN. With it set the center may bind beyond loopback
+  CCX_CENTER_AGENT_TOKEN  token sent to each agent's Wake (same value as the agent's
+                    CCX_API_TOKEN); unset, the center does not wake agents
 `);
 }
 
@@ -39,7 +41,7 @@ function serve(): void {
 
   const db = openDb(cfg.dbPath);
   mkdirSync(cfg.objectsDir, { recursive: true });
-  const app = createApp(db, new ObjectStore(cfg.objectsDir), { token: cfg.token });
+  const app = createApp(db, new ObjectStore(cfg.objectsDir), { agentToken: cfg.agentToken, token: cfg.token });
 
   const server = Bun.serve({
     hostname: cfg.host,

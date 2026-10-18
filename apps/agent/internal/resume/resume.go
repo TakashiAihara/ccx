@@ -116,6 +116,10 @@ type Options struct {
 	HomesFile string
 	Center    Center
 	Run       RunFunc
+	// APIURL is where the center reaches this agent's API to wake it. It goes in
+	// the running list, so the center only wakes an agent that said it can be
+	// reached; "" leaves the list without it.
+	APIURL string
 	// Interval is how often the unchanged list is sent again.
 	Interval time.Duration
 	// Poll is how often the center is asked whether anything is to be opened.
@@ -144,7 +148,7 @@ func New(o Options) *Resume {
 	if o.Log == nil {
 		o.Log = func(string, ...any) {}
 	}
-	r := &Resume{opts: o}
+	r := &Resume{opts: o, wake: make(chan struct{}, 1)}
 	r.loadHomes()
 	return r
 }
@@ -236,6 +240,10 @@ type Resume struct {
 
 	// running counts the resumes Run has started and not finished.
 	running atomic.Int32
+
+	// wake holds at most one pending wake, so Wake never blocks and several
+	// wakes before the claim loop runs make one claim.
+	wake chan struct{}
 }
 
 // maxRunning bounds the resumes running at once. Each is a CLI, a workspace and
@@ -258,7 +266,9 @@ func (r *Resume) Name() string { return "resume" }
 // a request to one claim at a time, so two goroutines never run the same one.
 func (r *Resume) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
-	every := func(tick func()) {
+	// every runs tick on each poll and on each signal from wake. A nil wake
+	// never fires.
+	every := func(wake <-chan struct{}, tick func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -269,13 +279,14 @@ func (r *Resume) Run(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-t.C:
-					tick()
+				case <-wake:
 				}
+				tick()
 			}
 		}()
 	}
-	every(func() { r.Report(ctx) })
-	every(func() {
+	every(nil, func() { r.Report(ctx) })
+	every(r.wake, func() {
 		// Full: leave the requests on the center, where another tick (or another
 		// agent) takes them, rather than start more than maxRunning at once.
 		if r.running.Load() >= maxRunning {
@@ -302,10 +313,21 @@ func (r *Resume) Tick(ctx context.Context) {
 	r.Claim(ctx)
 }
 
+// Wake makes the claim loop look at the center now rather than at the next
+// poll. It never blocks, and a wake already pending covers this one.
+func (r *Resume) Wake() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
 // runningList is the running list's JSON. The array is never null: an empty
 // list says nothing is running here, which is not the same as the key missing.
 type runningList struct {
 	SessionIDs []string `json:"session_ids"`
+	// APIURL is left out when unset, so an agent without one reads as not wakeable.
+	APIURL string `json:"api_url,omitempty"`
 }
 
 // Report sends what is running under every Claude home this agent knows.
@@ -342,7 +364,7 @@ func (r *Resume) Report(ctx context.Context) {
 		r.log("resume: could not mint an event id: %v", err)
 		return
 	}
-	payload, err := json.Marshal(runningList{SessionIDs: ids})
+	payload, err := json.Marshal(runningList{SessionIDs: ids, APIURL: r.opts.APIURL})
 	if err != nil {
 		r.log("resume: could not encode the running sessions: %v", err)
 		return

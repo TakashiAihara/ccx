@@ -14,7 +14,37 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/agent.proto.
  */
 export const file_ccx_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSJCChdHZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhMKC2NsYXVkZV9ob21lGAIgASgJIpYBChhHZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2USJgoIZGVjbGFyZWQYASABKAsyFC5jY3gudjEuU2Vzc2lvblN0YXRlEioKCWhlYXJ0YmVhdBgCIAEoCzIXLmNjeC52MS5IZWFydGJlYXRTdGF0dXMSJgoHY29sbGVjdBgDIAEoCzIVLmNjeC52MS5Db2xsZWN0U3RhdHVzItgBCg9IZWFydGJlYXRTdGF0dXMSDwoHZW5hYmxlZBgBIAEoCBIRCglsaXN0ZW5pbmcYCCABKAgSEAoIZGVjbGFyZWQYAiABKAkSDgoGd2FudGVkGAMgASgIEhIKCnJlZ2lzdGVyZWQYBCABKAgSKwoHbmV4dF9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEc2VudBgGIAEoDRIwCgxsYXN0X3NlbnRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIt8BCg1Db2xsZWN0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSGQoRY2VudGVyX2NvbmZpZ3VyZWQYAiABKAgSDwoHcGVuZGluZxgDIAEoDRI1ChFsYXN0X2ZvcndhcmRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF9lcnJvcl9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKbGFzdF9lcnJvchgGIAEoCRITCgtzcG9vbF9lcnJvchgHIAEoCTJlCgxBZ2VudFNlcnZpY2USVQoQR2V0U2Vzc2lvblN0YXR1cxIfLmNjeC52MS5HZXRTZXNzaW9uU3RhdHVzUmVxdWVzdBogLmNjeC52MS5HZXRTZXNzaW9uU3RhdHVzUmVzcG9uc2ViBnByb3RvMw", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSINCgtXYWtlUmVxdWVzdCIOCgxXYWtlUmVzcG9uc2UiQgoXR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRITCgtjbGF1ZGVfaG9tZRgCIAEoCSKWAQoYR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEiYKCGRlY2xhcmVkGAEgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIqCgloZWFydGJlYXQYAiABKAsyFy5jY3gudjEuSGVhcnRiZWF0U3RhdHVzEiYKB2NvbGxlY3QYAyABKAsyFS5jY3gudjEuQ29sbGVjdFN0YXR1cyLYAQoPSGVhcnRiZWF0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSEQoJbGlzdGVuaW5nGAggASgIEhAKCGRlY2xhcmVkGAIgASgJEg4KBndhbnRlZBgDIAEoCBISCgpyZWdpc3RlcmVkGAQgASgIEisKB25leHRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNlbnQYBiABKA0SMAoMbGFzdF9zZW50X2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLfAQoNQ29sbGVjdFN0YXR1cxIPCgdlbmFibGVkGAEgASgIEhkKEWNlbnRlcl9jb25maWd1cmVkGAIgASgIEg8KB3BlbmRpbmcYAyABKA0SNQoRbGFzdF9mb3J3YXJkZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjEKDWxhc3RfZXJyb3JfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhIKCmxhc3RfZXJyb3IYBiABKAkSEwoLc3Bvb2xfZXJyb3IYByABKAkymAEKDEFnZW50U2VydmljZRJVChBHZXRTZXNzaW9uU3RhdHVzEh8uY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXF1ZXN0GiAuY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXNwb25zZRIxCgRXYWtlEhMuY2N4LnYxLldha2VSZXF1ZXN0GhQuY2N4LnYxLldha2VSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+
+/**
+ * 中身は無い。宛先は叩かれた agent 自身で、どの依頼かは ClaimResume が決める。
+ *
+ * @generated from message ccx.v1.WakeRequest
+ */
+export type WakeRequest = Message<"ccx.v1.WakeRequest"> & {
+};
+
+/**
+ * Describes the message ccx.v1.WakeRequest.
+ * Use `create(WakeRequestSchema)` to create a new message.
+ */
+export const WakeRequestSchema: GenMessage<WakeRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_agent, 0);
+
+/**
+ * 合図を受け取ったことだけを返す。依頼を取れたか・開けたかは返さない (それは ResumeRequest に残る)。
+ *
+ * @generated from message ccx.v1.WakeResponse
+ */
+export type WakeResponse = Message<"ccx.v1.WakeResponse"> & {
+};
+
+/**
+ * Describes the message ccx.v1.WakeResponse.
+ * Use `create(WakeResponseSchema)` to create a new message.
+ */
+export const WakeResponseSchema: GenMessage<WakeResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_agent, 1);
 
 /**
  * @generated from message ccx.v1.GetSessionStatusRequest
@@ -44,7 +74,7 @@ export type GetSessionStatusRequest = Message<"ccx.v1.GetSessionStatusRequest"> 
  * Use `create(GetSessionStatusRequestSchema)` to create a new message.
  */
 export const GetSessionStatusRequestSchema: GenMessage<GetSessionStatusRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_agent, 0);
+  messageDesc(file_ccx_v1_agent, 2);
 
 /**
  * @generated from message ccx.v1.GetSessionStatusResponse
@@ -73,7 +103,7 @@ export type GetSessionStatusResponse = Message<"ccx.v1.GetSessionStatusResponse"
  * Use `create(GetSessionStatusResponseSchema)` to create a new message.
  */
 export const GetSessionStatusResponseSchema: GenMessage<GetSessionStatusResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_agent, 1);
+  messageDesc(file_ccx_v1_agent, 3);
 
 /**
  * @generated from message ccx.v1.HeartbeatStatus
@@ -142,7 +172,7 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
  * Use `create(HeartbeatStatusSchema)` to create a new message.
  */
 export const HeartbeatStatusSchema: GenMessage<HeartbeatStatus> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_agent, 2);
+  messageDesc(file_ccx_v1_agent, 4);
 
 /**
  * @generated from message ccx.v1.CollectStatus
@@ -201,7 +231,7 @@ export type CollectStatus = Message<"ccx.v1.CollectStatus"> & {
  * Use `create(CollectStatusSchema)` to create a new message.
  */
 export const CollectStatusSchema: GenMessage<CollectStatus> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_agent, 3);
+  messageDesc(file_ccx_v1_agent, 5);
 
 /**
  * ccx-agent に状態を問い合わせる口 (kaneo ccx#34)。
@@ -211,7 +241,9 @@ export const CollectStatusSchema: GenMessage<CollectStatus> = /*@__PURE__*/
  * 要求。center への書き込み権限を持つ hub token とは分ける)。プロトコルを 1 つにするのは、
  * 項目を足すたびに 2 か所を変えないため。
  *
- * 読むだけの口。ここから agent の状態を変える RPC は置かない。
+ * 読むだけの口。ここから agent の状態を変える RPC は置かない。Wake は agent の状態を書き換えないが、
+ * center への ClaimResume を 1 回起こす (依頼があればその先で session が開く)。叩く回数は制限していないので、
+ * API token を持つ人は ClaimResume を何度でも起こせる。
  *
  * @generated from service ccx.v1.AgentService
  */
@@ -226,6 +258,19 @@ export const AgentService: GenService<{
     methodKind: "unary";
     input: typeof GetSessionStatusRequestSchema;
     output: typeof GetSessionStatusResponseSchema;
+  },
+  /**
+   * center が「このマシン宛ての再開依頼を置いた」ときに叩く起こしの合図 (#261)。agent は次の polling を
+   * 待たずに ClaimResume を 1 回打つ。依頼そのものは運ばない (受け取りの経路は ClaimResume の 1 本だけ)。
+   * 合図が届かなくても、次の polling が同じ依頼を拾う。center が叩けるのは、agent が実行中一覧の報告に
+   * api_url を載せた (CCX_API_URL / [api] url を設定した) マシンだけで、TCP の口と同じ API token が要る。
+   *
+   * @generated from rpc ccx.v1.AgentService.Wake
+   */
+  wake: {
+    methodKind: "unary";
+    input: typeof WakeRequestSchema;
+    output: typeof WakeResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_ccx_v1_agent, 0);
