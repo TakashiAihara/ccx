@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { realpath, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   blockers,
@@ -554,6 +554,7 @@ agent
       ["socket", st.socketPath],
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
+      ["dead", `${st.dead} refused by the center, set aside in ${join(st.spoolDir, "dead")} (not retried)`],
       ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);

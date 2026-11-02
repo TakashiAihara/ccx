@@ -16,7 +16,9 @@ import (
 
 // Forwarder sends one enveloped event to the center and returns nil only when
 // the center has confirmed receipt. An error means "not delivered" — the caller
-// must keep the event and retry, never drop it.
+// keeps the event and retries it, except when the error says the center refused
+// the event itself (refusedForContent); that event is moved to dead/, not
+// dropped.
 type Forwarder interface {
 	Forward(ctx context.Context, ev *ccxv1.Event) error
 }
@@ -67,7 +69,8 @@ func (f *connectForwarder) Forward(ctx context.Context, ev *ccxv1.Event) error {
 // order — which is the acceptance condition "spooled events arrive in order".
 //
 // It carries no branch that depends on the payload's content. It reads an
-// event, forwards the bytes, and on success deletes the file. Whether the
+// event, forwards the bytes, and on success deletes the file. The one branch on
+// the outcome reads the center's error code, not the payload. Whether the
 // payload is a SessionStart or a Stop or malformed JSON, the path is identical
 // (scope.md: COLLECT + CARRY, never CONSULT).
 type forwardLoop struct {
@@ -147,11 +150,27 @@ func (l *forwardLoop) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			// Center unreachable. Keep the event, back off, retry the SAME one.
-			l.log("forward failed (seq %d), retrying: %v", e.Event.GetSeq(), err)
 			l.mu.Lock()
 			l.reached.LastErrorAt, l.reached.LastError = time.Now(), err.Error()
 			l.mu.Unlock()
+
+			if refusedForContent(err) {
+				// Sending it again gets the same answer, and every later event waits
+				// behind it (#126). Set it aside and go on to the next one now.
+				dead, derr := l.spool.MoveToDead(e)
+				if derr == nil {
+					l.log("center refused event (seq %d, event_id %s), moved to %s: %v", e.Event.GetSeq(), e.Event.GetEventId(), dead, err)
+					backoff = l.minBackoff
+					continue
+				}
+				// Still in the queue: retry the move after a backoff, as for a
+				// failed Ack, rather than re-forwarding it in a tight loop.
+				l.log("center refused event (seq %d, event_id %s), could not move it aside, retrying: %v", e.Event.GetSeq(), e.Event.GetEventId(), derr)
+			} else {
+				// Center unreachable (or failing for now). Keep the event, back off,
+				// retry the SAME one.
+				l.log("forward failed (seq %d), retrying: %v", e.Event.GetSeq(), err)
+			}
 			if !l.sleep(ctx, backoff) {
 				return
 			}
@@ -179,6 +198,20 @@ func (l *forwardLoop) run(ctx context.Context) {
 		}
 		backoff = l.minBackoff
 	}
+}
+
+// refusedForContent reports whether the center refused the event itself, so
+// that sending the same bytes again cannot succeed. The center answers that way
+// for an event it will not store (a missing event_id or origin, apps/hub). Every
+// other error, Unauthenticated included, can clear without the event changing
+// (the center comes back, the token is fixed), so those events stay and are
+// retried.
+func refusedForContent(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeInvalidArgument, connect.CodeFailedPrecondition:
+		return true
+	}
+	return false
 }
 
 func (l *forwardLoop) waitIdle(ctx context.Context) bool {
