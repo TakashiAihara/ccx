@@ -15,7 +15,7 @@ import type { Config } from "./config.ts";
 import { DIR_ID_LENGTH, isDirId } from "./dirid.ts";
 import { git, gitBare } from "./git.ts";
 import { readMeta, readState } from "./meta.ts";
-import { mirrorPath } from "./mirror.ts";
+import { ensureMirror, mirrorPath } from "./mirror.ts";
 import { createRepodir } from "./repodir.ts";
 import { explicitCloneUrl, parseRepoSpec } from "./repospec.ts";
 
@@ -509,5 +509,178 @@ describe("safe.bareRepository=explicit (#275)", () => {
     expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
     expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
     expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
+  });
+
+  for (const [name, unset] of [
+    ["url だけ書かれた mirror", ["remote.origin.fetch", "remote.origin.mirror"]],
+    ["url と fetch だけ書かれた mirror", ["remote.origin.mirror"]],
+    ["url と mirror だけ書かれた mirror", ["remote.origin.fetch"]],
+  ] as const) {
+    test(`復旧が中断された (${name}) も、次の呼び出しで残りを書き戻し、新しい commit を取る`, async () => {
+      const own: Config = { ...cfg, root: join(tmp, `partial-${unset.length}-${unset[0]}`), mirrorRoot: join(tmp, `partial-m-${unset.length}-${unset[0]}`) };
+      await createRepodir(own, spec(), {}, "0.1.0");
+      const path = mirrorPath(own, spec());
+      for (const k of unset) await gitBare(["config", "--unset-all", k], path);
+
+      await git(["switch", "--quiet", "main"], join(tmp, "work"));
+      await Bun.write(join(tmp, "work", `partial-${unset.length}-${unset[0]}.md`), "new\n");
+      await git(["add", "."], join(tmp, "work"));
+      await git(["commit", "--quiet", "-m", "partial"], join(tmp, "work"));
+      await git(["push", "--quiet", source, "main"], join(tmp, "work"));
+      const head = await git(["rev-parse", "main"], join(tmp, "work"));
+
+      await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+      expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
+      expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+      expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    });
+  }
+
+  test("別の refspec と mirror=false の mirror に、mirror の refspec を足して mirror=true にする (既存の行は残す)", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "wrongval"), mirrorRoot: join(tmp, "wrongval-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], path);
+    await gitBare(["config", "--add", "remote.origin.fetch", "^refs/pull/*"], path);
+    await gitBare(["config", "--bool", "remote.origin.mirror", "false"], path);
+
+    await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+    // 利用者が足した行は消さずに、mirror の refspec だけを足す
+    expect((await gitBare(["config", "--get-all", "remote.origin.fetch"], path)).split("\n")).toEqual([
+      "+refs/heads/*:refs/remotes/origin/*",
+      "^refs/pull/*",
+      "+refs/*:refs/*",
+    ]);
+    expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
+  });
+
+  test("refspec が複数行あっても警告せず、mirror の行が既にあれば config を書き換えない", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "multival"), mirrorRoot: join(tmp, "multival-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "--add", "remote.origin.fetch", "^refs/pull/*"], path);
+    await gitBare(["config", "remote.origin.mirror", "yes"], path);
+    const before = await Bun.file(join(path, "config")).text();
+
+    const warnings: string[] = [];
+    const r = await ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) });
+    expect(r.updated).toBe(true);
+    expect(warnings).toEqual([]);
+    expect(await Bun.file(join(path, "config")).text()).toBe(before);
+  });
+
+  test("明示 URL の mirror でも、欠けた refspec を書き戻す", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-repair"), mirrorRoot: join(tmp, "explicit-repair-m") };
+    const forge = parseRepoSpec(HTTP_FORGE, { defaultHost: "github.com" });
+    await createRepodir(own, forge, { url: explicitCloneUrl(HTTP_FORGE) }, "0.1.0");
+    const path = mirrorPath(own, forge);
+    await gitBare(["config", "--unset-all", "remote.origin.fetch"], path);
+
+    await createRepodir(own, forge, { refresh: true }, "0.1.0");
+    expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(HTTP_FORGE);
+    expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+  });
+
+  test("壊れた mirror フラグ (git が exit 128) は上書きせず、警告に落とす", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "badbool"), mirrorRoot: join(tmp, "badbool-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "remote.origin.mirror", "maybe"], path);
+    const before = await Bun.file(join(path, "config")).text();
+
+    const warnings: string[] = [];
+    // git 自身も壊れた bool では remote update に失敗する。ここで見るのは警告と config が無傷なこと
+    await ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) }).catch(() => undefined);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("could not update the mirror's origin config");
+    expect(await Bun.file(join(path, "config")).text()).toBe(before);
+  });
+
+  // config.lock を置くと git config の書き込みだけが失敗し、読み取りは通る (並行実行のロック競合と同じ形)
+  async function lockedMirror(name: string, breakConfig: (path: string) => Promise<void>) {
+    const own: Config = { ...cfg, root: join(tmp, name), mirrorRoot: join(tmp, `${name}-m`) };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await breakConfig(path);
+    const before = await gitBare(["rev-parse", "refs/heads/main"], path);
+
+    await git(["switch", "--quiet", "main"], join(tmp, "work"));
+    await Bun.write(join(tmp, "work", `${name}.md`), "new\n");
+    await git(["add", "."], join(tmp, "work"));
+    await git(["commit", "--quiet", "-m", name], join(tmp, "work"));
+    await git(["push", "--quiet", source, "main"], join(tmp, "work"));
+    const head = await git(["rev-parse", "main"], join(tmp, "work"));
+
+    await Bun.write(join(path, "config.lock"), "");
+    return { own, path, before, head };
+  }
+
+  for (const [name, breakConfig] of [
+    ["refspec が欠けた", (p: string) => gitBare(["config", "--unset-all", "remote.origin.fetch"], p)],
+    ["mirror フラグが false の", (p: string) => gitBare(["config", "--bool", "remote.origin.mirror", "false"], p)],
+  ] as const) {
+    test(`修復の書き込みが失敗し、読み直しても ${name} mirror は、更新せずに投げる`, async () => {
+      const { own, path, before } = await lockedMirror(`locked-${name}`, async (p) => void (await breakConfig(p)));
+      // refspec の無い fetch は ref を動かさないが FETCH_HEAD は書く。これが鮮度の判定を騙す (#77)
+      const fetchHead = () => stat(join(path, "FETCH_HEAD")).then((s) => s.mtimeMs, () => null);
+      const fetchedBefore = await fetchHead();
+
+      const warnings: string[] = [];
+      try {
+        await expect(ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) })).rejects.toThrow(
+          "the mirror's origin config is incomplete",
+        );
+        expect(warnings.length).toBe(1);
+        expect(await fetchHead()).toBe(fetchedBefore);
+        expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(before);
+      } finally {
+        await rm(join(path, "config.lock"), { force: true });
+      }
+    });
+  }
+
+  test("修復の書き込みが失敗しても、読み直して並行する修復が書き終えていれば、更新して updated を返す", async () => {
+    const { own, path, head } = await lockedMirror("locked-raced", (p) =>
+      gitBare(["config", "--unset-all", "remote.origin.fetch"], p).then(() => undefined),
+    );
+
+    // 警告は修復の失敗直後・読み直しの前に出る。そこで競合相手が書き終えた状態を作る。
+    // ロックは戻しておき、読み直しの代わりに書き込みをやり直す実装なら失敗するようにする
+    const lock = join(path, "config.lock");
+    const warnings: string[] = [];
+    try {
+      const r = await ensureMirror(own, spec(), {
+        force: true,
+        warn: (m) => {
+          warnings.push(m);
+          Bun.spawnSync(["rm", "-f", lock]);
+          Bun.spawnSync(["git", "--git-dir", path, "config", "remote.origin.fetch", "+refs/*:refs/*"]);
+          Bun.spawnSync(["touch", lock]);
+        },
+      });
+      expect(r.updated).toBe(true);
+      expect(warnings.length).toBe(1);
+      expect(await gitBare(["config", "--get-all", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    } finally {
+      await rm(lock, { force: true });
+    }
+  });
+
+  test("url の付け替えに失敗しても、警告して元の origin で更新する", async () => {
+    const { own, path, head } = await lockedMirror("locked-url", async () => undefined);
+    const other = `${REMOTE}-moved`;
+
+    const warnings: string[] = [];
+    try {
+      const r = await ensureMirror(own, spec(), { force: true, url: other, warn: (m) => warnings.push(m) });
+      expect(r.updated).toBe(true);
+      expect(warnings).toEqual([expect.stringContaining(`could not point the mirror at ${other}`)]);
+      expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    } finally {
+      await rm(join(path, "config.lock"), { force: true });
+    }
   });
 });
