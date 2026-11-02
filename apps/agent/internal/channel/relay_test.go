@@ -112,11 +112,13 @@ func TestRelayWaitsForServe(t *testing.T) {
 	}
 }
 
-// The sequence #196 saw: the runtime dir is removed under a running serve
-// (another unit with RuntimeDirectory=ccx stopped), then serve restarts. A channel
-// that was registered with the old serve registers with the new one, through
-// the real concern on both ends.
+// A channel that was registered with one serve registers with the next one after
+// a restart, through the real concern on both ends. The runtime dir is removed
+// first, as in #196 (another unit with RuntimeDirectory=ccx stopped); the relay
+// does not depend on it, and this test does not tell it apart from a plain restart.
 func TestRelayRegistersAgainAfterServeRestarts(t *testing.T) {
+	// heartbeat.New reads CLAUDE_CONFIG_DIR, else the real ~/.claude.
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	dir := filepath.Join(testsock.Dir(t), "ccx")
 	sock := filepath.Join(dir, "ccx-channel.sock")
 	cfg := config.Config{ChannelSocketPath: sock, Heartbeat: config.Heartbeat{Default: true, Interval: 50 * time.Minute}}

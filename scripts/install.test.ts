@@ -114,9 +114,9 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
     "systemctl --user show-environment",
     "systemctl --user show -p UnitPath --value",
     "systemctl --user daemon-reload",
+    "systemctl --user enable ccx-agent",
     "systemctl --user show -p ActiveState --value ccxd.service",
     "systemctl --user show -p UnitFileState --value ccxd.service",
-    "systemctl --user enable ccx-agent",
     "systemctl --user restart ccx-agent",
   ]);
   expect(r.out).toContain("loginctl enable-linger");
@@ -129,17 +129,17 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
 const ccxdCalls = (calls: string) =>
   calls.split("\n").filter((l) => l.startsWith("systemctl") && !l.includes(" show ") && !l.includes("show-environment"));
 
-test.skipIf(!linux)("a running, enabled ccxd.service is stopped and disabled before ccx-agent restarts", async () => {
+test.skipIf(!linux)("a running, enabled ccxd.service is disabled and stopped right before ccx-agent restarts", async () => {
   const r = await install(["--with-agent"], { CCXD_ACTIVE: "active", CCXD_FILE: "enabled" });
   expect(r.code).toBe(0);
   expect(ccxdCalls(r.calls)).toEqual([
     "systemctl --user daemon-reload",
-    "systemctl --user stop ccxd.service",
-    "systemctl --user disable ccxd.service",
     "systemctl --user enable ccx-agent",
+    "systemctl --user disable ccxd.service",
+    "systemctl --user stop ccxd.service",
     "systemctl --user restart ccx-agent",
   ]);
-  expect(r.out).toContain("ccx: stopped and disabled ccxd.service");
+  expect(r.out).toContain("ccx: disabled and stopped ccxd.service");
 });
 
 // A unit whose file was deleted (not-found) or masked still runs until it is stopped,
@@ -150,8 +150,8 @@ for (const file of ["", "masked"]) {
     expect(r.code).toBe(0);
     expect(ccxdCalls(r.calls)).toEqual([
       "systemctl --user daemon-reload",
-      "systemctl --user stop ccxd.service",
       "systemctl --user enable ccx-agent",
+      "systemctl --user stop ccxd.service",
       "systemctl --user restart ccx-agent",
     ]);
     expect(r.out).toContain("ccx: stopped ccxd.service");
@@ -164,8 +164,8 @@ for (const file of ["enabled", "enabled-runtime", "linked", "linked-runtime"]) {
     expect(r.code).toBe(0);
     expect(ccxdCalls(r.calls)).toEqual([
       "systemctl --user daemon-reload",
-      "systemctl --user disable ccxd.service",
       "systemctl --user enable ccx-agent",
+      "systemctl --user disable ccxd.service",
       "systemctl --user restart ccx-agent",
     ]);
     expect(r.out).toContain("ccx: disabled ccxd.service");
