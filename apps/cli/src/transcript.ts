@@ -60,8 +60,9 @@ export type Selector = { ended?: boolean; archived?: boolean };
 
 /**
  * 引数の id か、選択子に当たる全部。どちらも無ければ何を指すか分からないので止まる。
- * prune は選択子で選んだ running を先に外す (「done だが動いている」を refused で
- * 数えると、退役していない session が毎回 exit 1 を作る)
+ * prune は選択子に当たった running を外す (「done だが動いている」を refused で
+ * 数えると、退役していない session が毎回 exit 1 を作る)。--archived では、archived かを
+ * 読んだ後で外す
  *
  * The ones taken out that way come back as skippedRunning, so prune can say which they were
  * (#144). A running session that --ended leaves out is not among them: --ended means "not
