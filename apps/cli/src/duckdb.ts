@@ -64,6 +64,17 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // session を渡されたら glob で絞る。read_json は glob に当たったファイルしか取りに行かない
   const sessionGlob = opts.session ? `session_id=${opts.session.replaceAll("*", "")}*` : "*";
   const files = `${base}/machine=*/user=*/${sessionGlob}/transcript.jsonl`;
+  // machine / user / session_id come from the segments after `base`, never from the prefix (#171): hive_partitioning
+  // takes the first `key=value` in the whole path, so no view reads the hive columns DuckDB adds on its own.
+  // The regexp is tied to the file at the end of the path: a glob `*` stays within one segment, so the three
+  // directories above the leaf are the ones after `base`, whatever DuckDB spells the prefix as in `filename`
+  const PATH = "__ccx_path";
+  const tail = (leaf: string) => (k: "machine" | "user" | "session_id") =>
+    `regexp_extract(${PATH}, '/machine=([^/]+)/user=([^/]+)/session_id=([^/]+)/${leaf}$', ${["machine", "user", "session_id"].indexOf(k) + 1})`;
+  const tPart = tail("transcript\\.jsonl");
+  const cols = (part: (k: "machine" | "user" | "session_id") => string) =>
+    `${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user"`;
+  const reader = `filename=${q(PATH)}, maximum_object_size=268435456`;
   // maximum_object_size: tool の出力を抱えた行が 16 MB の既定を超える (手元の 26 本で最大 3.8 MB。上限は 256 MB)。
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
@@ -71,10 +82,16 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     // union_by_name で全レコード種別のキーを持つ struct になり、to_json すると無いキーが
     // `"x":null` として全行に現れて、"null" や "model" がすべての行に当たる
     await c.run(
-      `CREATE VIEW lines AS SELECT session_id, machine, "user", json FROM read_json_objects(${q(files)}, format='newline_delimited', hive_partitioning=true, maximum_object_size=268435456)`,
+      `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
     await c.run(
-      `CREATE VIEW transcripts AS SELECT * FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, hive_partitioning=true, maximum_object_size=268435456)`,
+      // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
+      // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
+      // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
+      // The path columns stay in hive_partitioning's (alphabetical) order
+      `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
+         ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
+       FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, ${reader})`,
     );
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
@@ -84,16 +101,15 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // read_json_objects ではなく read_text + json_valid: 壊れた state.json が 1 つあると read_json_objects は
   // クエリ全体を止め、既定の検索 (transcript も含む) が丸ごと落ちる。壊れたものはその 1 件だけ落とす。
   // archived は JSON の true だけを真にする (normalizeDeclared と同じ。"true" / 1 は偽)。キャストで全体を止めない。
-  // read_text は hive_partitioning を取らないので、パスから取り出す。最初の一致を取るのは DuckDB の hive_partitioning
-  // と同じ (prefix に `user=` 等があると両方とも誤る。他の view と食い違わせない)
+  // read_text also auto-adds first-match hive columns; the inner SELECT keeps only filename and content, and the path
+  // columns come from the same end-anchored regexp as the other views
   const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
-  const part = (k: string) => `regexp_extract(filename, '/${k}=([^/]+)/', 1)`;
   await c.run(
     `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task, json->>'role' AS role,
        coalesce((json->'archived')::VARCHAR = 'true', false) AS archived, json->'metadata' AS metadata, json->'labelHistory' AS label_history,
        json->>'$.labelHistory[#-1].at' AS label_recorded_at, json
-     FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user", content::JSON AS json
-           FROM read_text(${q(states)}) WHERE json_valid(content))`,
+     FROM (SELECT ${cols(tail("state\\.json"))}, content::JSON AS json
+           FROM (SELECT filename AS ${PATH}, content FROM read_text(${q(states)})) WHERE json_valid(content))`,
   );
   if (opts.withHistory) {
     // パスの machine / user は push した側で、操作した側はファイルの中にある。history は「誰が pull したか」
@@ -101,11 +117,12 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     // object でないもの、op / machine / user / at のどれかが文字列でないもの。tr ls と同じ) がクエリ全体を止めず、その 1 件
     // だけ落ちる (#172)。glob が空なら 0 行
     const hist = `${base}/machine=*/user=*/${sessionGlob}/history/*.json`;
+    const hPart = tail("history/[^/]+\\.json");
     await c.run(
       // `at` は DuckDB の予約語 (AT 句) なので列名は occurred_at
       `CREATE VIEW history AS SELECT session_id, json->>'op' AS op, json->>'machine' AS machine, json->>'user' AS "user", json->>'at' AS occurred_at, pushed_by_machine, pushed_by_user
-       FROM (SELECT ${part("session_id")} AS session_id, ${part("machine")} AS pushed_by_machine, ${part("user")} AS pushed_by_user, content::JSON AS json
-             FROM read_text(${q(hist)}) WHERE json_valid(content))
+       FROM (SELECT ${hPart("session_id")} AS session_id, ${hPart("machine")} AS pushed_by_machine, ${hPart("user")} AS pushed_by_user, content::JSON AS json
+             FROM (SELECT filename AS ${PATH}, content FROM read_text(${q(hist)})) WHERE json_valid(content))
        WHERE ${["op", "machine", "user", "at"].map((k) => `json_type(json, '$.${k}') = 'VARCHAR'`).join(" AND ")}`,
     );
   }
