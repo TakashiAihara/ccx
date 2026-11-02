@@ -147,6 +147,13 @@ could block a session on a timeout.
 - **At-least-once.** An event may be delivered twice (e.g. ccx-agent is killed after
   the center acked but before the spool file was deleted); the center drops the
   duplicate by `event_id`. Duplicates are acceptable; losing an event is not.
+- **An event the center refuses does not hold the rest back.** When the center
+  itself answers `InvalidArgument` or `FailedPrecondition` (it will not store that
+  event, e.g. its origin is empty), sending it again cannot succeed, so ccx-agent moves it
+  to `~/.ccx/spool/dead/`, logs one line, and goes on with the next event. It is
+  not retried; `ccx agent status` shows how many are there. Every other error
+  (center down, timeout, `Unauthenticated`, a reply the client could not read) keeps
+  the event and retries it.
 - **It forwards bytes; it does not read them.** The payload is opaque to ccx-agent —
   there is no branch in the forward path that depends on its content
   (`docs/design/scope.md`: COLLECT + CARRY, never CONSULT). The parsed shape
@@ -296,4 +303,5 @@ ccx session mark archived # from inside a session; the flag shows in `ccx sessio
 ```
 
 `incoming` in `ccx agent status` counts events hooks dropped while the agent was down;
-they are taken in when it starts.
+they are taken in when it starts. `dead` counts events the center refused; they stay
+in `~/.ccx/spool/dead/` and are not sent again.

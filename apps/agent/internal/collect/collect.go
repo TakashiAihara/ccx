@@ -332,9 +332,9 @@ func shortList(names []string) string {
 }
 
 // CheckOrigin says why collect cannot stamp its events, or nil. The center rejects
-// an event without a machine and a user name, and the forward loop would retry it
-// forever, holding back everything behind it (#126). Hooks fall back to incoming/
-// while collect is not running, so refusing to start loses nothing.
+// an event without a machine and a user name, so every event would end up in the
+// spool's dead/ and none would reach the center (#126). Hooks fall back to
+// incoming/ while collect is not running, so refusing to start loses nothing.
 func CheckOrigin(cfg config.Config) error {
 	if cfg.Machine == "" {
 		return fmt.Errorf("no machine name: the hostname could not be read; set CCX_MACHINE or machine in config.toml")

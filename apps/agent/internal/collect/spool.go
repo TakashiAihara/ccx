@@ -345,6 +345,33 @@ func (s *Spool) Ack(e *Entry) error {
 	return err
 }
 
+// deadPath is where events the center refused for their content are set aside
+// (#126). The CLI's `ccx agent status` (apps/cli/src/agent.ts) counts the .pb
+// files there.
+func deadPath(spoolDir string) string { return filepath.Join(spoolDir, "dead") }
+
+// MoveToDead takes an event out of the queue without sending it: the center
+// refused it, and sending it again would only hold every later event back. The
+// file keeps its bytes so someone can read why later. The name gets a fresh id
+// after the seq, because seq resumes from the queue alone after a restart and a
+// later refused event could carry the same seq; a rename onto it would replace
+// the first one.
+//
+// The move is not fsynced. If a crash undoes it, the event is back at the front
+// of the queue, the center refuses it again, and it is moved again.
+func (s *Spool) MoveToDead(e *Entry) (string, error) {
+	dir := deadPath(s.dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	stem := strings.TrimSuffix(filepath.Base(e.Path), spoolExt)
+	target := filepath.Join(dir, stem+"-"+s.newID()+spoolExt)
+	if err := os.Rename(e.Path, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 // Pending counts events still waiting to be forwarded.
 func (s *Spool) Pending() (int, error) {
 	names, err := s.sortedNames()

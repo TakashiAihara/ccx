@@ -19,6 +19,12 @@ export type AgentStatus = {
   spooled: number;
   /** ccx-agent に渡せず hook が直接落とした event 数。次の ccx-agent 起動で取り込まれる */
   incoming: number;
+  /**
+   * Events the center refused for their content (InvalidArgument / FailedPrecondition),
+   * set aside in spool/dead/ without being sent again (#126). Not retried, so a non-zero
+   * count needs a person to look.
+   */
+  dead: number;
   /** hubUrl が URL として読めなかった。「届かない」とは別の状態 */
   hubUrlInvalid?: boolean;
   hubUrl?: string;
@@ -99,10 +105,12 @@ export async function agentStatus(
     () => false,
   );
 
-  const [socketConnectable, spooled, incoming] = await Promise.all([
+  const [socketConnectable, spooled, incoming, dead] = await Promise.all([
     socketPresent ? connectable(socketPath) : Promise.resolve(false),
     countFiles(spoolDir, SPOOL_EXT),
     countFiles(join(spoolDir, "incoming"), INCOMING_EXT),
+    // Same place as ccx-agent's deadPath (apps/agent/internal/collect/spool.go); the files are spool .pb files
+    countFiles(join(spoolDir, "dead"), SPOOL_EXT),
   ]);
 
   // URL の組み立ては fetch の前に同期で走るので、catch の外で throw する。
@@ -147,6 +155,7 @@ export async function agentStatus(
     spoolDir,
     spooled,
     incoming,
+    dead,
     hubUrl,
     hubReachable,
     ...(hubTokenAccepted !== undefined ? { hubTokenAccepted } : {}),
