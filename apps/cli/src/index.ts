@@ -140,10 +140,11 @@ repodir
   .command("ls")
   .description("List repodirs and what each one is for")
   .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option("-b, --branch <name|glob>", "only repodirs whose current branch is this name, or matches this glob (* and ?)")
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const infos = await scanRepodirs(cfg, { filter: o.repo });
+    const infos = await scanRepodirs(cfg, { filter: o.repo, branch: o.branch });
 
     if (o.json) {
       console.log(JSON.stringify(infos, null, 2));

@@ -106,6 +106,9 @@ ccd() {
   dir="$(ccx rd cd)" || return   # nothing picked: stop here, do not cd
   cd "$dir"
 }
+
+# Which repodir is on a branch? --branch takes an exact name or a glob (* also spans /).
+ccx rd ls --branch 'fix/*-authz'
 ```
 
 ### Seeing across machines

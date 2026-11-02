@@ -18,7 +18,7 @@ import { git } from "./git.ts";
 import { META_SCHEMA, metaPath, statePath } from "./meta.ts";
 import { createRepodir } from "./repodir.ts";
 import { parseRepoSpec } from "./repospec.ts";
-import { defaultClaudeHomes, encodeCwd, scanRepodirs, type RepodirInfo } from "./scan.ts";
+import { branchMatches, defaultClaudeHomes, encodeCwd, scanRepodirs, type RepodirInfo } from "./scan.ts";
 
 const REMOTE = "https://github.com/test-owner/demo.git";
 
@@ -173,5 +173,57 @@ describe("session の生死", () => {
       (await scanRepodirs(cfg, { claudeHomes })).filter((x) => x.path === inAccount.path || x.path === inDefault.path).map((x) => [x.path === inAccount.path ? "account" : "default", x.session.active] as const);
     expect(new Map(await active([account, dflt]))).toEqual(new Map([["account", true], ["default", true]]));
     expect(new Map(await active([join(tmp, "account-c"), dflt]))).toEqual(new Map([["account", false], ["default", true]]));
+  });
+});
+
+describe("branch filter (#280)", () => {
+  test("a name without * or ? is an exact branch name, not a substring", () => {
+    expect(branchMatches("main", "main")).toBe(true);
+    expect(branchMatches("main", "fix/main-loop")).toBe(false);
+    expect(branchMatches("fix/a", "fix/a-b")).toBe(false);
+  });
+
+  test("* spans / and any run of characters, including none", () => {
+    expect(branchMatches("fix/*", "fix/a/b")).toBe(true);
+    expect(branchMatches("*-authz", "fix/action-summarizer-authz")).toBe(true);
+    expect(branchMatches("fix/*-authz", "fix/-authz")).toBe(true);
+    expect(branchMatches("fix/*", "feat/a")).toBe(false);
+    expect(branchMatches("*-authz", "fix/authz-2")).toBe(false);
+  });
+
+  test("? matches exactly one character", () => {
+    expect(branchMatches("v?", "v1")).toBe(true);
+    expect(branchMatches("v?", "v12")).toBe(false);
+    expect(branchMatches("v?", "v")).toBe(false);
+  });
+
+  test("regex metacharacters in a glob are literal", () => {
+    expect(branchMatches("rel.1*", "rel.1.0")).toBe(true);
+    expect(branchMatches("rel.1*", "relx1.0")).toBe(false);
+    expect(branchMatches("a+b*", "a+bc")).toBe(true);
+    expect(branchMatches("a+b*", "aab")).toBe(false);
+  });
+
+  test("a detached HEAD matches nothing, even *", () => {
+    expect(branchMatches("*", null)).toBe(false);
+    expect(branchMatches("main", null)).toBe(false);
+  });
+
+  test("scanRepodirs keeps only repodirs whose current branch matches", async () => {
+    const fcfg: Config = { ...cfg, root: join(tmp, "branch-filter") };
+    const onMain = await createRepodir(fcfg, spec(), {}, "0.1.0");
+    const onFix = await createRepodir(fcfg, spec(), {}, "0.1.0");
+    await git(["switch", "--quiet", "-c", "fix/action-summarizer-authz"], onFix.path);
+    const detached = await createRepodir(fcfg, spec(), {}, "0.1.0");
+    await git(["switch", "--quiet", "--detach"], detached.path);
+
+    const paths = async (branch?: string) =>
+      (await scanRepodirs(fcfg, { branch, claudeHomes: [], procRoot: join(tmp, "no-proc") })).map((i) => i.path).sort();
+
+    expect(await paths()).toEqual([onMain.path, onFix.path, detached.path].sort());
+    expect(await paths("main")).toEqual([onMain.path]);
+    expect(await paths("*-authz")).toEqual([onFix.path]);
+    expect(await paths("*")).toEqual([onMain.path, onFix.path].sort());
+    expect(await paths("nope")).toEqual([]);
   });
 });

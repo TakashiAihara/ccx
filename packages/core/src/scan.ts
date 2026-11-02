@@ -203,9 +203,30 @@ async function subdirs(dir: string): Promise<string[]> {
   }
 }
 
+/**
+ * Whether a repodir's current branch matches `pattern` (#280).
+ *
+ * Without `*` or `?` the pattern is an exact branch name: a substring match would make
+ * `main` also select `fix/main-loop`. `*` matches any run of characters including `/`, because
+ * branch names are namespaced with `/` and `fix/*` is meant to cover `fix/a/b` as well. `?`
+ * matches one character. Everything else is literal. A detached HEAD (null) never matches.
+ */
+export function branchMatches(pattern: string, branch: string | null): boolean {
+  if (branch === null) return false;
+  if (!/[*?]/.test(pattern)) return branch === pattern;
+
+  const body = pattern
+    .split("")
+    .map((c) => (c === "*" ? ".*" : c === "?" ? "." : c.replace(/[\\^$.|+()[\]{}]/g, "\\$&")))
+    .join("");
+  return new RegExp(`^${body}$`).test(branch);
+}
+
 export type ScanOptions = {
   /** repo で絞る (host/owner/repo の部分一致) */
   filter?: string;
+  /** Only repodirs whose current branch matches this name or glob (see branchMatches) */
+  branch?: string;
   idleMs?: number;
   /** テスト用。session の transcript を探す Claude の config dir (既定は defaultClaudeHomes) */
   claudeHomes?: string[];
@@ -236,5 +257,7 @@ export async function scanRepodirs(cfg: Config, opts: ScanOptions = {}): Promise
   }
 
   const all = await Promise.all(found);
-  return all.sort((a, b) => a.created.getTime() - b.created.getTime());
+  const branch = opts.branch;
+  const kept = branch === undefined ? all : all.filter((i) => branchMatches(branch, i.git.branch));
+  return kept.sort((a, b) => a.created.getTime() - b.created.getTime());
 }
