@@ -105,8 +105,27 @@ func cmdServe() int {
 
 	logger := func(format string, a ...any) { log.Printf(format, a...) }
 
-	// Assemble the enabled concerns (ADR 0002). Only collect is built in #90;
-	// carry and persistence append here the same way when they exist.
+	concerns, err := assemble(cfg, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := concern.Run(ctx, logger, concerns...); err != nil {
+		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// assemble builds the enabled concerns (ADR 0002) and logs the one startup line
+// that says which of them serve runs. Only collect is built in #90; carry and
+// persistence append here the same way when they exist. It is apart from
+// cmdServe so a test can hand it a Config without running anything (#257).
+func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern, error) {
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
 	// Without a machine and a user name collect would only wedge (#126). Turn it off
@@ -119,8 +138,7 @@ func cmdServe() int {
 	} else if cfg.Concerns.Collect {
 		c, err := collect.New(cfg, logger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ccx-agent: collect: %v\n", err)
-			return 1
+			return nil, fmt.Errorf("collect: %w", err)
 		}
 		concerns = append(concerns, c)
 		srv.Collect = c
@@ -167,17 +185,10 @@ func cmdServe() int {
 	// Not a toggle: the API only reads, and it is how a person sees the rest.
 	concerns = append(concerns, api.New(cfg, srv, logger))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v heartbeat=%v interval=%v default=%v)",
 		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect,
 		cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval, cfg.Heartbeat.Default)
-	if err := concern.Run(ctx, logger, concerns...); err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
-		return 1
-	}
-	return 0
+	return concerns, nil
 }
 
 // startLiveTranscript builds the live transcript concern (#120,
