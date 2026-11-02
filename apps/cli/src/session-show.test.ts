@@ -31,6 +31,19 @@ let requests: number;
 
 const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
 let n = 0;
+/** A declared-state report (`ccx session mark`, or the state `ccx tr pull` installs), as session-state.ts sends it */
+const mark = (machine: string, user: string) => {
+  n += 1;
+  return {
+    eventId: `s-${n}`,
+    machine,
+    user,
+    seq: n,
+    receivedAtMs: 1_700_000_000_000 + n * 1000,
+    producer: 2,
+    payload: enc({ session_id: SID, rev: n, marks: ["archived"], label: "", task: "", role: "", metadata: {} }),
+  };
+};
 const hook = (machine: string, user: string, name: string, sid = SID) => {
   n += 1;
   return {
@@ -190,6 +203,29 @@ describe("showEvents", () => {
 
     const got = await showEvents(client(), { sessionId: SID, hookEventName: "PostToolUse", limit: 2, includePayload: false });
     expect(got.map((e) => `${e.seq}:${e.hookEventName}`)).toEqual(["4:PostToolUse", "3:PostToolUse"]);
+  });
+
+  test("a stream holding only marks (a session moved by `ccx tr pull`) is not a second stream", async () => {
+    ingest(db, [hook("m1", "alice", "SessionStart"), hook("m1", "alice", "Stop"), mark("m2", "alice")]);
+
+    const got = await showEvents(client(), { sessionId: SID, includePayload: false });
+    expect(got.map((e) => `${e.machine}:${e.producer}`)).toEqual(["m2:2", "m1:1", "m1:1"]);
+  });
+
+  test("marks in the same stream as the hooks change nothing", async () => {
+    ingest(db, [hook("m1", "alice", "SessionStart"), mark("m1", "alice")]);
+
+    const got = await showEvents(client(), { sessionId: SID, includePayload: false });
+    expect(got).toHaveLength(2);
+  });
+
+  test("a second stream older than the page but inside the probe window still refuses", async () => {
+    // 150 newer events of ccxu1 push ccxu2 beyond the center's default page of 100, so only a
+    // probe that asks for its full window sees it
+    ingest(db, [hook("m1", "ccxu2", "SessionStart"), ...Array.from({ length: 150 }, () => hook("m1", "ccxu1", "PostToolUse"))]);
+
+    const err = await showEvents(client(), { sessionId: SID, limit: 1, includePayload: false }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AmbiguousSession);
   });
 
   test("allowMixed returns every stream's events without refusing", async () => {
