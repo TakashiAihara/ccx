@@ -312,6 +312,46 @@ describe("select: --ended / --archived", () => {
     expect(ids(await select([SID.slice(0, 8)], {}, { home: homeA }))).toEqual([SID]);
     await expect(select([], {}, { home: homeA })).rejects.toThrow(/--ended .* --archived/);
   });
+
+  test("prune's selection says which archived sessions it left out as running, and only those (#144)", async () => {
+    await seed(homeA, SID, "one");
+    await seed(homeA, SID2, "two");
+    await seed(homeA, SID3, "three");
+    // SID2: archived and running. SID3: running, not archived (the selector never matches it)
+    await mkdir(join(homeA, "sessions"), { recursive: true });
+    await Bun.write(join(homeA, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: SID2 }));
+    await Bun.write(join(homeA, "sessions", `${process.ppid}.json`), JSON.stringify({ pid: process.ppid, sessionId: SID3 }));
+    await writeDeclared(SID, { archived: true }, homeA);
+    await writeDeclared(SID2, { archived: true }, homeA);
+
+    const ids = (ts: LocalTranscript[]) => ts.map((t) => t.sessionId).sort();
+    const pruneArchived = await select([], { archived: true }, { home: homeA, excludeRunning: true });
+    expect([ids(pruneArchived.picked), ids(pruneArchived.skippedRunning)]).toEqual([[SID], [SID2]]);
+    // push takes running sessions, so it skips none
+    const pushArchived = await select([], { archived: true }, { home: homeA });
+    expect([ids(pushArchived.picked), ids(pushArchived.skippedRunning)]).toEqual([[SID, SID2], []]);
+    // --ended means not running: a running session is outside the selector, not skipped by it
+    const pruneEnded = await select([], { ended: true }, { home: homeA, excludeRunning: true });
+    expect([ids(pruneEnded.picked), ids(pruneEnded.skippedRunning)]).toEqual([[SID], []]);
+    // An id given by name goes to prune itself, which refuses it there (and says so)
+    const byId = await select([SID2], {}, { home: homeA, excludeRunning: true });
+    expect([ids(byId.picked), ids(byId.skippedRunning)]).toEqual([[SID2], []]);
+
+    // A running session whose state cannot be read: prune leaves it alone either way, so that
+    // is no failure there; push --archived, which would have carried it, still exits 1
+    await Bun.write(join(homeA, "sessions", SID3, "meta"), "not a dir");
+    const before = process.exitCode;
+    try {
+      process.exitCode = 0;
+      expect(ids((await select([], { archived: true }, { home: homeA, excludeRunning: true })).picked)).toEqual([SID]);
+      expect(process.exitCode).toBe(0);
+      expect(ids((await select([], { archived: true }, { home: homeA })).picked)).toEqual([SID, SID2]);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      // Assigning undefined does not clear it in Bun; an exit code left at 1 fails the whole run
+      process.exitCode = before ?? 0;
+    }
+  });
 });
 
 describe("ccx session (the CLI itself, no center, no store)", () => {
@@ -385,6 +425,56 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     const mark = await run(["mark", "archived", SID, "--json"]);
     expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "label", "task", "role", "heartbeat", "metadata", "labelHistory"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
+  });
+
+  test("mark / label / task / role take many ids; one that fails is said and the rest are written (#144)", async () => {
+    await seed(homeA, SID);
+    await seed(homeA, SID2);
+    const both = await run(["mark", "archived", SID, SID2.slice(0, 8)]);
+    expect([both.code, both.err]).toEqual([0, ""]);
+    expect(both.out).toBe(`archived on  ${SID}\narchived on  ${SID2}\n`);
+    expect([(await readDeclared(SID, homeA)).archived, (await readDeclared(SID2, homeA)).archived]).toEqual([true, true]);
+
+    // An unknown id in the middle: the ones around it are still written, and the exit is 1
+    const gap = await run(["label", "L", SID, "ffffffff", SID2]);
+    expect(gap.code).toBe(1);
+    expect(gap.err).toMatch(/\(ffffffff: not written: no local session matches ffffffff\)/);
+    expect(gap.out).toBe(`label = L  ${SID}\nlabel = L  ${SID2}\n`);
+    expect([(await readDeclared(SID, homeA)).label, (await readDeclared(SID2, homeA)).label]).toEqual(["L", "L"]);
+
+    // --json with several ids is an array, one entry per session written
+    const js = await run(["task", "kaneo ccx#1", SID, SID2, "--json"]);
+    expect(js.code).toBe(0);
+    expect((JSON.parse(js.out) as { sessionId: string; task: string }[]).map((e) => [e.sessionId, e.task])).toEqual([
+      [SID, "kaneo ccx#1"],
+      [SID2, "kaneo ccx#1"],
+    ]);
+    const off = await run(["mark", "archived", "--off", SID, SID2, "--json"]);
+    expect((JSON.parse(off.out) as { archived: boolean }[]).map((e) => e.archived)).toEqual([false, false]);
+
+    // A value every session rejects writes none of them
+    const bad = await run(["role", "a\nb", SID, SID2]);
+    expect(bad.code).toBe(1);
+    expect(bad.err.match(/not written: invalid role/g)?.length).toBe(2);
+    expect([(await readDeclared(SID, homeA)).role, (await readDeclared(SID2, homeA)).role]).toEqual(["", ""]);
+  });
+
+  test("the first `ccx transcript` on a host with no center says that none is set and how to set one (#144)", async () => {
+    const xdg = await mkdtemp(join(tmpdir(), "ccx-xdg-"));
+    try {
+      const p = Bun.spawn(["bun", "run", cli, "tr", "push", "--ended"], {
+        env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", XDG_CONFIG_HOME: xdg, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+      expect(code).toBe(3);
+      expect(err).toMatch(/no transcript store/);
+      expect(err).toMatch(/CCX_HUB_URL=http:\/\/host:8791/);
+      expect(err).toMatch(/config\.toml\s+\[hub\] url = "http:\/\/host:8791"/);
+    } finally {
+      await rm(xdg, { recursive: true, force: true });
+    }
   });
 
   test("a full id does not enumerate the local sessions; a prefix does (#177)", async () => {
@@ -536,6 +626,24 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect((await readDeclared(SID, homeA)).labelHistory.length).toBeGreaterThan(0);
   });
 
+  test("mark with many ids reports each session written, once; a broken setting is said once (#144)", async () => {
+    await seed(homeA, SID);
+    await seed(homeA, SID2);
+    const r = await run(["mark", "archived", SID, "ffffffff", SID2]);
+    expect(r.code).toBe(1);
+    const sent = listEvents(db, { includePayload: true, limit: 20 }).filter((e) => e.producer === 2);
+    const reported = sent.map((e) => JSON.parse(new TextDecoder().decode(e.payload!)) as { session_id: string; state: { archived: boolean } });
+    expect(reported.map((x) => [x.session_id, x.state.archived]).sort()).toEqual([
+      [SID, true],
+      [SID2, true],
+    ]);
+
+    const broken = await run(["mark", "archived", "--off", SID, SID2], { CCX_PROTOCOL: "gopher" });
+    expect(broken.code).toBe(0);
+    expect(broken.err.match(/config could not be read/g)?.length).toBe(1);
+    expect([(await readDeclared(SID, homeA)).archived, (await readDeclared(SID2, homeA)).archived]).toEqual([false, false]);
+  });
+
   test("a broken unrelated setting does not stop the local write (only the report is skipped)", async () => {
     await seed(homeA, SID);
     const r = await run(["mark", "archived", SID], { CCX_PROTOCOL: "gopher" });
@@ -576,6 +684,38 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(show.out).toMatch(/ccx\.session\.state/);
     expect(show.out).toMatch(/PostToolUse/);
   });
+
+  test("mark with many ids sends the batch in one request, and a silent center is one line, not one per session (#144)", async () => {
+    await seed(homeA, SID);
+    await seed(homeA, SID2);
+    await seed(homeA, SID3);
+    let received = 0;
+    const silent = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        received += 1;
+        return new Promise<Response>(() => {});
+      },
+    });
+    try {
+      const r = await run(["mark", "archived", SID, SID2, SID3], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
+      expect(r.code).toBe(0);
+      expect(received).toBe(1);
+      expect(r.err.match(/did not confirm/g)?.length).toBe(1);
+      expect(r.err).toMatch(/did not confirm the states of 3 sessions/);
+      expect((await readDeclared(SID3, homeA)).archived).toBe(true);
+
+      // Nothing written, nothing sent
+      const none = await run(["mark", "archived", "ffffffff", "eeeeeeee"], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
+      expect(none.code).toBe(1);
+      expect(none.err).toMatch(/\(eeeeeeee: not written/);
+      expect(none.err).not.toMatch(/did not confirm/);
+      expect(received).toBe(1);
+    } finally {
+      void silent.stop(true);
+    }
+  }, 20_000);
 
   test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
     await seed(homeA, SID);
@@ -655,6 +795,40 @@ describe("ccx session with a center: marks are reported as events, and session l
     const rows2 = JSON.parse(broken.out) as typeof rows;
     expect(rows2.find((x) => x.key.sessionId === SID)!.state).toBeNull();
     expect(rows2.find((x) => x.key.sessionId === SID2)!.state).not.toBeNull();
+  });
+
+  test("tr prune --archived lists an archived session it left alone as running, and still exits 0 (#144)", async () => {
+    const t = await seed(homeA, SID);
+    await seed(homeA, SID2);
+    await seed(homeA, SID3);
+    await writeDeclared(SID, { archived: true }, homeA);
+    await writeDeclared(SID2, { archived: true }, homeA);
+    expect((await A.push(t, homeA)).status).toBe("pushed");
+    // SID2 archived and running; SID3 running and not archived (not matched, so not listed)
+    await Bun.write(join(homeA, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: SID2 }));
+    await Bun.write(join(homeA, "sessions", `${process.ppid}.json`), JSON.stringify({ pid: process.ppid, sessionId: SID3 }));
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_TRANSCRIPT_PREFIX: "p/", CCX_MACHINE: "host-a" };
+    const prune = async (...extra: string[]) => {
+      const p = Bun.spawn(["bun", "run", cli, "tr", "prune", "--archived", ...extra], { env, stdout: "pipe", stderr: "pipe" });
+      const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+      return { out, err, code };
+    };
+
+    const first = await prune("--json");
+    expect(first.code).toBe(0);
+    const rows = JSON.parse(first.out) as { sessionId: string; status: string; reason?: string }[];
+    expect(rows.map((r) => [r.sessionId, r.status]).sort()).toEqual([
+      [SID, "pruned"],
+      [SID2, "skipped"],
+    ]);
+    expect(rows.find((r) => r.sessionId === SID2)!.reason).toBe("session is running");
+    // The running session is still there
+    expect((await localTranscripts(homeA)).map((x) => x.sessionId).sort()).toEqual([SID2, SID3]);
+
+    const text = await prune();
+    expect(text.code).toBe(0);
+    expect(text.out).toBe(`skipped ${SID2}  session is running\n`);
+    expect(text.out).not.toMatch(new RegExp(SID3));
   });
 
   test("tr push --archived skips a session whose state cannot be read and pushes the rest", async () => {

@@ -153,10 +153,10 @@ missing (`null`) is "the center / the store has not heard", not "no mark".
 
 | Verb | Does |
 |---|---|
-| `ccx session mark archived [id] [--off]` | set or clear the flag; report the whole state to the center if one is configured |
-| `ccx session label <text> [id]` | set the label; an empty string clears it; report as above |
-| `ccx session task <ref> [id]` | set the task reference; an empty string clears it; report as above |
-| `ccx session role <role> [id]` | set the role; an empty string clears it; report as above |
+| `ccx session mark archived [id...] [--off]` | set or clear the flag; report the whole state to the center if one is configured. With several ids, one that fails is said on stderr, the rest are written, and the exit is 1; the center gets one report for the batch |
+| `ccx session label <text> [id...]` | set the label; an empty string clears it; report as above |
+| `ccx session task <ref> [id...]` | set the task reference; an empty string clears it; report as above |
+| `ccx session role <role> [id...]` | set the role; an empty string clears it; report as above |
 | `ccx session meta set <key>[=<value>] [id]` | set a metadata key, with or without a value; report as above |
 | `ccx session meta unset <key> [id]` | remove a metadata key; report as above |
 | `ccx session status [id]` | lifecycle + declared state. This machine's declaration wins (including one that cleared everything); the store's `state.json` is read only for a `remote` session this machine never declared. A prefix that nothing local knows is tried against the store |
