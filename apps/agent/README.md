@@ -63,8 +63,9 @@ handler on two listeners:
   uses. With serve down, `ccx-agent status` prints nothing and exits 1 (a
   malformed session id is 2, checked before dialing) — there is no fallback that
   reads the files some other way. The client finds the socket from the
-  environment only (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
-  `XDG_RUNTIME_DIR`, else `~/.ccx/run`):
+  environment and the filesystem, never config (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
+  `XDG_RUNTIME_DIR`, else `/run/user/<uid>/ccx` if a systemd-run agent's socket
+  is there, else `~/.ccx/run`):
   set these the same way for serve (its systemd unit) and for the shell the
   statusline runs in, or the statusline shows nothing as if serve were down.
 - TCP, for agents on other hosts. Off unless `CCX_API_LISTEN` is set, and then
@@ -162,7 +163,7 @@ it simply has no center to forward to.
 |---|---|---|---|---|
 | center URL | `CCX_HUB_URL` | `ccx.hubUrl` | `[hub] url` | none (spool only) |
 | machine name | `CCX_MACHINE` | `ccx.machine` | `machine` | hostname |
-| socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccx-agent.sock` (`~/.ccx/run/ccx-agent.sock` without `XDG_RUNTIME_DIR`) |
+| socket | `CCX_SOCKET` | — | — | `$XDG_RUNTIME_DIR/ccx/ccx-agent.sock` (without `XDG_RUNTIME_DIR`: `/run/user/<uid>/ccx/ccx-agent.sock` if it exists, else `~/.ccx/run/ccx-agent.sock`) |
 | spool | `CCX_SPOOL` | — | — | `~/.ccx/spool` |
 | collect on/off | `CCX_COLLECT` | `ccx.collect` | `[collect] enabled` | on |
 | carry on/off | `CCX_CARRY` | `ccx.carry` | `[carry] enabled` | off |

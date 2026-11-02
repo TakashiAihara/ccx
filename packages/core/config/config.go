@@ -274,12 +274,16 @@ func load(
 	}
 	tPrefix := normalizePrefix(pick(getenv("CCX_TRANSCRIPT_PREFIX"), gitcfg("ccx.transcriptPrefix"), file.Transcript.Prefix))
 
+	// Resolved once: the /run/user step looks at the filesystem, and the channel
+	// and API sockets must land next to the same hook socket.
+	hook := socketPath(getenv)
+
 	return Config{
 		HubURL:     hub,
 		HubToken:   token,
 		Machine:    machine,
 		User:       uname,
-		SocketPath: socketPath(getenv),
+		SocketPath: hook,
 		SpoolDir:   spoolDir(getenv),
 		Concerns: Concerns{
 			// Defaults per ADR 0002: passive concerns may default on, the one
@@ -295,8 +299,8 @@ func load(
 			MaxIdle:  maxIdle,
 			Err:      hbErr,
 		},
-		ChannelSocketPath: channelSocketPath(getenv),
-		APISocketPath:     apiSocketPath(getenv),
+		ChannelSocketPath: channelSocketPath(getenv, hook),
+		APISocketPath:     apiSocketPath(getenv, hook),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
 		APIURL:            apiURL,
 		APIURLErr:         apiURLErr,
@@ -487,9 +491,22 @@ func configPath(getenv func(string) string) string {
 	return filepath.Join(xdg, "ccx", "config.toml")
 }
 
+// runUserDir is the runtime dir systemd gives this user (/run/user/<uid>). A
+// var so tests can point it at a temp dir.
+var runUserDir = func() string { return filepath.Join("/run/user", strconv.Itoa(os.Getuid())) }
+
 // socketPath is CCX_SOCKET, else $XDG_RUNTIME_DIR/ccx/ccx-agent.sock, else
-// ~/.ccx/run/ccx-agent.sock. Under a user-owned dir so the socket is user-owned and
-// the hook→ccx-agent path is trivially permitted (#90).
+// /run/user/<uid>/ccx/ccx-agent.sock if it exists, else ~/.ccx/run/ccx-agent.sock.
+// Under a user-owned dir so the socket is user-owned and the hook→ccx-agent path
+// is trivially permitted (#90).
+//
+// The /run/user step is for shells without XDG_RUNTIME_DIR (cron): a ccx-agent
+// run by a systemd user unit listens there, and without it a hook from such a
+// shell misses the socket and spools to incoming/ (#258). It follows a socket
+// file that is there when the path is resolved, so a serve started from such a
+// shell with no systemd agent (and no leftover file) listens under ~/.ccx/run,
+// and a long-lived caller must resolve again to notice an agent that came up
+// later. The CLI's defaultSocketPath (apps/cli/src/agent.ts) resolves the same way.
 func socketPath(getenv func(string) string) string {
 	if p := getenv("CCX_SOCKET"); p != "" {
 		return p
@@ -497,35 +514,50 @@ func socketPath(getenv func(string) string) string {
 	if run := getenv("XDG_RUNTIME_DIR"); run != "" {
 		return filepath.Join(run, "ccx", "ccx-agent.sock")
 	}
+	if systemd := filepath.Join(runUserDir(), "ccx", "ccx-agent.sock"); exists(systemd) {
+		return systemd
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ccx", "run", "ccx-agent.sock")
 }
 
-// channelSocketPath is CCX_CHANNEL_SOCKET, else ccx-channel.sock next to the
-// hook socket's default.
-func channelSocketPath(getenv func(string) string) string {
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// ChannelSocket is where serve takes channel registrations, resolved without
+// reading config, like APISocket. A channel lives as long as its session and
+// resolves this again on every retry: the /run/user step depends on whether a
+// socket exists, and a session started while a systemd agent restarts would
+// otherwise stay on ~/.ccx/run for good.
+func ChannelSocket() string { return channelSocketPath(os.Getenv, socketPath(os.Getenv)) }
+
+// channelSocketPath is CCX_CHANNEL_SOCKET, else ccx-channel.sock next to hook,
+// the resolved hook socket.
+func channelSocketPath(getenv func(string) string, hook string) string {
 	if p := getenv("CCX_CHANNEL_SOCKET"); p != "" {
 		return p
 	}
 	// Next to wherever the hook socket resolved, CCX_SOCKET included: a short
 	// CCX_SOCKET is how a path over the unix-socket limit is fixed, and the
 	// channel socket needs the same fix.
-	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-channel.sock")
+	return filepath.Join(filepath.Dir(hook), "ccx-channel.sock")
 }
 
 // APISocket is where serve answers AgentService, resolved from the environment
-// alone. `ccx-agent status` runs on every statusline render and needs nothing
-// else: the full Load runs git config several times and fails on a bad
+// and socketPath's /run/user check, never config. `ccx-agent status` runs on
+// every statusline render and needs nothing else: the full Load runs git config several times and fails on a bad
 // config.toml the socket path does not depend on.
-func APISocket() string { return apiSocketPath(os.Getenv) }
+func APISocket() string { return apiSocketPath(os.Getenv, socketPath(os.Getenv)) }
 
-// apiSocketPath is CCX_API_SOCKET, else ccx-api.sock next to the hook socket
-// (for the same reason as the channel socket).
-func apiSocketPath(getenv func(string) string) string {
+// apiSocketPath is CCX_API_SOCKET, else ccx-api.sock next to hook, the resolved
+// hook socket (for the same reason as the channel socket).
+func apiSocketPath(getenv func(string) string, hook string) string {
 	if p := getenv("CCX_API_SOCKET"); p != "" {
 		return p
 	}
-	return filepath.Join(filepath.Dir(socketPath(getenv)), "ccx-api.sock")
+	return filepath.Join(filepath.Dir(hook), "ccx-api.sock")
 }
 
 // spoolDir is CCX_SPOOL, else ~/.ccx/spool. Persisted across reboots (unlike
