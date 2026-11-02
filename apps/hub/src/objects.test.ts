@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { connect } from "node:net";
 
 import { openDb, type Db } from "./db/open.ts";
-import { ObjectStore, partNumbersOf, validKey, validPrefix } from "./objects.ts";
+import { excludes, excludesAll, ObjectStore, partNumbersOf, validKey, validPrefix } from "./objects.ts";
 import { createApp } from "./server.ts";
 
 /**
@@ -131,6 +131,8 @@ describe("objects: S3 client round trip", () => {
     const z = await zero.text();
     expect(z).toContain("<KeyCount>0</KeyCount>");
     expect(z).toContain("<IsTruncated>true</IsTruncated>");
+    // An empty token would be read back as "from the start" and loop a client that follows IsTruncated (#175)
+    expect(z).not.toContain("NextContinuationToken");
 
     const enc = await (await fetch(`${base}/ccx?list-type=2&encoding-type=url`)).text();
     expect(enc).toContain("<Key>sp%20ace/k%3Dv.txt</Key>");
@@ -374,7 +376,116 @@ describe("objects: S3 client round trip", () => {
   });
 });
 
+/** Records which keys a listing stat-ed, to see how much of the bucket one page touches */
+class CountingStore extends ObjectStore {
+  stated: string[] = [];
+  read: string[] = [];
+  protected override async readDirOf(path: string) {
+    this.read.push(path.slice(join(this.root, "ccx").length + 1));
+    return super.readDirOf(path);
+  }
+  protected override async statOf(path: string) {
+    this.stated.push(path.slice(join(this.root, "ccx").length + 1));
+    return super.statOf(path);
+  }
+}
+
+describe("objects: a listing page walks only what it returns (#175)", () => {
+  let dir: string;
+  let ldb: Db;
+  let store: CountingStore;
+  let app: ReturnType<typeof createApp>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "ccx-objects-walk-"));
+    ldb = openDb(":memory:");
+    store = new CountingStore(dir);
+    app = createApp(ldb, store);
+    // d0/f0 .. d9/f9: 100 keys in 10 directories
+    for (let d = 0; d < 10; d++) for (let f = 0; f < 10; f++) await Bun.write(join(dir, "ccx", `d${d}`, `f${f}`), "x");
+  });
+  afterEach(async () => {
+    ldb.$client.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const list = async (params: Record<string, string>) =>
+    (await app.fetch(new Request(`http://h/ccx?${new URLSearchParams({ "list-type": "2", ...params })}`))).text();
+  const keysOf = (xml: string) => [...xml.matchAll(/<Key>([^<]*)</g)].map((m) => m[1]!);
+  const prefixesOf = (xml: string) => [...xml.matchAll(/<CommonPrefixes><Prefix>([^<]*)</g)].map((m) => m[1]!);
+  const tokenOf = (xml: string) => /<NextContinuationToken>([^<]*)</.exec(xml)?.[1];
+
+  test("a page after start-after stats its keys plus one, and nothing before or past it", async () => {
+    const xml = await list({ "start-after": "d5/f4", "max-keys": "3" });
+    expect(keysOf(xml)).toEqual(["d5/f5", "d5/f6", "d5/f7"]);
+    expect(xml).toContain("<IsTruncated>true</IsTruncated>");
+    expect(store.stated).toEqual(["d5/f5", "d5/f6", "d5/f7", "d5/f8"]);
+    // d0 .. d4 lie wholly before start-after and are not even read
+    expect(store.read).toEqual(["", "d5"]);
+  });
+
+  test("paging through the bucket by token stats each key about once, not once per page", async () => {
+    const seen: string[] = [];
+    let token: string | undefined;
+    let pages = 0;
+    do {
+      const xml = await list({ "max-keys": "10", ...(token === undefined ? {} : { "continuation-token": token }) });
+      seen.push(...keysOf(xml));
+      token = tokenOf(xml);
+      pages++;
+    } while (token !== undefined && pages < 20);
+    const all = [];
+    for (let d = 0; d < 10; d++) for (let f = 0; f < 10; f++) all.push(`d${d}/f${f}`);
+    expect(seen).toEqual(all);
+    // 100 keys, plus the one look-ahead stat on each of the 9 truncated pages. Walking the
+    // whole prefix on every page would be 1000
+    expect(store.stated.length).toBe(109);
+  });
+
+  test("with a delimiter, each common prefix costs one stat, and the token's common prefix is jumped over", async () => {
+    const p1 = await list({ delimiter: "/", "max-keys": "2" });
+    expect(prefixesOf(p1)).toEqual(["d0/", "d1/"]);
+    expect(store.stated).toEqual(["d0/f0", "d1/f0", "d2/f0"]);
+
+    store.stated = [];
+    const p2 = await list({ delimiter: "/", "max-keys": "2", "continuation-token": tokenOf(p1)! });
+    expect(prefixesOf(p2)).toEqual(["d2/", "d3/"]);
+    expect(store.stated).toEqual(["d2/f0", "d3/f0", "d4/f0"]);
+  });
+
+  test("with a delimiter, start-after inside a common prefix leaves that common prefix out", async () => {
+    const xml = await list({ delimiter: "/", "start-after": "d5/f4", "max-keys": "2" });
+    expect(prefixesOf(xml)).toEqual(["d6/", "d7/"]);
+    expect(keysOf(xml)).toEqual([]);
+  });
+
+  test("keys come out in string order across directory boundaries", async () => {
+    await rm(join(dir, "ccx"), { recursive: true, force: true });
+    // `-` and `.` sort before `/`, `0` after it: a directory's keys go after `a-b` and `a.c` but before `a0`
+    const keys = ["a-b", "a/x", "a/y-z", "a/y/1", "a/y/2", "a0", "a.c", "b"];
+    for (const k of keys) await Bun.write(join(dir, "ccx", k), "x");
+    const expected = [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect((await store.listKeys("ccx", "")).map((o) => o.key)).toEqual(expected);
+    expect(keysOf(await list({}))).toEqual(expected);
+  });
+});
+
 describe("objects: helpers", () => {
+  test("excludes / excludesAll", () => {
+    expect(excludes({ after: "d5/f4" }, "d5/f4")).toBe(true);
+    expect(excludes({ after: "d5/f4" }, "d5/f5")).toBe(false);
+    expect(excludes({ after: "", skipPrefix: "d1/" }, "d1/f0")).toBe(true);
+    expect(excludes({ after: "", skipPrefix: "d1/" }, "d2/f0")).toBe(false);
+
+    expect(excludesAll({ after: "d5/f4" }, "d3/")).toBe(true);
+    // after lies inside the directory: some of its keys come later
+    expect(excludesAll({ after: "d5/f4" }, "d5/")).toBe(false);
+    expect(excludesAll({ after: "d5/f4" }, "d6/")).toBe(false);
+    expect(excludesAll({ after: "d5/" }, "d5/")).toBe(false);
+    expect(excludesAll({ after: "", skipPrefix: "d1/" }, "d1/x/")).toBe(true);
+    expect(excludesAll({ after: "", skipPrefix: "d1/" }, "d2/")).toBe(false);
+  });
+
   test("validPrefix", () => {
     expect(validPrefix("")).toBe(true);
     expect(validPrefix("t/")).toBe(true);
