@@ -111,9 +111,10 @@ export function excludes(bound: WalkBound, key: string): boolean {
 }
 
 /**
- * Whether `bound` leaves out every key that starts with `p`. When `after` does not
- * start with `p`, the first character where they differ lies inside `p`, so all such
- * keys sort on the same side of `after` as `p` does.
+ * Whether `bound` leaves out every key that starts with `p`. When `after` does not start
+ * with `p`, either they differ at a position inside `p` (and every key starting with `p`
+ * sorts on the same side of `after` as `p`), or `after` is a proper prefix of `p` (and
+ * every such key sorts after it). Either way `p < after` decides it.
  */
 export function excludesAll(bound: WalkBound, p: string): boolean {
   if (bound.skipPrefix !== undefined && p.startsWith(bound.skipPrefix)) return true;
@@ -401,10 +402,12 @@ export class ObjectStore {
 
   /**
    * Yields the keys under prefix in ascending order, skipping whatever `bound` excludes
-   * without reading or stat-ing it. `bound` is re-read before every entry, so the consumer
-   * may raise it between yields (ListObjectsV2 does, to jump over a common prefix it has
-   * already emitted). Stopping the iteration stops the walk, so a page costs about what it
-   * returns instead of the whole prefix (#175).
+   * without reading or stat-ing it. `bound.skipPrefix` is re-read before every entry, so the
+   * consumer may change it between yields (ListObjectsV2 does, to jump over a common prefix
+   * it has already emitted); `bound.after` must stay fixed for the walk. Stopping the
+   * iteration stops the walk, so a page stats only the keys it returns plus one. Each
+   * directory on the path to the start position is still read in full on every page: the
+   * filesystem has no way to list a directory from a given name (#175).
    */
   async *walkKeys(
     bucket: string,

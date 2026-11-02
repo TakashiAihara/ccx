@@ -453,6 +453,13 @@ describe("objects: a listing page walks only what it returns (#175)", () => {
     expect(store.stated).toEqual(["d2/f0", "d3/f0", "d4/f0"]);
   });
 
+  test("with a delimiter, directories nested under an emitted common prefix are not read", async () => {
+    for (let d = 0; d < 3; d++) await Bun.write(join(dir, "ccx", `d${d}`, "sub", "x"), "x");
+    const xml = await list({ delimiter: "/", "max-keys": "2" });
+    expect(prefixesOf(xml)).toEqual(["d0/", "d1/"]);
+    expect(store.read).toEqual(["", "d0", "d1", "d2"]);
+  });
+
   test("with a delimiter, start-after inside a common prefix leaves that common prefix out", async () => {
     const xml = await list({ delimiter: "/", "start-after": "d5/f4", "max-keys": "2" });
     expect(prefixesOf(xml)).toEqual(["d6/", "d7/"]);
