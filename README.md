@@ -241,8 +241,9 @@ target. See `docs/design/transcript-store.md`.
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
-A running session that `prune --archived` leaves alone is listed as `skipped` (`status: "skipped"` in
-`--json`) and does not make the exit code `1`.
+A running session that `prune --archived` (without `--ended`, which selects only sessions that are not
+running) leaves alone is listed as `skipped` (`status: "skipped"` in `--json`) and does not make the
+exit code `1`.
 `push --archived` and `prune --archived` skip a session whose declared state cannot be read and exit
 `1`; `push` of such a session by id or `--ended` still carries the transcript without `state.json`
 and exits `1`. The reason is on stderr.

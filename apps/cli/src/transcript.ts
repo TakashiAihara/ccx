@@ -98,7 +98,9 @@ export async function select(
         (s) => s.archived,
         (e: unknown) => {
           console.error(`(${t.sessionId}: skipped, declared state could not be read: ${e instanceof Error ? e.message : String(e)})`);
-          process.exitCode = 1;
+          // prune would leave a running session alone either way, so not knowing whether it is
+          // archived loses nothing there and is no failure (as before #144, when it was not read)
+          if (!(opts.excludeRunning && running.has(t.sessionId))) process.exitCode = 1;
           return false;
         },
       );

@@ -109,34 +109,46 @@ const REPORT_TIMEOUT_MS = 3000;
 const withoutHistory = ({ labelHistory: _, ...rest }: DeclaredState) => rest;
 
 export async function reportState(hub: Hub | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
-  if (!hub) return;
+  await reportStates(hub, machine, [{ sessionId, state }]);
+}
+
+/**
+ * The same report for several sessions in one ingest call (#144): one request and one
+ * deadline for the batch, so 71 sessions do not open 71 requests, or print 71 lines when the
+ * center is silent
+ */
+export async function reportStates(
+  hub: Hub | undefined,
+  machine: string | undefined,
+  items: { sessionId: string; state: DeclaredState }[],
+): Promise<void> {
+  if (!hub || items.length === 0) return;
   const origin = localOrigin(machine);
   const client = createClient(IngestService, centerTransport(hub));
   try {
     await client.ingest(
       {
-        events: [
-          {
-            origin: { machine: origin.machine, user: origin.user },
-            eventId: randomUUID(),
-            // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は payload の rev
-            seq: 0n,
-            receivedAt: timestampFromMs(Date.now()),
-            producer: Producer.CCX_SESSION_STATE,
-            // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
-            // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
-            // label の履歴は送らない: center は読まず (fleet.proto に欄が無い)、毎回全件を送ると 1 session で
-            // 履歴の長さの 2 乗で events が太る。検索は保存先の state.json を読む (#169)
-            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state: withoutHistory(state), rev: Date.now() })),
-          },
-        ],
+        events: items.map(({ sessionId, state }) => ({
+          origin: { machine: origin.machine, user: origin.user },
+          eventId: randomUUID(),
+          // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は payload の rev
+          seq: 0n,
+          receivedAt: timestampFromMs(Date.now()),
+          producer: Producer.CCX_SESSION_STATE,
+          // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
+          // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
+          // label の履歴は送らない: center は読まず (fleet.proto に欄が無い)、毎回全件を送ると 1 session で
+          // 履歴の長さの 2 乗で events が太る。検索は保存先の state.json を読む (#169)
+          payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state: withoutHistory(state), rev: Date.now() })),
+        })),
       },
       // 繋がった後に黙る center で mark を止めない。期限切れは「受け取ったと言われなかった」で
       // あって「届かなかった」ではない (center が書いた後に返事だけ遅れたこともありうる)
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
   } catch (e) {
-    console.error(`(center ${hub.url} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
+    const what = items.length === 1 ? "the state" : `the states of ${items.length} sessions`;
+    console.error(`(center ${hub.url} did not confirm ${what}: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
   }
 }
 
@@ -203,6 +215,8 @@ export async function declaredFor(
  * With several, a session that cannot be resolved or written is reported on stderr and the
  * rest are still written (exit 1 at the end); --json prints an array of the ones written.
  * The center is told after all the local writes, so a slow center does not hold them up.
+ * The same session given twice (an id and its prefix) is written and reported twice; writing
+ * the same value again changes nothing (the label history only grows when the label changes).
  */
 export async function writeEach(
   args: string[],
@@ -237,7 +251,7 @@ export async function writeEach(
 
   // One config read for the batch, so a broken config is said once, not once per session
   const cfg = await configOrNull();
-  if (cfg) await Promise.all(written.map(({ id, s }) => reportState(cfg.hub, cfg.machine, id, s)));
+  if (cfg) await reportStates(cfg.hub, cfg.machine, written.map(({ id, s }) => ({ sessionId: id, state: s })));
 }
 
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>

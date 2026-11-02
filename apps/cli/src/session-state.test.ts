@@ -336,6 +336,21 @@ describe("select: --ended / --archived", () => {
     // An id given by name goes to prune itself, which refuses it there (and says so)
     const byId = await select([SID2], {}, { home: homeA, excludeRunning: true });
     expect([ids(byId.picked), ids(byId.skippedRunning)]).toEqual([[SID2], []]);
+
+    // A running session whose state cannot be read: prune leaves it alone either way, so that
+    // is no failure there; push --archived, which would have carried it, still exits 1
+    await Bun.write(join(homeA, "sessions", SID3, "meta"), "not a dir");
+    const before = process.exitCode;
+    try {
+      process.exitCode = 0;
+      expect(ids((await select([], { archived: true }, { home: homeA, excludeRunning: true })).picked)).toEqual([SID]);
+      expect(process.exitCode).toBe(0);
+      expect(ids((await select([], { archived: true }, { home: homeA })).picked)).toEqual([SID, SID2]);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      // Assigning undefined does not clear it in Bun; an exit code left at 1 fails the whole run
+      process.exitCode = before ?? 0;
+    }
   });
 });
 
@@ -669,6 +684,38 @@ describe("ccx session with a center: marks are reported as events, and session l
     expect(show.out).toMatch(/ccx\.session\.state/);
     expect(show.out).toMatch(/PostToolUse/);
   });
+
+  test("mark with many ids sends the batch in one request, and a silent center is one line, not one per session (#144)", async () => {
+    await seed(homeA, SID);
+    await seed(homeA, SID2);
+    await seed(homeA, SID3);
+    let received = 0;
+    const silent = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        received += 1;
+        return new Promise<Response>(() => {});
+      },
+    });
+    try {
+      const r = await run(["mark", "archived", SID, SID2, SID3], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
+      expect(r.code).toBe(0);
+      expect(received).toBe(1);
+      expect(r.err.match(/did not confirm/g)?.length).toBe(1);
+      expect(r.err).toMatch(/did not confirm the states of 3 sessions/);
+      expect((await readDeclared(SID3, homeA)).archived).toBe(true);
+
+      // Nothing written, nothing sent
+      const none = await run(["mark", "archived", "ffffffff", "eeeeeeee"], { CCX_HUB_URL: `http://127.0.0.1:${silent.port}` });
+      expect(none.code).toBe(1);
+      expect(none.err).toMatch(/\(eeeeeeee: not written/);
+      expect(none.err).not.toMatch(/did not confirm/);
+      expect(received).toBe(1);
+    } finally {
+      void silent.stop(true);
+    }
+  }, 20_000);
 
   test("a center that accepts the connection and never answers does not hold mark hostage (deadline)", async () => {
     await seed(homeA, SID);
