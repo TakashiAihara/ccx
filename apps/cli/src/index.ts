@@ -46,6 +46,7 @@ import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
 import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
+import { AmbiguousSession, showEvents } from "./session-show.ts";
 import { registerTranscript } from "./transcript.ts";
 
 // release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
@@ -481,8 +482,8 @@ session
   .command("show")
   .description("Show what one session did, newest first")
   .argument("<session-id>", "session id (full, as printed by --json)")
-  .option("-m, --machine <name>", "disambiguate when the id exists on several machines")
-  .option("-u, --user <name>", "disambiguate when the id exists for several users")
+  .option("-m, --machine <name>", "pick a stream when the id exists on several machines (required then)")
+  .option("-u, --user <name>", "pick a stream when the id exists for several users (required then)")
   .option("-e, --hook <name>", "only this hook event")
   .option("-n, --limit <count>", "how many events (default 100)", parseLimit)
   .option("-p, --payload", "include the raw hook payload")
@@ -491,23 +492,23 @@ session
     const cfg = await loadConfig();
     const client = fleetClient(cfg.hub);
 
-    const res = await client
-      .listEvents({
-        sessionId,
-        machine: o.machine ?? "",
-        user: o.user ?? "",
-        hookEventName: o.hook ?? "",
-        limit: o.limit ?? 0,
-        includePayload: Boolean(o.payload),
-      })
-      .catch((e: unknown) => {
-        throw unreachable(cfg.hub!.url, e);
-      });
+    const events = await showEvents(client, {
+      sessionId,
+      machine: o.machine,
+      user: o.user,
+      hookEventName: o.hook,
+      limit: o.limit,
+      includePayload: Boolean(o.payload),
+      allowMixed: Boolean(o.json),
+    }).catch((e: unknown) => {
+      if (e instanceof AmbiguousSession) throw e;
+      throw unreachable(cfg.hub!.url, e);
+    });
 
     if (o.json) {
       console.log(
         JSON.stringify(
-          res.events.map((e) => ({
+          events.map((e) => ({
             ...e,
             payload: o.payload ? new TextDecoder().decode(e.payload) : undefined,
           })),
@@ -518,12 +519,12 @@ session
       return;
     }
 
-    if (res.events.length === 0) {
+    if (events.length === 0) {
       console.error(`no events for session ${sessionId}`);
       return;
     }
 
-    for (const e of res.events) {
+    for (const e of events) {
       const at = e.receivedAt ? new Date(Number(e.receivedAt.seconds) * 1000).toISOString() : "?";
       // パースできなかった event も出す。出さないと「壊れている」と「無い」の
       // 区別がつかなくなる
