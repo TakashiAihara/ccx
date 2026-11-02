@@ -65,7 +65,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const sessionGlob = opts.session ? `session_id=${opts.session.replaceAll("*", "")}*` : "*";
   const files = `${base}/machine=*/user=*/${sessionGlob}/transcript.jsonl`;
   // machine / user / session_id come from the segments after `base`, never from the prefix (#171): hive_partitioning
-  // takes the first `key=value` in the whole path, and read_json turns it on by itself, so it is off explicitly.
+  // takes the first `key=value` in the whole path, so none of the views read its columns (read_json may still add them).
   // The regexp is tied to the file at the end of the path: a glob `*` stays within one segment, so the three
   // directories above the leaf are the ones after `base`, whatever DuckDB spells the prefix as in `filename`
   const PATH = "__ccx_path";
@@ -74,7 +74,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const tPart = tail("transcript\\.jsonl");
   const cols = (part: (k: "machine" | "user" | "session_id") => string) =>
     `${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user"`;
-  const reader = `hive_partitioning=false, filename=${q(PATH)}, maximum_object_size=268435456`;
+  const reader = `filename=${q(PATH)}, maximum_object_size=268435456`;
   // maximum_object_size: tool の出力を抱えた行が 16 MB の既定を超える (手元の 26 本で最大 3.8 MB。上限は 256 MB)。
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
@@ -85,7 +85,12 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
     await c.run(
-      `CREATE VIEW transcripts AS SELECT * EXCLUDE (${PATH}), ${cols(tPart)} FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, ${reader})`,
+      // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
+      // hive_partitioning did; COLUMNS rather than EXCLUDE because EXCLUDE fails on a column that no record has.
+      // The path columns stay in hive_partitioning's (alphabetical) order
+      `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
+         ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
+       FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, ${reader})`,
     );
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);

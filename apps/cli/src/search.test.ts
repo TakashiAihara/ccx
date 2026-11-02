@@ -199,23 +199,40 @@ describe("search: embedded DuckDB over the store", () => {
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
 
-  test("every view takes machine / user / session_id from the segments after the prefix, not from key=value segments in the prefix (#171)", async () => {
-    const trap: TranscriptStore = { ...store, prefix: "machine=trap-m/user=trap-u/session_id=trap-s/x/" };
-    const client = new TranscriptClient(trap, { machine: "host-a", user: "alice" });
-    for (const t of await localTranscripts(home)) await client.push(t, home);
+  // Each trap prefix also ends in one view's leaf name, so the match has to be the one right above the real file
+  for (const leaf of ["transcript.jsonl", "state.json", "history/1.json"]) {
+    test(`every view takes machine / user / session_id from the segments after the prefix, not from key=value segments in the prefix ending in ${leaf} (#171)`, async () => {
+      const prefix = `machine=trap-m/user=trap-u/session_id=trap-s/${leaf}/`;
+      const trap: TranscriptStore = { ...store, prefix };
+      const client = new TranscriptClient(trap, { machine: "host-a", user: "alice" });
+      for (const t of await localTranscripts(home)) await client.push(t, home);
 
-    const c = await openDuckDB(trap, { withHistory: true });
-    const want = [
+      const c = await openDuckDB(trap, { withHistory: true });
+      const want = [
+        { session_id: SID, machine: "host-a", user: "alice" },
+        { session_id: SID2, machine: "host-a", user: "alice" },
+      ];
+      const pick = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
+      expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM lines ORDER BY session_id`)).toEqual(want);
+      expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM transcripts ORDER BY session_id`)).toEqual(want);
+      expect(await pick(`SELECT session_id, machine, "user" FROM sessions`)).toEqual([want[1]!]);
+      expect(await pick(`SELECT session_id, pushed_by_machine AS machine, pushed_by_user AS "user" FROM history ORDER BY session_id`)).toEqual(want);
+    });
+  }
+
+  test("transcripts keeps the path's session_id / machine / user over a record's own keys, without the reader's path column, in hive order (#171)", async () => {
+    const recDir = join(root, "ccx", "pre", "transcripts", "machine=host-q", "user=quinn", "session_id=rec-1");
+    await Bun.write(join(recDir, "transcript.jsonl"), line({ type: "user", session_id: "REC-S", machine: "REC-M", user: "REC-U" }));
+    const c = await openDuckDB(store);
+    const pick = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
+    expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM transcripts ORDER BY session_id`)).toEqual([
       { session_id: SID, machine: "host-a", user: "alice" },
       { session_id: SID2, machine: "host-a", user: "alice" },
-    ];
-    const pick = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
-    expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM lines ORDER BY session_id`)).toEqual(want);
-    expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM transcripts ORDER BY session_id`)).toEqual(want);
-    expect(await pick(`SELECT session_id, machine, "user" FROM sessions`)).toEqual([want[1]!]);
-    expect(await pick(`SELECT session_id, pushed_by_machine AS machine, pushed_by_user AS "user" FROM history ORDER BY session_id`)).toEqual(want);
-    // the reader's path column does not leak into the structured view
-    expect(await pick(`SELECT count(*) AS n FROM (DESCRIBE transcripts) WHERE column_name = '__ccx_path'`)).toEqual([{ n: "0" }]);
+      { session_id: "rec-1", machine: "host-q", user: "quinn" },
+    ]);
+    const names = (await pick(`SELECT column_name FROM (DESCRIBE transcripts)`)).map((r) => r.column_name);
+    expect(names.slice(-3)).toEqual(["machine", "session_id", "user"]);
+    expect(names.filter((n) => n === "__ccx_path" || /^(session_id|machine|user)_\d+$/.test(String(n)))).toEqual([]);
   });
 
   test("search ignores a persistent DuckDB secret the user saved for s3://ccx (#213)", async () => {
