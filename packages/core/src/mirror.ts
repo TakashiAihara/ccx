@@ -40,7 +40,7 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
 }
 
 /**
- * mirror の origin (url / fetch refspec / mirror フラグ) を合わせる。既に揃っていれば何も書かない。
+ * mirror の origin (url / fetch refspec / mirror フラグ) を合わせる。
  *
  * origin が無い mirror に対して `git remote set-url` は使えない。remote を作る機能は無く、
  * "No such remote 'origin'" で終了コード 2 を返すだけで、mirror は origin 不在のまま残る。
@@ -51,32 +51,46 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
  * clone --mirror が書くのと同じ 3 つを、同じ形で書く。
  */
 async function syncOrigin(path: string, url: string): Promise<void> {
-  // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config (128) や他の失敗まで
-  // 「無い」と解釈すると、読めなかった設定を黙って上書きしてしまう。1 だけを握る。
-  const read = async (key: string): Promise<string | null> => {
-    try {
-      // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
-      return await gitBare(["config", "--get", key], path);
-    } catch (e) {
-      if (!(e instanceof GitError) || e.code !== 1) throw e;
-      return null;
-    }
-  };
+  const current = await storedOrigin(path);
 
-  const current = await read("remote.origin.url");
-
-  if (current !== null && current !== url) {
-    await gitBare(["remote", "set-url", "origin", url], path);
-  } else if (current === null) {
+  if (current === null) {
     await gitBare(["config", "remote.origin.url", url], path);
+  } else if (current !== url) {
+    await gitBare(["remote", "set-url", "origin", url], path);
   }
 
-  // 復旧が url の書き込み直後に中断されると、url だけが合って refspec と mirror フラグが無い
-  // mirror が残る。url だけを見て済みと判定すると二度と直らないので、3 つ全部を確かめる。
-  if ((await read("remote.origin.fetch")) !== "+refs/*:refs/*") {
-    await gitBare(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
+  await repairMirrorConfig(path);
+}
+
+/**
+ * origin の refspec と mirror フラグを揃える。url は触らない。
+ *
+ * 復旧が url の書き込み直後に中断されると、url だけが合って refspec と mirror フラグが無い
+ * mirror が残る。url だけを見て済みと判定すると二度と直らないので、ここで別に確かめる。
+ * refspec は複数行ありうる (`--get` は最後の 1 行しか返さない) ので、全行を読んで
+ * mirror の refspec が無いときだけ足す。利用者が足した行は消さない。
+ */
+async function repairMirrorConfig(path: string): Promise<void> {
+  const MIRROR_REFSPEC = "+refs/*:refs/*";
+
+  let refspecs: string[] = [];
+  try {
+    refspecs = (await gitBare(["config", "--get-all", "remote.origin.fetch"], path)).split("\n");
+  } catch (e) {
+    // 1 は「キーが無い」。壊れた config (128) まで「無い」と読んで上書きしない
+    if (!(e instanceof GitError) || e.code !== 1) throw e;
   }
-  if ((await read("remote.origin.mirror")) !== "true") {
+  if (!refspecs.includes(MIRROR_REFSPEC)) {
+    await gitBare(["config", "--add", "remote.origin.fetch", MIRROR_REFSPEC], path);
+  }
+
+  let flag: string | null = null;
+  try {
+    flag = await gitBare(["config", "--get", "--type=bool", "remote.origin.mirror"], path);
+  } catch (e) {
+    if (!(e instanceof GitError) || e.code !== 1) throw e;
+  }
+  if (flag !== "true") {
     await gitBare(["config", "--bool", "remote.origin.mirror", "true"], path);
   }
 }
@@ -125,13 +139,13 @@ export async function ensureMirror(
   const keep = !opts.url && !opts.protocol && current !== null && explicitCloneUrl(current) !== undefined;
   // repodir の origin はこちら。mirror の付け替えに失敗しても、求められた URL を repodir には付ける
   const origin = keep ? current : url;
-  if (!keep) {
-    try {
-      await syncOrigin(path, url);
-    } catch (e) {
-      const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
-      warn(`ccx: warning: could not point the mirror at ${url}: ${reason}`);
-    }
+  try {
+    // 明示 URL の origin は付け替えないが、refspec と mirror フラグの欠けは直す
+    if (keep) await repairMirrorConfig(path);
+    else await syncOrigin(path, url);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    warn(`ccx: warning: could not update the mirror's origin config (${url}): ${reason}`);
   }
 
   const fetched = await lastFetchedAt(path);

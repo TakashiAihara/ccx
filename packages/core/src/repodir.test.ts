@@ -15,7 +15,7 @@ import type { Config } from "./config.ts";
 import { DIR_ID_LENGTH, isDirId } from "./dirid.ts";
 import { git, gitBare } from "./git.ts";
 import { readMeta, readState } from "./meta.ts";
-import { mirrorPath } from "./mirror.ts";
+import { ensureMirror, mirrorPath } from "./mirror.ts";
 import { createRepodir } from "./repodir.ts";
 import { explicitCloneUrl, parseRepoSpec } from "./repospec.ts";
 
@@ -536,4 +536,49 @@ describe("safe.bareRepository=explicit (#275)", () => {
       expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
     });
   }
+
+  test("refspec と mirror フラグが別の値の mirror も、mirror の値に直す", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "wrongval"), mirrorRoot: join(tmp, "wrongval-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], path);
+    await gitBare(["config", "--add", "remote.origin.fetch", "^refs/pull/*"], path);
+    await gitBare(["config", "--bool", "remote.origin.mirror", "false"], path);
+
+    await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+    // 利用者が足した行は消さずに、mirror の refspec だけを足す
+    expect((await gitBare(["config", "--get-all", "remote.origin.fetch"], path)).split("\n")).toEqual([
+      "+refs/heads/*:refs/remotes/origin/*",
+      "^refs/pull/*",
+      "+refs/*:refs/*",
+    ]);
+    expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
+  });
+
+  test("refspec が複数行あっても警告せず、mirror の行が既にあれば config を書き換えない", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "multival"), mirrorRoot: join(tmp, "multival-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "--add", "remote.origin.fetch", "^refs/pull/*"], path);
+    await gitBare(["config", "remote.origin.mirror", "yes"], path);
+    const before = await Bun.file(join(path, "config")).text();
+
+    const warnings: string[] = [];
+    const r = await ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) });
+    expect(r.updated).toBe(true);
+    expect(warnings).toEqual([]);
+    expect(await Bun.file(join(path, "config")).text()).toBe(before);
+  });
+
+  test("明示 URL の mirror でも、欠けた refspec を書き戻す", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-repair"), mirrorRoot: join(tmp, "explicit-repair-m") };
+    const forge = parseRepoSpec(HTTP_FORGE, { defaultHost: "github.com" });
+    await createRepodir(own, forge, { url: explicitCloneUrl(HTTP_FORGE) }, "0.1.0");
+    const path = mirrorPath(own, forge);
+    await gitBare(["config", "--unset-all", "remote.origin.fetch"], path);
+
+    await createRepodir(own, forge, { refresh: true }, "0.1.0");
+    expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(HTTP_FORGE);
+    expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+  });
 });
