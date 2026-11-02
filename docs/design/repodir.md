@@ -115,22 +115,27 @@ belongs to without consulting any registry, and the id itself needs to carry no 
 
 ### The directory id
 
-The id is the first 14 characters of the Crockford base32 encoding of a UUIDv7.
+The id is 14 Crockford base32 characters encoding 70 bits: 2 zero bits, a 48-bit unix
+millisecond timestamp, and 20 random bits.
 
 ```text
-uuidv7   019f5b0c-9adb-7000-9d6f-54a89fb84922
-base32   01KXDGS6PVE009TVTMN2FVGJ92
-dir-id   01KXDGS6PVE009
+timestamp  0x0123456789ab
+random     0xabcde
+dir-id     014D2PF2DBNF6Y
 ```
 
-The top 48 bits of a UUIDv7 are a millisecond timestamp, so the base32 prefix sorts
-lexicographically in creation order, and the creation time can be recovered from the name. No
-counter is allocated, so concurrent creation does not race.
+The timestamp is on top, so ids sort lexicographically in creation order, and the creation time
+can be recovered from the name. The random part is drawn afresh for each millisecond and
+incremented for further ids minted by the same process in that millisecond.
 
-**The id is unique per machine only.** Bun's UUIDv7 uses `rand_a` as a monotonic counter that
-restarts at zero every millisecond, so two machines creating their first repodir in the same
-millisecond produce the same 14-character prefix. Anything that spans machines must key on
-`machine + path`, never on the id alone.
+Ids minted before #75 were the first 14 characters of a base32 UUIDv7. Their timestamp sits in
+the same bits, so they still sort and decode the same way.
+
+**The id alone is not unique.** Each `ccx repodir new` is its own process, and two processes
+starting in the same millisecond can draw the same 20 random bits. `createRepodir` reserves the
+directory with `mkdir` (EEXIST when taken) and mints a new id on a collision, so the race ends in
+a retry rather than a failed clone. Anything that spans machines must key on `machine + path`,
+never on the id alone.
 
 ### Nobody types the id
 

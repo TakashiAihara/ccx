@@ -264,8 +264,8 @@ Repodirs live under a path that carries the meaning, so the directory id itself 
     01KXDGS6PWE00B/                      another one, possibly on the same branch
 ```
 
-The id is the first 14 characters of a Crockford-base32 UUIDv7, so directory names sort by
-creation time and no counter needs to be allocated.
+The id is 14 Crockford-base32 characters: a millisecond timestamp followed by 20 random bits, so
+directory names sort by creation time and no counter needs to be allocated.
 
 ### Metadata
 
