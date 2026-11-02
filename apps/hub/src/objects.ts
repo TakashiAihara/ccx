@@ -428,6 +428,13 @@ export class ObjectStore {
       } catch {
         return;
       }
+      // readdir has to read the whole directory, but what lies at or before `after` (which
+      // never moves during a walk) need not be sorted
+      const after = bound.after;
+      entries = entries.filter((e) => {
+        const key = rel ? `${rel}/${e.name}` : e.name;
+        return e.isDirectory() ? !excludesAll({ after }, `${key}/`) : !excludes({ after }, key);
+      });
       entries.sort((a, b) => {
         const x = sortName(a);
         const y = sortName(b);
