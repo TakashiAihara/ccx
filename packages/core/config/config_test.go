@@ -515,9 +515,10 @@ func TestRunUserDir_IsThisUsersRuntimeDir(t *testing.T) {
 	}
 }
 
-// ChannelSocket is what a session's channel dials, so it must land where serve
-// listens (load's ChannelSocketPath) and follow the same /run/user step.
-func TestChannelSocket_AgreesWithLoad(t *testing.T) {
+// ChannelSocket and APISocket are what a session's channel and the statusline
+// dial, so they must land where serve listens (load) and follow the same
+// /run/user step.
+func TestChannelAndAPISocket_AgreeWithLoad(t *testing.T) {
 	runUser := t.TempDir()
 	withRunUser(t, runUser)
 	if err := os.MkdirAll(filepath.Join(runUser, "ccx"), 0o700); err != nil {
@@ -529,6 +530,7 @@ func TestChannelSocket_AgreesWithLoad(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("CCX_SOCKET", "")
 	t.Setenv("CCX_CHANNEL_SOCKET", "")
+	t.Setenv("CCX_API_SOCKET", "")
 	t.Setenv("CCX_CONFIG", "/nonexistent")
 	c, err := load(os.Getenv, noGit, fixedHost("h"))
 	if err != nil {
@@ -536,6 +538,10 @@ func TestChannelSocket_AgreesWithLoad(t *testing.T) {
 	}
 	if want := filepath.Join(runUser, "ccx", "ccx-channel.sock"); ChannelSocket() != want || c.ChannelSocketPath != want {
 		t.Errorf("ChannelSocket = %q, load = %q, want %q", ChannelSocket(), c.ChannelSocketPath, want)
+	}
+	// What statusline's `ccx-agent status` dials: the symptom #258 is about.
+	if want := filepath.Join(runUser, "ccx", "ccx-api.sock"); APISocket() != want || c.APISocketPath != want {
+		t.Errorf("APISocket = %q, load = %q, want %q", APISocket(), c.APISocketPath, want)
 	}
 	t.Setenv("CCX_CHANNEL_SOCKET", "/x/ch.sock")
 	if ChannelSocket() != "/x/ch.sock" {

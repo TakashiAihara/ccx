@@ -526,8 +526,8 @@ func exists(p string) bool {
 	return err == nil
 }
 
-// ChannelSocket is where serve takes channel registrations, resolved from the
-// environment alone like APISocket. A channel lives as long as its session and
+// ChannelSocket is where serve takes channel registrations, resolved without
+// reading config, like APISocket. A channel lives as long as its session and
 // resolves this again on every retry: the /run/user step depends on whether a
 // socket exists, and a session started while a systemd agent restarts would
 // otherwise stay on ~/.ccx/run for good.
@@ -546,8 +546,8 @@ func channelSocketPath(getenv func(string) string, hook string) string {
 }
 
 // APISocket is where serve answers AgentService, resolved from the environment
-// alone. `ccx-agent status` runs on every statusline render and needs nothing
-// else: the full Load runs git config several times and fails on a bad
+// and socketPath's /run/user check, never config. `ccx-agent status` runs on
+// every statusline render and needs nothing else: the full Load runs git config several times and fails on a bad
 // config.toml the socket path does not depend on.
 func APISocket() string { return apiSocketPath(os.Getenv, socketPath(os.Getenv)) }
 
