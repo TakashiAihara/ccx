@@ -156,20 +156,19 @@ fi
 # differently (space, %, quotes, \, &, |), and, to be safe, everything else.
 unit_path=""
 dropped=""
-set -f
-old_ifs=$IFS
-IFS=:
-for d in $PATH; do
+# PATH is cut with parameter expansion rather than field splitting, so neither IFS
+# nor globbing is touched, and empty entries (the cwd), trailing one included, are seen.
+rest=$PATH
+while :; do
+  d=${rest%%:*}
   case "$d" in
     /*[!A-Za-z0-9/._@+,~-]*) dropped="$dropped '$d'" ;;
     /*) unit_path="${unit_path:+$unit_path:}$d" ;;
     *) dropped="$dropped '$d'" ;;
   esac
+  [ "$rest" != "${rest#*:}" ] || break
+  rest=${rest#*:}
 done
-IFS=$old_ifs
-set +f
-# Field splitting drops a trailing empty field, which in PATH means the cwd as well.
-case "$PATH" in *:) dropped="$dropped ''" ;; esac
 # A fresh install from a shell that does not have the install dir on PATH yet still
 # gives the unit that dir, where ccx and, often, herdr are.
 case ":$unit_path:" in
