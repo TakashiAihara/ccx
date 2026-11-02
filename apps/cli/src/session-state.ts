@@ -197,6 +197,49 @@ export async function declaredFor(
   return remote ?? local;
 }
 
+/**
+ * Writes one declaration to each session named (#144). With no id or one id it behaves as the
+ * single-id verb always did: an error stops the command, and --json prints one object.
+ * With several, a session that cannot be resolved or written is reported on stderr and the
+ * rest are still written (exit 1 at the end); --json prints an array of the ones written.
+ * The center is told after all the local writes, so a slow center does not hold them up.
+ */
+export async function writeEach(
+  args: string[],
+  json: boolean,
+  apply: (id: string, home: string) => Promise<DeclaredState>,
+  line: (id: string, s: DeclaredState) => string,
+): Promise<void> {
+  const home = claudeHome();
+  if (args.length <= 1) {
+    const id = await target(args[0], home);
+    const s = await apply(id, home);
+    // The write is reported first; a slow center does not hide that it is done
+    if (json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
+    else console.log(line(id, s));
+    await reportAfterWrite(id, s);
+    return;
+  }
+
+  const written: { id: string; s: DeclaredState }[] = [];
+  for (const arg of args) {
+    try {
+      const id = await target(arg, home);
+      const s = await apply(id, home);
+      written.push({ id, s });
+      if (!json) console.log(line(id, s));
+    } catch (e) {
+      console.error(`(${arg}: not written: ${e instanceof Error ? e.message : String(e)})`);
+      process.exitCode = 1;
+    }
+  }
+  if (json) console.log(JSON.stringify(written.map(({ id, s }) => ({ sessionId: id, ...s })), null, 2));
+
+  // One config read for the batch, so a broken config is said once, not once per session
+  const cfg = await configOrNull();
+  if (cfg) await Promise.all(written.map(({ id, s }) => reportState(cfg.hub, cfg.machine, id, s)));
+}
+
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
   table([
     ["session", id],
@@ -212,23 +255,24 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
   ]);
 
+const MANY_IDS = "full ids or unique prefixes, one or more (default: this session)";
+
 export function registerSessionState(session: Command): void {
   session
     .command("mark")
     .description(`Declare a flag on a session: ${FLAGS.join(" | ")} (--off to clear)`)
     .argument("<flag>", FLAGS.join(" | "))
-    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .argument("[session-id...]", MANY_IDS)
     .option("--off", "clear the flag instead of setting it")
-    .option("--json", "print the resulting state as JSON")
-    .action(async (flag: string, idOrPrefix: string | undefined, o) => {
+    .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+    .action(async (flag: string, ids: string[], o) => {
       if (!isFlag(flag)) throw new Error(`unknown flag ${flag}; one of ${FLAGS.join(", ")}`);
-      const home = claudeHome();
-      const id = await target(idOrPrefix, home);
-      const s = await writeDeclared(id, { [flag]: !o.off }, home);
-      // 書けた事実を先に出す。center が遅くても、書き込みが済んだことは隠れない
-      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
-      else console.log(`${flag} ${o.off ? "off" : "on"}  ${id}`);
-      await reportAfterWrite(id, s);
+      await writeEach(
+        ids,
+        Boolean(o.json),
+        (id, home) => writeDeclared(id, { [flag]: !o.off }, home),
+        (id) => `${flag} ${o.off ? "off" : "on"}  ${id}`,
+      );
     });
 
   const TEXT_VERBS = {
@@ -242,15 +286,15 @@ export function registerSessionState(session: Command): void {
       .command(key)
       .description(description)
       .argument(`<${key}>`, argument)
-      .argument("[session-id]", "full id or unique prefix (default: this session)")
-      .option("--json", "print the resulting state as JSON")
-      .action(async (value: string, idOrPrefix: string | undefined, o) => {
-        const home = claudeHome();
-        const id = await target(idOrPrefix, home);
-        const s = await writeDeclared(id, { [key]: value.trim() }, home);
-        if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
-        else console.log(`${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`);
-        await reportAfterWrite(id, s);
+      .argument("[session-id...]", MANY_IDS)
+      .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+      .action(async (value: string, ids: string[], o) => {
+        await writeEach(
+          ids,
+          Boolean(o.json),
+          (id, home) => writeDeclared(id, { [key]: value.trim() }, home),
+          (id, s) => `${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`,
+        );
       });
   }
 

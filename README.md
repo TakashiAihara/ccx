@@ -135,6 +135,7 @@ transcripts and the store.
 ```bash
 ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
 ccx session mark archived --off <id>
+ccx session mark archived <id> <id> …   # mark, label, task and role take any number of ids; one that fails is said on stderr, the rest are written, exit 1
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
 ccx session role worker       # what the session is; free text, ccx gives it no meaning
@@ -240,6 +241,8 @@ target. See `docs/design/transcript-store.md`.
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
+A running session that `prune --archived` leaves alone is listed as `skipped` (`status: "skipped"` in
+`--json`) and does not make the exit code `1`.
 `push --archived` and `prune --archived` skip a session whose declared state cannot be read and exit
 `1`; `push` of such a session by id or `--ended` still carries the transcript without `state.json`
 and exits `1`. The reason is on stderr.

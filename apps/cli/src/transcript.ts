@@ -62,14 +62,19 @@ export type Selector = { ended?: boolean; archived?: boolean };
  * 引数の id か、選択子に当たる全部。どちらも無ければ何を指すか分からないので止まる。
  * prune は選択子で選んだ running を先に外す (「done だが動いている」を refused で
  * 数えると、退役していない session が毎回 exit 1 を作る)
+ *
+ * The ones taken out that way come back as skippedRunning, so prune can say which they were
+ * (#144). A running session that --ended leaves out is not among them: --ended means "not
+ * running", so the selector never matched it.
  */
 export async function select(
   ids: string[],
   sel: Selector,
   opts: { home?: string; excludeRunning?: boolean } = {},
-): Promise<{ picked: LocalTranscript[]; running: Set<string> }> {
+): Promise<{ picked: LocalTranscript[]; running: Set<string>; skippedRunning: LocalTranscript[] }> {
   const home = opts.home ?? claudeHome();
   const [all, running] = await Promise.all([localTranscripts(home), runningSessionIds(home)]);
+  const skippedRunning: LocalTranscript[] = [];
   if (ids.length) {
     const byId = new Map(all.map((t) => [t.sessionId, t]));
     const picked: LocalTranscript[] = [];
@@ -81,12 +86,12 @@ export async function select(
       if (hits.length > 1) throw new Error(`${id} matches ${hits.length} sessions: ${hits.map((h) => h.sessionId).join(", ")}`);
       picked.push(hits[0]!);
     }
-    return { picked, running };
+    return { picked, running, skippedRunning };
   }
   if (!sel.ended && !sel.archived) throw new Error("give session ids, or a selector: --ended (not running) / --archived (marked archived)");
   const picked: LocalTranscript[] = [];
   for (const t of all) {
-    if ((sel.ended || opts.excludeRunning) && running.has(t.sessionId)) continue;
+    if (sel.ended && running.has(t.sessionId)) continue;
     if (sel.archived) {
       // 読めない session は選ばない (archived か分からない)。他の session の選択は止めない
       const archived = await readDeclared(t.sessionId, home).then(
@@ -99,9 +104,13 @@ export async function select(
       );
       if (!archived) continue;
     }
+    if (opts.excludeRunning && running.has(t.sessionId)) {
+      skippedRunning.push(t);
+      continue;
+    }
     picked.push(t);
   }
-  return { picked, running };
+  return { picked, running, skippedRunning };
 }
 
 export function registerTranscript(program: Command, VERSION: string): void {
@@ -358,13 +367,19 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .description("Delete local transcripts whose copy in the store matches byte for byte")
     .argument("[session-id...]", "session ids (a unique prefix is enough)")
     .option("--ended", "every local session that is not running")
-    .option("--archived", "every local session marked archived and not running")
+    .option("--archived", "every local session marked archived and not running (running ones are listed as skipped)")
     .option("--json", "print as JSON")
     .action(async (ids: string[], o) => {
       const c = await client();
-      const { picked, running } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) }, { excludeRunning: true });
+      const { picked, running, skippedRunning } = await select(ids, { ended: Boolean(o.ended), archived: Boolean(o.archived) }, { excludeRunning: true });
       const results = [];
       let refused = 0;
+      // Matched by the selector but left alone. Said, so "pushed 70, pruned 69" needs no diff;
+      // not counted as refused, so a live session does not turn every prune into exit 1
+      for (const t of skippedRunning) {
+        results.push({ sessionId: t.sessionId, status: "skipped", reason: "session is running" });
+        if (!o.json) console.log(`${"skipped".padEnd(7)} ${t.sessionId}  session is running`);
+      }
       for (const t of picked) {
         let r: Awaited<ReturnType<typeof c.prune>>;
         try {
