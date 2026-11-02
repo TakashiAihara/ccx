@@ -95,7 +95,7 @@ func TestOpenSpool_ReapsStrayTemps(t *testing.T) {
 	if _, err := os.Stat(strayIn); err != nil {
 		t.Errorf("incoming/ must not be touched before the lock: %v", err)
 	}
-	if _, d, _ := s.recoverTemps(time.Now()); d != 1 {
+	if _, d, _, _ := s.recoverTemps(time.Now()); d != 1 {
 		t.Errorf("dropped %d, want the partial temp", d)
 	}
 	if _, err := os.Stat(strayIn); !os.IsNotExist(err) {
