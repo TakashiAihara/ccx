@@ -510,4 +510,30 @@ describe("safe.bareRepository=explicit (#275)", () => {
     expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
     expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
   });
+
+  for (const [name, unset] of [
+    ["url だけ書かれた mirror", ["remote.origin.fetch", "remote.origin.mirror"]],
+    ["url と fetch だけ書かれた mirror", ["remote.origin.mirror"]],
+    ["url と mirror だけ書かれた mirror", ["remote.origin.fetch"]],
+  ] as const) {
+    test(`復旧が中断された (${name}) も、次の呼び出しで残りを書き戻し、新しい commit を取る`, async () => {
+      const own: Config = { ...cfg, root: join(tmp, `partial-${unset.length}-${unset[0]}`), mirrorRoot: join(tmp, `partial-m-${unset.length}-${unset[0]}`) };
+      await createRepodir(own, spec(), {}, "0.1.0");
+      const path = mirrorPath(own, spec());
+      for (const k of unset) await gitBare(["config", "--unset-all", k], path);
+
+      await git(["switch", "--quiet", "main"], join(tmp, "work"));
+      await Bun.write(join(tmp, "work", `partial-${unset.length}-${unset[0]}.md`), "new\n");
+      await git(["add", "."], join(tmp, "work"));
+      await git(["commit", "--quiet", "-m", "partial"], join(tmp, "work"));
+      await git(["push", "--quiet", source, "main"], join(tmp, "work"));
+      const head = await git(["rev-parse", "main"], join(tmp, "work"));
+
+      await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+      expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
+      expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+      expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    });
+  }
 });

@@ -40,7 +40,7 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
 }
 
 /**
- * mirror の origin を url に合わせる。既に一致していれば何もしない。
+ * mirror の origin (url / fetch refspec / mirror フラグ) を合わせる。既に揃っていれば何も書かない。
  *
  * origin が無い mirror に対して `git remote set-url` は使えない。remote を作る機能は無く、
  * "No such remote 'origin'" で終了コード 2 を返すだけで、mirror は origin 不在のまま残る。
@@ -51,26 +51,34 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
  * clone --mirror が書くのと同じ 3 つを、同じ形で書く。
  */
 async function syncOrigin(path: string, url: string): Promise<void> {
-  let current: string | null = null;
-  try {
-    // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
-    current = await gitBare(["config", "--get", "remote.origin.url"], path);
-  } catch (e) {
-    // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config (128) や他の失敗まで
-    // 「origin が無い」と解釈すると、読めなかった設定を黙って上書きしてしまう。1 だけを握る。
-    if (!(e instanceof GitError) || e.code !== 1) throw e;
-  }
+  // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config (128) や他の失敗まで
+  // 「無い」と解釈すると、読めなかった設定を黙って上書きしてしまう。1 だけを握る。
+  const read = async (key: string): Promise<string | null> => {
+    try {
+      // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
+      return await gitBare(["config", "--get", key], path);
+    } catch (e) {
+      if (!(e instanceof GitError) || e.code !== 1) throw e;
+      return null;
+    }
+  };
 
-  if (current === url) return;
+  const current = await read("remote.origin.url");
 
-  if (current === null) {
+  if (current !== null && current !== url) {
+    await gitBare(["remote", "set-url", "origin", url], path);
+  } else if (current === null) {
     await gitBare(["config", "remote.origin.url", url], path);
-    await gitBare(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
-    await gitBare(["config", "--bool", "remote.origin.mirror", "true"], path);
-    return;
   }
 
-  await gitBare(["remote", "set-url", "origin", url], path);
+  // 復旧が url の書き込み直後に中断されると、url だけが合って refspec と mirror フラグが無い
+  // mirror が残る。url だけを見て済みと判定すると二度と直らないので、3 つ全部を確かめる。
+  if ((await read("remote.origin.fetch")) !== "+refs/*:refs/*") {
+    await gitBare(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
+  }
+  if ((await read("remote.origin.mirror")) !== "true") {
+    await gitBare(["config", "--bool", "remote.origin.mirror", "true"], path);
+  }
 }
 
 export type EnsureMirrorResult = {
