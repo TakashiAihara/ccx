@@ -346,8 +346,8 @@ func TestRun_TakesInATempThatWasYoungAtStartup(t *testing.T) {
 	}
 }
 
-// An event without machine or user is rejected by the center and would be retried
-// forever, holding back the rest (#126): collect does not start without both.
+// An event without machine or user is rejected by the center and would only be
+// set aside in dead/ (#126): collect does not start without both.
 func TestNew_RequiresMachineAndUser(t *testing.T) {
 	base := config.Config{Machine: "m", User: "u", SpoolDir: filepath.Join(t.TempDir(), "spool")}
 	if _, err := New(base, quietLog); err != nil {

@@ -124,7 +124,8 @@ describe("agentStatus", () => {
     mkdirSync(dead, { recursive: true });
     writeFileSync(join(spool, "00000000000000000009.pb"), "x");
     for (const id of ["a", "b", "c"]) writeFileSync(join(dead, `00000000000000000001-${id}.pb`), "x");
-    writeFileSync(join(dead, ".tmp-00000000000000000002.pb-1"), "x");
+    // A temp name that still ends in .pb, so only the .tmp- rule leaves it out
+    writeFileSync(join(dead, ".tmp-00000000000000000002.pb"), "x");
     writeFileSync(join(dead, "note.txt"), "x");
 
     const st = await agentStatus(undefined, { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool });

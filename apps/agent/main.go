@@ -109,7 +109,8 @@ func cmdServe() int {
 	// carry and persistence append here the same way when they exist.
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
-	// Without a machine and a user name collect would only wedge (#126). Turn it off
+	// Without a machine and a user name the center refuses every event, and collect
+	// would only fill the spool's dead/ (#126). Turn it off
 	// and keep the rest: heartbeat and the API do not need them. The live transcript
 	// goes with it (it rides on collect), and `ccx agent status` then reports
 	// ccx-agent as not running, since that is the hook socket it probes.

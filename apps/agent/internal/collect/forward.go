@@ -163,8 +163,8 @@ func (l *forwardLoop) run(ctx context.Context) {
 					backoff = l.minBackoff
 					continue
 				}
-				// Still in the queue: retry the move after a backoff, as for a
-				// failed Ack, rather than re-forwarding it in a tight loop.
+				// Still in the queue: after a backoff, as for a failed Ack, it is sent
+				// again, and a second refusal tries the move again. No tight loop.
 				l.log("center refused event (seq %d, event_id %s), could not move it aside, retrying: %v", e.Event.GetSeq(), e.Event.GetEventId(), derr)
 			} else {
 				// Center unreachable (or failing for now). Keep the event, back off,
