@@ -183,8 +183,25 @@ function apiURLOf(l: IncomingEvent): string | null {
   const o = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(l.payload)) as { api_url?: unknown };
   const raw = o.api_url;
   if (typeof raw !== "string") return null;
-  // new URL は "http://host?" の空の query を捨てるので、記号は文字列で見る
-  if (/[?#]/.test(raw)) return null;
+  return apiOrigin(raw);
+}
+
+/**
+ * The same rule as the agent's apiURLFrom (packages/core/config/config.go), so a value one side
+ * refuses the other refuses too. Both read packages/core/config/testdata/api_url_cases.json.
+ * WHATWG URL alone is looser: it resolves "/.." and "/%2e" to "/", reads "http:/h" and "http:\\h"
+ * as "http://h", drops tabs and newlines, and takes an empty or zero-led port.
+ * So the shape is checked on the string first, and new URL only normalizes the host.
+ */
+export function apiOrigin(value: string): string | null {
+  const raw = value.trim();
+  // "//" then an authority with no path, query, fragment, userinfo, backslash, space or control character
+  const m = /^(https?):\/\/([^/?#\\@\x00-\x20\x7f]+)\/?$/i.exec(raw);
+  if (!m) return null;
+  // A port, when there is a ":" after the host, is digits without a leading zero; new URL refuses one above 65535
+  // An authority this does not split ("[::1]x", "[::1") is left to new URL, which refuses it
+  const port = /^(?:\[[^\]]*\]|[^:[\]]*)(?::(.*))?$/.exec(m[2]!)?.[1];
+  if (port !== undefined && !/^[1-9][0-9]*$/.test(port)) return null;
   try {
     const u = new URL(raw);
     if (

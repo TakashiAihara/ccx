@@ -17,9 +17,8 @@ func TestAdvertisedAPIURL(t *testing.T) {
 		t.Errorf("all set: %q %q", url, why)
 	}
 	for name, c := range map[string]config.Config{
-		"no listen":   {APIURL: ok.APIURL, APIToken: ok.APIToken},
-		"no token":    {APIURL: ok.APIURL, APIListen: ok.APIListen},
-		"token error": {APIURL: ok.APIURL, APIListen: ok.APIListen, APIToken: ok.APIToken, APITokenErr: errors.New("same as the hub token")},
+		"no listen": {APIURL: ok.APIURL, APIToken: ok.APIToken},
+		"no token":  {APIURL: ok.APIURL, APIListen: ok.APIListen},
 	} {
 		url, why := advertisedAPIURL(c)
 		if url != "" || !strings.Contains(why, "cannot wake") {

@@ -1,0 +1,206 @@
+[
+  {
+    "in": "http://10.0.0.5:8792",
+    "ok": true
+  },
+  {
+    "in": "https://agent.example",
+    "ok": true
+  },
+  {
+    "in": "https://agent.example:9",
+    "ok": true
+  },
+  {
+    "in": "http://10.0.0.5:8792/",
+    "ok": true
+  },
+  {
+    "in": "HTTP://10.0.0.5:8792",
+    "ok": true
+  },
+  {
+    "in": "  http://10.0.0.5:8792  ",
+    "ok": true
+  },
+  {
+    "in": "http://[::1]:8792",
+    "ok": true
+  },
+  {
+    "in": "http://10.0.0.5:65535",
+    "ok": true
+  },
+  {
+    "in": "http://10.0.0.5:1",
+    "ok": true
+  },
+  {
+    "in": "http://localhost",
+    "ok": true
+  },
+  {
+    "in": "http://h\t",
+    "ok": true
+  },
+  {
+    "in": "http://h/\t",
+    "ok": true
+  },
+  {
+    "in": "",
+    "ok": false
+  },
+  {
+    "in": "   ",
+    "ok": false
+  },
+  {
+    "in": "10.0.0.5:8792",
+    "ok": false
+  },
+  {
+    "in": "/relative",
+    "ok": false
+  },
+  {
+    "in": "ftp://10.0.0.5",
+    "ok": false
+  },
+  {
+    "in": "http://",
+    "ok": false
+  },
+  {
+    "in": "http:///",
+    "ok": false
+  },
+  {
+    "in": "http://h/x",
+    "ok": false
+  },
+  {
+    "in": "http://h//",
+    "ok": false
+  },
+  {
+    "in": "http://h/..",
+    "ok": false
+  },
+  {
+    "in": "http://h/.",
+    "ok": false
+  },
+  {
+    "in": "http://h/%2e",
+    "ok": false
+  },
+  {
+    "in": "http://h/%2E%2E",
+    "ok": false
+  },
+  {
+    "in": "http://h?",
+    "ok": false
+  },
+  {
+    "in": "http://h?q=1",
+    "ok": false
+  },
+  {
+    "in": "http://h#",
+    "ok": false
+  },
+  {
+    "in": "http://h#f",
+    "ok": false
+  },
+  {
+    "in": "http://u:p@h",
+    "ok": false
+  },
+  {
+    "in": "http://u@h",
+    "ok": false
+  },
+  {
+    "in": "http://@h",
+    "ok": false
+  },
+  {
+    "in": "http:/h",
+    "ok": false
+  },
+  {
+    "in": "http:h",
+    "ok": false
+  },
+  {
+    "in": "http:\\\\h",
+    "ok": false
+  },
+  {
+    "in": "http:\\h",
+    "ok": false
+  },
+  {
+    "in": "http://h\\",
+    "ok": false
+  },
+  {
+    "in": "http://\\h",
+    "ok": false
+  },
+  {
+    "in": "http://h\tx",
+    "ok": false
+  },
+  {
+    "in": "http://h\nx",
+    "ok": false
+  },
+  {
+    "in": "http://h\rx",
+    "ok": false
+  },
+  {
+    "in": "http://h x",
+    "ok": false
+  },
+  {
+    "in": "http://h:65536",
+    "ok": false
+  },
+  {
+    "in": "http://h:0",
+    "ok": false
+  },
+  {
+    "in": "http://h:01",
+    "ok": false
+  },
+  {
+    "in": "http://h:",
+    "ok": false
+  },
+  {
+    "in": "http://h:x",
+    "ok": false
+  },
+  {
+    "in": "http://h:80:80",
+    "ok": false
+  },
+  {
+    "in": "http://[::1]x",
+    "ok": false
+  },
+  {
+    "in": "http://[::1",
+    "ok": false
+  },
+  {
+    "in": "https:/h",
+    "ok": false
+  }
+]

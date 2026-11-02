@@ -410,6 +410,10 @@ func apiURLFrom(raw string) (string, error) {
 	}
 	// The center (WHATWG URL) refuses a port it cannot read and would drop this address
 	// without a word, so refuse here too, where the agent can log why.
+	// A second ":" outside brackets ("h:80:80") is not a host and port either.
+	if !strings.HasPrefix(u.Host, "[") && strings.Count(u.Host, ":") > 1 {
+		return "", errors.New("api url has a port that is not 1-65535")
+	}
 	if p := u.Port(); p != "" || strings.HasSuffix(u.Host, ":") {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 || strings.HasPrefix(p, "0") {

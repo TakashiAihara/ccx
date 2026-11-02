@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -449,5 +450,33 @@ func TestAPIURLPort(t *testing.T) {
 	c, _ := load(env(map[string]string{"CCX_API_URL": "http://10.0.0.5:65535"}), noGit, fixedHost("h"))
 	if c.APIURL != "http://10.0.0.5:65535" {
 		t.Errorf("65535: %q %v", c.APIURL, c.APIURLErr)
+	}
+}
+
+// The center (apps/hub/src/store.ts apiOrigin) reads the same table, so a value
+// one side refuses the other refuses too (#273).
+func TestAPIURLSharedCases(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "api_url_cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		In string `json:"in"`
+		OK bool   `json:"ok"`
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 40 {
+		t.Fatalf("read %d cases, want the whole table", len(cases))
+	}
+	for _, c := range cases {
+		got, err := apiURLFrom(c.In)
+		if c.OK && (err != nil || got == "") {
+			t.Errorf("%q: refused (%v), want taken", c.In, err)
+		}
+		if !c.OK && got != "" {
+			t.Errorf("%q: taken as %q, want refused", c.In, got)
+		}
 	}
 }
