@@ -131,14 +131,18 @@ func cmdServe() int {
 
 	logger := func(format string, a ...any) { log.Printf(format, a...) }
 
+	// Before assemble logs the startup line, so a supervisor that signals on
+	// seeing it gets a clean shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Keep the decisions in assemble, where the tests see them (#257): nothing
+	// drives cmdServe itself with a Config, so a check added here goes untested.
 	concerns, err := assemble(cfg, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
 		return 1
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	if err := concern.Run(ctx, logger, concerns...); err != nil {
 		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
@@ -166,7 +170,7 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 		concerns = append(concerns, r)
 		wakers = append(wakers, r)
 	}
-	// Without a machine and a user name the center refuses every event, and collect
+	// Without a machine or a user name the center refuses every event, and collect
 	// would only fill the spool's dead/ (#126). Turn it off
 	// and keep the rest: heartbeat and the API do not need them. The live transcript
 	// goes with it (it rides on collect), and `ccx agent status` then reports
