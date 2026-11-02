@@ -12,7 +12,18 @@ export class GitError extends Error {
 }
 
 export async function git(args: string[], cwd?: string): Promise<string> {
-  const argv = cwd ? ["git", "-C", cwd, ...args] : ["git", ...args];
+  return run(cwd ? ["git", "-C", cwd, ...args] : ["git", ...args]);
+}
+
+/**
+ * bare repo (mirror) 用。`-C` は暗黙の検出に頼るので、safe.bareRepository=explicit では拒否される。
+ * `--git-dir` で明示した bare repo は explicit でも開ける (#275)。
+ */
+export async function gitBare(args: string[], gitDir: string): Promise<string> {
+  return run(["git", "--git-dir", gitDir, ...args]);
+}
+
+async function run(argv: string[]): Promise<string> {
 
   // env を明示的に渡す。Bun.spawn は既定では起動時の環境を使うため、実行中に
   // process.env を変更しても子プロセスに伝播しない (GIT_CONFIG_GLOBAL 等が効かない)。
@@ -31,12 +42,12 @@ export async function git(args: string[], cwd?: string): Promise<string> {
 /** リモートの default branch (HEAD が指す先) を得る。 */
 export async function defaultBranch(gitDir: string): Promise<string> {
   try {
-    const head = await git(["symbolic-ref", "--short", "HEAD"], gitDir);
+    const head = await gitBare(["symbolic-ref", "--short", "HEAD"], gitDir);
     if (head) return head;
   } catch {
     // bare mirror で HEAD が未設定のケース
   }
-  const ref = await git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], gitDir);
+  const ref = await gitBare(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], gitDir);
   return ref.replace(/^origin\//, "");
 }
 

@@ -450,3 +450,39 @@ describe("createRepodir の失敗 (checkout)", () => {
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "nocheckout"))).toEqual([]);
   });
 });
+
+describe("safe.bareRepository=explicit (#275)", () => {
+  const KEYS = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] as const;
+  const saved = new Map<string, string | undefined>();
+
+  beforeAll(() => {
+    for (const k of KEYS) saved.set(k, process.env[k]);
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "safe.bareRepository";
+    process.env.GIT_CONFIG_VALUE_0 = "explicit";
+  });
+
+  afterAll(() => {
+    for (const k of KEYS) {
+      const v = saved.get(k);
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  test("git -C で bare を開くと拒否される (この環境が explicit を実際に効かせている)", async () => {
+    await expect(git(["symbolic-ref", "HEAD"], source)).rejects.toThrow("safe.bareRepository");
+  });
+
+  test("mirror の作成・再利用・強制更新・default branch の解決がすべて通る", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-root"), mirrorRoot: join(tmp, "explicit-root", ".mirror") };
+
+    const first = await createRepodir(own, spec(), {}, "0.1.0");
+    expect(first.mirror.created).toBe(true);
+
+    const second = await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+    expect(second.mirror.created).toBe(false);
+    expect(second.mirror.updated).toBe(true);
+    expect(await Bun.file(join(second.path, "README.md")).exists()).toBe(true);
+  });
+});
