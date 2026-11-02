@@ -28,7 +28,7 @@ let server: ReturnType<typeof Bun.serve>;
 let db: ReturnType<typeof openDb>;
 let root: string;
 let home: string;
-/** Every ListEvents request the center received, in order */
+/** Number of ListEvents requests the center received */
 let requests: number;
 
 const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
@@ -236,9 +236,9 @@ describe("showEvents", () => {
   });
 
   test("a second stream older than the page but inside the probe window still refuses", async () => {
-    // 150 newer events of ccxu1 push ccxu2 beyond the center's default page of 100, so only a
-    // probe that asks for its full window sees it
-    ingest(db, [hook("m1", "ccxu2", "SessionStart"), ...Array.from({ length: 150 }, () => hook("m1", "ccxu1", "PostToolUse"))]);
+    // 999 newer events of ccxu1 leave ccxu2 as the 1000th newest, so only a probe that asks for
+    // the center's full window of 1000 sees it
+    ingest(db, [hook("m1", "ccxu2", "SessionStart"), ...Array.from({ length: 999 }, () => hook("m1", "ccxu1", "PostToolUse"))]);
 
     const err = await showEvents(client(), { sessionId: SID, limit: 1, includePayload: false }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AmbiguousSession);

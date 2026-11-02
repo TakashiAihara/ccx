@@ -130,7 +130,8 @@ age column alongside it.
 The center keys a session by (machine, user, session id). When the same id has hook events from several
 machines or users (the separate rows `ccx session ls` shows), `ccx session show` lists them and exits 1
 instead of interleaving their events; pick one with `-m` / `-u`. Marks alone (or the state `ccx tr pull`
-installed after a move) do not make a second stream. `--json` still returns them all, each event
+installed after a move) do not make a second stream, on a center that reports each event's producer;
+an older center does not, so there they count as one. `--json` still returns them all, each event
 carrying its machine and user.
 
 ### What ccx holds about a session
