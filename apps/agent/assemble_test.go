@@ -59,9 +59,9 @@ func startupLine(logs string) string {
 	return ""
 }
 
-// Without a machine or a user name serve keeps running: only collect (and what
-// rides on it) is off, the heartbeat and the API stay, and the startup line
-// says collect=false (#126, #257).
+// Without a machine or a user name assemble still builds the heartbeat and the
+// API for serve to run: only collect (and what rides on it) is off, and the
+// startup line says collect=false (#126, #257).
 func TestAssembleWithoutOriginTurnsOnlyCollectOff(t *testing.T) {
 	for name, cfg := range map[string]config.Config{
 		"no user":    assembleConfig(t, "box", ""),
