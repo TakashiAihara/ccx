@@ -596,4 +596,79 @@ describe("safe.bareRepository=explicit (#275)", () => {
     expect(warnings[0]).toContain("could not update the mirror's origin config");
     expect(await Bun.file(join(path, "config")).text()).toBe(before);
   });
+
+  // config.lock を置くと git config の書き込みだけが失敗し、読み取りは通る (並行実行のロック競合と同じ形)
+  async function lockedMirror(name: string, breakConfig: (path: string) => Promise<void>) {
+    const own: Config = { ...cfg, root: join(tmp, name), mirrorRoot: join(tmp, `${name}-m`) };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await breakConfig(path);
+    const before = await gitBare(["rev-parse", "refs/heads/main"], path);
+
+    await git(["switch", "--quiet", "main"], join(tmp, "work"));
+    await Bun.write(join(tmp, "work", `${name}.md`), "new\n");
+    await git(["add", "."], join(tmp, "work"));
+    await git(["commit", "--quiet", "-m", name], join(tmp, "work"));
+    await git(["push", "--quiet", source, "main"], join(tmp, "work"));
+    const head = await git(["rev-parse", "main"], join(tmp, "work"));
+
+    await Bun.write(join(path, "config.lock"), "");
+    return { own, path, before, head };
+  }
+
+  for (const [name, breakConfig] of [
+    ["refspec が欠けた", (p: string) => gitBare(["config", "--unset-all", "remote.origin.fetch"], p)],
+    ["mirror フラグが false の", (p: string) => gitBare(["config", "--bool", "remote.origin.mirror", "false"], p)],
+  ] as const) {
+    test(`修復の書き込みが失敗し、読み直しても ${name} mirror は、更新せずに投げる`, async () => {
+      const { own, path, before } = await lockedMirror(`locked-${name}`, async (p) => void (await breakConfig(p)));
+
+      const warnings: string[] = [];
+      try {
+        await expect(ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) })).rejects.toThrow(
+          "the mirror's origin config is incomplete",
+        );
+        expect(warnings.length).toBe(1);
+        expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(before);
+      } finally {
+        await rm(join(path, "config.lock"), { force: true });
+      }
+    });
+  }
+
+  test("修復の書き込みが失敗しても、読み直して並行する修復が書き終えていれば、更新して updated を返す", async () => {
+    const { own, path, head } = await lockedMirror("locked-raced", (p) =>
+      gitBare(["config", "--unset-all", "remote.origin.fetch"], p).then(() => undefined),
+    );
+
+    // 警告は修復の失敗直後・読み直しの前に出る。そこで競合相手がロックを手放して書き終えた状態を作る
+    const warnings: string[] = [];
+    const r = await ensureMirror(own, spec(), {
+      force: true,
+      warn: (m) => {
+        warnings.push(m);
+        Bun.spawnSync(["rm", "-f", join(path, "config.lock")]);
+        Bun.spawnSync(["git", "--git-dir", path, "config", "remote.origin.fetch", "+refs/*:refs/*"]);
+      },
+    });
+    expect(r.updated).toBe(true);
+    expect(warnings.length).toBe(1);
+    expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+  });
+
+  test("url の付け替えに失敗しても、警告して元の origin で更新する", async () => {
+    const { own, path, head } = await lockedMirror("locked-url", async () => undefined);
+    const other = `${REMOTE}-moved`;
+
+    const warnings: string[] = [];
+    try {
+      const r = await ensureMirror(own, spec(), { force: true, url: other, warn: (m) => warnings.push(m) });
+      expect(r.updated).toBe(true);
+      expect(warnings).toEqual([expect.stringContaining(`could not point the mirror at ${other}`)]);
+      expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    } finally {
+      await rm(join(path, "config.lock"), { force: true });
+    }
+  });
 });
