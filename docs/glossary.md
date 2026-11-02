@@ -66,5 +66,5 @@ believed.
 ## Repodirs
 
 - **repodir** — an independent clone made by `ccx repodir new` (`docs/design/repodir.md`).
-- **did (dir-id)** — a repodir's name: the first 14 characters of a UUIDv7 in base32. Unique within a
-  machine only.
+- **did (dir-id)** — a repodir's name: 14 Crockford base32 characters, a millisecond timestamp followed by 20
+  random bits. Not unique by itself; a new repodir reserves its id with mkdir.
