@@ -66,8 +66,9 @@ export async function createRepodir(
 
   const branch = opts.from ?? (await defaultBranch(mirror.path));
 
-  // dir-id はマシン内で一意だが、念のため衝突時は取り直す。空のディレクトリを mkdir (既にあれば EEXIST) で
-  // 先に取るので、ここから先で消すのは必ずこの呼び出しが作ったものになる (git clone は空のディレクトリに入れる)
+  // Parallel `rd new` processes can still draw the same dir-id (its random part is only 20 bits), so the dir-id is
+  // reserved by mkdir (EEXIST when taken) and redrawn on a collision. Reserving an empty directory first also means
+  // that anything removed below was made by this call (git clone accepts an empty directory)
   let dirId = "";
   let path = "";
   for (let i = 0; !path; i++) {

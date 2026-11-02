@@ -6,12 +6,15 @@
  * The timestamp sits on top, so the lexical order of dir-ids follows creation time and `created` can be recovered
  * from the directory name alone.
  *
- * The low 20 bits are drawn from crypto randomness for each new millisecond, and only incremented for further ids
- * minted by the same process within that millisecond (the ULID "monotonic" scheme). This is what keeps independent
- * processes apart (#75): every `ccx rd new` is its own process, and a UUIDv7 prefix left only the generator's
- * in-process counter (plus 2 random bits) below the timestamp, so processes started in the same millisecond could
- * mint the same dir-id. 20 bits make that rare enough for `createRepodir`'s mkdir reservation to absorb it with a
- * retry; uniqueness is still only guaranteed per machine, so a global key needs machine + path.
+ * The low 20 bits are drawn from crypto randomness for each new millisecond. Further ids minted by the same process
+ * in that millisecond (or after the clock steps back) increment them instead (the ULID "monotonic" scheme).
+ *
+ * Randomness is what keeps independent processes apart (#75): every `ccx rd new` is its own process. A 14-character
+ * UUIDv7 prefix left only the 12-bit rand_a field plus 2 random bits below the timestamp, and how rand_a is seeded
+ * is up to the runtime: some Bun releases started it at 0 every millisecond, so processes started in the same
+ * millisecond minted the same dir-id. 20 bits of our own randomness do not depend on that, but they only make a
+ * collision rare: uniqueness across processes is enforced by `createRepodir`'s mkdir reservation, and a key across
+ * machines needs machine + path.
  */
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
