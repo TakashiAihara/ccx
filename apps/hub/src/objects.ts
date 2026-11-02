@@ -405,7 +405,8 @@ export class ObjectStore {
    * without reading or stat-ing it. `bound.skipPrefix` is re-read before every entry, so the
    * consumer may change it between yields (ListObjectsV2 does, to jump over a common prefix
    * it has already emitted); `bound.after` must stay fixed for the walk. Stopping the
-   * iteration stops the walk, so a page stats only the keys it returns plus one. Each
+   * iteration stops the walk, so a page stats about as many keys as it returns (one look-ahead,
+   * plus one when start-after falls inside a common prefix). Each
    * directory on the path to the start position is still read in full on every page: the
    * filesystem has no way to list a directory from a given name (#175).
    */
