@@ -7,7 +7,8 @@
  * from the directory name alone.
  *
  * The low 20 bits are drawn from crypto randomness for each new millisecond. Further ids minted by the same process
- * in that millisecond (or after the clock steps back) increment them instead (the ULID "monotonic" scheme).
+ * in that millisecond (or after the clock steps back) increment them instead, as ULID's monotonic mode does; where
+ * ULID fails once the random part runs out, this carries into the next millisecond.
  *
  * Randomness is what keeps independent processes apart (#75): every `ccx rd new` is its own process. A 14-character
  * UUIDv7 prefix left only the 12-bit rand_a field plus 2 random bits below the timestamp, and how rand_a is seeded

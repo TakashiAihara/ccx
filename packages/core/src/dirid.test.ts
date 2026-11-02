@@ -66,6 +66,17 @@ describe("dir-id across processes (#75)", () => {
     expect(new Set(ids).size).toBeGreaterThanOrEqual(990);
     expect(new Set(ids.map(dirIdToDate).map((d) => d.getTime()))).toEqual(new Set([1_783_952_632_953]));
   });
+
+  test("newDirId draws its low bits itself instead of taking a UUIDv7 prefix", async () => {
+    // a fresh module instance stands for a fresh process. A UUIDv7 prefix carries the fixed version nibble 7 at the
+    // top of the low 20 bits whatever the runtime does with rand_a; our own random bits put any value there
+    const nibbles = new Set<number>();
+    for (let i = 0; i < 64; i++) {
+      const fresh: { newDirId: () => string } = await import(`./dirid.ts?fresh=${i}`);
+      nibbles.add(randomPart(fresh.newDirId()) >> 16);
+    }
+    expect(nibbles.size).toBeGreaterThan(1);
+  });
 });
 
 describe("dir-id within one process", () => {
