@@ -199,6 +199,25 @@ describe("search: embedded DuckDB over the store", () => {
     // ccx を 10 回起動する。1 回 0.2s 前後で、全体を並べて流すと既定の 5s を越えることがある
   }, 20_000);
 
+  test("every view takes machine / user / session_id from the segments after the prefix, not from key=value segments in the prefix (#171)", async () => {
+    const trap: TranscriptStore = { ...store, prefix: "machine=trap-m/user=trap-u/session_id=trap-s/x/" };
+    const client = new TranscriptClient(trap, { machine: "host-a", user: "alice" });
+    for (const t of await localTranscripts(home)) await client.push(t, home);
+
+    const c = await openDuckDB(trap, { withHistory: true });
+    const want = [
+      { session_id: SID, machine: "host-a", user: "alice" },
+      { session_id: SID2, machine: "host-a", user: "alice" },
+    ];
+    const pick = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
+    expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM lines ORDER BY session_id`)).toEqual(want);
+    expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM transcripts ORDER BY session_id`)).toEqual(want);
+    expect(await pick(`SELECT session_id, machine, "user" FROM sessions`)).toEqual([want[1]!]);
+    expect(await pick(`SELECT session_id, pushed_by_machine AS machine, pushed_by_user AS "user" FROM history ORDER BY session_id`)).toEqual(want);
+    // the reader's path column does not leak into the structured view
+    expect(await pick(`SELECT count(*) AS n FROM (DESCRIBE transcripts) WHERE column_name = '__ccx_path'`)).toEqual([{ n: "0" }]);
+  });
+
   test("search ignores a persistent DuckDB secret the user saved for s3://ccx (#213)", async () => {
     const userHome = join(root, "user-home");
     const { DuckDBInstance } = await import("@duckdb/node-api");
