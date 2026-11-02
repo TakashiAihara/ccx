@@ -622,6 +622,9 @@ describe("safe.bareRepository=explicit (#275)", () => {
   ] as const) {
     test(`修復の書き込みが失敗し、読み直しても ${name} mirror は、更新せずに投げる`, async () => {
       const { own, path, before } = await lockedMirror(`locked-${name}`, async (p) => void (await breakConfig(p)));
+      // refspec の無い fetch は ref を動かさないが FETCH_HEAD は書く。これが鮮度の判定を騙す (#77)
+      const fetchHead = () => stat(join(path, "FETCH_HEAD")).then((s) => s.mtimeMs, () => null);
+      const fetchedBefore = await fetchHead();
 
       const warnings: string[] = [];
       try {
@@ -629,6 +632,7 @@ describe("safe.bareRepository=explicit (#275)", () => {
           "the mirror's origin config is incomplete",
         );
         expect(warnings.length).toBe(1);
+        expect(await fetchHead()).toBe(fetchedBefore);
         expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(before);
       } finally {
         await rm(join(path, "config.lock"), { force: true });
