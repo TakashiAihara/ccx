@@ -32,9 +32,9 @@ export type AgentStatus = {
   hubTokenAccepted?: boolean;
 };
 
-// 基本は ccx-agent の既定 (packages/core/config/config.go socketPath) と同じく XDG_RUNTIME_DIR、無ければ
-// ~/.ccx/run。CLI だけは、XDG_RUNTIME_DIR の無い shell (cron 等) からでも systemd の user unit で動く agent
-// の socket (/run/user/<uid>) が在ればそちらを見る (hook と statusline の Go 側は見ない。macOS には /run/user が無い)
+// Same resolution as ccx-agent's socketPath (packages/core/config/config.go): XDG_RUNTIME_DIR, else
+// the socket of an agent run by a systemd user unit (/run/user/<uid>) if it exists, so a shell without
+// XDG_RUNTIME_DIR (cron) still finds it, else ~/.ccx/run (macOS has no /run/user).
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env, runUser = join("/run/user", String(process.getuid?.() ?? 0))): string {
   if (env.CCX_SOCKET) return env.CCX_SOCKET;
   if (env.XDG_RUNTIME_DIR) return join(env.XDG_RUNTIME_DIR, "ccx", "ccx-agent.sock");

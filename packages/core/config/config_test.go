@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -449,5 +450,67 @@ func TestAPIURLPort(t *testing.T) {
 	c, _ := load(env(map[string]string{"CCX_API_URL": "http://10.0.0.5:65535"}), noGit, fixedHost("h"))
 	if c.APIURL != "http://10.0.0.5:65535" {
 		t.Errorf("65535: %q %v", c.APIURL, c.APIURLErr)
+	}
+}
+
+// withRunUser points runUserDir at dir for one test.
+func withRunUser(t *testing.T, dir string) {
+	t.Helper()
+	prev := runUserDir
+	runUserDir = func() string { return dir }
+	t.Cleanup(func() { runUserDir = prev })
+}
+
+func TestSocketPath_WithoutRuntimeDir_FollowsASystemdAgentsSocket(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := filepath.Join(home, ".ccx", "run", "ccx-agent.sock")
+	runUser := t.TempDir()
+	withRunUser(t, runUser)
+
+	// Nothing under /run/user/<uid>: the home fallback, for serve and hook alike.
+	if got := socketPath(env(nil)); got != fallback {
+		t.Errorf("no systemd socket: got %q, want %q", got, fallback)
+	}
+	// The dir alone is not enough; it is the socket that says an agent listens there.
+	if err := os.MkdirAll(filepath.Join(runUser, "ccx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := socketPath(env(nil)); got != fallback {
+		t.Errorf("dir without socket: got %q, want %q", got, fallback)
+	}
+
+	systemd := filepath.Join(runUser, "ccx", "ccx-agent.sock")
+	if err := os.WriteFile(systemd, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SocketPath != systemd {
+		t.Errorf("hook socket: got %q, want %q", c.SocketPath, systemd)
+	}
+	if want := filepath.Join(runUser, "ccx", "ccx-api.sock"); c.APISocketPath != want {
+		t.Errorf("API socket: got %q, want %q", c.APISocketPath, want)
+	}
+	if want := filepath.Join(runUser, "ccx", "ccx-channel.sock"); c.ChannelSocketPath != want {
+		t.Errorf("channel socket: got %q, want %q", c.ChannelSocketPath, want)
+	}
+
+	// XDG_RUNTIME_DIR and CCX_SOCKET still win over it.
+	if got := socketPath(env(map[string]string{"XDG_RUNTIME_DIR": "/xdg"})); got != "/xdg/ccx/ccx-agent.sock" {
+		t.Errorf("with XDG_RUNTIME_DIR: got %q", got)
+	}
+	if got := socketPath(env(map[string]string{"CCX_SOCKET": "/s/hook.sock"})); got != "/s/hook.sock" {
+		t.Errorf("with CCX_SOCKET: got %q", got)
+	}
+}
+
+func TestRunUserDir_IsThisUsersRuntimeDir(t *testing.T) {
+	if want := filepath.Join("/run/user", strconv.Itoa(os.Getuid())); runUserDir() != want {
+		t.Errorf("runUserDir = %q, want %q", runUserDir(), want)
 	}
 }

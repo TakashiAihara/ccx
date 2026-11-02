@@ -487,9 +487,21 @@ func configPath(getenv func(string) string) string {
 	return filepath.Join(xdg, "ccx", "config.toml")
 }
 
+// runUserDir is the runtime dir systemd gives this user (/run/user/<uid>). A
+// var so tests can point it at a temp dir.
+var runUserDir = func() string { return filepath.Join("/run/user", strconv.Itoa(os.Getuid())) }
+
 // socketPath is CCX_SOCKET, else $XDG_RUNTIME_DIR/ccx/ccx-agent.sock, else
-// ~/.ccx/run/ccx-agent.sock. Under a user-owned dir so the socket is user-owned and
-// the hook→ccx-agent path is trivially permitted (#90).
+// /run/user/<uid>/ccx/ccx-agent.sock if it exists, else ~/.ccx/run/ccx-agent.sock.
+// Under a user-owned dir so the socket is user-owned and the hook→ccx-agent path
+// is trivially permitted (#90).
+//
+// The /run/user step is for shells without XDG_RUNTIME_DIR (cron): a ccx-agent
+// run by a systemd user unit listens there, and without it a hook from such a
+// shell misses the socket and spools to incoming/ (#258). It only follows a
+// socket that is already there, so a serve started from such a shell with no
+// systemd agent still listens under ~/.ccx/run. The CLI's defaultSocketPath
+// (apps/cli/src/agent.ts) resolves the same way.
 func socketPath(getenv func(string) string) string {
 	if p := getenv("CCX_SOCKET"); p != "" {
 		return p
@@ -497,8 +509,16 @@ func socketPath(getenv func(string) string) string {
 	if run := getenv("XDG_RUNTIME_DIR"); run != "" {
 		return filepath.Join(run, "ccx", "ccx-agent.sock")
 	}
+	if systemd := filepath.Join(runUserDir(), "ccx", "ccx-agent.sock"); exists(systemd) {
+		return systemd
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".ccx", "run", "ccx-agent.sock")
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // channelSocketPath is CCX_CHANNEL_SOCKET, else ccx-channel.sock next to the
