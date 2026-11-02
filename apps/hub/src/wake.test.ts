@@ -197,6 +197,8 @@ function errorLines() {
 async function linesAfter(lines: string[], ms = 1000) {
   const end = Date.now() + ms;
   while (Date.now() < end && lines.length === 0) await Bun.sleep(10);
+  // A second line logged late is a failure too, so wait a little after the first
+  await Bun.sleep(100);
   return lines;
 }
 

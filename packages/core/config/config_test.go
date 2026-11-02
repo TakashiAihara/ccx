@@ -453,8 +453,8 @@ func TestAPIURLPort(t *testing.T) {
 	}
 }
 
-// The center (apps/hub/src/store.ts apiOrigin) reads the same table, so a value
-// one side refuses the other refuses too (#273).
+// The center (apps/hub/src/store.ts apiOrigin) reads the same table, so the two
+// agree on these values (#273). Host characters outside it can still differ.
 func TestAPIURLSharedCases(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("testdata", "api_url_cases.json"))
 	if err != nil {

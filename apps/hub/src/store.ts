@@ -187,11 +187,12 @@ function apiURLOf(l: IncomingEvent): string | null {
 }
 
 /**
- * The same rule as the agent's apiURLFrom (packages/core/config/config.go), so a value one side
- * refuses the other refuses too. Both read packages/core/config/testdata/api_url_cases.json.
+ * The shape rule of the agent's apiURLFrom (packages/core/config/config.go): scheme, "//", no path,
+ * query, fragment or userinfo, and the port. Both sides read packages/core/config/testdata/api_url_cases.json.
  * WHATWG URL alone is looser: it resolves "/.." and "/%2e" to "/", reads "http:/h" and "http:\\h"
  * as "http://h", drops tabs and newlines, and takes an empty or zero-led port.
- * So the shape is checked on the string first, and new URL only normalizes the host.
+ * So the shape is checked on the string first, and new URL only reads and normalizes the host.
+ * Which characters a host may hold still differs: Go and WHATWG each apply their own host grammar.
  */
 export function apiOrigin(value: string): string | null {
   const raw = value.trim();
@@ -202,20 +203,14 @@ export function apiOrigin(value: string): string | null {
   // An authority this does not split ("[::1]x", "[::1") is left to new URL, which refuses it
   const port = /^(?:\[[^\]]*\]|[^:[\]]*)(?::(.*))?$/.exec(m[2]!)?.[1];
   if (port !== undefined && !/^[1-9][0-9]*$/.test(port)) return null;
+  // The string checks above already fix the scheme, the empty path and the absent userinfo
   try {
     const u = new URL(raw);
-    if (
-      (u.protocol === "http:" || u.protocol === "https:") &&
-      u.pathname === "/" &&
-      u.username === "" &&
-      u.password === ""
-    ) {
-      return `${u.protocol}//${u.host}`;
-    }
+    return `${u.protocol}//${u.host}`;
   } catch {
-    // 相対や scheme の無い文字列は URL にならない。下で null
+    // A host WHATWG cannot read ("[::1]x", "999.1.1.1")
+    return null;
   }
-  return null;
 }
 
 /** 一覧は `{"session_ids": ["...", ...]}` で、それ以外の形は読めていないとみなす */

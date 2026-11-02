@@ -1,6 +1,6 @@
 /**
- * The center keeps an agent's api_url only under the same rule the agent applies to its own
- * config (packages/core/config/config.go apiURLFrom). Both sides read one table (#273).
+ * The center keeps an agent's api_url under the shape rule the agent applies to its own config
+ * (packages/core/config/config.go apiURLFrom). Both sides read one table and agree on it (#273).
  */
 
 import { expect, test } from "bun:test";

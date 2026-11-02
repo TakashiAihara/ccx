@@ -202,5 +202,17 @@
   {
     "in": "https:/h",
     "ok": false
+  },
+  {
+    "in": "xhttp://h",
+    "ok": false
+  },
+  {
+    "in": "ws://h",
+    "ok": false
+  },
+  {
+    "in": "http://h:80/x",
+    "ok": false
   }
 ]
