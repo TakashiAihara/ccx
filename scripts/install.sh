@@ -186,18 +186,30 @@ fi
 
 systemctl --user daemon-reload
 # ccxd.service is this unit's old name (#131). Both own RuntimeDirectory=ccx, so
-# while both exist, stopping either one removes the other's sockets (#196). Take
-# the old one out before the restart below, which then makes the dir last.
-# An assignment of its own, so a failing systemctl stops the install (set -e).
-ccxd_state=$(systemctl --user show -p LoadState --value ccxd.service)
-case "$ccxd_state" in
-  not-found) ;;
-  loaded)
-    systemctl --user disable --now ccxd.service
-    echo "ccx: stopped and disabled ccxd.service, the old name of ccx-agent; its unit file is left in place for you to remove" >&2
+# while both run, stopping either one removes the other's sockets (#196). Stop and
+# disable the old one before the restart below, which then makes the dir last.
+# Whether it runs is read apart from whether its file is there: a unit whose file
+# was deleted, or that was masked, can still be running.
+# Assignments of their own, so a failing systemctl stops the install (set -e).
+ccxd_active=$(systemctl --user show -p ActiveState --value ccxd.service)
+ccxd_file=$(systemctl --user show -p UnitFileState --value ccxd.service)
+ccxd_done=""
+case "$ccxd_active" in
+  inactive|failed) ;;
+  *)
+    systemctl --user stop ccxd.service
+    ccxd_done="stopped"
     ;;
-  *) echo "ccx: ccxd.service, the old name of ccx-agent, is $ccxd_state; it shares /run/user/<uid>/ccx with ccx-agent, so if it ever runs, stopping it removes ccx-agent's sockets. Remove its unit file" >&2 ;;
 esac
+case "$ccxd_file" in
+  enabled|enabled-runtime|linked|linked-runtime)
+    systemctl --user disable ccxd.service
+    ccxd_done="${ccxd_done:+$ccxd_done and }disabled"
+    ;;
+esac
+if [ -n "$ccxd_done" ]; then
+  echo "ccx: $ccxd_done ccxd.service, the old name of ccx-agent; remove its unit file if one is left" >&2
+fi
 systemctl --user enable ccx-agent
 # restart, not start: on an upgrade the running agent must pick up the new binary.
 systemctl --user restart ccx-agent
