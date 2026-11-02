@@ -120,11 +120,16 @@ ccx session ls                # every session the center knows about, newest act
 ccx session ls --active       # only those with no SessionEnd observed
 ccx session show <id>         # what one session did, newest first
 ccx session show <id> --hook PostToolUse --payload
+ccx session show <id> -m <machine> -u <user>   # when the id exists in several streams
 ```
 
 `--active` means exactly one thing: no `SessionEnd` has been observed. It is **not** a liveness
 check — a session whose machine lost its ccx-agent, or that was killed, never sends one either. Read the
 age column alongside it.
+
+The center keys a session by (machine, user, session id). When the same id shows up for several
+machines or users, `ccx session show` lists them and exits 1 instead of interleaving their events;
+pick one with `-m` / `-u`. `--json` still returns them all, each event carrying its machine and user.
 
 ### What ccx holds about a session
 
