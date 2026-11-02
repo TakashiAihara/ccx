@@ -295,9 +295,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			s.ToolRunning = len(pending) > 0
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
-			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
-				// Channel events are meta records too, and a comment arriving on
-				// akapen is the session being used.
+			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "" || isCrossSessionMessage(rec.Message.Content)) {
+				// Channel events and cross-session messages are meta records too: a
+				// comment arriving on akapen, or another session asking for work, is
+				// the session being used.
 				inBeat = false
 			}
 		case "assistant":
@@ -439,6 +440,21 @@ func channelTag(content json.RawMessage) string {
 		return s[:i+1]
 	}
 	return ""
+}
+
+// crossSessionIntro is the line Claude Code puts before a cross-session message's
+// tag (observed 2026-09-27); older records start at the tag itself.
+const crossSessionIntro = "Another Claude session sent a message:\n"
+
+// isCrossSessionMessage is a message another session sent, as Claude Code writes
+// it. Only the start is matched, as for channelTag: a person or a tool quoting the
+// tag is not one.
+func isCrossSessionMessage(content json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(content, &s) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimPrefix(s, crossSessionIntro), "<cross-session-message ")
 }
 
 func isToolResult(content json.RawMessage) bool {
