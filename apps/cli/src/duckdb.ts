@@ -65,7 +65,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const sessionGlob = opts.session ? `session_id=${opts.session.replaceAll("*", "")}*` : "*";
   const files = `${base}/machine=*/user=*/${sessionGlob}/transcript.jsonl`;
   // machine / user / session_id come from the segments after `base`, never from the prefix (#171): hive_partitioning
-  // takes the first `key=value` in the whole path, so none of the views read its columns (read_json may still add them).
+  // takes the first `key=value` in the whole path, so no view reads the hive columns DuckDB adds on its own.
   // The regexp is tied to the file at the end of the path: a glob `*` stays within one segment, so the three
   // directories above the leaf are the ones after `base`, whatever DuckDB spells the prefix as in `filename`
   const PATH = "__ccx_path";
@@ -86,7 +86,8 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     );
     await c.run(
       // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
-      // hive_partitioning did; COLUMNS rather than EXCLUDE because EXCLUDE fails on a column that no record has.
+      // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
+      // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
       // The path columns stay in hive_partitioning's (alphabetical) order
       `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
          ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
@@ -100,7 +101,8 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // read_json_objects ではなく read_text + json_valid: 壊れた state.json が 1 つあると read_json_objects は
   // クエリ全体を止め、既定の検索 (transcript も含む) が丸ごと落ちる。壊れたものはその 1 件だけ落とす。
   // archived は JSON の true だけを真にする (normalizeDeclared と同じ。"true" / 1 は偽)。キャストで全体を止めない。
-  // read_text has no hive_partitioning; the path columns come from the same end-anchored regexp as the other views
+  // read_text also auto-adds first-match hive columns; the inner SELECT keeps only filename and content, and the path
+  // columns come from the same end-anchored regexp as the other views
   const states = `${base}/machine=*/user=*/${sessionGlob}/state.json`;
   await c.run(
     `CREATE VIEW sessions AS SELECT session_id, machine, "user", json->>'label' AS label, json->>'task' AS task, json->>'role' AS role,
