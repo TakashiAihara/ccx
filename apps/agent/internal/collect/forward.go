@@ -200,13 +200,22 @@ func (l *forwardLoop) run(ctx context.Context) {
 	}
 }
 
-// refusedForContent reports whether the center refused the event itself, so
-// that sending the same bytes again cannot succeed. The center answers that way
-// for an event it will not store (a missing event_id or origin, apps/hub). Every
-// other error, Unauthenticated included, can clear without the event changing
-// (the center comes back, the token is fixed), so those events stay and are
-// retried.
+// refusedForContent reports whether the center answered that it will not take
+// the event, so sending the same bytes again cannot succeed. The center answers
+// InvalidArgument for an event it will not store (a missing event_id or origin,
+// apps/hub/src/services.ts). Its Ingest does not answer FailedPrecondition today;
+// #126 settled on treating it the same way, as "do not resend as is".
+//
+// Only an error the center sent counts. The Connect client also makes up
+// InvalidArgument itself when it cannot read the reply (a body that is not the
+// expected message), and then the center may well have stored the event; that
+// stays in the queue and is retried like every other error. So do
+// Unauthenticated, Unavailable and timeouts, which clear without the event
+// changing (the token is fixed, the center comes back).
 func refusedForContent(err error) bool {
+	if !connect.IsWireError(err) {
+		return false
+	}
 	switch connect.CodeOf(err) {
 	case connect.CodeInvalidArgument, connect.CodeFailedPrecondition:
 		return true

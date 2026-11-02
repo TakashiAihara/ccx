@@ -133,6 +133,22 @@ describe("agentStatus", () => {
     expect(st.spooled).toBe(1);
   });
 
+  test("`ccx agent status` prints the dead count and where they are", async () => {
+    const spool = join(dir, "spool");
+    mkdirSync(join(spool, "dead"), { recursive: true });
+    for (const id of ["a", "b"]) writeFileSync(join(spool, "dead", `00000000000000000001-${id}.pb`), "x");
+
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "agent", "status"], {
+      env: { ...process.env, XDG_CONFIG_HOME: dir, CCX_CONFIG: join(dir, "none.toml"), CCX_HUB_URL: "", CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(out).toMatch(new RegExp(`dead +2 refused by the center, set aside in ${join(spool, "dead")} \\(not retried\\)`));
+  });
+
   test("hub が設定されていて届かなければ false", async () => {
     const st = await agentStatus("http://127.0.0.1:1", {
       CCX_SOCKET: join(dir, "n.sock"),

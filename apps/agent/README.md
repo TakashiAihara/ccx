@@ -148,11 +148,12 @@ could block a session on a timeout.
   the center acked but before the spool file was deleted); the center drops the
   duplicate by `event_id`. Duplicates are acceptable; losing an event is not.
 - **An event the center refuses does not hold the rest back.** When the center
-  answers `InvalidArgument` or `FailedPrecondition` (it will not store that event,
-  e.g. its origin is empty), sending it again cannot succeed, so ccx-agent moves it
+  itself answers `InvalidArgument` or `FailedPrecondition` (it will not store that
+  event, e.g. its origin is empty), sending it again cannot succeed, so ccx-agent moves it
   to `~/.ccx/spool/dead/`, logs one line, and goes on with the next event. It is
   not retried; `ccx agent status` shows how many are there. Every other error
-  (center down, timeout, `Unauthenticated`) keeps the event and retries it.
+  (center down, timeout, `Unauthenticated`, a reply the client could not read) keeps
+  the event and retries it.
 - **It forwards bytes; it does not read them.** The payload is opaque to ccx-agent —
   there is no branch in the forward path that depends on its content
   (`docs/design/scope.md`: COLLECT + CARRY, never CONSULT). The parsed shape

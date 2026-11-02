@@ -64,6 +64,20 @@ func (f *scriptedForwarder) lastCall(p string) time.Time {
 	return f.at[p]
 }
 
+// wireError is an error as the Connect client returns it when the center itself
+// answered with code: it comes over the real wire from a testcenter.
+func wireError(t *testing.T, code connect.Code) error {
+	t.Helper()
+	c, url := testcenter.Start()
+	defer c.Close()
+	c.Refuse("refuse me", code)
+	err := NewForwarder(url, "").Forward(context.Background(), &ccxv1.Event{EventId: "w", Payload: []byte("refuse me")})
+	if connect.CodeOf(err) != code || !connect.IsWireError(err) {
+		t.Fatalf("precondition: want a wire error with %v, got %v", code, err)
+	}
+	return err
+}
+
 func repeat(err error, n int) []error {
 	out := make([]error, n)
 	for i := range out {
@@ -138,7 +152,7 @@ func TestForwardLoop_RefusedEventIsSetAsideAndTheQueueMovesOn(t *testing.T) {
 		t.Run(code.String(), func(t *testing.T) {
 			spool, dir := openDeadSpool(t, &ccxv1.Origin{Machine: "m", User: "u"})
 			appendAll(t, spool, "first", "refused", "last")
-			fwd := newScripted(map[string][]error{"refused": {connect.NewError(code, errors.New("no"))}})
+			fwd := newScripted(map[string][]error{"refused": {wireError(t, code)}})
 			loop := newForwardLoop(spool, fwd, quietLog)
 			// The next event goes out at once, without a backoff: a sleep here
 			// would outlast the test.
@@ -174,6 +188,11 @@ func TestForwardLoop_RetryableErrorsKeepTheEvent(t *testing.T) {
 		"deadline":        connect.NewError(connect.CodeDeadlineExceeded, errors.New("slow")),
 		"internal":        connect.NewError(connect.CodeInternal, errors.New("bug")),
 		"plain":           errors.New("dial tcp: connection refused"),
+		// The client makes up InvalidArgument when it cannot read the reply; the
+		// center may have stored the event, so it is not set aside.
+		"client-made invalid_argument":    connect.NewError(connect.CodeInvalidArgument, errors.New("unmarshal message")),
+		"client-made failed_precondition": connect.NewError(connect.CodeFailedPrecondition, errors.New("local")),
+		"wire unavailable":                wireError(t, connect.CodeUnavailable),
 	}
 	for name, ferr := range retryable {
 		t.Run(name, func(t *testing.T) {
@@ -227,7 +246,7 @@ func TestForwardLoop_MoveToDeadFailure_KeepsTheEventAndBacksOff(t *testing.T) {
 	if err := os.WriteFile(deadPath(dir), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	refuse := connect.NewError(connect.CodeInvalidArgument, errors.New("no"))
+	refuse := wireError(t, connect.CodeInvalidArgument)
 	fwd := newScripted(map[string][]error{"refused": repeat(refuse, 100)})
 	cancel := runLoop(t, newForwardLoop(spool, fwd, quietLog))
 
@@ -251,7 +270,7 @@ func TestForwardLoop_RefusalResetsTheBackoff(t *testing.T) {
 	spool, _ := openDeadSpool(t, &ccxv1.Origin{Machine: "m", User: "u"})
 	appendAll(t, spool, "refused", "next")
 	down := connect.NewError(connect.CodeUnavailable, errors.New("down"))
-	refusedScript := append(repeat(down, 10), connect.NewError(connect.CodeInvalidArgument, errors.New("no")))
+	refusedScript := append(repeat(down, 10), wireError(t, connect.CodeInvalidArgument))
 	fwd := newScripted(map[string][]error{"refused": refusedScript, "next": {down}})
 	loop := newForwardLoop(spool, fwd, quietLog)
 	loop.minBackoff = time.Millisecond
