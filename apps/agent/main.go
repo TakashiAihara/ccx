@@ -105,11 +105,35 @@ func cmdServe() int {
 
 	logger := func(format string, a ...any) { log.Printf(format, a...) }
 
-	// Assemble the enabled concerns (ADR 0002). Only collect is built in #90;
-	// carry and persistence append here the same way when they exist.
+	// Before assemble logs the startup line, so a supervisor that signals on
+	// seeing it gets a clean shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Keep the decisions in assemble, where the tests see them (#257): nothing
+	// drives cmdServe itself with a Config, so a check added here goes untested.
+	concerns, err := assemble(cfg, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
+		return 1
+	}
+
+	if err := concern.Run(ctx, logger, concerns...); err != nil {
+		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// assemble builds the enabled concerns (ADR 0002) and logs the one startup line
+// that says which of them serve runs. Only collect is built in #90; carry and
+// persistence append here the same way when they exist. It is apart from
+// cmdServe so a test can hand it a Config without starting any concern (#257);
+// building collect still creates its spool directory.
+func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern, error) {
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
-	// Without a machine and a user name collect would only wedge (#126). Turn it off
+	// Without a machine or a user name collect would only wedge (#126). Turn it off
 	// and keep the rest: heartbeat and the API do not need them. The live transcript
 	// goes with it (it rides on collect), and `ccx agent status` then reports
 	// ccx-agent as not running, since that is the hook socket it probes.
@@ -119,8 +143,7 @@ func cmdServe() int {
 	} else if cfg.Concerns.Collect {
 		c, err := collect.New(cfg, logger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ccx-agent: collect: %v\n", err)
-			return 1
+			return nil, fmt.Errorf("collect: %w", err)
 		}
 		concerns = append(concerns, c)
 		srv.Collect = c
@@ -167,17 +190,10 @@ func cmdServe() int {
 	// Not a toggle: the API only reads, and it is how a person sees the rest.
 	concerns = append(concerns, api.New(cfg, srv, logger))
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	logger("ccx-agent serving (machine=%s user=%s hub=%q collect=%v heartbeat=%v interval=%v default=%v)",
 		cfg.Machine, cfg.User, cfg.HubURL, cfg.Concerns.Collect,
 		cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval, cfg.Heartbeat.Default)
-	if err := concern.Run(ctx, logger, concerns...); err != nil {
-		fmt.Fprintf(os.Stderr, "ccx-agent: %v\n", err)
-		return 1
-	}
-	return 0
+	return concerns, nil
 }
 
 // startLiveTranscript builds the live transcript concern (#120,
