@@ -106,6 +106,26 @@ describe("unpushedLanded (#220)", () => {
     });
   });
 
+  test("the mirror is read under safe.bareRepository=explicit (#275)", async () => {
+    const keys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] as const;
+    const saved = keys.map((k) => process.env[k]);
+    const w = await clone("explicit");
+    await git(["switch", "--quiet", "-c", "feat"], w);
+    await commit(w, { "x.txt": "explicit one\n" }, "first");
+    await landOnMain({ "x.txt": "explicit one\n" });
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "safe.bareRepository";
+    process.env.GIT_CONFIG_VALUE_0 = "explicit";
+    try {
+      expect(await unpushedLanded(w, { mirror: { path: remote, branch: "main" } })).toEqual({
+        landed: true,
+        how: "every changed file's content reached the mirror's main after the branch point",
+      });
+    } finally {
+      keys.forEach((k, i) => (saved[i] === undefined ? delete process.env[k] : (process.env[k] = saved[i])));
+    }
+  });
+
   test("content that only looks upstream is not landed: an old version, a rename, an empty or copied file, a non-ASCII name, another branch", async () => {
     // main に v1 → v2 と入っている old.txt
     await landOnMain({ "old.txt": "v1\n" });

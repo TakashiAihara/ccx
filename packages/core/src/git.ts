@@ -39,7 +39,7 @@ async function run(argv: string[]): Promise<string> {
   return stdout.trim();
 }
 
-/** リモートの default branch (HEAD が指す先) を得る。 */
+/** リモートの default branch (HEAD が指す先) を得る。gitDir は bare repo (mirror) で、work tree は渡せない。 */
 export async function defaultBranch(gitDir: string): Promise<string> {
   try {
     const head = await gitBare(["symbolic-ref", "--short", "HEAD"], gitDir);
