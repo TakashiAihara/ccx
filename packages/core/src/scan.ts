@@ -209,7 +209,8 @@ async function subdirs(dir: string): Promise<string[]> {
  * Without `*` or `?` the pattern is an exact branch name: a substring match would make
  * `main` also select `fix/main-loop`. `*` matches any run of characters including `/`, because
  * branch names are namespaced with `/` and `fix/*` is meant to cover `fix/a/b` as well. `?`
- * matches one character. Everything else is literal. A detached HEAD (null) never matches.
+ * matches one character. Everything else is literal. A detached HEAD (null) never matches; that
+ * includes a repodir in the middle of a rebase, where `git branch --show-current` prints nothing.
  */
 export function branchMatches(pattern: string, branch: string | null): boolean {
   if (branch === null) return false;

@@ -189,6 +189,7 @@ describe("branch filter (#280)", () => {
     expect(branchMatches("fix/*-authz", "fix/-authz")).toBe(true);
     expect(branchMatches("fix/*", "feat/a")).toBe(false);
     expect(branchMatches("*-authz", "fix/authz-2")).toBe(false);
+    expect(branchMatches("main*", "fix/main-loop")).toBe(false);
   });
 
   test("? matches exactly one character", () => {

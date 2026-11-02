@@ -1,6 +1,6 @@
 /**
  * Runs `ccx rd ls` as a CLI to pin the --branch wiring (#280): the flag reaches the scan for
- * both the table and --json, and the table shows the current branch.
+ * both the table and --json, and an empty pattern is refused.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -89,4 +89,7 @@ test("rd ls --branch keeps only repodirs on a matching branch, in the table and 
 
   const none = await ccxLs("--branch", "nope");
   expect([none.code, none.out, none.err.trim()]).toEqual([0, "", "no repodirs"]);
+
+  const empty = await ccxLs("--branch", "");
+  expect([empty.code, empty.out, empty.err.trim()]).toEqual([1, "", "--branch needs a branch name or glob"]);
 });
