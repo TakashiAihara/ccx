@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,14 +105,50 @@ func TestAssembleWithOriginBuildsCollect(t *testing.T) {
 	}
 }
 
+// What rides on collect goes with it: with an http hub and the live transcript
+// on, a missing user name builds neither the live transcript nor resume, while
+// the same Config with both names builds both. Nothing is run, so the
+// unreachable hub is never dialled and the stub ccx never executed.
+func TestAssembleWithoutOriginDropsWhatRidesOnCollect(t *testing.T) {
+	// Resume is built only when it finds a ccx CLI to resume with.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "ccx"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	withHub := func(cfg config.Config) config.Config {
+		cfg.HubURL = "http://127.0.0.1:1"
+		cfg.Transcript.Live = true
+		return cfg
+	}
+
+	names, _ := runAssemble(t, withHub(assembleConfig(t, "box", "")))
+	for _, gone := range []string{"collect", "livetranscript", "resume"} {
+		if has(names, gone) {
+			t.Errorf("no user: concerns %v: %s is built without an origin", names, gone)
+		}
+	}
+	if !has(names, "api") || !has(names, "heartbeat") {
+		t.Errorf("no user: concerns %v: want the heartbeat and the API", names)
+	}
+
+	names, _ = runAssemble(t, withHub(assembleConfig(t, "box", "alice")))
+	for _, want := range []string{"livetranscript", "resume"} {
+		if !has(names, want) {
+			t.Errorf("both names: concerns %v: want %s, or the check above sees nothing", names, want)
+		}
+	}
+}
+
 // Collect turned off in config is not a missing origin: no reason is logged,
-// and the rest still runs.
+// and the heartbeat and the API still run.
 func TestAssembleCollectOffInConfigSaysNothing(t *testing.T) {
 	cfg := assembleConfig(t, "", "")
 	cfg.Concerns.Collect = false
 	names, logs := runAssemble(t, cfg)
-	if has(names, "collect") || !has(names, "api") {
-		t.Errorf("concerns %v: want api without collect", names)
+	if has(names, "collect") || !has(names, "api") || !has(names, "heartbeat") {
+		t.Errorf("concerns %v: want the heartbeat and the API without collect", names)
 	}
 	if strings.Contains(logs, "collect off") {
 		t.Errorf("logs %q: collect was turned off in config, not for a missing origin", logs)

@@ -124,7 +124,8 @@ func cmdServe() int {
 // assemble builds the enabled concerns (ADR 0002) and logs the one startup line
 // that says which of them serve runs. Only collect is built in #90; carry and
 // persistence append here the same way when they exist. It is apart from
-// cmdServe so a test can hand it a Config without running anything (#257).
+// cmdServe so a test can hand it a Config without starting any concern (#257);
+// building collect still creates its spool directory.
 func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern, error) {
 	var concerns []concern.Concern
 	srv := &api.Server{ClaudeHome: claudeHome()}
