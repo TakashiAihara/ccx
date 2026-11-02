@@ -46,8 +46,9 @@ async function lastFetchedAt(path: string): Promise<Date | null> {
  * "No such remote 'origin'" で終了コード 2 を返すだけで、mirror は origin 不在のまま残る。
  * 失敗した clone の後始末や手作業の復旧で origin が消えていることがあるので、無ければ作る。
  *
- * `git remote add` ではなく config を直接書く。`remote add --mirror=fetch` は refspec と
- * mirror フラグも書くが、この 2 つは refspec 側でまとめて揃えるので、ここでは url だけを書く。
+ * `git remote add` ではなく config を直接書く。`remote add --mirror=fetch` は refspec も書くが
+ * mirror フラグは書かない。refspec と mirror フラグは repairMirrorConfig がまとめて揃えるので、
+ * ここでは url だけを書く。
  */
 async function syncOriginUrl(path: string, current: string | null, url: string): Promise<void> {
   if (current === null) {
@@ -170,7 +171,8 @@ export async function ensureMirror(
 
   // 修復の書き込みが失敗しても、並行する修復が先に書き終えていれば揃っている。それなら進む。
   // 揃っていないまま remote update すると refspec の無い fetch が何も取らずに成功し、
-  // 古い mirror を「更新した」と返してしまう (#77)
+  // 古い mirror を「更新した」と返してしまう (#77)。mirror フラグは fetch には効かないが、
+  // clone --mirror が作るのと同じ形でない mirror を更新済みとは扱わない
   if (repairFailure !== null) {
     const { refspecs, flag } = await readMirrorConfig(path);
     if (!refspecs.includes(MIRROR_REFSPEC) || flag !== "true") {

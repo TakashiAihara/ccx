@@ -641,19 +641,27 @@ describe("safe.bareRepository=explicit (#275)", () => {
       gitBare(["config", "--unset-all", "remote.origin.fetch"], p).then(() => undefined),
     );
 
-    // 警告は修復の失敗直後・読み直しの前に出る。そこで競合相手がロックを手放して書き終えた状態を作る
+    // 警告は修復の失敗直後・読み直しの前に出る。そこで競合相手が書き終えた状態を作る。
+    // ロックは戻しておき、読み直しの代わりに書き込みをやり直す実装なら失敗するようにする
+    const lock = join(path, "config.lock");
     const warnings: string[] = [];
-    const r = await ensureMirror(own, spec(), {
-      force: true,
-      warn: (m) => {
-        warnings.push(m);
-        Bun.spawnSync(["rm", "-f", join(path, "config.lock")]);
-        Bun.spawnSync(["git", "--git-dir", path, "config", "remote.origin.fetch", "+refs/*:refs/*"]);
-      },
-    });
-    expect(r.updated).toBe(true);
-    expect(warnings.length).toBe(1);
-    expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    try {
+      const r = await ensureMirror(own, spec(), {
+        force: true,
+        warn: (m) => {
+          warnings.push(m);
+          Bun.spawnSync(["rm", "-f", lock]);
+          Bun.spawnSync(["git", "--git-dir", path, "config", "remote.origin.fetch", "+refs/*:refs/*"]);
+          Bun.spawnSync(["touch", lock]);
+        },
+      });
+      expect(r.updated).toBe(true);
+      expect(warnings.length).toBe(1);
+      expect(await gitBare(["config", "--get-all", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+      expect(await gitBare(["rev-parse", "refs/heads/main"], path)).toBe(head);
+    } finally {
+      await rm(lock, { force: true });
+    }
   });
 
   test("url の付け替えに失敗しても、警告して元の origin で更新する", async () => {
