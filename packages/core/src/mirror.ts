@@ -81,7 +81,8 @@ async function repairMirrorConfig(path: string): Promise<void> {
     if (!(e instanceof GitError) || e.code !== 1) throw e;
   }
   if (!refspecs.includes(MIRROR_REFSPEC)) {
-    await gitBare(["config", "--add", "remote.origin.fetch", MIRROR_REFSPEC], path);
+    // 並行する修復が同じ行を足して重複させないよう、一致する行があれば 1 行に畳み、無ければ足す
+    await gitBare(["config", "--replace-all", "remote.origin.fetch", MIRROR_REFSPEC, "^\\+refs/\\*:refs/\\*$"], path);
   }
 
   let flag: string | null = null;
@@ -145,7 +146,7 @@ export async function ensureMirror(
     else await syncOrigin(path, url);
   } catch (e) {
     const reason = e instanceof Error ? e.message.split("\n")[0] : String(e);
-    warn(`ccx: warning: could not update the mirror's origin config (${url}): ${reason}`);
+    warn(`ccx: warning: could not update the mirror's origin config (${origin}): ${reason}`);
   }
 
   const fetched = await lastFetchedAt(path);

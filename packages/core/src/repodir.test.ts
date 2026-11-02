@@ -537,7 +537,7 @@ describe("safe.bareRepository=explicit (#275)", () => {
     });
   }
 
-  test("refspec と mirror フラグが別の値の mirror も、mirror の値に直す", async () => {
+  test("別の refspec と mirror=false の mirror に、mirror の refspec を足して mirror=true にする (既存の行は残す)", async () => {
     const own: Config = { ...cfg, root: join(tmp, "wrongval"), mirrorRoot: join(tmp, "wrongval-m") };
     await createRepodir(own, spec(), {}, "0.1.0");
     const path = mirrorPath(own, spec());
@@ -580,5 +580,20 @@ describe("safe.bareRepository=explicit (#275)", () => {
     await createRepodir(own, forge, { refresh: true }, "0.1.0");
     expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(HTTP_FORGE);
     expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+  });
+
+  test("壊れた mirror フラグ (git が exit 128) は上書きせず、警告に落とす", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "badbool"), mirrorRoot: join(tmp, "badbool-m") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "remote.origin.mirror", "maybe"], path);
+    const before = await Bun.file(join(path, "config")).text();
+
+    const warnings: string[] = [];
+    // git 自身も壊れた bool では remote update に失敗する。ここで見るのは警告と config が無傷なこと
+    await ensureMirror(own, spec(), { force: true, warn: (m) => warnings.push(m) }).catch(() => undefined);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("could not update the mirror's origin config");
+    expect(await Bun.file(join(path, "config")).text()).toBe(before);
   });
 });
