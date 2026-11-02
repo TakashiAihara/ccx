@@ -17,7 +17,9 @@ import { ObjectStore } from "@ccx/hub/src/objects.ts";
 import { createApp } from "@ccx/hub/src/server.ts";
 import { ingest } from "@ccx/hub/src/store.ts";
 
-import { AmbiguousSession, showEvents, streamsOf } from "./session-show.ts";
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
+import { AmbiguousSession, hookStreams, showEvents, streamsOf } from "./session-show.ts";
 
 const SID = "0f9a1b2c-2222-4f60-8a7b-9c0d1e2f3a4b";
 const cli = join(import.meta.dir, "index.ts");
@@ -94,6 +96,20 @@ describe("streamsOf", () => {
       { machine: "m1", user: "a" },
       { machine: "m1", user: "b" },
       { machine: "m2", user: "a" },
+    ]);
+  });
+});
+
+describe("hookStreams", () => {
+  test("drops streams holding only declared state; keeps events with no producer (a center older than the field)", () => {
+    const got = hookStreams([
+      { machine: "m1", user: "a", producer: Producer.CLAUDE_CODE_HOOK },
+      { machine: "m2", user: "a", producer: Producer.CCX_SESSION_STATE },
+      { machine: "m3", user: "a", producer: Producer.UNSPECIFIED },
+    ]);
+    expect(got).toEqual([
+      { machine: "m1", user: "a" },
+      { machine: "m3", user: "a" },
     ]);
   });
 });
@@ -212,11 +228,11 @@ describe("showEvents", () => {
     expect(got.map((e) => `${e.machine}:${e.producer}`)).toEqual(["m2:2", "m1:1", "m1:1"]);
   });
 
-  test("marks in the same stream as the hooks change nothing", async () => {
-    ingest(db, [hook("m1", "alice", "SessionStart"), mark("m1", "alice")]);
+  test("marks from another user on the same machine do not make a second stream either", async () => {
+    ingest(db, [hook("m1", "alice", "SessionStart"), mark("m1", "alice"), mark("m1", "bob")]);
 
     const got = await showEvents(client(), { sessionId: SID, includePayload: false });
-    expect(got).toHaveLength(2);
+    expect(got.map((e) => `${e.machine}:${e.user}:${e.producer}`)).toEqual(["m1:bob:2", "m1:alice:2", "m1:alice:1"]);
   });
 
   test("a second stream older than the page but inside the probe window still refuses", async () => {
@@ -265,6 +281,7 @@ describe("ccx session show", () => {
 
     const r = await run([SID, "-u", "ccxu2"]);
     expect(r.code).toBe(0);
+    expect(r.err).toBe("");
     expect(r.out.trim().split("\n")).toEqual([expect.stringMatching(/Z {2}Stop$/)]);
   });
 

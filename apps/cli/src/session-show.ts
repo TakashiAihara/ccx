@@ -47,9 +47,13 @@ export class AmbiguousSession extends Error {
  * only declared-state events (a mark, or the state `ccx tr pull` installed on the machine a session
  * moved to) is an attribute of the session, not a second stream, and refusing on it would break
  * `session show` right after every move.
+ *
+ * It drops declared-state events rather than keeping hook events: a center older than
+ * EventRecord.producer sends no producer (it reads as UNSPECIFIED), and keeping only hooks would then
+ * drop every event and silently stop refusing.
  */
 export function hookStreams(events: readonly (Stream & { producer: Producer })[]): Stream[] {
-  return streamsOf(events.filter((e) => e.producer === Producer.CLAUDE_CODE_HOOK));
+  return streamsOf(events.filter((e) => e.producer !== Producer.CCX_SESSION_STATE));
 }
 
 /** Distinct (machine, user) pairs, sorted so the candidate list reads the same on every run */
