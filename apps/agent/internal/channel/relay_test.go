@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
+	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
 type syncBuf struct {
@@ -106,4 +110,52 @@ func TestRelayWaitsForServe(t *testing.T) {
 	if !strings.Contains(line, `"sid-2"`) {
 		t.Errorf("registration = %q", line)
 	}
+}
+
+// A channel that was registered with one serve registers with the next one after
+// a restart, through the real concern on both ends. The runtime dir is removed
+// first, as in #196 (another unit with RuntimeDirectory=ccx stopped); the relay
+// does not depend on it, and this test does not tell it apart from a plain restart.
+func TestRelayRegistersAgainAfterServeRestarts(t *testing.T) {
+	// heartbeat.New reads CLAUDE_CONFIG_DIR, else the real ~/.claude.
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	dir := filepath.Join(testsock.Dir(t), "ccx")
+	sock := filepath.Join(dir, "ccx-channel.sock")
+	cfg := config.Config{ChannelSocketPath: sock, Heartbeat: config.Heartbeat{Default: true, Interval: 50 * time.Minute}}
+	const sid = "00000000-0000-4000-8000-000000000196"
+	start := func() (*heartbeat.Concern, func()) {
+		c := heartbeat.New(cfg, t.Logf)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { _ = c.Run(ctx); close(done) }()
+		return c, func() { cancel(); <-done }
+	}
+	waitRegistered := func(c *heartbeat.Concern, what string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !c.Status(sid, "").Registered {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the channel never registered", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	old, stopOld := start()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relay(ctx, sock, sid, "", NewServer("ccx", "0", &syncBuf{}), t.Logf, 50*time.Millisecond)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	waitRegistered(old, "first serve")
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	stopOld()
+	restarted, stopRestarted := start()
+	defer stopRestarted()
+	waitRegistered(restarted, "restarted serve")
 }
