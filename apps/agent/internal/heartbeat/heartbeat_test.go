@@ -131,7 +131,7 @@ func TestScanTranscript(t *testing.T) {
 	for _, next := range []string{human, otherChan, crossMsg, crossIntro} {
 		s = mustScan(t, tr+rec("user", "11:00:00", next)+rec("assistant", "11:00:02", reply))
 		if !s.LastReal.Equal(at("11:00:02")) {
-			t.Errorf("after %s: LastReal = %v, want 11:00:02", next[:30], s.LastReal)
+			t.Errorf("after %s: LastReal = %v, want 11:00:02", next[min(51, len(next)):], s.LastReal)
 		}
 	}
 }

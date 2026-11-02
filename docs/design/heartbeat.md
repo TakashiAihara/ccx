@@ -150,12 +150,12 @@ sequenceDiagram
 | `[heartbeat] enabled = false`, or `interval = "off"` | turned off for the machine |
 
 "Real use" is any record outside a heartbeat turn. A heartbeat turn runs from its user record to the
-next user prompt, channel event that is not a heartbeat, or cross-session message. Only the opening tag of an `isMeta` channel
-event is matched, and the attribute name whole (`event_kind="heartbeat"` is not it), so a person or a
-tool quoting the attribute is not a heartbeat. A cross-session message is matched the same way, on the
-start of the `isMeta` record (`<cross-session-message `, after the `Another Claude session sent a
-message:` line when there is one). Without it, a session driven by other sessions (a manager) looked
-idle while it worked on their messages and lost keepalive after `CCX_HEARTBEAT_MAX_IDLE` (#184).
+next user prompt, channel event that is not a heartbeat, or cross-session message. Only the opening
+tag of an `isMeta` channel event is matched, and the attribute name whole (`event_kind="heartbeat"` is
+not it), so a person or a tool quoting the attribute is not a heartbeat. A cross-session message is
+matched the same way, on the start of the `isMeta` record (`<cross-session-message `, after the
+`Another Claude session sent a message:` line when there is one), so a session driven by other
+sessions (a manager) is in use while it works on their messages.
 
 The clock is the start of the last answered request: the first user record up the `parentUuid` chain
 of the response's first record (attachments sit in between). The cache is read when a request starts,

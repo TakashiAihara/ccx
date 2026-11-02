@@ -234,8 +234,8 @@ func (h *Heartbeat) read() (Scan, bool) {
 }
 
 // ScanTranscript walks the records in order. A heartbeat turn runs from a user
-// record carrying Marker to the next user prompt that does not; nothing inside
-// it counts as the session being used.
+// record carrying Marker to the next user prompt, other channel event or
+// cross-session message; nothing inside it counts as the session being used.
 func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
@@ -443,7 +443,8 @@ func channelTag(content json.RawMessage) string {
 }
 
 // crossSessionIntro is the line Claude Code puts before a cross-session message's
-// tag (observed 2026-09-27); older records start at the tag itself.
+// tag (the shape reported in #184). A record starting at the tag is taken as one
+// too.
 const crossSessionIntro = "Another Claude session sent a message:\n"
 
 // isCrossSessionMessage is a message another session sent, as Claude Code writes
