@@ -63,7 +63,7 @@ handler on two listeners:
   uses. With serve down, `ccx-agent status` prints nothing and exits 1 (a
   malformed session id is 2, checked before dialing) — there is no fallback that
   reads the files some other way. The client finds the socket from the
-  environment only (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
+  environment and the filesystem, never config (`CCX_API_SOCKET`, else next to `CCX_SOCKET`, else under
   `XDG_RUNTIME_DIR`, else `/run/user/<uid>/ccx` if a systemd-run agent's socket
   is there, else `~/.ccx/run`):
   set these the same way for serve (its systemd unit) and for the shell the

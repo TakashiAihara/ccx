@@ -266,8 +266,8 @@ func TestAPI_SocketAndListen(t *testing.T) {
 	}
 	envOnly := env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/7", "CCX_CONFIG": tomlPath})
 	anyGit := func(string) string { return "/from-git.sock" }
-	if full, err := load(envOnly, anyGit, fixedHost("h")); err != nil || full.APISocketPath != apiSocketPath(envOnly) {
-		t.Errorf("load = %q, env-only = %q (%v)", full.APISocketPath, apiSocketPath(envOnly), err)
+	if full, err := load(envOnly, anyGit, fixedHost("h")); err != nil || full.APISocketPath != apiSocketPath(envOnly, socketPath(envOnly)) {
+		t.Errorf("load = %q, env-only = %q (%v)", full.APISocketPath, apiSocketPath(envOnly, socketPath(envOnly)), err)
 	}
 	t.Setenv("CCX_API_SOCKET", "/e/a.sock")
 	if got := APISocket(); got != "/e/a.sock" {
@@ -512,5 +512,33 @@ func TestSocketPath_WithoutRuntimeDir_FollowsASystemdAgentsSocket(t *testing.T) 
 func TestRunUserDir_IsThisUsersRuntimeDir(t *testing.T) {
 	if want := filepath.Join("/run/user", strconv.Itoa(os.Getuid())); runUserDir() != want {
 		t.Errorf("runUserDir = %q, want %q", runUserDir(), want)
+	}
+}
+
+// ChannelSocket is what a session's channel dials, so it must land where serve
+// listens (load's ChannelSocketPath) and follow the same /run/user step.
+func TestChannelSocket_AgreesWithLoad(t *testing.T) {
+	runUser := t.TempDir()
+	withRunUser(t, runUser)
+	if err := os.MkdirAll(filepath.Join(runUser, "ccx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runUser, "ccx", "ccx-agent.sock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("CCX_SOCKET", "")
+	t.Setenv("CCX_CHANNEL_SOCKET", "")
+	t.Setenv("CCX_CONFIG", "/nonexistent")
+	c, err := load(os.Getenv, noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(runUser, "ccx", "ccx-channel.sock"); ChannelSocket() != want || c.ChannelSocketPath != want {
+		t.Errorf("ChannelSocket = %q, load = %q, want %q", ChannelSocket(), c.ChannelSocketPath, want)
+	}
+	t.Setenv("CCX_CHANNEL_SOCKET", "/x/ch.sock")
+	if ChannelSocket() != "/x/ch.sock" {
+		t.Errorf("override: ChannelSocket = %q", ChannelSocket())
 	}
 }
