@@ -15,7 +15,7 @@
  * 途中の commit (別の remote ブランチに push したものを含む) が何をしていても、手元の中身はすべて分岐点にある
  */
 
-import { git } from "./git.ts";
+import { git, gitBare } from "./git.ts";
 
 export type Landed =
   | { landed: true; how: string }
@@ -58,8 +58,10 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
 
   // 分岐点は 1 つ: 比べる ref との merge-base のうち一番新しいもの (他がすべてその祖先)。古い分岐点で比べると、
   // 起点ブランチ (develop 等) にだけある変更を戻したものが「変化なし」や「入っている」に見える
+  // mirror は bare なので -C ではなく --git-dir で開く (safe.bareRepository=explicit。#275)
+  const gitAt = (args: string[], cwd: string) => (mirror && cwd === mirror.path ? gitBare(args, cwd) : git(args, cwd));
   const isAncestor = (a: string, b: string, cwd = path) =>
-    git(["merge-base", "--is-ancestor", a, b], cwd).then(
+    gitAt(["merge-base", "--is-ancestor", a, b], cwd).then(
       () => true,
       () => false,
     );
@@ -75,8 +77,8 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
   if (mirror) {
     // mirror でも起点ブランチを見る (あれば)。repodir が mirror を通さず fetch していて分岐点を mirror が
     // 持っていなければ、mirror は見ない
-    const branch = baseBranch && (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${baseBranch}`], mirror.path).catch(() => "")) ? baseBranch : mirror.branch;
-    const has = await git(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false);
+    const branch = baseBranch && (await gitAt(["rev-parse", "--verify", "--quiet", `refs/heads/${baseBranch}`], mirror.path).catch(() => "")) ? baseBranch : mirror.branch;
+    const has = await gitAt(["cat-file", "-e", `${base}^{commit}`], mirror.path).then(() => true, () => false);
     if (has && (await isAncestor(base, branch, mirror.path))) {
       targets.push({ cwd: mirror.path, ref: branch, name: `the mirror's ${branch}`, base });
     }
@@ -106,14 +108,14 @@ export async function unpushedLanded(path: string, opts: LandedOptions = {}): Pr
       const blob = blobOf.get(f)!;
       if (!blob) {
         // 手元で消したファイル: ref の先にも無ければ入っている
-        const there = await git(["cat-file", "-e", `${t.ref}:${f}`], t.cwd).then(
+        const there = await gitAt(["cat-file", "-e", `${t.ref}:${f}`], t.cwd).then(
           () => true,
           () => false,
         );
         if (there) missing.push(f);
         continue;
       }
-      const seen = await git(["log", `${t.base}..${t.ref}`, "-1", "--format=%H", `--find-object=${blob}`, "--", f], t.cwd);
+      const seen = await gitAt(["log", `${t.base}..${t.ref}`, "-1", "--format=%H", `--find-object=${blob}`, "--", f], t.cwd);
       if (!seen) missing.push(f);
     }
     if (missing.length === 0) return { landed: true, how: `every changed file's content reached ${t.name} after the branch point` };

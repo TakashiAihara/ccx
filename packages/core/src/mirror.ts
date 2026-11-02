@@ -11,7 +11,7 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.ts";
-import { git, GitError } from "./git.ts";
+import { git, gitBare, GitError } from "./git.ts";
 import { cloneUrl, explicitCloneUrl, type Protocol, type RepoSpec } from "./repospec.ts";
 
 export function mirrorPath(cfg: Config, spec: RepoSpec): string {
@@ -54,7 +54,7 @@ async function syncOrigin(path: string, url: string): Promise<void> {
   let current: string | null = null;
   try {
     // remote get-url は insteadOf の書き換えを適用して返すので、保存値そのものを読む
-    current = await git(["config", "--get", "remote.origin.url"], path);
+    current = await gitBare(["config", "--get", "remote.origin.url"], path);
   } catch (e) {
     // git config --get は「キーが無い」を終了コード 1 で表す。壊れた config (128) や他の失敗まで
     // 「origin が無い」と解釈すると、読めなかった設定を黙って上書きしてしまう。1 だけを握る。
@@ -64,13 +64,13 @@ async function syncOrigin(path: string, url: string): Promise<void> {
   if (current === url) return;
 
   if (current === null) {
-    await git(["config", "remote.origin.url", url], path);
-    await git(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
-    await git(["config", "--bool", "remote.origin.mirror", "true"], path);
+    await gitBare(["config", "remote.origin.url", url], path);
+    await gitBare(["config", "remote.origin.fetch", "+refs/*:refs/*"], path);
+    await gitBare(["config", "--bool", "remote.origin.mirror", "true"], path);
     return;
   }
 
-  await git(["remote", "set-url", "origin", url], path);
+  await gitBare(["remote", "set-url", "origin", url], path);
 }
 
 export type EnsureMirrorResult = {
@@ -130,14 +130,14 @@ export async function ensureMirror(
   const stale = opts.force || !fetched || Date.now() - fetched.getTime() > cfg.mirrorMaxAgeMs;
   if (!stale) return { path, created: false, updated: false, origin };
 
-  await git(["remote", "update", "--prune"], path);
+  await gitBare(["remote", "update", "--prune"], path);
   return { path, created: false, updated: true, origin };
 }
 
 /** 保存されている origin の URL (insteadOf を通さない)。無ければ null。壊れた config は投げる */
 async function storedOrigin(path: string): Promise<string | null> {
   try {
-    return await git(["config", "--get", "remote.origin.url"], path);
+    return await gitBare(["config", "--get", "remote.origin.url"], path);
   } catch (e) {
     if (e instanceof GitError && e.code === 1) return null;
     throw e;

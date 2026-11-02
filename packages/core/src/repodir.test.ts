@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import type { Config } from "./config.ts";
 import { DIR_ID_LENGTH, isDirId } from "./dirid.ts";
-import { git } from "./git.ts";
+import { git, gitBare } from "./git.ts";
 import { readMeta, readState } from "./meta.ts";
 import { mirrorPath } from "./mirror.ts";
 import { createRepodir } from "./repodir.ts";
@@ -448,5 +448,66 @@ describe("createRepodir の失敗 (checkout)", () => {
     // checkout で落ちたこと (mirror の取得で落ちたのなら git が自分で片付けるので、この試験にならない)
     await expect(createRepodir(cfg, spec, {}, "0.1.0")).rejects.toThrow(/checkout failed/);
     expect(await readdir(join(cfg.root, "github.com", "test-owner", "nocheckout"))).toEqual([]);
+  });
+});
+
+describe("safe.bareRepository=explicit (#275)", () => {
+  const KEYS = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] as const;
+  const saved = new Map<string, string | undefined>();
+
+  beforeAll(() => {
+    for (const k of KEYS) saved.set(k, process.env[k]);
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "safe.bareRepository";
+    process.env.GIT_CONFIG_VALUE_0 = "explicit";
+  });
+
+  afterAll(() => {
+    for (const k of KEYS) {
+      const v = saved.get(k);
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  test("git -C で bare を開くと拒否される (この環境が explicit を実際に効かせている)", async () => {
+    await expect(git(["symbolic-ref", "HEAD"], source)).rejects.toThrow("safe.bareRepository");
+  });
+
+  test("mirror の作成・再利用・強制更新・default branch の解決がすべて通る", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-root"), mirrorRoot: join(tmp, "explicit-root", ".mirror") };
+
+    const first = await createRepodir(own, spec(), {}, "0.1.0");
+    expect(first.mirror.created).toBe(true);
+
+    const second = await createRepodir(own, spec(), { refresh: true }, "0.1.0");
+    expect(second.mirror.created).toBe(false);
+    expect(second.mirror.updated).toBe(true);
+    expect(await Bun.file(join(second.path, "README.md")).exists()).toBe(true);
+    // 読み損ねた origin は「無い」と同じ exit 1 になり、付け替えの失敗は警告に落ちて成功に見える。保存値で確かめる
+    expect(await gitBare(["config", "--get", "remote.origin.url"], mirrorPath(own, spec()))).toBe(REMOTE);
+  });
+
+  test("origin の付け替え (config の書き込み) も通る", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-root-sw"), mirrorRoot: join(tmp, "explicit-root-sw", ".mirror") };
+    const first = await createRepodir(own, spec(), {}, "0.1.0");
+    expect(await gitBare(["config", "--get", "remote.origin.url"], mirrorPath(own, spec()))).toBe(REMOTE);
+
+    const ssh = await createRepodir(own, spec(), { protocol: "ssh" }, "0.1.0");
+    expect(await gitBare(["config", "--get", "remote.origin.url"], mirrorPath(own, spec()))).toBe(SSH_REMOTE);
+  });
+
+  test("origin が無い mirror にも origin を書き戻せる", async () => {
+    const own: Config = { ...cfg, root: join(tmp, "explicit-root-no"), mirrorRoot: join(tmp, "explicit-root-no", ".mirror") };
+    await createRepodir(own, spec(), {}, "0.1.0");
+    const path = mirrorPath(own, spec());
+    await gitBare(["config", "--unset-all", "remote.origin.url"], path);
+    await gitBare(["config", "--unset-all", "remote.origin.fetch"], path);
+    await gitBare(["config", "--unset-all", "remote.origin.mirror"], path);
+
+    await createRepodir(own, spec(), {}, "0.1.0");
+    expect(await gitBare(["config", "--get", "remote.origin.url"], path)).toBe(REMOTE);
+    expect(await gitBare(["config", "--get", "remote.origin.fetch"], path)).toBe("+refs/*:refs/*");
+    expect(await gitBare(["config", "--get", "remote.origin.mirror"], path)).toBe("true");
   });
 });
