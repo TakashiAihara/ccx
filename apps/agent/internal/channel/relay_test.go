@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
+	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
 type syncBuf struct {
@@ -106,4 +110,50 @@ func TestRelayWaitsForServe(t *testing.T) {
 	if !strings.Contains(line, `"sid-2"`) {
 		t.Errorf("registration = %q", line)
 	}
+}
+
+// The sequence #196 saw: the runtime dir is removed under a running serve
+// (another unit with RuntimeDirectory=ccx stopped), then serve restarts. A channel
+// that was registered with the old serve registers with the new one, through
+// the real concern on both ends.
+func TestRelayRegistersAgainAfterServeRestarts(t *testing.T) {
+	dir := filepath.Join(testsock.Dir(t), "ccx")
+	sock := filepath.Join(dir, "ccx-channel.sock")
+	cfg := config.Config{ChannelSocketPath: sock, Heartbeat: config.Heartbeat{Default: true, Interval: 50 * time.Minute}}
+	const sid = "00000000-0000-4000-8000-000000000196"
+	start := func() (*heartbeat.Concern, func()) {
+		c := heartbeat.New(cfg, t.Logf)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { _ = c.Run(ctx); close(done) }()
+		return c, func() { cancel(); <-done }
+	}
+	waitRegistered := func(c *heartbeat.Concern, what string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !c.Status(sid, "").Registered {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the channel never registered", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	old, stopOld := start()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relay(ctx, sock, sid, "", NewServer("ccx", "0", &syncBuf{}), t.Logf, 50*time.Millisecond)
+		close(done)
+	}()
+	defer func() { cancel(); <-done }()
+	waitRegistered(old, "first serve")
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	stopOld()
+	restarted, stopRestarted := start()
+	defer stopRestarted()
+	waitRegistered(restarted, "restarted serve")
 }

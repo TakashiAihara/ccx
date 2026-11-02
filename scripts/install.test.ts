@@ -30,6 +30,8 @@ beforeEach(() => {
     `#!/bin/sh\necho "systemctl $*" >> "${work}/calls"\n[ "$*" = "--user show-environment" ] && [ -n "$NO_MANAGER" ] && exit 1\n` +
       // user.control と transient は */systemd/user で終わらない。先に並ぶのは本物の UnitPath と同じ
       // 後ろの system 側の dir もテストの中に置く。取り違えたときに本物の /etc に書かないため
+      `[ "$*" = "--user show -p LoadState --value ccxd.service" ] && [ -n "$CCXD_FAIL" ] && exit 1\n` +
+      `[ "$*" = "--user show -p LoadState --value ccxd.service" ] && echo "\${CCXD_STATE:-not-found}"\n` +
       `[ "$*" = "--user show -p UnitPath --value" ] && echo "\${UNIT_PATH:-$HOME/.config/systemd/user.control /run/user/1/systemd/transient $HOME/.config/systemd/user $HOME/etc/systemd/user}"\nexit 0\n`,
   );
   writeFileSync(join(fake, "loginctl"), `#!/bin/sh\necho "loginctl $*" >> "${work}/calls"\n`);
@@ -109,11 +111,43 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
     "systemctl --user show-environment",
     "systemctl --user show -p UnitPath --value",
     "systemctl --user daemon-reload",
+    "systemctl --user show -p LoadState --value ccxd.service",
     "systemctl --user enable ccx-agent",
     "systemctl --user restart ccx-agent",
   ]);
   expect(r.out).toContain("loginctl enable-linger");
+  expect(r.out).not.toContain("ccxd.service");
 
+});
+
+// ccxd.service (the old name) owns the same RuntimeDirectory, so stopping it later would
+// remove the running ccx-agent's sockets (#196). It goes before ccx-agent restarts.
+test.skipIf(!linux)("an old ccxd.service is stopped and disabled before ccx-agent restarts", async () => {
+  const r = await install(["--with-agent"], { CCXD_STATE: "loaded" });
+  expect(r.code).toBe(0);
+  const systemctl = r.calls.split("\n").filter((l) => l.startsWith("systemctl"));
+  expect(systemctl.slice(2)).toEqual([
+    "systemctl --user daemon-reload",
+    "systemctl --user show -p LoadState --value ccxd.service",
+    "systemctl --user disable --now ccxd.service",
+    "systemctl --user enable ccx-agent",
+    "systemctl --user restart ccx-agent",
+  ]);
+  expect(r.out).toContain("stopped and disabled ccxd.service");
+});
+
+test.skipIf(!linux)("a user manager that cannot say whether ccxd.service exists stops the install before the restart", async () => {
+  const r = await install(["--with-agent"], { CCXD_FAIL: "1" });
+  expect(r.code).not.toBe(0);
+  expect(r.calls).not.toContain("restart ccx-agent");
+});
+
+test.skipIf(!linux)("a ccxd.service that cannot be disabled (masked) is warned about, not touched", async () => {
+  const r = await install(["--with-agent"], { CCXD_STATE: "masked" });
+  expect(r.code).toBe(0);
+  expect(r.calls).not.toContain("disable --now");
+  expect(r.out).toContain("ccxd.service, the old name of ccx-agent, is masked");
+  expect(r.calls).toContain("systemctl --user restart ccx-agent");
 });
 
 test.skipIf(!linux)("the unit goes to the user manager's own unit dir, not this shell's idea of it", async () => {

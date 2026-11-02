@@ -185,6 +185,19 @@ if ! PATH=$unit_path command -v herdr >/dev/null 2>&1; then
 fi
 
 systemctl --user daemon-reload
+# ccxd.service is this unit's old name (#131). Both own RuntimeDirectory=ccx, so
+# while both exist, stopping either one removes the other's sockets (#196). Take
+# the old one out before the restart below, which then makes the dir last.
+# An assignment of its own, so a failing systemctl stops the install (set -e).
+ccxd_state=$(systemctl --user show -p LoadState --value ccxd.service)
+case "$ccxd_state" in
+  not-found) ;;
+  loaded)
+    systemctl --user disable --now ccxd.service
+    echo "ccx: stopped and disabled ccxd.service, the old name of ccx-agent; its unit file is left in place for you to remove" >&2
+    ;;
+  *) echo "ccx: ccxd.service, the old name of ccx-agent, is $ccxd_state; it shares /run/user/<uid>/ccx with ccx-agent, so if it ever runs, stopping it removes ccx-agent's sockets. Remove its unit file" >&2 ;;
+esac
 systemctl --user enable ccx-agent
 # restart, not start: on an upgrade the running agent must pick up the new binary.
 systemctl --user restart ccx-agent
