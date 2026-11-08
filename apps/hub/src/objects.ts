@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, type Stats } from "node:fs";
+import { createWriteStream, type Dirent, type Stats } from "node:fs";
 import { appendFile, mkdir, readdir, rename, rm, stat, truncate, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -96,6 +96,29 @@ export type AppendOptions = {
 /** CompleteMultipartUpload の本文から PartNumber を出現順に取る */
 export function partNumbersOf(xml: string): number[] {
   return [...xml.matchAll(/<PartNumber>\s*(\d+)\s*<\/PartNumber>/g)].map((m) => Number(m[1]));
+}
+
+/**
+ * The lower edge of a sorted key walk: keys at or before `after`, and keys under
+ * `skipPrefix`, are not listed.
+ */
+export type WalkBound = { after: string; skipPrefix?: string };
+
+/** Whether `bound` leaves out this key */
+export function excludes(bound: WalkBound, key: string): boolean {
+  if (bound.skipPrefix !== undefined && key.startsWith(bound.skipPrefix)) return true;
+  return key <= bound.after;
+}
+
+/**
+ * Whether `bound` leaves out every key that starts with `p`. When `after` does not start
+ * with `p`, either they differ at a position inside `p` (and every key starting with `p`
+ * sorts on the same side of `after` as `p`), or `after` is a proper prefix of `p` (and
+ * every such key sorts after it). Either way `p < after` decides it.
+ */
+export function excludesAll(bound: WalkBound, p: string): boolean {
+  if (bound.skipPrefix !== undefined && p.startsWith(bound.skipPrefix)) return true;
+  return p < bound.after && !bound.after.startsWith(p);
 }
 
 const isEnoent = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT";
@@ -286,6 +309,11 @@ export class ObjectStore {
     return names.filter(validBucket).sort();
   }
 
+  /** readdir with types. Overridden by tests to see which directories a listing reads */
+  protected async readDirOf(path: string): Promise<Dirent[]> {
+    return readdir(path, { withFileTypes: true });
+  }
+
   /** テストの継ぎ目。stat が読む瞬間を追記の途中に置くため */
   protected async statOf(path: string): Promise<Stats> {
     return stat(path);
@@ -367,34 +395,68 @@ export class ObjectStore {
    * prefix は呼び出し側 (validPrefix) が検証済みのものを渡す。
    */
   async listKeys(bucket: string, prefix: string): Promise<{ key: string; size: number; mtime: Date }[]> {
+    const out: { key: string; size: number; mtime: Date }[] = [];
+    for await (const o of this.walkKeys(bucket, prefix, { after: "" })) out.push(o);
+    return out;
+  }
+
+  /**
+   * Yields the keys under prefix in ascending order, skipping whatever `bound` excludes
+   * without reading or stat-ing it. `bound.skipPrefix` is re-read before every entry, so the
+   * consumer may change it between yields (ListObjectsV2 does, to jump over a common prefix
+   * it has already emitted); `bound.after` must stay fixed for the walk. Stopping the
+   * iteration stops the walk, so a page stats about as many keys as it returns (one look-ahead,
+   * plus one when start-after falls inside a common prefix). Each
+   * directory on the path to the start position is still read in full on every page: the
+   * filesystem has no way to list a directory from a given name (#175).
+   */
+  async *walkKeys(
+    bucket: string,
+    prefix: string,
+    bound: WalkBound,
+  ): AsyncGenerator<{ key: string; size: number; mtime: Date }> {
     const base = join(this.root, bucket);
-    // prefix の最後の `/` までは確実にディレクトリ。そこから歩く
+    // Everything up to the last `/` of prefix is a directory, so the walk starts there
     const slash = prefix.lastIndexOf("/");
     const startRel = slash === -1 ? "" : prefix.slice(0, slash);
-    const out: { key: string; size: number; mtime: Date }[] = [];
 
-    const walk = async (rel: string) => {
-      let entries: import("node:fs").Dirent[];
+    // Every key in directory `d` starts with `d/`, and no sibling name can contain `/`, so
+    // ordering a directory as `d/` against file names gives the order of its keys against them
+    const sortName = (e: Dirent) => (e.isDirectory() ? `${e.name}/` : e.name);
+    const self = this;
+
+    async function* walk(rel: string): AsyncGenerator<{ key: string; size: number; mtime: Date }> {
+      let entries: Dirent[];
       try {
-        entries = await readdir(join(base, rel), { withFileTypes: true });
+        entries = await self.readDirOf(join(base, rel));
       } catch {
         return;
       }
+      // readdir has to read the whole directory, but what lies at or before `after` (which
+      // never moves during a walk) need not be sorted
+      const after = bound.after;
+      entries = entries.filter((e) => {
+        const key = rel ? `${rel}/${e.name}` : e.name;
+        return e.isDirectory() ? !excludesAll({ after }, `${key}/`) : !excludes({ after }, key);
+      });
+      entries.sort((a, b) => {
+        const x = sortName(a);
+        const y = sortName(b);
+        return x < y ? -1 : x > y ? 1 : 0;
+      });
       for (const e of entries) {
         const key = rel ? `${rel}/${e.name}` : e.name;
         if (e.isDirectory()) {
-          if (key.startsWith(prefix) || prefix.startsWith(`${key}/`)) await walk(key);
-        } else if (e.isFile() && key.startsWith(prefix)) {
-          // readdir と stat の間に消えたものは一覧に出さない (消えた以外は投げる)
-          // 追記の途中なら確定した長さ (head と同じ判定)
-          const st = await this.committedStat(bucket, key);
-          if (st) out.push({ key, size: st.size, mtime: st.s.mtime });
+          if ((key.startsWith(prefix) || prefix.startsWith(`${key}/`)) && !excludesAll(bound, `${key}/`)) yield* walk(key);
+        } else if (e.isFile() && key.startsWith(prefix) && !excludes(bound, key)) {
+          // Files removed between readdir and stat are left out (anything else throws).
+          // A file being appended to is listed at its committed length (same as head)
+          const st = await self.committedStat(bucket, key);
+          if (st) yield { key, size: st.size, mtime: st.s.mtime };
         }
       }
-    };
-    await walk(startRel);
-    out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-    return out;
+    }
+    yield* walk(startRel);
   }
 
   async createUpload(bucket: string, key: string): Promise<string> {
@@ -498,28 +560,34 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
     // Contents と CommonPrefixes を 1 本の辞書順に並べてからページを切る。
     // 別々に数えると、delimiter 付きの一覧が max-keys を超えても truncated にならない
     type Entry = { key: string; size: number; mtime: Date } | { commonPrefix: string };
-    const entries: Entry[] = [];
-    const seen = new Set<string>();
-    for (const o of await store.listKeys(bucket, prefix)) {
-      if (delimiter) {
-        const rest = o.key.slice(prefix.length);
-        const i = rest.indexOf(delimiter);
-        if (i !== -1) {
-          const p = prefix + rest.slice(0, i + delimiter.length);
-          if (!seen.has(p)) {
-            seen.add(p);
-            entries.push({ commonPrefix: p });
-          }
-          continue;
-        }
-      }
-      entries.push(o);
-    }
     const nameOf = (e: Entry) => ("commonPrefix" in e ? e.commonPrefix : e.key);
-    const remaining = entries.filter((e) => nameOf(e) > after);
-    const page = remaining.slice(0, maxKeys);
-    const truncated = remaining.length > maxKeys;
-    const last = page.length ? nameOf(page[page.length - 1]!) : "";
+    const commonPrefixOf = (key: string): string | undefined => {
+      if (!delimiter) return undefined;
+      const rest = key.slice(prefix.length);
+      const i = rest.indexOf(delimiter);
+      return i === -1 ? undefined : prefix + rest.slice(0, i + delimiter.length);
+    };
+    // Every key that starts with a common prefix rolls up into that same common prefix (the
+    // first delimiter in the key is the one that ends the common prefix), so once one is
+    // emitted, or was the last entry of the previous page, the walk can jump over its keys
+    const bound: WalkBound = { after };
+    if (commonPrefixOf(after) === after) bound.skipPrefix = after;
+    // The walk is in key order and a common prefix sorts right before its first key, so
+    // entries come out in order; one past max-keys is enough to know the page is truncated
+    const entries: Entry[] = [];
+    for await (const o of store.walkKeys(bucket, prefix, bound)) {
+      const p = commonPrefixOf(o.key);
+      const e: Entry = p === undefined ? o : { commonPrefix: p };
+      if (p !== undefined) bound.skipPrefix = p;
+      if (nameOf(e) <= after) continue;
+      entries.push(e);
+      if (entries.length > maxKeys) break;
+    }
+    const page = entries.slice(0, maxKeys);
+    const truncated = entries.length > maxKeys;
+    // An empty page (max-keys=0) has no position to resume from. An empty token would be read
+    // back as "from the start", so a client that follows IsTruncated would never finish
+    const last = page.length ? nameOf(page[page.length - 1]!) : undefined;
 
     const xml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -533,7 +601,7 @@ export function mountObjects(app: Hono, store: ObjectStore): void {
       q["start-after"] !== undefined ? `<StartAfter>${xmlEscape(enc(q["start-after"]))}</StartAfter>` : "",
       `<KeyCount>${page.length}</KeyCount><MaxKeys>${maxKeys}</MaxKeys>`,
       `<IsTruncated>${truncated}</IsTruncated>`,
-      truncated ? `<NextContinuationToken>${Buffer.from(last).toString("base64url")}</NextContinuationToken>` : "",
+      truncated && last !== undefined ? `<NextContinuationToken>${Buffer.from(last).toString("base64url")}</NextContinuationToken>` : "",
       ...page.map((e) =>
         "commonPrefix" in e
           ? `<CommonPrefixes><Prefix>${xmlEscape(enc(e.commonPrefix))}</Prefix></CommonPrefixes>`

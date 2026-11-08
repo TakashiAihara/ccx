@@ -63,6 +63,7 @@ describe("agentStatus", () => {
     expect(st.socketConnectable).toBe(false);
     expect(st.spooled).toBe(0);
     expect(st.incoming).toBe(0);
+    expect(st.dead).toBe(0);
     // hub 未設定は「届かない」ではない。区別できる形で返す
     expect(st.hubReachable).toBeUndefined();
   });
@@ -114,6 +115,39 @@ describe("agentStatus", () => {
     const st = await agentStatus(undefined, { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool });
     expect(st.spooled).toBe(2);
     expect(st.incoming).toBe(1);
+  });
+
+  test("counts events the center refused, set aside in dead/, on their own (#126)", async () => {
+    // ccx-agent's MoveToDead names them <seq>-<id>.pb
+    const spool = join(dir, "spool");
+    const dead = join(spool, "dead");
+    mkdirSync(dead, { recursive: true });
+    writeFileSync(join(spool, "00000000000000000009.pb"), "x");
+    for (const id of ["a", "b", "c"]) writeFileSync(join(dead, `00000000000000000001-${id}.pb`), "x");
+    // A temp name that still ends in .pb, so only the .tmp- rule leaves it out
+    writeFileSync(join(dead, ".tmp-00000000000000000002.pb"), "x");
+    writeFileSync(join(dead, "note.txt"), "x");
+
+    const st = await agentStatus(undefined, { CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool });
+    expect(st.dead).toBe(3);
+    // What is in dead/ is not waiting to be forwarded
+    expect(st.spooled).toBe(1);
+  });
+
+  test("`ccx agent status` prints the dead count and where they are", async () => {
+    const spool = join(dir, "spool");
+    mkdirSync(join(spool, "dead"), { recursive: true });
+    for (const id of ["a", "b"]) writeFileSync(join(spool, "dead", `00000000000000000001-${id}.pb`), "x");
+
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "agent", "status"], {
+      env: { ...process.env, XDG_CONFIG_HOME: dir, CCX_CONFIG: join(dir, "none.toml"), CCX_HUB_URL: "", CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    expect(err).toBe("");
+    expect(code).toBe(0);
+    expect(out).toMatch(new RegExp(`dead +2 refused by the center, set aside in ${join(spool, "dead")} \\(not retried\\)`));
   });
 
   test("hub が設定されていて届かなければ false", async () => {

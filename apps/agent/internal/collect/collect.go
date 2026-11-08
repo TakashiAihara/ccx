@@ -125,11 +125,7 @@ func (s *Collect) Run(ctx context.Context) error {
 	if others, err := s.spool.OtherIncoming(); err != nil {
 		s.log("could not list %s: %v", s.spool.IncomingDir(), err)
 	} else if len(others) > 0 {
-		shown := others
-		if len(shown) > 10 {
-			shown = append(shown[:10:10], "…")
-		}
-		s.log("left %d entr(ies) in %s that are not events: %s", len(others), s.spool.IncomingDir(), strings.Join(shown, ", "))
+		s.log("left %d entr(ies) in %s that are not events: %s", len(others), s.spool.IncomingDir(), shortList(others))
 	}
 
 	ln, err := s.listen()
@@ -305,13 +301,19 @@ func (s *Collect) handle(conn net.Conn) {
 // the main queue, logging what it did. It returns how many temps were too young to
 // judge. The spool lock must be held.
 func (s *Collect) takeInIncoming(when string) (young int) {
-	r, d, young := s.spool.recoverTemps(s.clock())
+	r, d, young, left := s.spool.recoverTemps(s.clock())
 	if r+d > 0 {
 		s.log("incoming/ %s: took in %d event(s) a hook wrote but did not finish naming, removed %d that were not complete", when, r, d)
 	}
-	if n, err := s.spool.DrainIncoming(); err != nil {
+	if len(left) > 0 {
+		s.log("incoming/ %s: left %d temp(s) in %s that are not regular files, cannot be read, or have no free name: %s", when, len(left), s.spool.IncomingDir(), shortList(left))
+	}
+	n, err := s.spool.DrainIncoming()
+	if err != nil {
 		s.log("drain of incoming/ %s: %v", when, err)
-	} else if n > 0 {
+	}
+	// what a failed drain already moved is in the queue too, so wake for it as well
+	if n > 0 {
 		s.log("drained %d event(s) from the fallback spool %s", n, when)
 		// as handle does; at startup the loop has not started and reads the queue first
 		if s.loop != nil {
@@ -321,10 +323,18 @@ func (s *Collect) takeInIncoming(when string) (young int) {
 	return young
 }
 
+// shortList joins names for a log line, the first 10 of them.
+func shortList(names []string) string {
+	if len(names) > 10 {
+		names = append(names[:10:10], "…")
+	}
+	return strings.Join(names, ", ")
+}
+
 // CheckOrigin says why collect cannot stamp its events, or nil. The center rejects
-// an event without a machine and a user name, and the forward loop would retry it
-// forever, holding back everything behind it (#126). Hooks fall back to incoming/
-// while collect is not running, so refusing to start loses nothing.
+// an event without a machine and a user name, so every event would end up in the
+// spool's dead/ and none would reach the center (#126). Hooks fall back to
+// incoming/ while collect is not running, so refusing to start loses nothing.
 func CheckOrigin(cfg config.Config) error {
 	if cfg.Machine == "" {
 		return fmt.Errorf("no machine name: the hostname could not be read; set CCX_MACHINE or machine in config.toml")

@@ -10,6 +10,7 @@ package testcenter
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"sync"
 
@@ -28,6 +29,31 @@ type Center struct {
 	srv     *httptest.Server
 	// token, when set, is required as a Bearer on Ingest (the center's #158 check).
 	token string
+	// requireOrigin makes Ingest refuse an event without origin.machine or
+	// origin.user, as the real center does (apps/hub/src/services.ts).
+	requireOrigin bool
+	// refuse maps a payload to the code Ingest refuses it with.
+	refuse map[string]connect.Code
+}
+
+// Refuse makes Ingest refuse, with code and for the whole batch, an event whose
+// payload is exactly payload.
+func (c *Center) Refuse(payload string, code connect.Code) {
+	c.mu.Lock()
+	if c.refuse == nil {
+		c.refuse = map[string]connect.Code{}
+	}
+	c.refuse[payload] = code
+	c.mu.Unlock()
+}
+
+// RequireOrigin makes Ingest refuse, with InvalidArgument and for the whole
+// batch, an event whose origin.machine or origin.user is empty, as the real
+// center does.
+func (c *Center) RequireOrigin() {
+	c.mu.Lock()
+	c.requireOrigin = true
+	c.mu.Unlock()
 }
 
 // RequireToken makes Ingest refuse calls without "Authorization: Bearer <token>".
@@ -65,6 +91,18 @@ func (c *Center) Ingest(_ context.Context, req *connect.Request[ccxv1.IngestRequ
 	}
 	if c.token != "" && req.Header().Get("Authorization") != "Bearer "+c.token {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	for _, ev := range req.Msg.GetEvents() {
+		if code, ok := c.refuse[string(ev.GetPayload())]; ok {
+			return nil, connect.NewError(code, fmt.Errorf("event %s refused", ev.GetEventId()))
+		}
+	}
+	if c.requireOrigin {
+		for _, ev := range req.Msg.GetEvents() {
+			if ev.GetOrigin().GetMachine() == "" || ev.GetOrigin().GetUser() == "" {
+				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("event %s: origin.machine and origin.user are required", ev.GetEventId()))
+			}
+		}
 	}
 	var accepted uint32
 	for _, ev := range req.Msg.GetEvents() {

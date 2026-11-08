@@ -234,8 +234,8 @@ func (h *Heartbeat) read() (Scan, bool) {
 }
 
 // ScanTranscript walks the records in order. A heartbeat turn runs from a user
-// record carrying Marker to the next user prompt that does not; nothing inside
-// it counts as the session being used.
+// record carrying Marker to the next user prompt, other channel event or
+// cross-session message; nothing inside it counts as the session being used.
 func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	var s Scan
 	inBeat := false
@@ -295,9 +295,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			s.ToolRunning = len(pending) > 0
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
-			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "") {
-				// Channel events are meta records too, and a comment arriving on
-				// akapen is the session being used.
+			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "" || isCrossSessionMessage(rec.Message.Content)) {
+				// Channel events and cross-session messages are meta records too: a
+				// comment arriving on akapen, or another session asking for work, is
+				// the session being used.
 				inBeat = false
 			}
 		case "assistant":
@@ -439,6 +440,22 @@ func channelTag(content json.RawMessage) string {
 		return s[:i+1]
 	}
 	return ""
+}
+
+// crossSessionIntro is the line Claude Code puts before a cross-session message's
+// tag (the shape reported in #184). A record starting at the tag is taken as one
+// too.
+const crossSessionIntro = "Another Claude session sent a message:\n"
+
+// isCrossSessionMessage is a message another session sent, as Claude Code writes
+// it. Only the start is matched, as for channelTag: a person or a tool quoting the
+// tag is not one.
+func isCrossSessionMessage(content json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(content, &s) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimPrefix(s, crossSessionIntro), "<cross-session-message ")
 }
 
 func isToolResult(content json.RawMessage) bool {

@@ -689,21 +689,22 @@ func TestWakeWithResumeOffIsFailedPrecondition(t *testing.T) {
 
 // The wake as the center sends it: a raw JSON POST with a Bearer, through the real
 // TCP listener and RequireBearer, reaches the Waker once; without the token it does not.
+// The port is chosen by the kernel at bind time and read back from the log line,
+// so no other process can take it between choosing and binding.
 func TestWakeOverTCPAsTheCenterSendsIt(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-
 	work := shortDir(t)
 	w := &countingWaker{}
-	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: addr, APIToken: "tok-tok-tok-tok-tok"}
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: "127.0.0.1:0", APIToken: "tok-tok-tok-tok-tok"}
+	log, listening := tcpAddrFromLog(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = New(cfg, &Server{ClaudeHome: work, Waker: w}, t.Logf).Run(ctx) }()
-	waitDial(t, "tcp", addr)
+	go func() { _ = New(cfg, &Server{ClaudeHome: work, Waker: w}, log).Run(ctx) }()
+	var addr string
+	select {
+	case addr = <-listening:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the TCP side never logged its address")
+	}
 
 	post := func(auth string) int {
 		req, _ := http.NewRequest("POST", "http://"+addr+"/ccx.v1.AgentService/Wake", strings.NewReader("{}"))
@@ -727,4 +728,20 @@ func TestWakeOverTCPAsTheCenterSendsIt(t *testing.T) {
 	if w.n != 1 {
 		t.Errorf("woke %d times, want 1", w.n)
 	}
+}
+
+// tcpAddrFromLog returns a log func for a Concern and a channel that receives the
+// address of the first "api: listening on <addr>" line it logs.
+func tcpAddrFromLog(t *testing.T) (func(string, ...any), <-chan string) {
+	t.Helper()
+	ch := make(chan string, 1)
+	var once sync.Once
+	return func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		t.Log(msg)
+		if rest, ok := strings.CutPrefix(msg, "api: listening on "); ok {
+			addr, _, _ := strings.Cut(rest, " ")
+			once.Do(func() { ch <- addr })
+		}
+	}, ch
 }

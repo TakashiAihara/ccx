@@ -270,7 +270,7 @@ func TestRecoverTemps_TakesInCompleteIncomingTemps(t *testing.T) {
 	}
 	// recovered: the id-named temp, the old-style one, and the one whose name is
 	// taken (under a minted id, not overwriting); dropped: the empty and the partial
-	if r, d, y := s.recoverTemps(time.Now()); r != 3 || d != 2 || y != 1 {
+	if r, d, y, left := s.recoverTemps(time.Now()); r != 3 || d != 2 || y != 1 || len(left) != 0 {
 		t.Fatalf("recovered %d dropped %d young %d, want 3, 2 and 1", r, d, y)
 	}
 	for _, gone := range []string{".tmp-2", ".tmp-3"} {
@@ -297,7 +297,7 @@ func TestRecoverTemps_TakesInCompleteIncomingTemps(t *testing.T) {
 	if err := os.Chtimes(tmp.Name(), old, old); err != nil {
 		t.Fatal(err)
 	}
-	if r, d, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 || d != 0 {
+	if r, d, _, _ := recoverIncomingTemps(incoming, time.Now()); r != 1 || d != 0 {
 		t.Fatalf("recovered %d of the atomicWrite-named temp", r)
 	}
 	if _, err := os.Stat(filepath.Join(incoming, "01a050e6-8722-7c8a-9041-f38193f5a471.raw")); err != nil {

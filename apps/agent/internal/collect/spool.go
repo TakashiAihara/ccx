@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,22 +132,31 @@ func tempPattern(path string) string { return ".tmp-" + filepath.Base(path) + "-
 // createTemp is os.CreateTemp; a test swaps it to see the pattern atomicWrite uses.
 var createTemp = os.CreateTemp
 
-// recoverIncomingTemps renames each settled ".tmp-*" in incoming/ that holds
+// recoverIncomingTemps links each settled ".tmp-*" in incoming/ that holds
 // complete JSON (a hook payload) to a .raw the drain then takes in, and removes
 // the empty or partial ones. A temp named after its event keeps that id, so a copy
 // that also reached the socket (a lost ack) is deduped by the center as usual; a
-// temp from before the id was in its name gets an id the drain mints. A file that
-// cannot be read now is left for the next start. tempAge does not cover a hook
-// stuck in a syscall for longer than it; that hook's event is then lost. young
-// counts the temps left alone for being newer than tempAge.
-func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young int) {
+// temp from before the id was in its name gets an id the drain mints. tempAge does
+// not cover a hook stuck in a syscall for longer than it; that hook's event is then
+// lost. young counts the temps left alone for being newer than tempAge.
+//
+// left names the temps it would not or could not take in: one that is not a
+// regular file (the hook only writes regular files, and following a symlink would
+// send whatever it points at), one that cannot be read, and one whose names are
+// all taken. They stay where they are, so the caller logs them; nothing else
+// reports them, since OtherIncoming and the status counts skip ".tmp-" (#249).
+func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young int, left []string) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, nil
 	}
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, ".tmp-") {
+		if !strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		if !e.Type().IsRegular() {
+			left = append(left, name)
 			continue
 		}
 		info, err := e.Info()
@@ -156,9 +168,9 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young 
 			continue
 		}
 		p := filepath.Join(dir, name)
-		b, err := os.ReadFile(p)
+		b, err := readTemp(p)
 		if err != nil {
-			// Unreadable now is not partial: leave it for the next start.
+			left = append(left, name)
 			continue
 		}
 		if !json.Valid(b) {
@@ -170,29 +182,67 @@ func recoverIncomingTemps(dir string, now time.Time) (recovered, dropped, young 
 		// ".tmp-<id>.raw-<random>" carries the hook's event id: recover under it, so
 		// a copy that also reached the socket is the same event to the center. An
 		// older temp (".tmp-<random>") has none; the drain mints one.
-		final := "recovered" + name + incomingExt
+		finals := []string{"recovered" + name + incomingExt}
 		if base := strings.TrimPrefix(name, ".tmp-"); strings.Contains(base, incomingExt+"-") {
-			final = base[:strings.LastIndex(base, incomingExt+"-")+len(incomingExt)]
+			// If the id's name is taken (only a second writer of one id could leave
+			// it), do not compare: take this one in under a minted id; a duplicate is
+			// better than a lost event.
+			finals = append([]string{base[:strings.LastIndex(base, incomingExt+"-")+len(incomingExt)]}, finals...)
 		}
-		target := filepath.Join(dir, final)
-		if _, err := os.Lstat(target); !os.IsNotExist(err) {
-			// Something already has that name (only a second writer of one id could
-			// leave it). Do not compare: take this one in under a minted id; a
-			// duplicate is better than a lost event. An old-style temp's fallback is
-			// that same name, so a leftover recovered file of the same name would be
-			// replaced; the random part makes that unlikely, not impossible (#249).
-			target = filepath.Join(dir, "recovered"+name+incomingExt)
-		}
-		if os.Rename(p, target) == nil {
+		if claimName(p, dir, finals) {
 			recovered++
+		} else {
+			left = append(left, name)
 		}
 	}
-	return recovered, dropped, young
+	return recovered, dropped, young, left
+}
+
+// readTemp is readNoFollow; a test swaps it for a read that fails.
+var readTemp = readNoFollow
+
+// readNoFollow reads a file without following a symlink put in its place after
+// the directory was listed.
+func readNoFollow(p string) ([]byte, error) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// linkFile is os.Link; a test swaps it for a filesystem without hard links.
+var linkFile = os.Link
+
+// claimName moves p to the first of names in dir that is free, and reports
+// whether it did. A hard link fails on a name already taken where a rename would
+// replace it, so a recovered file is never overwritten, not even by another
+// recovery of an old-style temp of the same random name (#249). Only where the
+// filesystem refuses hard links does it fall back to a rename after checking the
+// name is free, which leaves that check-then-act window.
+func claimName(p, dir string, names []string) bool {
+	for _, n := range names {
+		target := filepath.Join(dir, n)
+		if linkFile(p, target) == nil {
+			// Linked: the event is under its new name. Should the temp outlive this
+			// remove, the next start takes it in again, a duplicate, not a loss.
+			_ = os.Remove(p)
+			return true
+		}
+		// The name is taken (EEXIST), or hard links are refused and the name is
+		// checked before a rename.
+		if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		return os.Rename(p, target) == nil
+	}
+	return false
 }
 
 // recoverTemps runs recoverIncomingTemps on incoming/. Call it only while holding
 // the spool lock.
-func (s *Spool) recoverTemps(now time.Time) (recovered, dropped, young int) {
+func (s *Spool) recoverTemps(now time.Time) (recovered, dropped, young int, left []string) {
 	return recoverIncomingTemps(s.incoming, now)
 }
 
@@ -293,6 +343,33 @@ func (s *Spool) Ack(e *Entry) error {
 		return nil
 	}
 	return err
+}
+
+// deadPath is where events the center refused for their content are set aside
+// (#126). The CLI's `ccx agent status` (apps/cli/src/agent.ts) counts the .pb
+// files there.
+func deadPath(spoolDir string) string { return filepath.Join(spoolDir, "dead") }
+
+// MoveToDead takes an event out of the queue without sending it: the center
+// refused it, and sending it again would only hold every later event back. The
+// file keeps its bytes so someone can read why later. The name gets a fresh id
+// after the seq, because seq resumes from the queue alone after a restart and a
+// later refused event could carry the same seq; a rename onto it would replace
+// the first one.
+//
+// The move is not fsynced. If a crash undoes it, the event is back at the front
+// of the queue, the center refuses it again, and it is moved again.
+func (s *Spool) MoveToDead(e *Entry) (string, error) {
+	dir := deadPath(s.dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	stem := strings.TrimSuffix(filepath.Base(e.Path), spoolExt)
+	target := filepath.Join(dir, stem+"-"+s.newID()+spoolExt)
+	if err := os.Rename(e.Path, target); err != nil {
+		return "", err
+	}
+	return target, nil
 }
 
 // Pending counts events still waiting to be forwarded.

@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { realpath, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   blockers,
@@ -46,6 +46,7 @@ import { humanSince, parseLimit, shortId, table } from "./format.ts";
 import { pickRepodir } from "./pick.ts";
 import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
+import { AmbiguousSession, showEvents } from "./session-show.ts";
 import { registerTranscript } from "./transcript.ts";
 
 // release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
@@ -140,10 +141,16 @@ repodir
   .command("ls")
   .description("List repodirs and what each one is for")
   .option("-r, --repo <filter>", "only repositories whose path contains this")
+  .option(
+    "-b, --branch <name|glob>",
+    "only repodirs whose current branch is this name, or matches this glob (* spans /, ? is one character, no [...])",
+  )
   .option("--json", "print as JSON")
   .action(async (o) => {
+    // An empty pattern can never match a branch, so it would look like a search that found nothing
+    if (o.branch === "") throw new Error("--branch needs a branch name or glob");
     const cfg = await loadConfig();
-    const infos = await scanRepodirs(cfg, { filter: o.repo });
+    const infos = await scanRepodirs(cfg, { filter: o.repo, branch: o.branch });
 
     if (o.json) {
       console.log(JSON.stringify(infos, null, 2));
@@ -475,8 +482,8 @@ session
   .command("show")
   .description("Show what one session did, newest first")
   .argument("<session-id>", "session id (full, as printed by --json)")
-  .option("-m, --machine <name>", "disambiguate when the id exists on several machines")
-  .option("-u, --user <name>", "disambiguate when the id exists for several users")
+  .option("-m, --machine <name>", "pick a stream when the id exists on several machines (required then)")
+  .option("-u, --user <name>", "pick a stream when the id exists for several users (required then)")
   .option("-e, --hook <name>", "only this hook event")
   .option("-n, --limit <count>", "how many events (default 100)", parseLimit)
   .option("-p, --payload", "include the raw hook payload")
@@ -485,23 +492,23 @@ session
     const cfg = await loadConfig();
     const client = fleetClient(cfg.hub);
 
-    const res = await client
-      .listEvents({
-        sessionId,
-        machine: o.machine ?? "",
-        user: o.user ?? "",
-        hookEventName: o.hook ?? "",
-        limit: o.limit ?? 0,
-        includePayload: Boolean(o.payload),
-      })
-      .catch((e: unknown) => {
-        throw unreachable(cfg.hub!.url, e);
-      });
+    const events = await showEvents(client, {
+      sessionId,
+      machine: o.machine,
+      user: o.user,
+      hookEventName: o.hook,
+      limit: o.limit,
+      includePayload: Boolean(o.payload),
+      allowMixed: Boolean(o.json),
+    }).catch((e: unknown) => {
+      if (e instanceof AmbiguousSession) throw e;
+      throw unreachable(cfg.hub!.url, e);
+    });
 
     if (o.json) {
       console.log(
         JSON.stringify(
-          res.events.map((e) => ({
+          events.map((e) => ({
             ...e,
             payload: o.payload ? new TextDecoder().decode(e.payload) : undefined,
           })),
@@ -512,12 +519,12 @@ session
       return;
     }
 
-    if (res.events.length === 0) {
+    if (events.length === 0) {
       console.error(`no events for session ${sessionId}`);
       return;
     }
 
-    for (const e of res.events) {
+    for (const e of events) {
       const at = e.receivedAt ? new Date(Number(e.receivedAt.seconds) * 1000).toISOString() : "?";
       // パースできなかった event も出す。出さないと「壊れている」と「無い」の
       // 区別がつかなくなる
@@ -554,6 +561,7 @@ agent
       ["socket", st.socketPath],
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
+      ["dead", `${st.dead} refused by the center, set aside in ${join(st.spoolDir, "dead")} (not retried)`],
       ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);

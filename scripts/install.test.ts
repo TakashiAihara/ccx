@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,9 @@ const RELEASES: Record<string, string[]> = {
 const body = (tag: string, name: string) =>
   name === "ccx-agent.service" ? UNIT : `#!/bin/sh\necho ${name.startsWith("ccx-agent-") ? "agent" : "cli"}-${tag}\n`;
 
+const TOOLS = ["sh", "uname", "mkdir", "curl", "rm", "chmod", "mv", "sed", "id"];
+const SH = Bun.which("sh")!;
+
 let work: string;
 let server: ReturnType<typeof Bun.serve>;
 let requests: number;
@@ -28,12 +31,27 @@ beforeEach(() => {
   writeFileSync(
     join(fake, "systemctl"),
     `#!/bin/sh\necho "systemctl $*" >> "${work}/calls"\n[ "$*" = "--user show-environment" ] && [ -n "$NO_MANAGER" ] && exit 1\n` +
+      // ccxd.service is the old unit name (#196): what it reports is set per test
+      `[ "$*" = "--user show -p ActiveState --value ccxd.service" ] && [ -n "$CCXD_FAIL" ] && exit 1\n` +
+      `[ "$*" = "--user show -p ActiveState --value ccxd.service" ] && echo "\${CCXD_ACTIVE:-inactive}"\n` +
+      `[ "$*" = "--user show -p UnitFileState --value ccxd.service" ] && [ -n "$CCXD_FILE_FAIL" ] && exit 1\n` +
+      `[ "$*" = "--user show -p UnitFileState --value ccxd.service" ] && echo "$CCXD_FILE"\n` +
       // user.control と transient は */systemd/user で終わらない。先に並ぶのは本物の UnitPath と同じ
       // 後ろの system 側の dir もテストの中に置く。取り違えたときに本物の /etc に書かないため
       `[ "$*" = "--user show -p UnitPath --value" ] && echo "\${UNIT_PATH:-$HOME/.config/systemd/user.control /run/user/1/systemd/transient $HOME/.config/systemd/user $HOME/etc/systemd/user}"\nexit 0\n`,
   );
   writeFileSync(join(fake, "loginctl"), `#!/bin/sh\necho "loginctl $*" >> "${work}/calls"\n`);
   for (const c of ["systemctl", "loginctl"]) chmodSync(join(fake, c), 0o755);
+
+  // The tools install.sh runs, and nothing else: a herdr the host put in /usr/bin
+  // must not be on the PATH the tests give it.
+  const tools = join(work, "tools");
+  mkdirSync(tools);
+  for (const t of TOOLS) {
+    const real = Bun.which(t);
+    if (!real) throw new Error(`the install tests need ${t} on PATH`);
+    symlinkSync(real, join(tools, t));
+  }
 
   requests = 0;
   server = Bun.serve({
@@ -61,14 +79,14 @@ afterEach(() => {
 // spawnSync だと event loop が止まり、同じプロセスの偽 release が応答できない
 async function install(args: string[], env: Record<string, string> = {}) {
   const home = join(work, "home");
-  const p = Bun.spawn(["sh", join(ROOT, "scripts", "install.sh"), ...args], {
+  const p = Bun.spawn([SH, join(ROOT, "scripts", "install.sh"), ...args], {
     // 壊した実装が相対パスへ書いても、テストランナーの cwd (通常は repo) ではなく一時ディレクトリに落ちるように
     cwd: work,
     stdout: "pipe",
     stderr: "pipe",
     env: {
       HOME: home,
-      PATH: `${join(work, "fakebin")}:${process.env.PATH}`,
+      PATH: `${join(work, "fakebin")}:${join(work, "tools")}`,
       CCX_INSTALL_DIR: join(work, "bin"),
       CCX_DOWNLOAD_URL: `http://127.0.0.1:${server.port}`,
       ...env,
@@ -110,11 +128,85 @@ test.skipIf(!linux)("--with-agent installs both from one release and runs the ag
     "systemctl --user show -p UnitPath --value",
     "systemctl --user daemon-reload",
     "systemctl --user enable ccx-agent",
+    "systemctl --user show -p ActiveState --value ccxd.service",
+    "systemctl --user show -p UnitFileState --value ccxd.service",
     "systemctl --user restart ccx-agent",
   ]);
   expect(r.out).toContain("loginctl enable-linger");
+  expect(r.out).not.toContain("ccxd.service");
 
 });
+
+// ccxd.service (the old name) owns the same RuntimeDirectory, so stopping it later would
+// remove the running ccx-agent's sockets (#196). It is dealt with before ccx-agent restarts.
+const ccxdCalls = (calls: string) =>
+  calls.split("\n").filter((l) => l.startsWith("systemctl") && !l.includes(" show ") && !l.includes("show-environment"));
+
+test.skipIf(!linux)("a running, enabled ccxd.service is disabled and stopped right before ccx-agent restarts", async () => {
+  const r = await install(["--with-agent"], { CCXD_ACTIVE: "active", CCXD_FILE: "enabled" });
+  expect(r.code).toBe(0);
+  expect(ccxdCalls(r.calls)).toEqual([
+    "systemctl --user daemon-reload",
+    "systemctl --user enable ccx-agent",
+    "systemctl --user disable ccxd.service",
+    "systemctl --user stop ccxd.service",
+    "systemctl --user restart ccx-agent",
+  ]);
+  expect(r.out).toContain("ccx: disabled and stopped ccxd.service");
+});
+
+// A unit whose file was deleted (not-found) or masked still runs until it is stopped,
+// and disable has nothing to act on.
+for (const file of ["", "masked"]) {
+  test.skipIf(!linux)(`a running ccxd.service whose file state is '${file}' is stopped, not disabled`, async () => {
+    const r = await install(["--with-agent"], { CCXD_ACTIVE: "deactivating", CCXD_FILE: file });
+    expect(r.code).toBe(0);
+    expect(ccxdCalls(r.calls)).toEqual([
+      "systemctl --user daemon-reload",
+      "systemctl --user enable ccx-agent",
+      "systemctl --user stop ccxd.service",
+      "systemctl --user restart ccx-agent",
+    ]);
+    expect(r.out).toContain("ccx: stopped ccxd.service");
+  });
+}
+
+for (const file of ["enabled", "enabled-runtime", "linked", "linked-runtime"]) {
+  test.skipIf(!linux)(`a ccxd.service that failed but is still ${file} is disabled, not stopped`, async () => {
+    const r = await install(["--with-agent"], { CCXD_ACTIVE: "failed", CCXD_FILE: file });
+    expect(r.code).toBe(0);
+    expect(ccxdCalls(r.calls)).toEqual([
+      "systemctl --user daemon-reload",
+      "systemctl --user enable ccx-agent",
+      "systemctl --user disable ccxd.service",
+      "systemctl --user restart ccx-agent",
+    ]);
+    expect(r.out).toContain("ccx: disabled ccxd.service");
+  });
+}
+
+test.skipIf(!linux)("an inactive, disabled ccxd.service is left alone without a word", async () => {
+  const r = await install(["--with-agent"], { CCXD_ACTIVE: "inactive", CCXD_FILE: "disabled" });
+  expect(r.code).toBe(0);
+  expect(ccxdCalls(r.calls)).toEqual([
+    "systemctl --user daemon-reload",
+    "systemctl --user enable ccx-agent",
+    "systemctl --user restart ccx-agent",
+  ]);
+  expect(r.out).not.toContain("ccxd.service");
+});
+
+for (const [what, env] of [
+  ["whether ccxd.service runs", { CCXD_FAIL: "1" }],
+  ["whether ccxd.service is enabled", { CCXD_FILE_FAIL: "1", CCXD_ACTIVE: "active" }],
+] as const) {
+  test.skipIf(!linux)(`a user manager that cannot say ${what} stops the install before the restart`, async () => {
+    const r = await install(["--with-agent"], env);
+    expect(r.code).not.toBe(0);
+    expect(r.calls).not.toContain("stop ccxd.service");
+    expect(r.calls).not.toContain("restart ccx-agent");
+  });
+}
 
 test.skipIf(!linux)("the unit goes to the user manager's own unit dir, not this shell's idea of it", async () => {
   const managerDir = join(work, "manager-config", "systemd", "user");
@@ -164,10 +256,22 @@ test.skipIf(!linux)("without a user manager, --with-agent installs the binaries 
   expect(r.calls.split("\n").filter((l) => l.startsWith("systemctl"))).toEqual(["systemctl --user show-environment"]);
 });
 
-test.skipIf(!linux)("--with-agent refuses an install dir that would break ExecStart", async () => {
-  const r = await install(["--with-agent"], { CCX_INSTALL_DIR: join(work, "my bin") });
+// space splits ExecStart, % is a systemd specifier, & and | are special to the sed that writes the unit
+test.skipIf(!linux).each([" ", "%", "&", "|", "\n"])("--with-agent refuses an install dir with %p before anything is downloaded", async (c) => {
+  const dest = join(work, `my${c}bin`);
+  const r = await install(["--with-agent"], { CCX_INSTALL_DIR: dest });
   expect(r.code).toBe(1);
-  expect(existsSync(join(work, "my bin", "ccx"))).toBe(false);
+  expect(r.out).toContain("--with-agent needs an install dir of plain characters");
+  expect(requests).toBe(0);
+  expect(existsSync(join(dest, "ccx"))).toBe(false);
+  expect(existsSync(join(r.home, ".config", "systemd", "user", "ccx-agent.service"))).toBe(false);
+});
+
+test.skipIf(!linux)("--with-agent takes an install dir of letters, digits and . _ -", async () => {
+  const dest = join(work, "my.bin_x-1");
+  const r = await install(["--with-agent"], { CCX_INSTALL_DIR: dest });
+  expect(r.code).toBe(0);
+  expect(unitOf(r.home)).toContain(`ExecStart=${join(dest, "ccx-agent")} serve`);
 });
 
 test("an unknown option is refused before anything is downloaded", async () => {
@@ -176,9 +280,9 @@ test("an unknown option is refused before anything is downloaded", async () => {
   expect(requests).toBe(0);
 });
 
-// install.sh が要る道具 (sh / curl / sed など) はここにある。手元の PATH を混ぜると、空白を含む entry
-// (WSL の /mnt/c/Program Files) がテストの期待を変えるので、テストの PATH はここから組む
-const SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin";
+// The tools install.sh needs, linked one by one. The host's PATH is not mixed in: an
+// entry with a space (WSL's /mnt/c/Program Files) or a herdr installed there would change what the tests expect.
+const toolsPath = () => `${join(work, "fakebin")}:${join(work, "tools")}`;
 const unitOf = (home: string) => readFileSync(join(home, ".config", "systemd", "user", "ccx-agent.service"), "utf8");
 function dirWithHerdr(name: string) {
   const d = join(work, name);
@@ -190,7 +294,8 @@ function dirWithHerdr(name: string) {
 
 test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent's resumes find herdr", async () => {
   // the install dir is already on PATH here, so it is not added a second time
-  const path = `${dirWithHerdr("node@22+x")}:${join(work, "bin")}:${join(work, "fakebin")}:${SYSTEM_PATH}`;
+  // every character the filter allows besides letters, digits, / and - (the temp dir has those) is in this name
+  const path = `${dirWithHerdr("node@22+x,y~z_w.v")}:${join(work, "bin")}:${toolsPath()}`;
   const r = await install(["--with-agent"], { PATH: path });
   expect(r.code).toBe(0);
   const unit = unitOf(r.home);
@@ -202,7 +307,7 @@ test.skipIf(!linux)("the unit carries the installing shell's PATH, so the agent'
 
 test.skipIf(!linux)("entries a unit cannot carry are left out one by one, and a herdr only there is said to be missing", async () => {
   const odd = dirWithHerdr("Program Files");
-  const kept = `${join(work, "fakebin")}:${SYSTEM_PATH}`;
+  const kept = toolsPath();
   // g* would expand to gx if the loop globbed; it must be left out as written
   mkdirSync(join(work, "gx"));
   const glob = join(work, "g*");

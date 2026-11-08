@@ -106,6 +106,9 @@ ccd() {
   dir="$(ccx rd cd)" || return   # nothing picked: stop here, do not cd
   cd "$dir"
 }
+
+# Which repodir is on a branch? --branch takes an exact name or a glob (* also spans /).
+ccx rd ls --branch 'fix/*-authz'
 ```
 
 ### Seeing across machines
@@ -120,11 +123,19 @@ ccx session ls                # every session the center knows about, newest act
 ccx session ls --active       # only those with no SessionEnd observed
 ccx session show <id>         # what one session did, newest first
 ccx session show <id> --hook PostToolUse --payload
+ccx session show <id> -m <machine> -u <user>   # when the id exists in several streams
 ```
 
 `--active` means exactly one thing: no `SessionEnd` has been observed. It is **not** a liveness
 check — a session whose machine lost its ccx-agent, or that was killed, never sends one either. Read the
 age column alongside it.
+
+The center keys a session by (machine, user, session id). When the same id has hook events from several
+machines or users (the separate rows `ccx session ls` shows), `ccx session show` lists them and exits 1
+instead of interleaving their events; pick one with `-m` / `-u`. Marks alone (or the state `ccx tr pull`
+installed after a move) do not make a second stream, on a center that reports each event's producer;
+an older center does not, so there they count as one. `--json` still returns them all, each event
+carrying its machine and user.
 
 ### What ccx holds about a session
 
@@ -135,6 +146,7 @@ transcripts and the store.
 ```bash
 ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
 ccx session mark archived --off <id>
+ccx session mark archived <id> <id> …   # mark, label, task and role take any number of ids; one that fails is said on stderr, the rest are written, exit 1
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
 ccx session role worker       # what the session is; free text, ccx gives it no meaning
@@ -240,8 +252,11 @@ target. See `docs/design/transcript-store.md`.
 mark archived`). Deciding when to archive a session is your call; `prune` refuses a
 running session, a session the store does not have, and any session whose copy in the store does not
 read back byte-identical (transcript, tool-results, subagents and workflows) — and it exits `1` if it refused any.
+An archived session that is running, which `prune --archived` (without `--ended`, which selects only
+sessions that are not running) leaves alone, is listed as `skipped` (`status: "skipped"` in `--json`)
+and does not make the exit code `1`.
 `push --archived` and `prune --archived` skip a session whose declared state cannot be read and exit
-`1`; `push` of such a session by id or `--ended` still carries the transcript without `state.json`
+`1` (for `prune`, only when the session is not running: a running one is left alone either way); `push` of such a session by id or `--ended` still carries the transcript without `state.json`
 and exits `1`. The reason is on stderr.
 
 `cd` prints the chosen path on stdout and everything else on stderr, so its output is a path you can
@@ -264,8 +279,8 @@ Repodirs live under a path that carries the meaning, so the directory id itself 
     01KXDGS6PWE00B/                      another one, possibly on the same branch
 ```
 
-The id is the first 14 characters of a Crockford-base32 UUIDv7, so directory names sort by
-creation time and no counter needs to be allocated.
+The id is 14 Crockford-base32 characters: a millisecond timestamp followed by 20 random bits, so
+directory names sort by creation time and no counter needs to be allocated.
 
 ### Metadata
 

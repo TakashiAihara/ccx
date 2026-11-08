@@ -109,34 +109,46 @@ const REPORT_TIMEOUT_MS = 3000;
 const withoutHistory = ({ labelHistory: _, ...rest }: DeclaredState) => rest;
 
 export async function reportState(hub: Hub | undefined, machine: string | undefined, sessionId: string, state: DeclaredState): Promise<void> {
-  if (!hub) return;
+  await reportStates(hub, machine, [{ sessionId, state }]);
+}
+
+/**
+ * The same report for several sessions in one ingest call (#144): one request and one
+ * deadline for the batch, so 71 sessions do not open 71 requests, or print 71 lines when the
+ * center is silent
+ */
+export async function reportStates(
+  hub: Hub | undefined,
+  machine: string | undefined,
+  items: { sessionId: string; state: DeclaredState }[],
+): Promise<void> {
+  if (!hub || items.length === 0) return;
   const origin = localOrigin(machine);
   const client = createClient(IngestService, centerTransport(hub));
   try {
     await client.ingest(
       {
-        events: [
-          {
-            origin: { machine: origin.machine, user: origin.user },
-            eventId: randomUUID(),
-            // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は payload の rev
-            seq: 0n,
-            receivedAt: timestampFromMs(Date.now()),
-            producer: Producer.CCX_SESSION_STATE,
-            // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
-            // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
-            // label の履歴は送らない: center は読まず (fleet.proto に欄が無い)、毎回全件を送ると 1 session で
-            // 履歴の長さの 2 乗で events が太る。検索は保存先の state.json を読む (#169)
-            payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state: withoutHistory(state), rev: Date.now() })),
-          },
-        ],
+        events: items.map(({ sessionId, state }) => ({
+          origin: { machine: origin.machine, user: origin.user },
+          eventId: randomUUID(),
+          // seq は spool の rowid のためのもの。ccx は spool を持たないので 0。順序は payload の rev
+          seq: 0n,
+          receivedAt: timestampFromMs(Date.now()),
+          producer: Producer.CCX_SESSION_STATE,
+          // rev: 送る直前の時刻。同じ session の報告どうしを center が並べるのに使う (同じ machine の
+          // 時計なので比べられる)。先に書いて遅れて届いた古い写しが、後の写しに勝たないように
+          // label の履歴は送らない: center は読まず (fleet.proto に欄が無い)、毎回全件を送ると 1 session で
+          // 履歴の長さの 2 乗で events が太る。検索は保存先の state.json を読む (#169)
+          payload: new TextEncoder().encode(JSON.stringify({ session_id: sessionId, state: withoutHistory(state), rev: Date.now() })),
+        })),
       },
       // 繋がった後に黙る center で mark を止めない。期限切れは「受け取ったと言われなかった」で
       // あって「届かなかった」ではない (center が書いた後に返事だけ遅れたこともありうる)
       { timeoutMs: REPORT_TIMEOUT_MS },
     );
   } catch (e) {
-    console.error(`(center ${hub.url} did not confirm the state: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
+    const what = items.length === 1 ? "the state" : `the states of ${items.length} sessions`;
+    console.error(`(center ${hub.url} did not confirm ${what}: ${e instanceof Error ? e.message : String(e)}; it may or may not have been recorded there — it is recorded locally, and the next mark sends it again)`);
   }
 }
 
@@ -197,6 +209,51 @@ export async function declaredFor(
   return remote ?? local;
 }
 
+/**
+ * Writes one declaration to each session named (#144). With no id or one id it behaves as the
+ * single-id verb always did: an error stops the command, and --json prints one object.
+ * With several, a session that cannot be resolved or written is reported on stderr and the
+ * rest are still written (exit 1 at the end); --json prints an array of the ones written.
+ * The center is told after all the local writes, so a slow center does not hold them up.
+ * The same session given twice (an id and its prefix) is written and reported twice; writing
+ * the same value again changes nothing (the label history only grows when the label changes).
+ */
+export async function writeEach(
+  args: string[],
+  json: boolean,
+  apply: (id: string, home: string) => Promise<DeclaredState>,
+  line: (id: string, s: DeclaredState) => string,
+): Promise<void> {
+  const home = claudeHome();
+  if (args.length <= 1) {
+    const id = await target(args[0], home);
+    const s = await apply(id, home);
+    // The write is reported first; a slow center does not hide that it is done
+    if (json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
+    else console.log(line(id, s));
+    await reportAfterWrite(id, s);
+    return;
+  }
+
+  const written: { id: string; s: DeclaredState }[] = [];
+  for (const arg of args) {
+    try {
+      const id = await target(arg, home);
+      const s = await apply(id, home);
+      written.push({ id, s });
+      if (!json) console.log(line(id, s));
+    } catch (e) {
+      console.error(`(${arg}: not written: ${e instanceof Error ? e.message : String(e)})`);
+      process.exitCode = 1;
+    }
+  }
+  if (json) console.log(JSON.stringify(written.map(({ id, s }) => ({ sessionId: id, ...s })), null, 2));
+
+  // One config read for the batch, so a broken config is said once, not once per session
+  const cfg = await configOrNull();
+  if (cfg) await reportStates(cfg.hub, cfg.machine, written.map(({ id, s }) => ({ sessionId: id, state: s })));
+}
+
 const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
   table([
     ["session", id],
@@ -212,23 +269,24 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
   ]);
 
+const MANY_IDS = "full ids or unique prefixes, one or more (default: this session)";
+
 export function registerSessionState(session: Command): void {
   session
     .command("mark")
     .description(`Declare a flag on a session: ${FLAGS.join(" | ")} (--off to clear)`)
     .argument("<flag>", FLAGS.join(" | "))
-    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .argument("[session-id...]", MANY_IDS)
     .option("--off", "clear the flag instead of setting it")
-    .option("--json", "print the resulting state as JSON")
-    .action(async (flag: string, idOrPrefix: string | undefined, o) => {
+    .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+    .action(async (flag: string, ids: string[], o) => {
       if (!isFlag(flag)) throw new Error(`unknown flag ${flag}; one of ${FLAGS.join(", ")}`);
-      const home = claudeHome();
-      const id = await target(idOrPrefix, home);
-      const s = await writeDeclared(id, { [flag]: !o.off }, home);
-      // 書けた事実を先に出す。center が遅くても、書き込みが済んだことは隠れない
-      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
-      else console.log(`${flag} ${o.off ? "off" : "on"}  ${id}`);
-      await reportAfterWrite(id, s);
+      await writeEach(
+        ids,
+        Boolean(o.json),
+        (id, home) => writeDeclared(id, { [flag]: !o.off }, home),
+        (id) => `${flag} ${o.off ? "off" : "on"}  ${id}`,
+      );
     });
 
   const TEXT_VERBS = {
@@ -242,15 +300,15 @@ export function registerSessionState(session: Command): void {
       .command(key)
       .description(description)
       .argument(`<${key}>`, argument)
-      .argument("[session-id]", "full id or unique prefix (default: this session)")
-      .option("--json", "print the resulting state as JSON")
-      .action(async (value: string, idOrPrefix: string | undefined, o) => {
-        const home = claudeHome();
-        const id = await target(idOrPrefix, home);
-        const s = await writeDeclared(id, { [key]: value.trim() }, home);
-        if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
-        else console.log(`${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`);
-        await reportAfterWrite(id, s);
+      .argument("[session-id...]", MANY_IDS)
+      .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+      .action(async (value: string, ids: string[], o) => {
+        await writeEach(
+          ids,
+          Boolean(o.json),
+          (id, home) => writeDeclared(id, { [key]: value.trim() }, home),
+          (id, s) => `${key} ${s[key] ? `= ${s[key]}` : "cleared"}  ${id}`,
+        );
       });
   }
 

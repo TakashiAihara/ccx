@@ -156,20 +156,19 @@ fi
 # differently (space, %, quotes, \, &, |), and, to be safe, everything else.
 unit_path=""
 dropped=""
-set -f
-old_ifs=$IFS
-IFS=:
-for d in $PATH; do
+# PATH is cut with parameter expansion rather than field splitting, so neither IFS
+# nor globbing is touched, and empty entries (the cwd), trailing one included, are seen.
+rest=$PATH
+while :; do
+  d=${rest%%:*}
   case "$d" in
     /*[!A-Za-z0-9/._@+,~-]*) dropped="$dropped '$d'" ;;
     /*) unit_path="${unit_path:+$unit_path:}$d" ;;
     *) dropped="$dropped '$d'" ;;
   esac
+  [ "$rest" != "${rest#*:}" ] || break
+  rest=${rest#*:}
 done
-IFS=$old_ifs
-set +f
-# Field splitting drops a trailing empty field, which in PATH means the cwd as well.
-case "$PATH" in *:) dropped="$dropped ''" ;; esac
 # A fresh install from a shell that does not have the install dir on PATH yet still
 # gives the unit that dir, where ccx and, often, herdr are.
 case ":$unit_path:" in
@@ -186,6 +185,32 @@ fi
 
 systemctl --user daemon-reload
 systemctl --user enable ccx-agent
+# ccxd.service is this unit's old name (#131). Both own RuntimeDirectory=ccx, so
+# while both run, stopping either one removes the other's sockets (#196). Take the
+# old one out right before the restart below, which then makes the dir last; the
+# stop is the last step before it, so no failing step can come in between.
+# Whether it runs is read apart from whether its file is there: a unit whose file
+# was deleted, or that was masked, can still be running.
+# Assignments of their own, so a failing systemctl stops the install (set -e).
+ccxd_active=$(systemctl --user show -p ActiveState --value ccxd.service)
+ccxd_file=$(systemctl --user show -p UnitFileState --value ccxd.service)
+ccxd_done=""
+case "$ccxd_file" in
+  enabled|enabled-runtime|linked|linked-runtime)
+    systemctl --user disable ccxd.service
+    ccxd_done="disabled"
+    ;;
+esac
+case "$ccxd_active" in
+  inactive|failed) ;;
+  *)
+    systemctl --user stop ccxd.service
+    ccxd_done="${ccxd_done:+$ccxd_done and }stopped"
+    ;;
+esac
+if [ -n "$ccxd_done" ]; then
+  echo "ccx: $ccxd_done ccxd.service, the old name of ccx-agent; remove its unit file if one is left" >&2
+fi
 # restart, not start: on an upgrade the running agent must pick up the new binary.
 systemctl --user restart ccx-agent
 echo "ccx: ccx-agent is running as a user service (systemctl --user status ccx-agent)"

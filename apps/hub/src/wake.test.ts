@@ -8,7 +8,7 @@
 
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-node";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -170,6 +170,120 @@ test("the center does not follow a redirect from the agent's address", async () 
   void other.stop(true);
   expect(hits).toHaveLength(1);
   expect(elsewhere).toEqual([]);
+});
+
+/** Replaces the fake agent with one that answers every request with respond() */
+function agentAnswering(respond: () => Response) {
+  void agent!.stop(true);
+  agent = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      hits.push({ path: new URL(req.url).pathname, auth: req.headers.get("authorization"), method: req.method });
+      return respond();
+    },
+  });
+}
+
+/** Collects console.error lines until the returned stop() is called */
+function errorLines() {
+  const lines: string[] = [];
+  const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  return { lines, stop: () => spy.mockRestore() };
+}
+
+async function linesAfter(lines: string[], ms = 1000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end && lines.length === 0) await Bun.sleep(10);
+  // A second line logged late is a failure too, so wait a little after the first
+  await Bun.sleep(100);
+  return lines;
+}
+
+test("a redirect from the agent is logged as not followed, with the URL it was sent to", async () => {
+  agentAnswering(() => new Response(null, { status: 302, headers: { location: "http://127.0.0.1:1/x" } }));
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  const log = errorLines();
+  try {
+    await client.requestResume({ key: key() });
+    expect(await linesAfter(log.lines)).toEqual([
+      `wake m1: agent at ${agentUrl()}/ccx.v1.AgentService/Wake answered 302; a redirect is not followed`,
+    ]);
+  } finally {
+    log.stop();
+  }
+});
+
+test("an error status from the agent is logged with the status", async () => {
+  agentAnswering(() => new Response("no", { status: 503 }));
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  const log = errorLines();
+  try {
+    await client.requestResume({ key: key() });
+    expect(await linesAfter(log.lines)).toEqual([`wake m1: agent at ${agentUrl()}/ccx.v1.AgentService/Wake answered 503`]);
+  } finally {
+    log.stop();
+  }
+});
+
+test("a successful wake logs nothing", async () => {
+  const client = startCenter(AGENT_TOKEN);
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+  const log = errorLines();
+  try {
+    await client.requestResume({ key: key() });
+    expect(await hitsAfter()).toHaveLength(1);
+    await Bun.sleep(100);
+    expect(log.lines).toEqual([]);
+  } finally {
+    log.stop();
+  }
+});
+
+test("the center drops the agent's answer body instead of leaving it open", async () => {
+  // A body that never ends, so only a cancel closes it. Left unread, Bun also closes it once the
+  // Response is garbage collected; the test holds every Response the center gets so that cannot happen
+  const held: Response[] = [];
+  const realFetch = globalThis.fetch;
+  const spy = spyOn(globalThis, "fetch").mockImplementation((async (...args: Parameters<typeof fetch>) => {
+    const res = await realFetch(...args);
+    held.push(res);
+    return res;
+  }) as typeof fetch);
+  let answeredAt = 0;
+  let cancelledAt = 0;
+  agentAnswering(() => {
+    answeredAt = Date.now();
+    return new Response(
+      new ReadableStream({
+        pull: async (c) => {
+          c.enqueue(new TextEncoder().encode("x".repeat(1024)));
+          await Bun.sleep(20);
+        },
+        cancel: () => {
+          cancelledAt = Date.now();
+        },
+      }),
+    );
+  });
+  try {
+    const client = startCenter(AGENT_TOKEN);
+    ingest(db, [running({ session_ids: [], api_url: agentUrl() })], now);
+    await client.requestResume({ key: key() });
+    // Below the wake's 3 s timeout, which would also end the body
+    const end = Date.now() + 1500;
+    while (Date.now() < end && !cancelledAt) await Bun.sleep(5);
+    expect(hits).toHaveLength(1);
+    expect(held).toHaveLength(1);
+    expect(cancelledAt).toBeGreaterThan(0);
+    expect(cancelledAt - answeredAt).toBeLessThan(500);
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test("without an agent token the center wakes no one", async () => {
