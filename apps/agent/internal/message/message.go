@@ -288,10 +288,11 @@ func (d *Devin) status(ctx context.Context, id string) (string, error) {
 // history above it. herdr accepting the prompt is not that: the text can sit in
 // the box unsent (docs/design/transport.md).
 //
-// The history is read first: text still unsent in the box reads like a history
-// line once the styling is gone, and only an empty box seen after it rules that
-// out. A box that is not seen (a dialog the message opened, or text too tall for
-// the screen) is not taken as sent; that ends as "may have been sent".
+// The box must be empty both before and after the history read: text still
+// unsent in the box reads like a history line once the styling is gone, so an
+// empty box on only one side does not rule it out. A box that is not seen (a
+// dialog the message opened, or text too tall for the screen) is not taken as
+// sent; that ends as "may have been sent".
 func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
 	// The wait bounds the herdr calls too, not only the looks between them: a
