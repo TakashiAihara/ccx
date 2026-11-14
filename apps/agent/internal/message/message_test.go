@@ -115,6 +115,10 @@ type fakeHerdr struct {
 	prompt          error
 	typed           bool
 	statusErr       error
+	lines           []string
+	// panesAfter, if set, is what pane list returns from its second call on.
+	panesAfter string
+	listed     int
 }
 
 func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
@@ -132,6 +136,10 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 	}
 	switch cmd {
 	case "pane list":
+		f.listed++
+		if f.panesAfter != "" && f.listed > 1 {
+			return []byte(f.panesAfter), nil
+		}
 		return []byte(f.panes), nil
 	case "pane get":
 		if f.statusErr != nil {
@@ -140,9 +148,10 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"result":{"pane":{"agent_status":"` + next(&f.status) + `"}}}`), nil
 	case "agent read":
 		if args[4] == "recent-unwrapped" {
-			if strings.Join(args[3:], " ") != "--source recent-unwrapped --format text" {
+			if strings.Join(args[3:7], " ") != "--source recent-unwrapped --format text" || len(args) != 9 || args[7] != "--lines" {
 				return nil, errors.New("unexpected read " + strings.Join(args, " "))
 			}
+			f.lines = append(f.lines, args[8])
 			if f.typed {
 				return []byte(f.history), nil
 			}
@@ -441,7 +450,8 @@ func TestSendsAreOneAtATime(t *testing.T) {
 			lists++
 		}
 	}
-	if lists != 1 {
+	// Each send looks the pane up twice (found, then again before the last check).
+	if lists != 2 {
 		t.Fatalf("the second send looked before the first typed: %q", order)
 	}
 }
@@ -698,4 +708,36 @@ func TestTheBoxIsReadRightBeforeTyping(t *testing.T) {
 		}
 	}
 	t.Fatal("no prompt")
+}
+
+func TestASessionThatLeftThePaneIsNotTypedInto(t *testing.T) {
+	moved := strings.Replace(devinPanes, `{"pane_id":"w2:p1","agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}}`, `{"pane_id":"w9:p1","agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}}`, 1)
+	f := &fakeHerdr{panes: devinPanes, panesAfter: moved, screens: []string{emptyBox}}
+	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "moved from pane w2:p1 to w9:p1") || f.prompted() != nil || !notTyped(err) {
+		t.Fatalf("err = %v, typed %v", err, f.prompted() != nil)
+	}
+	gone := &fakeHerdr{panes: devinPanes, panesAfter: `{"result":{"panes":[]}}`, screens: []string{emptyBox}}
+	if _, err := send(newDevin(gone), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); connect.CodeOf(err) != connect.CodeNotFound || gone.prompted() != nil {
+		t.Fatalf("gone: err = %v", err)
+	}
+}
+
+func TestHistoryIsReadDeepEnoughForTheBody(t *testing.T) {
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	r.Body = strings.Repeat("line\n", 500)
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(f), r); err != nil {
+		t.Fatal(err)
+	}
+	// 200 + 500 newlines + 2500 bytes / 40
+	want := "762"
+	for _, n := range f.lines {
+		if n != want {
+			t.Fatalf("history read with --lines %q, want %s for both reads (%q)", n, want, f.lines)
+		}
+	}
+	if len(f.lines) < 2 {
+		t.Fatalf("history reads = %q", f.lines)
+	}
 }

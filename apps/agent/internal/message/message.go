@@ -165,11 +165,20 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	header := headerLine(req.Sender, req.Summary)
 	// A header sent before is already in the history; only a new one counts. Read
 	// before the screen, so the box is looked at right before typing.
-	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text")
+	lines := strconv.Itoa(historyLines(req.Body))
+	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
 	if err != nil {
 		return connect.NewError(connect.CodeUnavailable, err)
 	}
 	seen := headerLines(string(before), header)
+
+	// The session may have left the pane since it was found (a pane hosts
+	// whatever agent runs in it now): look it up again before the last check.
+	if again, err := d.find(ctx, req.Target); err != nil {
+		return err
+	} else if again.ID != p.ID {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s moved from pane %s to %s while sending; nothing was sent", req.Target, p.ID, again.ID))
+	}
 
 	screen, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi")
 	if err != nil {
@@ -198,7 +207,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	}
 
 	// A long body takes longer to paste and render.
-	if err := d.waitSent(ctx, p.ID, header, seen, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
+	if err := d.waitSent(ctx, p.ID, header, seen, lines, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
 		return err
 	}
 	if working {
@@ -293,7 +302,7 @@ func (d *Devin) status(ctx context.Context, id string) (string, error) {
 // empty box on only one side does not rule it out. A box that is not seen (a
 // dialog the message opened, or text too tall for the screen) is not taken as
 // sent; that ends as "may have been sent".
-func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait time.Duration) error {
+func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, lines string, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
 	// The wait bounds the herdr calls too, not only the looks between them: a
 	// stuck read would otherwise hold every other send behind the mutex.
@@ -301,7 +310,7 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait 
 	defer cancel()
 	for {
 		if d.boxEmpty(wctx, id) {
-			hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
+			hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
 			if err == nil && headerLines(string(hist), header) > seen && d.boxEmpty(wctx, id) {
 				return nil
 			}
@@ -581,4 +590,12 @@ func refusedInBody(r rune) bool {
 func (d *Devin) boxEmpty(ctx context.Context, id string) bool {
 	screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
 	return err == nil && inputBox(string(screen)) == inputEmpty
+}
+
+// historyLines is how many lines of history to read so the header stays inside
+// them after the body is printed: herdr reads 80 by default, and a long body
+// pushes the header above that. Each newline is a line, and a long line wraps
+// about every 40 bytes; 200 more cover what Devin prints around it.
+func historyLines(body string) int {
+	return 200 + strings.Count(body, "\n") + len(body)/40
 }
