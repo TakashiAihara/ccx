@@ -37,6 +37,7 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/livetranscript"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/message"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/resume"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
@@ -108,7 +109,7 @@ func cmdServe() int {
 	// Assemble the enabled concerns (ADR 0002). Only collect is built in #90;
 	// carry and persistence append here the same way when they exist.
 	var concerns []concern.Concern
-	srv := &api.Server{ClaudeHome: claudeHome()}
+	srv := &api.Server{ClaudeHome: claudeHome(), Messages: &message.Service{Devin: message.NewDevin()}}
 	// Without a machine and a user name the center refuses every event, and collect
 	// would only fill the spool's dead/ (#126). Turn it off
 	// and keep the rest: heartbeat and the API do not need them. The live transcript

@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package ccx.v1;
+
+// Delivers a message to a running session (#301 / #302).
+//
+// The sender calls the same service whatever product the receiver is; ccx-agent picks how to get the
+// message there. The sender picks how the message is read (mode), not how it is delivered. A mode the
+// receiver does not have is refused, never quietly swapped for a nearby one.
+//
+// It writes into other sessions, so it is served on the unix socket only (same user, mode 0600), never on
+// AgentService's TCP listener: there, anyone holding the API token could type into any session on this
+// host. Other hosts go through the center (#138).
+service MessageService {
+  // Sends one message and streams the acks in the order they happen. A target that is not found, an
+  // input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
+  // (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT). The error text is for people; for a missing
+  // mode it lists the modes the receiver has.
+  rpc Send(SendRequest) returns (stream SendResponse);
+}
+
+// How the receiver reads it (the three decided on #301).
+enum DeliveryMode {
+  // Unspecified is taken as AFTER_TURN.
+  DELIVERY_MODE_UNSPECIFIED = 0;
+  // Does not wake the receiver; read on its next turn.
+  DELIVERY_MODE_LATER = 1;
+  // Read after the receiver finishes its current work; now if it is idle.
+  DELIVERY_MODE_AFTER_TURN = 2;
+  // Read at the next break even while the receiver is working.
+  DELIVERY_MODE_URGENT = 3;
+}
+
+message SendRequest {
+  // The receiver's session name. For Devin, its session name (the herdr pane's agent_session).
+  string target = 1;
+  DeliveryMode mode = 2;
+  // Shown to the receiver as the line `ccx: <sender>: <summary>`. One line.
+  string summary = 3;
+  string body = 4;
+  // The sender's name. Only shown in that line, never used for auth. One line.
+  string sender = 5;
+}
+
+message SendResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // Taken as the receiver's input: the line shows in its history and its input box is empty again.
+    STATE_SENT = 1;
+    // The receiver started working on it.
+    STATE_WORKING = 2;
+    // No sign of the receiver starting within the wait. It does not mean the message was lost.
+    STATE_NOT_STARTED = 3;
+  }
+  State state = 1;
+  // One line for people about the state. May be empty.
+  string detail = 2;
+}

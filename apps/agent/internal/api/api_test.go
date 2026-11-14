@@ -745,3 +745,54 @@ func tcpAddrFromLog(t *testing.T) (func(string, ...any), <-chan string) {
 		}
 	}, ch
 }
+
+type echoMessages struct{ got *ccxv1.SendRequest }
+
+func (e *echoMessages) Send(_ context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
+	e.got = req.Msg
+	return stream.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
+}
+
+// MessageService types into other sessions: the unix socket serves it, the TCP
+// side does not, even with the token.
+func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
+	work := shortDir(t)
+	m := &echoMessages{}
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: "127.0.0.1:0", APIToken: "tok-tok-tok-tok-tok"}
+	log, listening := tcpAddrFromLog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = New(cfg, &Server{ClaudeHome: work, Messages: m}, log).Run(ctx) }()
+	var addr string
+	select {
+	case addr = <-listening:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the TCP side never logged its address")
+	}
+	waitDial(t, "unix", cfg.APISocketPath)
+
+	stream, err := MessageClient(cfg.APISocketPath).Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states []ccxv1.SendResponse_State
+	for stream.Receive() {
+		states = append(states, stream.Msg().State)
+	}
+	if stream.Err() != nil || len(states) != 1 || states[0] != ccxv1.SendResponse_STATE_SENT || m.got.GetTarget() != "t" {
+		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got)
+	}
+
+	m.got = nil
+	req, _ := http.NewRequest("POST", "http://"+addr+"/ccx.v1.MessageService/Send", strings.NewReader("{}"))
+	req.Header.Set("content-type", "application/connect+json")
+	req.Header.Set("authorization", "Bearer tok-tok-tok-tok-tok")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound || m.got != nil {
+		t.Fatalf("tcp: status %d, handler reached %v", res.StatusCode, m.got != nil)
+	}
+}
