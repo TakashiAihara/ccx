@@ -19,11 +19,13 @@ func fixture(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	// The files spell ESC as \e so that a diff of them stays readable text.
+	return strings.ReplaceAll(string(b), `\e`, "\x1b")
 }
 
 // The fixtures are devin 3000.12.57's screen read through `herdr agent read
-// --source visible --format ansi`, with the shell prompt and paths taken out.
+// --source visible --format ansi`, with the shell prompt and paths taken out
+// and ESC written as \e.
 func TestInputBoxOnDevinScreens(t *testing.T) {
 	for _, tc := range []struct {
 		file string
