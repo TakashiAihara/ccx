@@ -157,9 +157,24 @@ test("報告の ack の数・エラーコードは上限を超えれば断り、
   expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: [], errorCode: 17 }))).toBe(Code.InvalidArgument);
   expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: [], errorCode: -1 }))).toBe(Code.InvalidArgument);
 
-  await client.reportMessage({ id: a.id, claimToken: token, acks: [{ state: SendResponse_State.SENT, detail: "d".repeat(5000) }], finished: true, errorCode: 16, errorMessage: "e".repeat(5000) });
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [{ state: SendResponse_State.SENT, detail: "d".repeat(5000) }, ...acks(15)], finished: true, errorCode: 16, errorMessage: "e".repeat(5000) });
   const m = (await client.getMessage({ id: a.id })).message!;
   expect([m.errorCode, m.errorMessage.length, m.acks[0]!.detail.length]).toEqual([16, 4096, 4096]);
+});
+
+test("後から届いた短い ack の一覧で、保存済みの ack を戻さない", async () => {
+  const a = (await client.putMessage({ request: req("a") })).message!;
+  const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;
+  const sent = { state: SendResponse_State.SENT, detail: "pane" };
+  const working = { state: SendResponse_State.WORKING, detail: "" };
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [sent, working] });
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [sent] });
+  expect((await client.getMessage({ id: a.id })).message!.acks.map((x) => x.state)).toEqual([SendResponse_State.SENT, SendResponse_State.WORKING]);
+
+  // 終わりの報告は、一覧が短くても終わりとして書く
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [sent], finished: true });
+  const m = (await client.getMessage({ id: a.id })).message!;
+  expect([m.finishedAt !== undefined, m.acks.length]).toEqual([true, 2]);
 });
 
 test("finished の無い報告は終わりにしない", async () => {

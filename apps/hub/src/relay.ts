@@ -152,13 +152,14 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
           if (row.claimedAtMs === null || row.finishedAtMs !== null || row.claimToken !== req.claimToken) {
             throw new ConnectError(`the message ${req.id} is not claimed with this token, or is finished`, Code.FailedPrecondition);
           }
-          tx.update(relayMessages)
-            .set({
-              acks: ackRows(req.acks),
-              ...(req.finished ? { finishedAtMs: nowMs, errorCode: req.errorCode, errorMessage: capDetail(req.errorMessage), notTyped: req.notTyped } : {}),
-            })
-            .where(eq(relayMessages.id, req.id))
-            .run();
+          // ack の一覧は 1 回の配送の中で伸びるだけ。agent が打ち切った古い報告が後から届いても、
+          // 保存済みより短い一覧で戻さない
+          const stored = (JSON.parse(row.acks) as Ack[]).length;
+          const set = {
+            ...(req.acks.length >= stored ? { acks: ackRows(req.acks) } : {}),
+            ...(req.finished ? { finishedAtMs: nowMs, errorCode: req.errorCode, errorMessage: capDetail(req.errorMessage), notTyped: req.notTyped } : {}),
+          };
+          if (Object.keys(set).length > 0) tx.update(relayMessages).set(set).where(eq(relayMessages.id, req.id)).run();
         },
         { behavior: "immediate" },
       );
