@@ -745,3 +745,85 @@ func tcpAddrFromLog(t *testing.T) (func(string, ...any), <-chan string) {
 		}
 	}, ch
 }
+
+type echoMessages struct{ got *ccxv1.SendRequest }
+
+func (e *echoMessages) Send(_ context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
+	e.got = req.Msg
+	return stream.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
+}
+
+// MessageService types into other sessions: the unix socket serves it, the TCP
+// side does not, even with the token.
+func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
+	work := shortDir(t)
+	m := &echoMessages{}
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock"), APIListen: "127.0.0.1:0", APIToken: "tok-tok-tok-tok-tok"}
+	log, listening := tcpAddrFromLog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = New(cfg, &Server{ClaudeHome: work, Messages: m}, log).Run(ctx) }()
+	var addr string
+	select {
+	case addr = <-listening:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the TCP side never logged its address")
+	}
+	waitDial(t, "unix", cfg.APISocketPath)
+
+	stream, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states []ccxv1.SendResponse_State
+	for stream.Receive() {
+		states = append(states, stream.Msg().State)
+	}
+	if stream.Err() != nil || len(states) != 1 || states[0] != ccxv1.SendResponse_STATE_SENT || m.got.GetTarget() != "t" {
+		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got)
+	}
+
+	// A body as large as the message package takes fits the unix side's read limit.
+	big, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Sender: strings.Repeat("s", 120), Summary: strings.Repeat("s", 120), Body: strings.Repeat("b", 64<<10)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for big.Receive() {
+	}
+	if big.Err() != nil || len(m.got.GetBody()) != 64<<10 {
+		t.Fatalf("64 KiB body: %v", big.Err())
+	}
+
+	m.got = nil
+	withToken := bearer("tok-tok-tok-tok-tok")
+	tcp, err := ccxv1connect.NewMessageServiceClient(http.DefaultClient, "http://"+addr, withToken).Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	if err == nil {
+		for tcp.Receive() {
+		}
+		err = tcp.Err()
+	}
+	if connect.CodeOf(err) != connect.CodeUnimplemented || m.got != nil {
+		t.Fatalf("tcp: err %v, handler reached %v", err, m.got != nil)
+	}
+}
+
+// bearer adds the Authorization header to streaming calls too.
+func bearer(token string) connect.Option {
+	return connect.WithInterceptors(streamBearer(token))
+}
+
+type streamBearer string
+
+func (b streamBearer) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc { return next }
+
+func (b streamBearer) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
+		conn := next(ctx, spec)
+		conn.RequestHeader().Set("Authorization", "Bearer "+string(b))
+		return conn
+	}
+}
+
+func (b streamBearer) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return next
+}

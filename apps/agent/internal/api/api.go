@@ -69,6 +69,9 @@ type Server struct {
 	// Waker is the resume concern's wake. nil when resume is off, and then the
 	// Wake RPC says so.
 	Waker interface{ Wake() }
+	// Messages answers MessageService on the unix socket. It writes into other
+	// sessions, so the TCP side never serves it (message.proto). nil leaves it off.
+	Messages ccxv1connect.MessageServiceHandler
 }
 
 // Wake makes the resume concern claim now. The center calls it when a resume is
@@ -236,10 +239,14 @@ func (c *Concern) retry() time.Duration {
 
 func (c *Concern) run(ctx context.Context) error {
 	// The request is two short strings.
-	handler := func(s *Server) http.Handler {
+	handler := func(s *Server, local bool) http.Handler {
 		path, h := ccxv1connect.NewAgentServiceHandler(s, connect.WithReadMaxBytes(64<<10))
 		mux := http.NewServeMux()
 		mux.Handle(path, h)
+		if local && s.Messages != nil {
+			// A message body is free text, so it gets more room than the status asks.
+			mux.Handle(ccxv1connect.NewMessageServiceHandler(s.Messages, connect.WithReadMaxBytes(1<<20)))
+		}
 		return mux
 	}
 	server := func(h http.Handler) *http.Server {
@@ -252,7 +259,7 @@ func (c *Concern) run(ctx context.Context) error {
 	}
 	defer c.lock.Close()
 	defer os.Remove(c.socketPath)
-	unix := server(handler(c.server))
+	unix := server(handler(c.server, true))
 	if c.lastErr != "" {
 		c.log("api: up again on %s", c.socketPath)
 		c.lastErr = ""
@@ -275,7 +282,7 @@ func (c *Concern) run(ctx context.Context) error {
 		} else {
 			remote := *c.server
 			remote.Remote = true
-			go c.serveTCP(tcpCtx, server(RequireBearer(c.token, handler(&remote))))
+			go c.serveTCP(tcpCtx, server(RequireBearer(c.token, handler(&remote, false))))
 		}
 	}
 
@@ -393,11 +400,14 @@ func RequireBearer(token string, next http.Handler) http.Handler {
 
 // UnixClient is an AgentService client over the unix socket.
 func UnixClient(socketPath string) ccxv1connect.AgentServiceClient {
-	hc := &http.Client{Transport: &http.Transport{
+	// The host is not used; the dialer ignores it.
+	return ccxv1connect.NewAgentServiceClient(unixHTTP(socketPath), "http://ccx-agent")
+}
+
+func unixHTTP(socketPath string) *http.Client {
+	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 		},
 	}}
-	// The host is not used; the dialer ignores it.
-	return ccxv1connect.NewAgentServiceClient(hc, "http://ccx-agent")
 }

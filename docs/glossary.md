@@ -62,6 +62,13 @@ believed.
 - **heartbeat** — a channel event with the attribute ` kind="heartbeat"` (the whole name) that wakes an idle session for one short turn so
   its prompt cache does not expire (`docs/design/heartbeat.md`). Not a message; a heartbeat turn is not use.
   Decided by the `heartbeat` concern in serve; a session's own `on` / `off` is declared state.
+- **message** — text one session sends another through `ccx msg send` and ccx-agent's `MessageService`
+  (`packages/proto/ccx/v1/message.proto`, `docs/design/messaging.md`). Not a heartbeat.
+- **mode (message)** — how the receiver reads a message: `later` / `after-turn` / `urgent`
+  (`DeliveryMode`). Chosen by the sender; how it is delivered (herdr prompt, channel, hook) is ccx-agent's
+  choice and is not a mode.
+- **ack** — what ccx-agent tells the sender happened to a message (`SendResponse.State`): `sent`,
+  `working`, `not-started`. A refusal is not an ack; nothing was sent.
 
 ## Repodirs
 
