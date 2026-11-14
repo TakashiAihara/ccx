@@ -9,6 +9,7 @@ package ccxv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -143,7 +144,11 @@ type SendRequest struct {
 	// UTF-8 text up to 64 KiB, with no control characters but newline and tab.
 	Body string `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
 	// The sender's name. Only shown in that line, never used for auth. One line, at most 40 bytes.
-	Sender        string `protobuf:"bytes,5,opt,name=sender,proto3" json:"sender,omitempty"`
+	Sender string `protobuf:"bytes,5,opt,name=sender,proto3" json:"sender,omitempty"`
+	// The machine and OS user whose ccx-agent delivers it. Empty means this ccx-agent's own. Any other goes
+	// through the center (MessageRelayService, #138), and that ccx-agent delivers it as if sent to it locally.
+	Machine       string `protobuf:"bytes,6,opt,name=machine,proto3" json:"machine,omitempty"`
+	User          string `protobuf:"bytes,7,opt,name=user,proto3" json:"user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -213,6 +218,20 @@ func (x *SendRequest) GetSender() string {
 	return ""
 }
 
+func (x *SendRequest) GetMachine() string {
+	if x != nil {
+		return x.Machine
+	}
+	return ""
+}
+
+func (x *SendRequest) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
 type SendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	State SendResponse_State     `protobuf:"varint,1,opt,name=state,proto3,enum=ccx.v1.SendResponse_State" json:"state,omitempty"`
@@ -266,17 +285,554 @@ func (x *SendResponse) GetDetail() string {
 	return ""
 }
 
+type RelayedMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Set by the center (UUIDv7).
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// As the sender gave it; machine and user name the receiver.
+	Request *SendRequest           `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	PutAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=put_at,json=putAt,proto3" json:"put_at,omitempty"`
+	// Unset until a ccx-agent claimed it.
+	ClaimedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=claimed_at,json=claimedAt,proto3" json:"claimed_at,omitempty"`
+	// Unset until the receiver reported the end.
+	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// The acks so far, in order.
+	Acks []*SendResponse `protobuf:"bytes,6,rep,name=acks,proto3" json:"acks,omitempty"`
+	// The receiver's error, once finished: a Connect code (0 means it ended without an error) and its message.
+	ErrorCode    int32  `protobuf:"varint,7,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage string `protobuf:"bytes,8,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	// The error came before anything was typed (MessageService's Ccx-Not-Typed).
+	NotTyped bool `protobuf:"varint,9,opt,name=not_typed,json=notTyped,proto3" json:"not_typed,omitempty"`
+	// Not claimed within 30 seconds of being put. It will not be handed out.
+	Expired bool `protobuf:"varint,10,opt,name=expired,proto3" json:"expired,omitempty"`
+	// Only in ClaimMessage's answer: the receiver gives it back in ReportMessage.
+	ClaimToken    string `protobuf:"bytes,11,opt,name=claim_token,json=claimToken,proto3" json:"claim_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RelayedMessage) Reset() {
+	*x = RelayedMessage{}
+	mi := &file_ccx_v1_message_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RelayedMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RelayedMessage) ProtoMessage() {}
+
+func (x *RelayedMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RelayedMessage.ProtoReflect.Descriptor instead.
+func (*RelayedMessage) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RelayedMessage) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *RelayedMessage) GetRequest() *SendRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+func (x *RelayedMessage) GetPutAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.PutAt
+	}
+	return nil
+}
+
+func (x *RelayedMessage) GetClaimedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ClaimedAt
+	}
+	return nil
+}
+
+func (x *RelayedMessage) GetFinishedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinishedAt
+	}
+	return nil
+}
+
+func (x *RelayedMessage) GetAcks() []*SendResponse {
+	if x != nil {
+		return x.Acks
+	}
+	return nil
+}
+
+func (x *RelayedMessage) GetErrorCode() int32 {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return 0
+}
+
+func (x *RelayedMessage) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *RelayedMessage) GetNotTyped() bool {
+	if x != nil {
+		return x.NotTyped
+	}
+	return false
+}
+
+func (x *RelayedMessage) GetExpired() bool {
+	if x != nil {
+		return x.Expired
+	}
+	return false
+}
+
+func (x *RelayedMessage) GetClaimToken() string {
+	if x != nil {
+		return x.ClaimToken
+	}
+	return ""
+}
+
+type PutMessageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Request       *SendRequest           `protobuf:"bytes,1,opt,name=request,proto3" json:"request,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutMessageRequest) Reset() {
+	*x = PutMessageRequest{}
+	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutMessageRequest) ProtoMessage() {}
+
+func (x *PutMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutMessageRequest.ProtoReflect.Descriptor instead.
+func (*PutMessageRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PutMessageRequest) GetRequest() *SendRequest {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+type PutMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Message       *RelayedMessage        `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PutMessageResponse) Reset() {
+	*x = PutMessageResponse{}
+	mi := &file_ccx_v1_message_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PutMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutMessageResponse) ProtoMessage() {}
+
+func (x *PutMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutMessageResponse.ProtoReflect.Descriptor instead.
+func (*PutMessageResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PutMessageResponse) GetMessage() *RelayedMessage {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+type GetMessageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMessageRequest) Reset() {
+	*x = GetMessageRequest{}
+	mi := &file_ccx_v1_message_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMessageRequest) ProtoMessage() {}
+
+func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMessageRequest.ProtoReflect.Descriptor instead.
+func (*GetMessageRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetMessageRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Message       *RelayedMessage        `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMessageResponse) Reset() {
+	*x = GetMessageResponse{}
+	mi := &file_ccx_v1_message_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMessageResponse) ProtoMessage() {}
+
+func (x *GetMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMessageResponse.ProtoReflect.Descriptor instead.
+func (*GetMessageResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GetMessageResponse) GetMessage() *RelayedMessage {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+type ClaimMessageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The caller's own origin (ingest.proto's Origin).
+	Machine       string `protobuf:"bytes,1,opt,name=machine,proto3" json:"machine,omitempty"`
+	User          string `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClaimMessageRequest) Reset() {
+	*x = ClaimMessageRequest{}
+	mi := &file_ccx_v1_message_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClaimMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClaimMessageRequest) ProtoMessage() {}
+
+func (x *ClaimMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClaimMessageRequest.ProtoReflect.Descriptor instead.
+func (*ClaimMessageRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ClaimMessageRequest) GetMachine() string {
+	if x != nil {
+		return x.Machine
+	}
+	return ""
+}
+
+func (x *ClaimMessageRequest) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+type ClaimMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Message       *RelayedMessage        `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClaimMessageResponse) Reset() {
+	*x = ClaimMessageResponse{}
+	mi := &file_ccx_v1_message_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClaimMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClaimMessageResponse) ProtoMessage() {}
+
+func (x *ClaimMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClaimMessageResponse.ProtoReflect.Descriptor instead.
+func (*ClaimMessageResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ClaimMessageResponse) GetMessage() *RelayedMessage {
+	if x != nil {
+		return x.Message
+	}
+	return nil
+}
+
+type ReportMessageRequest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ClaimToken string                 `protobuf:"bytes,2,opt,name=claim_token,json=claimToken,proto3" json:"claim_token,omitempty"`
+	// All the acks so far, not only the new ones, so a resent report does no harm.
+	Acks          []*SendResponse `protobuf:"bytes,3,rep,name=acks,proto3" json:"acks,omitempty"`
+	Finished      bool            `protobuf:"varint,4,opt,name=finished,proto3" json:"finished,omitempty"`
+	ErrorCode     int32           `protobuf:"varint,5,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage  string          `protobuf:"bytes,6,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	NotTyped      bool            `protobuf:"varint,7,opt,name=not_typed,json=notTyped,proto3" json:"not_typed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportMessageRequest) Reset() {
+	*x = ReportMessageRequest{}
+	mi := &file_ccx_v1_message_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportMessageRequest) ProtoMessage() {}
+
+func (x *ReportMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportMessageRequest.ProtoReflect.Descriptor instead.
+func (*ReportMessageRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReportMessageRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ReportMessageRequest) GetClaimToken() string {
+	if x != nil {
+		return x.ClaimToken
+	}
+	return ""
+}
+
+func (x *ReportMessageRequest) GetAcks() []*SendResponse {
+	if x != nil {
+		return x.Acks
+	}
+	return nil
+}
+
+func (x *ReportMessageRequest) GetFinished() bool {
+	if x != nil {
+		return x.Finished
+	}
+	return false
+}
+
+func (x *ReportMessageRequest) GetErrorCode() int32 {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return 0
+}
+
+func (x *ReportMessageRequest) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ReportMessageRequest) GetNotTyped() bool {
+	if x != nil {
+		return x.NotTyped
+	}
+	return false
+}
+
+type ReportMessageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportMessageResponse) Reset() {
+	*x = ReportMessageResponse{}
+	mi := &file_ccx_v1_message_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportMessageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportMessageResponse) ProtoMessage() {}
+
+func (x *ReportMessageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportMessageResponse.ProtoReflect.Descriptor instead.
+func (*ReportMessageResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{10}
+}
+
 var File_ccx_v1_message_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_message_proto_rawDesc = "" +
 	"\n" +
-	"\x14ccx/v1/message.proto\x12\x06ccx.v1\"\x95\x01\n" +
+	"\x14ccx/v1/message.proto\x12\x06ccx.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x01\n" +
 	"\vSendRequest\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12(\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x14.ccx.v1.DeliveryModeR\x04mode\x12\x18\n" +
 	"\asummary\x18\x03 \x01(\tR\asummary\x12\x12\n" +
 	"\x04body\x18\x04 \x01(\tR\x04body\x12\x16\n" +
-	"\x06sender\x18\x05 \x01(\tR\x06sender\"\xb2\x01\n" +
+	"\x06sender\x18\x05 \x01(\tR\x06sender\x12\x18\n" +
+	"\amachine\x18\x06 \x01(\tR\amachine\x12\x12\n" +
+	"\x04user\x18\a \x01(\tR\x04user\"\xb2\x01\n" +
 	"\fSendResponse\x120\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1a.ccx.v1.SendResponse.StateR\x05state\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\"X\n" +
@@ -285,14 +841,62 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\n" +
 	"STATE_SENT\x10\x01\x12\x11\n" +
 	"\rSTATE_WORKING\x10\x02\x12\x15\n" +
-	"\x11STATE_NOT_STARTED\x10\x03*~\n" +
+	"\x11STATE_NOT_STARTED\x10\x03\"\xc0\x03\n" +
+	"\x0eRelayedMessage\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
+	"\arequest\x18\x02 \x01(\v2\x13.ccx.v1.SendRequestR\arequest\x121\n" +
+	"\x06put_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x05putAt\x129\n" +
+	"\n" +
+	"claimed_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tclaimedAt\x12;\n" +
+	"\vfinished_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"finishedAt\x12(\n" +
+	"\x04acks\x18\x06 \x03(\v2\x14.ccx.v1.SendResponseR\x04acks\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\a \x01(\x05R\terrorCode\x12#\n" +
+	"\rerror_message\x18\b \x01(\tR\ferrorMessage\x12\x1b\n" +
+	"\tnot_typed\x18\t \x01(\bR\bnotTyped\x12\x18\n" +
+	"\aexpired\x18\n" +
+	" \x01(\bR\aexpired\x12\x1f\n" +
+	"\vclaim_token\x18\v \x01(\tR\n" +
+	"claimToken\"B\n" +
+	"\x11PutMessageRequest\x12-\n" +
+	"\arequest\x18\x01 \x01(\v2\x13.ccx.v1.SendRequestR\arequest\"F\n" +
+	"\x12PutMessageResponse\x120\n" +
+	"\amessage\x18\x01 \x01(\v2\x16.ccx.v1.RelayedMessageR\amessage\"#\n" +
+	"\x11GetMessageRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"F\n" +
+	"\x12GetMessageResponse\x120\n" +
+	"\amessage\x18\x01 \x01(\v2\x16.ccx.v1.RelayedMessageR\amessage\"C\n" +
+	"\x13ClaimMessageRequest\x12\x18\n" +
+	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
+	"\x04user\x18\x02 \x01(\tR\x04user\"H\n" +
+	"\x14ClaimMessageResponse\x120\n" +
+	"\amessage\x18\x01 \x01(\v2\x16.ccx.v1.RelayedMessageR\amessage\"\xee\x01\n" +
+	"\x14ReportMessageRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
+	"\vclaim_token\x18\x02 \x01(\tR\n" +
+	"claimToken\x12(\n" +
+	"\x04acks\x18\x03 \x03(\v2\x14.ccx.v1.SendResponseR\x04acks\x12\x1a\n" +
+	"\bfinished\x18\x04 \x01(\bR\bfinished\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x05 \x01(\x05R\terrorCode\x12#\n" +
+	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\x12\x1b\n" +
+	"\tnot_typed\x18\a \x01(\bR\bnotTyped\"\x17\n" +
+	"\x15ReportMessageResponse*~\n" +
 	"\fDeliveryMode\x12\x1d\n" +
 	"\x19DELIVERY_MODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13DELIVERY_MODE_LATER\x10\x01\x12\x1c\n" +
 	"\x18DELIVERY_MODE_AFTER_TURN\x10\x02\x12\x18\n" +
 	"\x14DELIVERY_MODE_URGENT\x10\x032E\n" +
 	"\x0eMessageService\x123\n" +
-	"\x04Send\x12\x13.ccx.v1.SendRequest\x1a\x14.ccx.v1.SendResponse0\x01B\x94\x01\n" +
+	"\x04Send\x12\x13.ccx.v1.SendRequest\x1a\x14.ccx.v1.SendResponse0\x012\xb8\x02\n" +
+	"\x13MessageRelayService\x12C\n" +
+	"\n" +
+	"PutMessage\x12\x19.ccx.v1.PutMessageRequest\x1a\x1a.ccx.v1.PutMessageResponse\x12C\n" +
+	"\n" +
+	"GetMessage\x12\x19.ccx.v1.GetMessageRequest\x1a\x1a.ccx.v1.GetMessageResponse\x12I\n" +
+	"\fClaimMessage\x12\x1b.ccx.v1.ClaimMessageRequest\x1a\x1c.ccx.v1.ClaimMessageResponse\x12L\n" +
+	"\rReportMessage\x12\x1c.ccx.v1.ReportMessageRequest\x1a\x1d.ccx.v1.ReportMessageResponseB\x94\x01\n" +
 	"\n" +
 	"com.ccx.v1B\fMessageProtoP\x01Z?github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1;ccxv1\xa2\x02\x03CXX\xaa\x02\x06Ccx.V1\xca\x02\x06Ccx\\V1\xe2\x02\x12Ccx\\V1\\GPBMetadata\xea\x02\aCcx::V1b\x06proto3"
 
@@ -309,23 +913,51 @@ func file_ccx_v1_message_proto_rawDescGZIP() []byte {
 }
 
 var file_ccx_v1_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_ccx_v1_message_proto_goTypes = []any{
-	(DeliveryMode)(0),       // 0: ccx.v1.DeliveryMode
-	(SendResponse_State)(0), // 1: ccx.v1.SendResponse.State
-	(*SendRequest)(nil),     // 2: ccx.v1.SendRequest
-	(*SendResponse)(nil),    // 3: ccx.v1.SendResponse
+	(DeliveryMode)(0),             // 0: ccx.v1.DeliveryMode
+	(SendResponse_State)(0),       // 1: ccx.v1.SendResponse.State
+	(*SendRequest)(nil),           // 2: ccx.v1.SendRequest
+	(*SendResponse)(nil),          // 3: ccx.v1.SendResponse
+	(*RelayedMessage)(nil),        // 4: ccx.v1.RelayedMessage
+	(*PutMessageRequest)(nil),     // 5: ccx.v1.PutMessageRequest
+	(*PutMessageResponse)(nil),    // 6: ccx.v1.PutMessageResponse
+	(*GetMessageRequest)(nil),     // 7: ccx.v1.GetMessageRequest
+	(*GetMessageResponse)(nil),    // 8: ccx.v1.GetMessageResponse
+	(*ClaimMessageRequest)(nil),   // 9: ccx.v1.ClaimMessageRequest
+	(*ClaimMessageResponse)(nil),  // 10: ccx.v1.ClaimMessageResponse
+	(*ReportMessageRequest)(nil),  // 11: ccx.v1.ReportMessageRequest
+	(*ReportMessageResponse)(nil), // 12: ccx.v1.ReportMessageResponse
+	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
 }
 var file_ccx_v1_message_proto_depIdxs = []int32{
-	0, // 0: ccx.v1.SendRequest.mode:type_name -> ccx.v1.DeliveryMode
-	1, // 1: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
-	2, // 2: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
-	3, // 3: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0,  // 0: ccx.v1.SendRequest.mode:type_name -> ccx.v1.DeliveryMode
+	1,  // 1: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
+	2,  // 2: ccx.v1.RelayedMessage.request:type_name -> ccx.v1.SendRequest
+	13, // 3: ccx.v1.RelayedMessage.put_at:type_name -> google.protobuf.Timestamp
+	13, // 4: ccx.v1.RelayedMessage.claimed_at:type_name -> google.protobuf.Timestamp
+	13, // 5: ccx.v1.RelayedMessage.finished_at:type_name -> google.protobuf.Timestamp
+	3,  // 6: ccx.v1.RelayedMessage.acks:type_name -> ccx.v1.SendResponse
+	2,  // 7: ccx.v1.PutMessageRequest.request:type_name -> ccx.v1.SendRequest
+	4,  // 8: ccx.v1.PutMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	4,  // 9: ccx.v1.GetMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	4,  // 10: ccx.v1.ClaimMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	3,  // 11: ccx.v1.ReportMessageRequest.acks:type_name -> ccx.v1.SendResponse
+	2,  // 12: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
+	5,  // 13: ccx.v1.MessageRelayService.PutMessage:input_type -> ccx.v1.PutMessageRequest
+	7,  // 14: ccx.v1.MessageRelayService.GetMessage:input_type -> ccx.v1.GetMessageRequest
+	9,  // 15: ccx.v1.MessageRelayService.ClaimMessage:input_type -> ccx.v1.ClaimMessageRequest
+	11, // 16: ccx.v1.MessageRelayService.ReportMessage:input_type -> ccx.v1.ReportMessageRequest
+	3,  // 17: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
+	6,  // 18: ccx.v1.MessageRelayService.PutMessage:output_type -> ccx.v1.PutMessageResponse
+	8,  // 19: ccx.v1.MessageRelayService.GetMessage:output_type -> ccx.v1.GetMessageResponse
+	10, // 20: ccx.v1.MessageRelayService.ClaimMessage:output_type -> ccx.v1.ClaimMessageResponse
+	12, // 21: ccx.v1.MessageRelayService.ReportMessage:output_type -> ccx.v1.ReportMessageResponse
+	17, // [17:22] is the sub-list for method output_type
+	12, // [12:17] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_message_proto_init() }
@@ -339,9 +971,9 @@ func file_ccx_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_message_proto_rawDesc), len(file_ccx_v1_message_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   2,
+			NumMessages:   11,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_ccx_v1_message_proto_goTypes,
 		DependencyIndexes: file_ccx_v1_message_proto_depIdxs,

@@ -109,7 +109,18 @@ func cmdServe() int {
 	// Assemble the enabled concerns (ADR 0002). Only collect is built in #90;
 	// carry and persistence append here the same way when they exist.
 	var concerns []concern.Concern
-	srv := &api.Server{ClaudeHome: claudeHome(), Messages: &message.Service{Devin: message.NewDevin(), Log: logger}}
+	msgs := &message.Service{Devin: message.NewDevin(), Machine: cfg.Machine, User: cfg.User, Log: logger}
+	srv := &api.Server{ClaudeHome: claudeHome(), Messages: msgs}
+	var wakers wakeAll
+	// Messages to and from other machines (#138) go through the center. It keys
+	// them by machine and user, as resume does, so both are needed.
+	if config.IsHTTP(cfg.HubURL) && collect.CheckOrigin(cfg) == nil {
+		r := message.NewRelay(message.NewCenter(cfg.HubURL, cfg.HubToken), cfg.Machine, cfg.User)
+		r.Deliver, r.Log = msgs.Deliver, logger
+		msgs.Relay = r
+		concerns = append(concerns, r)
+		wakers = append(wakers, r)
+	}
 	// Without a machine and a user name the center refuses every event, and collect
 	// would only fill the spool's dead/ (#126). Turn it off
 	// and keep the rest: heartbeat and the API do not need them. The live transcript
@@ -141,7 +152,7 @@ func cmdServe() int {
 		if r := startResume(cfg, logger); r != nil {
 			concerns = append(concerns, r)
 			rs = r
-			srv.Waker = r
+			wakers = append(wakers, r)
 		}
 		// One observer, both of them: the live transcript follows each running
 		// session's transcript, and resume learns the Claude home a session runs
@@ -168,6 +179,9 @@ func cmdServe() int {
 	}
 	// Not a toggle: it is how a person sees the rest. Its one write (MessageService)
 	// is served on the unix socket only.
+	if len(wakers) > 0 {
+		srv.Waker = wakers
+	}
 	concerns = append(concerns, api.New(cfg, srv, logger))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -378,4 +392,14 @@ ccx-agent runs as your user, never root. See docs for the systemd user unit.
 serve's concerns: collect, the live transcript, resume (report the sessions
 running here, open the stopped ones the center asks for), the heartbeat, the API.
 `)
+}
+
+// wakeAll hands the center's one Wake to every concern that claims work from it:
+// resume (#261) and the message relay (#138).
+type wakeAll []interface{ Wake() }
+
+func (w wakeAll) Wake() {
+	for _, x := range w {
+		x.Wake()
+	}
 }

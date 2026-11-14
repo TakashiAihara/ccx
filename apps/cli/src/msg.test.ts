@@ -183,3 +183,28 @@ test("a default sender is cut to the 40 bytes ccx-agent takes", () => {
   expect(Buffer.byteLength(name)).toBeLessThanOrEqual(40);
   expect(name).toBe("u".repeat(40));
 });
+
+test("--machine and --user are passed on for ccx-agent to relay; left out, they are empty (here)", async () => {
+  const got: SendRequest[] = [];
+  const socket = fakeAgent(async function* (req) {
+    got.push(req);
+    yield { state: SendResponse_State.SENT };
+  });
+  await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket, machine: "ccx1", user: "dev" }, () => {});
+  await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket }, () => {});
+  expect(got.map((r) => [r.machine, r.user])).toEqual([
+    ["ccx1", "dev"],
+    ["", ""],
+  ]);
+});
+
+test("the command takes -m and -u", async () => {
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const r = await runCli(["msg", "send", "t", "-m", "ccx1", "-u", "dev", "--socket", socket, "--summary", "s", "b"], {});
+  expect(r.code).toBe(0);
+  expect(got).toMatchObject({ machine: "ccx1", user: "dev" });
+});

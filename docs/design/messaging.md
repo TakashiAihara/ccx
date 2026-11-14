@@ -1,6 +1,6 @@
 # Messages between running sessions
 
-A session sends text to another running session with `ccx msg send`. The sender names the receiver and how the message should be read; ccx-agent picks how to get it there and reports what happened. Issue #301 holds the plan across products, #302 the Devin delivery built here, #138 the hop to another machine.
+A session sends text to another running session with `ccx msg send`, on this machine or another. The sender names the receiver and how the message should be read; ccx-agent picks how to get it there and reports what happened. Issue #301 holds the plan across products, #302 the Devin delivery built here, #138 the hop to another machine.
 
 ## What the sender sees
 
@@ -60,8 +60,44 @@ sequenceDiagram
 - Only a Devin that herdr knows by name: `herdr agent start --kind devin` or `spawn-task --agent devin`. A Devin started another way has no session name in herdr and is not guessed.
 - Served on the unix socket only. On the TCP listener anyone holding the API token could type into any session.
 
+## Another machine
+
+```bash
+ccx msg send -m ccx1 excited-giraffe --summary "review: 3 findings" --mode urgent "src/foo.ts: ..."
+```
+
+- `-m <machine>` / `-u <user>` name the ccx-agent that delivers it, the same flags as `ccx session resume`. Either left out is this agent's own; both left out (or naming this agent) is a local send.
+- The receiving ccx-agent delivers it exactly as a local send, so the modes, refusals and acks above hold unchanged. The sender sees the same lines, and the error text starts with `<machine>/<user>:`.
+
+```mermaid
+sequenceDiagram
+    participant C as ccx msg send
+    participant A as ccx-agent (sender)
+    participant S as center
+    participant B as ccx-agent (receiver)
+    participant H as herdr
+
+    C->>A: MessageService.Send (unix socket), machine and user set
+    A->>S: PutMessage
+    S-->>B: Wake (when B advertised its API url)
+    B->>S: ClaimMessage (on the wake, or its 5 s poll)
+    B->>H: deliver as a local send
+    B->>S: ReportMessage per ack, then the end
+    loop every 250 ms
+        A->>S: GetMessage
+        A-->>C: each new ack
+    end
+```
+
+- The connections go ccx-agent → center, as for ingest and resume; the center reaches a ccx-agent only to wake it, and a missed wake waits for the receiver's 5 s poll.
+- A message is handed out once. One the receiver claimed and never finished (it died mid-send) is not handed out again, so it is never typed twice, and the sender ends at its `--timeout` as `may have been sent`. One not claimed within 30 s is never handed out, and the sender says `not sent` (no ccx-agent there took it).
+- A put the center refused (bad token, invalid request) or that could not connect is `not sent`; a put that timed out or lost its answer may have been stored, so it is not.
+- The center keeps a message, body included, for an hour after it was put, and drops it on a later put.
+- The relay runs on every ccx-agent with an http(s) center and a machine and user name. Receiving needs no other setting; the wake needs the API url that the resume concern advertises (`docs/design/resume.md`).
+- Anyone holding the center's token can put a message for any machine. That is the reach the token already has through resume, which starts sessions anywhere; MessageService itself stays off the agent's TCP listener.
+
 ## Not built yet
 
 - `question` and `done` acks, from Devin's `PreToolUse` (`ask_user_question`) and `Stop` hooks (#302).
 - `later` for Devin, and `after-turn` to a working Devin.
-- Receivers other than Devin (#301) and other machines (#138).
+- Receivers other than Devin (#301), among them a Claude Code session through its ccx channel (#138), and a send tool on the channel's MCP server (#301 puts the CLI first).

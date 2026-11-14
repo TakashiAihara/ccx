@@ -118,7 +118,7 @@ function unfinished(tx: Pick<Db, "select">, machine: string, user: string, sessi
  */
 const WAKE_TIMEOUT_MS = 3000;
 
-function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
+export function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
   const ep = db
     .select()
     .from(agentEndpoints)

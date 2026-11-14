@@ -1,0 +1,157 @@
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { timestampFromMs } from "@bufbuild/protobuf/wkt";
+import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
+
+import type { Db } from "./db/open.ts";
+import { relayMessages } from "./db/schema.ts";
+import { wakeAgent } from "./resume.ts";
+import {
+  MessageRelayService,
+  RelayedMessageSchema,
+  SendRequestSchema,
+  SendResponseSchema,
+  type RelayedMessage,
+  type SendResponse,
+} from "@ccx/proto/ccx/v1/message_pb.ts";
+
+/**
+ * message.proto の MessageRelayService (#138、docs/design/messaging.md)。送り手の ccx-agent が置いたメッセージを
+ * 宛先の ccx-agent が 1 度だけ取り、届けた ack を書き、送り手が読み返す。
+ */
+
+/** 取られないまま置いておく時間。過ぎた行は渡さないので、送り手は「送っていない」と言える */
+export const CLAIM_TTL_MS = 30_000;
+
+/** 行を残す時間。送り手が ack を読み終えるには足りる長さで、本文を center に溜め続けない */
+export const KEEP_MS = 60 * 60 * 1000;
+
+/** 置ける SendRequest の大きさ。本文の上限 (agent の MaxBody、64 KiB) に宛先と見出しの分を足した程度 */
+export const MAX_REQUEST_BYTES = 70 * 1024;
+
+type Row = typeof relayMessages.$inferSelect;
+type Ack = { state: number; detail: string };
+
+const invalid = (why: string): ConnectError => new ConnectError(why, Code.InvalidArgument);
+
+function toMessage(r: Row, nowMs: number, withToken = false): RelayedMessage {
+  const acks = (JSON.parse(r.acks) as Ack[]).map((a) => create(SendResponseSchema, a));
+  return create(RelayedMessageSchema, {
+    id: r.id,
+    request: fromBinary(SendRequestSchema, r.request),
+    putAt: timestampFromMs(r.putAtMs),
+    claimedAt: r.claimedAtMs === null ? undefined : timestampFromMs(r.claimedAtMs),
+    finishedAt: r.finishedAtMs === null ? undefined : timestampFromMs(r.finishedAtMs),
+    acks,
+    errorCode: r.errorCode,
+    errorMessage: r.errorMessage,
+    notTyped: r.notTyped,
+    expired: r.claimedAtMs === null && r.putAtMs <= nowMs - CLAIM_TTL_MS,
+    claimToken: withToken ? r.claimToken : "",
+  });
+}
+
+const ackRows = (acks: SendResponse[]): string => JSON.stringify(acks.map((a) => ({ state: a.state, detail: a.detail })));
+
+export function relayImpl(db: Db, now: () => number, agentToken?: string): ServiceImpl<typeof MessageRelayService> {
+  return {
+    putMessage(req) {
+      const r = req.request;
+      if (!r?.machine || !r.user) throw invalid("request.machine and request.user are required");
+      const bytes = toBinary(SendRequestSchema, r);
+      if (bytes.length > MAX_REQUEST_BYTES) throw invalid(`request is ${bytes.length} bytes, over the ${MAX_REQUEST_BYTES}-byte limit`);
+      const nowMs = now();
+
+      const row: Row = {
+        id: Bun.randomUUIDv7(),
+        machine: r.machine,
+        user: r.user,
+        request: Buffer.from(bytes),
+        putAtMs: nowMs,
+        claimedAtMs: null,
+        finishedAtMs: null,
+        acks: "[]",
+        errorCode: 0,
+        errorMessage: "",
+        notTyped: false,
+        claimToken: "",
+      };
+      db.transaction(
+        (tx) => {
+          tx.delete(relayMessages).where(lt(relayMessages.putAtMs, nowMs - KEEP_MS)).run();
+          tx.insert(relayMessages).values(row).run();
+        },
+        { behavior: "immediate" },
+      );
+
+      // 起こしは次の polling を待たせないためだけのもの。届かなくても polling が拾う
+      if (agentToken) {
+        try {
+          wakeAgent(db, r.machine, r.user, agentToken, nowMs);
+        } catch (err: unknown) {
+          console.error(`wake ${r.machine}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return { $typeName: "ccx.v1.PutMessageResponse", message: toMessage(row, nowMs) };
+    },
+
+    getMessage(req) {
+      const row = db.select().from(relayMessages).where(eq(relayMessages.id, req.id)).get();
+      if (!row) throw new ConnectError(`no message: ${req.id}`, Code.NotFound);
+      return { $typeName: "ccx.v1.GetMessageResponse", message: toMessage(row, now()) };
+    },
+
+    claimMessage(req) {
+      if (!req.machine || !req.user) throw invalid("machine and user are required");
+      const nowMs = now();
+
+      // 選ぶのと claimed_at を付けるのを 1 トランザクションにする: 同じ行を 2 つの agent に渡さない
+      const claimed = db.transaction(
+        (tx) => {
+          const row = tx
+            .select()
+            .from(relayMessages)
+            .where(
+              and(
+                eq(relayMessages.machine, req.machine),
+                eq(relayMessages.user, req.user),
+                isNull(relayMessages.claimedAtMs),
+                sql`${relayMessages.putAtMs} > ${nowMs - CLAIM_TTL_MS}`,
+              ),
+            )
+            .orderBy(relayMessages.putAtMs, sql`rowid`)
+            .get();
+          if (!row) return undefined;
+          const claimToken = Bun.randomUUIDv7();
+          tx.update(relayMessages).set({ claimedAtMs: nowMs, claimToken }).where(eq(relayMessages.id, row.id)).run();
+          return { ...row, claimedAtMs: nowMs, claimToken };
+        },
+        { behavior: "immediate" },
+      );
+
+      return { $typeName: "ccx.v1.ClaimMessageResponse", message: claimed ? toMessage(claimed, nowMs, true) : undefined };
+    },
+
+    reportMessage(req) {
+      const nowMs = now();
+      db.transaction(
+        (tx) => {
+          const row = tx.select().from(relayMessages).where(eq(relayMessages.id, req.id)).get();
+          if (!row) throw new ConnectError(`no message: ${req.id}`, Code.NotFound);
+          if (row.claimedAtMs === null || row.finishedAtMs !== null || row.claimToken !== req.claimToken) {
+            throw new ConnectError(`the message ${req.id} is not claimed with this token, or is finished`, Code.FailedPrecondition);
+          }
+          tx.update(relayMessages)
+            .set({
+              acks: ackRows(req.acks),
+              ...(req.finished ? { finishedAtMs: nowMs, errorCode: req.errorCode, errorMessage: req.errorMessage, notTyped: req.notTyped } : {}),
+            })
+            .where(eq(relayMessages.id, req.id))
+            .run();
+        },
+        { behavior: "immediate" },
+      );
+      return { $typeName: "ccx.v1.ReportMessageResponse" };
+    },
+  };
+}

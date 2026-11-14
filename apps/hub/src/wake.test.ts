@@ -13,6 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DeliveryMode, MessageRelayService } from "@ccx/proto/ccx/v1/message_pb.ts";
 import { ResumeService } from "@ccx/proto/ccx/v1/resume_pb.ts";
 
 import { openDb, type Db } from "./db/open.ts";
@@ -356,4 +357,16 @@ test("a failure while looking up the address does not fail the request that was 
   db.$client.exec("DROP TABLE agent_endpoints");
   const { request } = await client.requestResume({ key: key() });
   expect(request?.id).toBeTruthy();
+});
+
+test("a message put for a machine wakes that machine's agent, and only that one (#138)", async () => {
+  startCenter(AGENT_TOKEN);
+  const relay = createClient(MessageRelayService, createConnectTransport({ baseUrl: `http://127.0.0.1:${center!.port}`, httpVersion: "1.1" }));
+  ingest(db, [running({ session_ids: [], api_url: agentUrl() }, "m2")], now);
+  const msg = (machine: string) => ({ request: { target: "d", mode: DeliveryMode.URGENT, summary: "s", sender: "me", body: "b", machine, user: "dev" } });
+
+  await relay.putMessage(msg("m1"));
+  expect(await hitsAfter(300)).toEqual([]);
+  await relay.putMessage(msg("m2"));
+  expect(await hitsAfter()).toEqual([{ path: "/ccx.v1.AgentService/Wake", auth: `Bearer ${AGENT_TOKEN}`, method: "POST" }]);
 });

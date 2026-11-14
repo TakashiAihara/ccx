@@ -4,13 +4,15 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file ccx/v1/message.proto.
  */
 export const file_ccx_v1_message: GenFile = /*@__PURE__*/
-  fileDesc("ChRjY3gvdjEvbWVzc2FnZS5wcm90bxIGY2N4LnYxInAKC1NlbmRSZXF1ZXN0Eg4KBnRhcmdldBgBIAEoCRIiCgRtb2RlGAIgASgOMhQuY2N4LnYxLkRlbGl2ZXJ5TW9kZRIPCgdzdW1tYXJ5GAMgASgJEgwKBGJvZHkYBCABKAkSDgoGc2VuZGVyGAUgASgJIqMBCgxTZW5kUmVzcG9uc2USKQoFc3RhdGUYASABKA4yGi5jY3gudjEuU2VuZFJlc3BvbnNlLlN0YXRlEg4KBmRldGFpbBgCIAEoCSJYCgVTdGF0ZRIVChFTVEFURV9VTlNQRUNJRklFRBAAEg4KClNUQVRFX1NFTlQQARIRCg1TVEFURV9XT1JLSU5HEAISFQoRU1RBVEVfTk9UX1NUQVJURUQQAyp+CgxEZWxpdmVyeU1vZGUSHQoZREVMSVZFUllfTU9ERV9VTlNQRUNJRklFRBAAEhcKE0RFTElWRVJZX01PREVfTEFURVIQARIcChhERUxJVkVSWV9NT0RFX0FGVEVSX1RVUk4QAhIYChRERUxJVkVSWV9NT0RFX1VSR0VOVBADMkUKDk1lc3NhZ2VTZXJ2aWNlEjMKBFNlbmQSEy5jY3gudjEuU2VuZFJlcXVlc3QaFC5jY3gudjEuU2VuZFJlc3BvbnNlMAFiBnByb3RvMw");
+  fileDesc("ChRjY3gvdjEvbWVzc2FnZS5wcm90bxIGY2N4LnYxIo8BCgtTZW5kUmVxdWVzdBIOCgZ0YXJnZXQYASABKAkSIgoEbW9kZRgCIAEoDjIULmNjeC52MS5EZWxpdmVyeU1vZGUSDwoHc3VtbWFyeRgDIAEoCRIMCgRib2R5GAQgASgJEg4KBnNlbmRlchgFIAEoCRIPCgdtYWNoaW5lGAYgASgJEgwKBHVzZXIYByABKAkiowEKDFNlbmRSZXNwb25zZRIpCgVzdGF0ZRgBIAEoDjIaLmNjeC52MS5TZW5kUmVzcG9uc2UuU3RhdGUSDgoGZGV0YWlsGAIgASgJIlgKBVN0YXRlEhUKEVNUQVRFX1VOU1BFQ0lGSUVEEAASDgoKU1RBVEVfU0VOVBABEhEKDVNUQVRFX1dPUktJTkcQAhIVChFTVEFURV9OT1RfU1RBUlRFRBADItcCCg5SZWxheWVkTWVzc2FnZRIKCgJpZBgBIAEoCRIkCgdyZXF1ZXN0GAIgASgLMhMuY2N4LnYxLlNlbmRSZXF1ZXN0EioKBnB1dF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKY2xhaW1lZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiIKBGFja3MYBiADKAsyFC5jY3gudjEuU2VuZFJlc3BvbnNlEhIKCmVycm9yX2NvZGUYByABKAUSFQoNZXJyb3JfbWVzc2FnZRgIIAEoCRIRCglub3RfdHlwZWQYCSABKAgSDwoHZXhwaXJlZBgKIAEoCBITCgtjbGFpbV90b2tlbhgLIAEoCSI5ChFQdXRNZXNzYWdlUmVxdWVzdBIkCgdyZXF1ZXN0GAEgASgLMhMuY2N4LnYxLlNlbmRSZXF1ZXN0Ij0KElB1dE1lc3NhZ2VSZXNwb25zZRInCgdtZXNzYWdlGAEgASgLMhYuY2N4LnYxLlJlbGF5ZWRNZXNzYWdlIh8KEUdldE1lc3NhZ2VSZXF1ZXN0EgoKAmlkGAEgASgJIj0KEkdldE1lc3NhZ2VSZXNwb25zZRInCgdtZXNzYWdlGAEgASgLMhYuY2N4LnYxLlJlbGF5ZWRNZXNzYWdlIjQKE0NsYWltTWVzc2FnZVJlcXVlc3QSDwoHbWFjaGluZRgBIAEoCRIMCgR1c2VyGAIgASgJIj8KFENsYWltTWVzc2FnZVJlc3BvbnNlEicKB21lc3NhZ2UYASABKAsyFi5jY3gudjEuUmVsYXllZE1lc3NhZ2UiqwEKFFJlcG9ydE1lc3NhZ2VSZXF1ZXN0EgoKAmlkGAEgASgJEhMKC2NsYWltX3Rva2VuGAIgASgJEiIKBGFja3MYAyADKAsyFC5jY3gudjEuU2VuZFJlc3BvbnNlEhAKCGZpbmlzaGVkGAQgASgIEhIKCmVycm9yX2NvZGUYBSABKAUSFQoNZXJyb3JfbWVzc2FnZRgGIAEoCRIRCglub3RfdHlwZWQYByABKAgiFwoVUmVwb3J0TWVzc2FnZVJlc3BvbnNlKn4KDERlbGl2ZXJ5TW9kZRIdChlERUxJVkVSWV9NT0RFX1VOU1BFQ0lGSUVEEAASFwoTREVMSVZFUllfTU9ERV9MQVRFUhABEhwKGERFTElWRVJZX01PREVfQUZURVJfVFVSThACEhgKFERFTElWRVJZX01PREVfVVJHRU5UEAMyRQoOTWVzc2FnZVNlcnZpY2USMwoEU2VuZBITLmNjeC52MS5TZW5kUmVxdWVzdBoULmNjeC52MS5TZW5kUmVzcG9uc2UwATK4AgoTTWVzc2FnZVJlbGF5U2VydmljZRJDCgpQdXRNZXNzYWdlEhkuY2N4LnYxLlB1dE1lc3NhZ2VSZXF1ZXN0GhouY2N4LnYxLlB1dE1lc3NhZ2VSZXNwb25zZRJDCgpHZXRNZXNzYWdlEhkuY2N4LnYxLkdldE1lc3NhZ2VSZXF1ZXN0GhouY2N4LnYxLkdldE1lc3NhZ2VSZXNwb25zZRJJCgxDbGFpbU1lc3NhZ2USGy5jY3gudjEuQ2xhaW1NZXNzYWdlUmVxdWVzdBocLmNjeC52MS5DbGFpbU1lc3NhZ2VSZXNwb25zZRJMCg1SZXBvcnRNZXNzYWdlEhwuY2N4LnYxLlJlcG9ydE1lc3NhZ2VSZXF1ZXN0Gh0uY2N4LnYxLlJlcG9ydE1lc3NhZ2VSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.SendRequest
@@ -48,6 +50,19 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
    * @generated from field: string sender = 5;
    */
   sender: string;
+
+  /**
+   * The machine and OS user whose ccx-agent delivers it. Empty means this ccx-agent's own. Any other goes
+   * through the center (MessageRelayService, #138), and that ccx-agent delivers it as if sent to it locally.
+   *
+   * @generated from field: string machine = 6;
+   */
+  machine: string;
+
+  /**
+   * @generated from field: string user = 7;
+   */
+  user: string;
 };
 
 /**
@@ -117,6 +132,262 @@ export enum SendResponse_State {
  */
 export const SendResponse_StateSchema: GenEnum<SendResponse_State> = /*@__PURE__*/
   enumDesc(file_ccx_v1_message, 1, 0);
+
+/**
+ * @generated from message ccx.v1.RelayedMessage
+ */
+export type RelayedMessage = Message<"ccx.v1.RelayedMessage"> & {
+  /**
+   * Set by the center (UUIDv7).
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * As the sender gave it; machine and user name the receiver.
+   *
+   * @generated from field: ccx.v1.SendRequest request = 2;
+   */
+  request?: SendRequest | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp put_at = 3;
+   */
+  putAt?: Timestamp | undefined;
+
+  /**
+   * Unset until a ccx-agent claimed it.
+   *
+   * @generated from field: google.protobuf.Timestamp claimed_at = 4;
+   */
+  claimedAt?: Timestamp | undefined;
+
+  /**
+   * Unset until the receiver reported the end.
+   *
+   * @generated from field: google.protobuf.Timestamp finished_at = 5;
+   */
+  finishedAt?: Timestamp | undefined;
+
+  /**
+   * The acks so far, in order.
+   *
+   * @generated from field: repeated ccx.v1.SendResponse acks = 6;
+   */
+  acks: SendResponse[];
+
+  /**
+   * The receiver's error, once finished: a Connect code (0 means it ended without an error) and its message.
+   *
+   * @generated from field: int32 error_code = 7;
+   */
+  errorCode: number;
+
+  /**
+   * @generated from field: string error_message = 8;
+   */
+  errorMessage: string;
+
+  /**
+   * The error came before anything was typed (MessageService's Ccx-Not-Typed).
+   *
+   * @generated from field: bool not_typed = 9;
+   */
+  notTyped: boolean;
+
+  /**
+   * Not claimed within 30 seconds of being put. It will not be handed out.
+   *
+   * @generated from field: bool expired = 10;
+   */
+  expired: boolean;
+
+  /**
+   * Only in ClaimMessage's answer: the receiver gives it back in ReportMessage.
+   *
+   * @generated from field: string claim_token = 11;
+   */
+  claimToken: string;
+};
+
+/**
+ * Describes the message ccx.v1.RelayedMessage.
+ * Use `create(RelayedMessageSchema)` to create a new message.
+ */
+export const RelayedMessageSchema: GenMessage<RelayedMessage> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 2);
+
+/**
+ * @generated from message ccx.v1.PutMessageRequest
+ */
+export type PutMessageRequest = Message<"ccx.v1.PutMessageRequest"> & {
+  /**
+   * @generated from field: ccx.v1.SendRequest request = 1;
+   */
+  request?: SendRequest | undefined;
+};
+
+/**
+ * Describes the message ccx.v1.PutMessageRequest.
+ * Use `create(PutMessageRequestSchema)` to create a new message.
+ */
+export const PutMessageRequestSchema: GenMessage<PutMessageRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 3);
+
+/**
+ * @generated from message ccx.v1.PutMessageResponse
+ */
+export type PutMessageResponse = Message<"ccx.v1.PutMessageResponse"> & {
+  /**
+   * @generated from field: ccx.v1.RelayedMessage message = 1;
+   */
+  message?: RelayedMessage | undefined;
+};
+
+/**
+ * Describes the message ccx.v1.PutMessageResponse.
+ * Use `create(PutMessageResponseSchema)` to create a new message.
+ */
+export const PutMessageResponseSchema: GenMessage<PutMessageResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 4);
+
+/**
+ * @generated from message ccx.v1.GetMessageRequest
+ */
+export type GetMessageRequest = Message<"ccx.v1.GetMessageRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message ccx.v1.GetMessageRequest.
+ * Use `create(GetMessageRequestSchema)` to create a new message.
+ */
+export const GetMessageRequestSchema: GenMessage<GetMessageRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 5);
+
+/**
+ * @generated from message ccx.v1.GetMessageResponse
+ */
+export type GetMessageResponse = Message<"ccx.v1.GetMessageResponse"> & {
+  /**
+   * @generated from field: ccx.v1.RelayedMessage message = 1;
+   */
+  message?: RelayedMessage | undefined;
+};
+
+/**
+ * Describes the message ccx.v1.GetMessageResponse.
+ * Use `create(GetMessageResponseSchema)` to create a new message.
+ */
+export const GetMessageResponseSchema: GenMessage<GetMessageResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 6);
+
+/**
+ * @generated from message ccx.v1.ClaimMessageRequest
+ */
+export type ClaimMessageRequest = Message<"ccx.v1.ClaimMessageRequest"> & {
+  /**
+   * The caller's own origin (ingest.proto's Origin).
+   *
+   * @generated from field: string machine = 1;
+   */
+  machine: string;
+
+  /**
+   * @generated from field: string user = 2;
+   */
+  user: string;
+};
+
+/**
+ * Describes the message ccx.v1.ClaimMessageRequest.
+ * Use `create(ClaimMessageRequestSchema)` to create a new message.
+ */
+export const ClaimMessageRequestSchema: GenMessage<ClaimMessageRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 7);
+
+/**
+ * @generated from message ccx.v1.ClaimMessageResponse
+ */
+export type ClaimMessageResponse = Message<"ccx.v1.ClaimMessageResponse"> & {
+  /**
+   * @generated from field: ccx.v1.RelayedMessage message = 1;
+   */
+  message?: RelayedMessage | undefined;
+};
+
+/**
+ * Describes the message ccx.v1.ClaimMessageResponse.
+ * Use `create(ClaimMessageResponseSchema)` to create a new message.
+ */
+export const ClaimMessageResponseSchema: GenMessage<ClaimMessageResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 8);
+
+/**
+ * @generated from message ccx.v1.ReportMessageRequest
+ */
+export type ReportMessageRequest = Message<"ccx.v1.ReportMessageRequest"> & {
+  /**
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: string claim_token = 2;
+   */
+  claimToken: string;
+
+  /**
+   * All the acks so far, not only the new ones, so a resent report does no harm.
+   *
+   * @generated from field: repeated ccx.v1.SendResponse acks = 3;
+   */
+  acks: SendResponse[];
+
+  /**
+   * @generated from field: bool finished = 4;
+   */
+  finished: boolean;
+
+  /**
+   * @generated from field: int32 error_code = 5;
+   */
+  errorCode: number;
+
+  /**
+   * @generated from field: string error_message = 6;
+   */
+  errorMessage: string;
+
+  /**
+   * @generated from field: bool not_typed = 7;
+   */
+  notTyped: boolean;
+};
+
+/**
+ * Describes the message ccx.v1.ReportMessageRequest.
+ * Use `create(ReportMessageRequestSchema)` to create a new message.
+ */
+export const ReportMessageRequestSchema: GenMessage<ReportMessageRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 9);
+
+/**
+ * @generated from message ccx.v1.ReportMessageResponse
+ */
+export type ReportMessageResponse = Message<"ccx.v1.ReportMessageResponse"> & {
+};
+
+/**
+ * Describes the message ccx.v1.ReportMessageResponse.
+ * Use `create(ReportMessageResponseSchema)` to create a new message.
+ */
+export const ReportMessageResponseSchema: GenMessage<ReportMessageResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 10);
 
 /**
  * How the receiver reads it (the three decided on #301).
@@ -190,4 +461,64 @@ export const MessageService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_ccx_v1_message, 0);
+
+/**
+ * Carries a message to another machine's ccx-agent (#138). Served by the center.
+ *
+ * The sender's ccx-agent puts the message and reads it back for the acks; the receiver's ccx-agent claims it,
+ * delivers it as a local Send, and reports each ack. The center does not connect to a ccx-agent for this (it
+ * may wake one, as for resume): the connections go ccx-agent -> center, as for ingest.
+ *
+ * A message is handed out once. One claimed and never finished is not handed out again, so it is never typed
+ * twice; the sender then ends as "may have been sent". One not claimed within 30 seconds is expired and never
+ * handed out, so the sender can say "not sent".
+ *
+ * Anyone holding the center's token can put a message for any machine, the same reach as resume.
+ *
+ * @generated from service ccx.v1.MessageRelayService
+ */
+export const MessageRelayService: GenService<{
+  /**
+   * Stores a message for request.machine / request.user. Both are required.
+   *
+   * @generated from rpc ccx.v1.MessageRelayService.PutMessage
+   */
+  putMessage: {
+    methodKind: "unary";
+    input: typeof PutMessageRequestSchema;
+    output: typeof PutMessageResponseSchema;
+  },
+  /**
+   * Reads one back by id, acks included. NOT_FOUND for an unknown id.
+   *
+   * @generated from rpc ccx.v1.MessageRelayService.GetMessage
+   */
+  getMessage: {
+    methodKind: "unary";
+    input: typeof GetMessageRequestSchema;
+    output: typeof GetMessageResponseSchema;
+  },
+  /**
+   * Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
+   *
+   * @generated from rpc ccx.v1.MessageRelayService.ClaimMessage
+   */
+  claimMessage: {
+    methodKind: "unary";
+    input: typeof ClaimMessageRequestSchema;
+    output: typeof ClaimMessageResponseSchema;
+  },
+  /**
+   * Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
+   * message that is not claimed, already finished, or claimed with another claim_token.
+   *
+   * @generated from rpc ccx.v1.MessageRelayService.ReportMessage
+   */
+  reportMessage: {
+    methodKind: "unary";
+    input: typeof ReportMessageRequestSchema;
+    output: typeof ReportMessageResponseSchema;
+  },
+}> = /*@__PURE__*/
+  serviceDesc(file_ccx_v1_message, 1);
 

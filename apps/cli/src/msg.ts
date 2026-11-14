@@ -53,7 +53,7 @@ export function unixTransport(socketPath: string): Transport {
   });
 }
 
-export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number };
+export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number; machine?: string; user?: string };
 
 /** ccx-agent's NotTypedKey (apps/agent/internal/message): the failure came before anything was typed. */
 const NOT_TYPED_KEY = "Ccx-Not-Typed";
@@ -94,7 +94,8 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
   const client = createClient(MessageService, unixTransport(o.socket));
   // A wedged herdr or agent must not hold the sender forever. Running out ends as "may have been sent".
   const signal = AbortSignal.timeout(o.timeout ?? 60_000);
-  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from }, { signal })) {
+  const where = { machine: o.machine ?? "", user: o.user ?? "" };
+  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, ...where }, { signal })) {
     const state = STATES[ev.state] ?? `state ${ev.state}`;
     out(ev.detail ? `${state}  ${ev.detail}` : state);
   }
@@ -105,12 +106,14 @@ export function registerMsg(program: Command): void {
 
   msg
     .command("send")
-    .description("Type a message into a running session (Devin in a herdr pane, for now) and print each ack: sent, then working or not-started")
-    .argument("<target>", "the session name (Devin's session name as herdr shows it)")
+    .description("Type a message into a running session (Devin in a herdr pane, for now), here or on another machine through the center, and print each ack: sent, then working or not-started")
+    .argument("<target>", "the session name (Devin's session name as herdr shows it on that machine)")
     .argument("<body...>", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
     .option("--from <name>", "the sender name shown to the receiver (default: claude-<session id prefix>, else user@host)")
+    .option("-m, --machine <name>", "have that machine's ccx-agent deliver it, through the center (default: here)")
+    .option("-u, --user <name>", "have that user's ccx-agent deliver it, through the center (default: this agent's user)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
     .option("--timeout <ms>", "give up waiting for acks after this long", parseTimeout, 60_000)
     .action(async (target: string, body: string[], o: SendOptions) => {

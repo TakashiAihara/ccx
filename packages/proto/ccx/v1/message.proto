@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package ccx.v1;
 
+import "google/protobuf/timestamp.proto";
+
 // Delivers a message to a running session (#301 / #302).
 //
 // The sender calls the same service whatever product the receiver is; ccx-agent picks how to get the
@@ -43,6 +45,10 @@ message SendRequest {
   string body = 4;
   // The sender's name. Only shown in that line, never used for auth. One line, at most 40 bytes.
   string sender = 5;
+  // The machine and OS user whose ccx-agent delivers it. Empty means this ccx-agent's own. Any other goes
+  // through the center (MessageRelayService, #138), and that ccx-agent delivers it as if sent to it locally.
+  string machine = 6;
+  string user = 7;
 }
 
 message SendResponse {
@@ -59,3 +65,88 @@ message SendResponse {
   // One line for people about the state. May be empty.
   string detail = 2;
 }
+
+// Carries a message to another machine's ccx-agent (#138). Served by the center.
+//
+// The sender's ccx-agent puts the message and reads it back for the acks; the receiver's ccx-agent claims it,
+// delivers it as a local Send, and reports each ack. The center does not connect to a ccx-agent for this (it
+// may wake one, as for resume): the connections go ccx-agent -> center, as for ingest.
+//
+// A message is handed out once. One claimed and never finished is not handed out again, so it is never typed
+// twice; the sender then ends as "may have been sent". One not claimed within 30 seconds is expired and never
+// handed out, so the sender can say "not sent".
+//
+// Anyone holding the center's token can put a message for any machine, the same reach as resume.
+service MessageRelayService {
+  // Stores a message for request.machine / request.user. Both are required.
+  rpc PutMessage(PutMessageRequest) returns (PutMessageResponse);
+  // Reads one back by id, acks included. NOT_FOUND for an unknown id.
+  rpc GetMessage(GetMessageRequest) returns (GetMessageResponse);
+  // Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
+  rpc ClaimMessage(ClaimMessageRequest) returns (ClaimMessageResponse);
+  // Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
+  // message that is not claimed, already finished, or claimed with another claim_token.
+  rpc ReportMessage(ReportMessageRequest) returns (ReportMessageResponse);
+}
+
+message RelayedMessage {
+  // Set by the center (UUIDv7).
+  string id = 1;
+  // As the sender gave it; machine and user name the receiver.
+  SendRequest request = 2;
+  google.protobuf.Timestamp put_at = 3;
+  // Unset until a ccx-agent claimed it.
+  google.protobuf.Timestamp claimed_at = 4;
+  // Unset until the receiver reported the end.
+  google.protobuf.Timestamp finished_at = 5;
+  // The acks so far, in order.
+  repeated SendResponse acks = 6;
+  // The receiver's error, once finished: a Connect code (0 means it ended without an error) and its message.
+  int32 error_code = 7;
+  string error_message = 8;
+  // The error came before anything was typed (MessageService's Ccx-Not-Typed).
+  bool not_typed = 9;
+  // Not claimed within 30 seconds of being put. It will not be handed out.
+  bool expired = 10;
+  // Only in ClaimMessage's answer: the receiver gives it back in ReportMessage.
+  string claim_token = 11;
+}
+
+message PutMessageRequest {
+  SendRequest request = 1;
+}
+
+message PutMessageResponse {
+  RelayedMessage message = 1;
+}
+
+message GetMessageRequest {
+  string id = 1;
+}
+
+message GetMessageResponse {
+  RelayedMessage message = 1;
+}
+
+message ClaimMessageRequest {
+  // The caller's own origin (ingest.proto's Origin).
+  string machine = 1;
+  string user = 2;
+}
+
+message ClaimMessageResponse {
+  RelayedMessage message = 1;
+}
+
+message ReportMessageRequest {
+  string id = 1;
+  string claim_token = 2;
+  // All the acks so far, not only the new ones, so a resent report does no harm.
+  repeated SendResponse acks = 3;
+  bool finished = 4;
+  int32 error_code = 5;
+  string error_message = 6;
+  bool not_typed = 7;
+}
+
+message ReportMessageResponse {}
