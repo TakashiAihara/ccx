@@ -32,9 +32,16 @@ export function defaultApiSocketPath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 /** The name in the receiver's line `ccx: <sender>: <summary>`. A label, not an identity check. */
-export function defaultSender(env: NodeJS.ProcessEnv = process.env): string {
+export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => { username: string } = userInfo): string {
   if (env.CLAUDE_CODE_SESSION_ID) return `claude-${env.CLAUDE_CODE_SESSION_ID.slice(0, 8)}`;
-  return `${userInfo().username}@${hostname()}`;
+  let user: string;
+  try {
+    user = info().username;
+  } catch {
+    // A uid with no passwd entry (some containers).
+    user = env.USER || `uid${process.getuid?.() ?? ""}`;
+  }
+  return `${user}@${hostname()}`;
 }
 
 export function unixTransport(socketPath: string): Transport {
@@ -45,27 +52,36 @@ export function unixTransport(socketPath: string): Transport {
   });
 }
 
-export type SendOptions = { mode: string; summary: string; from: string; socket: string };
+export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number };
 
-/** ccx-agent's TypedKey (apps/agent/internal/message): the failure came after the text was handed to the pane. */
-const TYPED_KEY = "Ccx-Typed";
+/** ccx-agent's NotTypedKey (apps/agent/internal/message): the failure came before anything was typed. */
+const NOT_TYPED_KEY = "Ccx-Not-Typed";
 
 /**
- * "not sent" only when ccx-agent says nothing was typed (or it was never reached). A failure after
- * typing may have left the message in the receiver, and a resend could type it twice.
+ * "not sent" only when ccx-agent says nothing was typed, or it was never reached. Any other failure,
+ * a dropped stream included, may come after the text went in, and a resend could type it twice.
  */
 export function failurePrefix(e: ConnectError, acks: number): string {
   if (acks > 0) return "sent, then lost the ack stream";
-  return e.metadata.get(TYPED_KEY) ? "may have been sent (look at the receiver before sending again)" : "not sent";
+  if (e.metadata.get(NOT_TYPED_KEY) || unreachable(e)) return "not sent";
+  return "may have been sent (look at the receiver before sending again)";
+}
+
+/** The socket was never connected to, so ccx-agent did nothing. */
+function unreachable(e: ConnectError): boolean {
+  const code = (e.cause as { code?: string } | undefined)?.code;
+  return code === "ENOENT" || code === "ECONNREFUSED" || /ENOENT|ECONNREFUSED|Failed to connect/.test(String(e.cause ?? ""));
 }
 
 /** Hands each ack to out as one line. Throws a ConnectError when nothing was sent. */
-export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void, transport?: Transport): Promise<void> {
+export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void): Promise<void> {
   if (!Object.hasOwn(MODES, o.mode)) throw new Error(`--mode must be one of ${Object.keys(MODES).join(", ")}`);
   const mode = MODES[o.mode];
 
-  const client = createClient(MessageService, transport ?? unixTransport(o.socket));
-  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from })) {
+  const client = createClient(MessageService, unixTransport(o.socket));
+  // A wedged herdr or agent must not hold the sender forever. Running out ends as "may have been sent".
+  const signal = AbortSignal.timeout(o.timeout ?? 60_000);
+  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from }, { signal })) {
     const state = STATES[ev.state] ?? `state ${ev.state}`;
     out(ev.detail ? `${state}  ${ev.detail}` : state);
   }
@@ -83,6 +99,7 @@ export function registerMsg(program: Command): void {
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
     .option("--from <name>", "the sender name shown to the receiver (default: claude-<session id prefix>, else user@host)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
+    .option("--timeout <ms>", "give up waiting for acks after this long", (v) => Number(v), 60_000)
     .action(async (target: string, body: string[], o: SendOptions) => {
       let acks = 0;
       try {

@@ -85,29 +85,36 @@ var (
 	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f]`)
 )
 
-// TypedKey is the error metadata key set on a failure that came after the text
-// was handed to herdr: the message may be in the receiver, so the sender must not
-// resend blindly. A failure without it typed nothing.
-const TypedKey = "Ccx-Typed"
-
-func typedErr(err error) error {
-	ce := new(connect.Error)
-	if !errors.As(err, &ce) {
-		ce = connect.NewError(connect.CodeUnknown, err)
-	}
-	ce.Meta().Set(TypedKey, "1")
-	return ce
-}
+// NotTypedKey is the error metadata key set on a failure that came before
+// anything was handed to herdr. Only it says "not sent": an error without it
+// (including one lost on the way) may come after the text went in, and a resend
+// could type it twice.
+const NotTypedKey = "Ccx-Not-Typed"
 
 // Send delivers req and hands each ack to emit as it happens. An error carries
-// TypedKey when it came after the text was handed to herdr.
+// NotTypedKey when nothing was typed.
 func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error) error {
+	typed := false
+	err := d.send(ctx, req, emit, &typed)
+	if err != nil && !typed {
+		ce := new(connect.Error)
+		if !errors.As(err, &ce) {
+			ce = connect.NewError(connect.CodeUnknown, err)
+		}
+		ce.Meta().Set(NotTypedKey, "1")
+		return ce
+	}
+	return err
+}
+
+func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error, typed *bool) error {
 	if req.Target == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("target is empty"))
 	}
 	for _, s := range []string{req.Sender, req.Summary} {
-		if !utf8.ValidString(s) || !oneLine.MatchString(s) || len(s) > MaxLabel {
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("sender and summary must each be one non-empty line of at most %d bytes", MaxLabel))
+		// Leading or trailing spaces would not survive the history line Devin pads.
+		if !utf8.ValidString(s) || !oneLine.MatchString(s) || len(s) > MaxLabel || strings.TrimSpace(s) != s {
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("sender and summary must each be one non-empty line of at most %d bytes, without leading or trailing spaces", MaxLabel))
 		}
 	}
 	if req.Body == "" {
@@ -169,13 +176,15 @@ func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		return connect.NewError(connect.CodeUnavailable, err)
 	}
 	seen := headerLines(string(before), header)
+	*typed = true
 	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
 		// herdr may have written part of it before failing.
-		return typedErr(connect.NewError(connect.CodeUnknown, err))
+		return connect.NewError(connect.CodeUnknown, err)
 	}
 
-	if err := d.waitSent(ctx, p.ID, header, seen); err != nil {
-		return typedErr(err)
+	// A long body takes longer to paste and render.
+	if err := d.waitSent(ctx, p.ID, header, seen, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
+		return err
 	}
 	if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID}); err != nil {
 		return err
@@ -264,24 +273,28 @@ func (d *Devin) status(ctx context.Context, id string) (string, error) {
 // waitSent waits for the input box to be empty again with the header in the
 // history above it. herdr accepting the prompt is not that: the text can sit in
 // the box unsent (docs/design/transport.md).
-func (d *Devin) waitSent(ctx context.Context, id, header string, seen int) error {
-	deadline := time.Now().Add(d.SentWait)
+//
+// The history is read first: text still unsent in the box reads like a history
+// line once the styling is gone, and only an empty box seen after it rules that
+// out. A box that is not seen (a dialog the message opened, or text too tall for
+// the screen) is not taken as sent; that ends as "may have been sent".
+func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
 	for {
-		screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
-		// Not typed: the box is empty again, or a dialog the message opened (a
-		// permission prompt) has replaced it.
-		if err == nil && inputBox(string(screen)) != inputTyped {
-			hist, err := d.Herdr(ctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
-			if err == nil && headerLines(string(hist), header) > seen {
+		hist, err := d.Herdr(ctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
+		if err == nil && headerLines(string(hist), header) > seen {
+			screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
+			if err == nil && inputBox(string(screen)) == inputEmpty {
 				return nil
 			}
+		}
+		if time.Now().Before(deadline) && sleep(ctx, d.Poll) == nil {
+			continue
 		}
 		if ctx.Err() != nil {
 			return connect.NewError(connect.CodeCanceled, fmt.Errorf("stopped while waiting to see the message as sent in pane %s", id))
 		}
-		if !time.Now().Before(deadline) || sleep(ctx, d.Poll) != nil {
-			return connect.NewError(connect.CodeUnknown, fmt.Errorf("herdr took the prompt but it was not seen as sent in pane %s; look at the pane before sending again", id))
-		}
+		return connect.NewError(connect.CodeUnknown, fmt.Errorf("herdr took the prompt but it was not seen as sent in pane %s; look at the pane before sending again", id))
 	}
 }
 
@@ -349,7 +362,7 @@ func inputBox(screen string) inputState {
 			default:
 				state = inputMissing
 			}
-		} else if strings.HasPrefix(sgr.ReplaceAllString(line, ""), "❭ ") {
+		} else if strings.HasPrefix(strings.TrimLeft(sgr.ReplaceAllString(line, ""), " "), "❭ ") {
 			// A styled mark below the box is a dialog drawn over it.
 			state = inputMissing
 		}
@@ -398,9 +411,14 @@ func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendReque
 }
 
 // isReset says whether SGR parameters only reset: "", "0", "00", "0;0", ";".
+// Codes that turn one attribute back to the default (22 normal intensity, 39
+// default colour, ...) count too: text drawn after them is plain, and reading it
+// as styled would take typed text for the placeholder.
 func isReset(params string) bool {
 	for _, p := range strings.Split(params, ";") {
-		if strings.Trim(p, "0") != "" {
+		switch strings.TrimLeft(p, "0") {
+		case "", "22", "23", "24", "25", "27", "28", "29", "39", "49", "54", "55", "59":
+		default:
 			return false
 		}
 	}

@@ -15,9 +15,9 @@ service MessageService {
   // Sends one message and streams the acks in the order they happen. A target that is not found, an
   // input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
   // (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT; UNAVAILABLE when herdr cannot be asked). The
-  // error text is for people; for a missing mode it lists the modes the receiver has. An error that
-  // came after the text was handed to the receiver carries the metadata `Ccx-Typed: 1`: the message
-  // may be there, so do not resend without looking.
+  // error text is for people; for a missing mode it lists the modes the receiver has. An error from
+  // before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
+  // that breaks, may come after the text went in: do not resend without looking.
   rpc Send(SendRequest) returns (stream SendResponse);
 }
 

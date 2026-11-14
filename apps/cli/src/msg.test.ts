@@ -73,11 +73,15 @@ test("a Claude Code sender is named from its session id", () => {
   expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" })).toBe("claude-f61d5ded");
 });
 
-test("only a failure after typing is called may have been sent", () => {
-  expect(failurePrefix(new ConnectError("x", Code.Unknown), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.Unknown, { "Ccx-Typed": "1" }), 0)).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 1)).toBe("sent, then lost the ack stream");
+test("only a failure marked not typed, or an unreachable agent, is called not sent", async () => {
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown), 0)).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 0)).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 1)).toBe("sent, then lost the ack stream");
+  const dir = mkdtempSync(join(tmpdir(), "ccx-msg-"));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
+  expect(failurePrefix(down, 0)).toBe("not sent");
 });
 
 test("a sender outside Claude Code is user@host", () => {
@@ -103,16 +107,16 @@ test("the command names a Claude Code sender from its session and prints acks", 
 
 test("the command says not sent for a refusal and exits 1", async () => {
   const socket = fakeAgent(async function* () {
-    throw new ConnectError("no herdr pane has session", Code.NotFound);
+    throw new ConnectError("no herdr pane has session", Code.NotFound, { "Ccx-Not-Typed": "1" });
   });
   const r = await runCli(["msg", "send", "nobody", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
   expect(r.code).toBe(1);
   expect(r.err).toContain("not sent: no herdr pane has session");
 });
 
-test("the command says may have been sent for a failure marked typed", async () => {
+test("the command says may have been sent for a failure not marked as untyped", async () => {
   const socket = fakeAgent(async function* () {
-    throw new ConnectError("herdr took the prompt but it was not seen as sent", Code.Unknown, { "Ccx-Typed": "1" });
+    throw new ConnectError("herdr took the prompt but it was not seen as sent", Code.Unknown);
   });
   const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
   expect(r.code).toBe(1);
@@ -144,4 +148,12 @@ test("an explicit empty --from is passed on for ccx-agent to refuse, not replace
   });
   await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "", "x"], { CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" });
   expect(got?.sender).toBe("");
+});
+
+test("a uid with no passwd entry still gets a sender name", () => {
+  const throws = () => {
+    throw new Error("ENOENT: no such file or directory, uv_os_get_passwd");
+  };
+  expect(defaultSender({ USER: "ci" }, throws)).toMatch(/^ci@/);
+  expect(defaultSender({}, throws)).toMatch(/^uid\d*@/);
 });

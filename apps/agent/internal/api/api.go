@@ -5,6 +5,9 @@
 // 0600 mode; the TCP listener is off unless an address is configured, and then
 // demands the API token (not the hub token: reading an agent must not need the
 // center's write credential). One protocol for both, so a field added is added once.
+//
+// The unix socket also serves MessageService, the one service that writes: it
+// types into other sessions, so the TCP listener never serves it (message.proto).
 package api
 
 import (

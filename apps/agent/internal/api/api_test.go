@@ -783,6 +783,11 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got)
 	}
 
+	// AgentService still answers on the same socket.
+	if _, err := UnixClient(cfg.APISocketPath).GetSessionStatus(ctx, connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: sid})); err != nil {
+		t.Fatalf("AgentService beside MessageService: %v", err)
+	}
+
 	// A body as large as the message package takes fits the unix side's read limit.
 	big, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Sender: strings.Repeat("s", 120), Summary: strings.Repeat("s", 120), Body: strings.Repeat("b", 64<<10)}))
 	if err != nil {
@@ -826,4 +831,22 @@ func (b streamBearer) WrapStreamingClient(next connect.StreamingClientFunc) conn
 
 func (b streamBearer) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return next
+}
+
+func TestMessageServiceOffWithoutAHandler(t *testing.T) {
+	work := shortDir(t)
+	cfg := config.Config{APISocketPath: filepath.Join(work, "a.sock")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = New(cfg, &Server{ClaudeHome: work}, t.Logf).Run(ctx) }()
+	waitDial(t, "unix", cfg.APISocketPath)
+	stream, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	if err == nil {
+		for stream.Receive() {
+		}
+		err = stream.Err()
+	}
+	if connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("err = %v", err)
+	}
 }

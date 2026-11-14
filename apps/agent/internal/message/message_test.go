@@ -63,6 +63,9 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"a dialog drawn below the box", "❭ \x1b[2mplaceholder\n─\n\x1b[1m❭ \x1b[0mAllow", inputMissing},
 		{"zero-padded reset", "❭ \x1b[2m \x1b[00mhi", inputTyped},
 		{"reset spelled 0;0", "❭ \x1b[2m \x1b[0;0mhi", inputTyped},
+		{"typed after default colour", "❭ \x1b[38;2;9;9;9m \x1b[39mhi", inputTyped},
+		{"typed after normal intensity", "❭ \x1b[1m \x1b[22;39mhi", inputTyped},
+		{"an indented dialog below the box", "❭ \x1b[2mplaceholder\n─\n  \x1b[1m❭ \x1b[0mAllow", inputMissing},
 	} {
 		if got := inputBox(tc.screen); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.name, got, tc.want)
@@ -214,7 +217,7 @@ func TestSendFailsWhenThePromptNeverShowsAsSent(t *testing.T) {
 	// The box cleared but the header is not in the history: not counted as sent.
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ something else", status: []string{"working"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "was not seen as sent") || len(got) != 0 || !typedMark(err) {
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "was not seen as sent") || len(got) != 0 || notTyped(err) {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -243,8 +246,8 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 		if connect.CodeOf(err) != tc.code || !strings.Contains(err.Error(), tc.reason) {
 			t.Errorf("%s: err = %v, want %v containing %q", tc.name, err, tc.code, tc.reason)
 		}
-		if p := tc.f.prompted(); p != nil || len(got) != 0 || typedMark(err) {
-			t.Errorf("%s: typed %q, events %v, marked typed %v", tc.name, p, got, typedMark(err))
+		if p := tc.f.prompted(); p != nil || len(got) != 0 || !notTyped(err) {
+			t.Errorf("%s: typed %q, events %v, marked not typed %v", tc.name, p, got, notTyped(err))
 		}
 	}
 }
@@ -252,7 +255,7 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 func TestSendPassesOnAFailedPrompt(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, prompt: errors.New("herdr agent: exit status 1: agent_blocked")}
 	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if !strings.Contains(err.Error(), "agent_blocked") || !typedMark(err) {
+	if !strings.Contains(err.Error(), "agent_blocked") || notTyped(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -416,9 +419,9 @@ func TestNotStartedSaysWhyStatusCouldNotBeRead(t *testing.T) {
 	}
 }
 
-func typedMark(err error) bool {
+func notTyped(err error) bool {
 	ce := new(connect.Error)
-	return errors.As(err, &ce) && ce.Meta().Get(TypedKey) == "1"
+	return errors.As(err, &ce) && ce.Meta().Get(NotTypedKey) == "1"
 }
 
 func TestSentNeedsTheExactHeaderLine(t *testing.T) {
@@ -433,10 +436,12 @@ func TestSentNeedsTheExactHeaderLine(t *testing.T) {
 	}
 }
 
-func TestSentWhenADialogReplacedTheBoxRightAway(t *testing.T) {
+// With the box not in sight (a dialog, or unsent text too tall for the screen),
+// the header in the history may be that unsent text: not counted as sent.
+func TestABoxOutOfSightIsNotTakenAsSent(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox, "\x1b[1m❭ \x1b[0mAllow"}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"done"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if err != nil || len(got) != 2 || got[0].State != ccxv1.SendResponse_STATE_SENT {
+	if err == nil || connect.CodeOf(err) != connect.CodeUnknown || notTyped(err) || len(got) != 0 {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -454,7 +459,7 @@ func TestStoppingWhileWaitingIsCanceledAndMarkedTyped(t *testing.T) {
 		return inner(c, args...)
 	}
 	err := d.Send(ctx, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), func(*ccxv1.SendResponse) error { return nil })
-	if connect.CodeOf(err) != connect.CodeCanceled || !typedMark(err) {
+	if connect.CodeOf(err) != connect.CodeCanceled || notTyped(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -466,6 +471,8 @@ func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
 		"long summary":   {Target: "excited-giraffe", Sender: "s", Summary: long, Body: "b"},
 		"broken sender":  {Target: "excited-giraffe", Sender: "a\xffb", Summary: "x", Body: "b"},
 		"broken summary": {Target: "excited-giraffe", Sender: "s", Summary: "a\xffb", Body: "b"},
+		"trailing space": {Target: "excited-giraffe", Sender: "s", Summary: "review 3 ", Body: "b"},
+		"leading space":  {Target: "excited-giraffe", Sender: " s", Summary: "x", Body: "b"},
 	} {
 		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
 		if _, err := send(newDevin(f), r); connect.CodeOf(err) != connect.CodeInvalidArgument || f.prompted() != nil {
@@ -477,5 +484,18 @@ func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: " + r.Summary, status: []string{"working"}}
 	if _, err := send(newDevin(f), r); err != nil {
 		t.Errorf("a summary at the limit: %v", err)
+	}
+}
+
+func TestALongBodyGetsLongerToShowAsSent(t *testing.T) {
+	// With no base wait, only the time given for the body's size lets the
+	// box clear after a few looks.
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox, typedBox, typedBox, typedBox, emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	d := newDevin(f)
+	d.SentWait = 0
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	r.Body = strings.Repeat("x", 16<<10)
+	if got, err := send(d, r); err != nil || len(got) != 2 {
+		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
