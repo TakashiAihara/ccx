@@ -178,6 +178,9 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		return err
 	} else if again.ID != p.ID {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s moved from pane %s to %s while sending; nothing was sent", req.Target, p.ID, again.ID))
+	} else {
+		// Its status now, for the after-turn check and the start baseline.
+		p = again
 	}
 
 	screen, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi")

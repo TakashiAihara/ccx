@@ -741,3 +741,13 @@ func TestHistoryIsReadDeepEnoughForTheBody(t *testing.T) {
 		t.Fatalf("history reads = %q", f.lines)
 	}
 }
+
+// The status from the second lookup is the one used: idle when found, working
+// right before typing, refuses after-turn.
+func TestTheStatusFromTheSecondLookupIsUsed(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, panesAfter: panesWith("working"), screens: []string{emptyBox}}
+	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "after-turn is refused") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
