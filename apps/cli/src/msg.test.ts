@@ -81,3 +81,29 @@ test("only a refusal before typing is called not sent", () => {
   expect(failurePrefix(Code.Unavailable, 0)).toStartWith("may have been sent");
   expect(failurePrefix(Code.FailedPrecondition, 1)).toBe("sent, then lost the ack stream");
 });
+
+async function runCli(args: string[], env: Record<string, string>): Promise<{ code: number; out: string; err: string }> {
+  const p = Bun.spawn(["bun", join(import.meta.dir, "index.ts"), ...args], { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env }, stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, out, err };
+}
+
+test("the command names a Claude Code sender from its session and prints acks", async () => {
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT, detail: "pane w2:p1" };
+  });
+  const r = await runCli(["msg", "send", "excited-giraffe", "--socket", socket, "--summary", "s", "fix", "it"], { CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" });
+  expect(r).toMatchObject({ code: 0, out: "sent  pane w2:p1\n" });
+  expect(got).toMatchObject({ sender: "claude-f61d5ded", body: "fix it", mode: DeliveryMode.AFTER_TURN });
+});
+
+test("the command says not sent for a refusal and exits 1", async () => {
+  const socket = fakeAgent(async function* () {
+    throw new ConnectError("no herdr pane has session", Code.NotFound);
+  });
+  const r = await runCli(["msg", "send", "nobody", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("not sent: no herdr pane has session");
+});

@@ -3,8 +3,10 @@ package message
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,15 +50,19 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		name, screen string
 		want         inputState
 	}{
-		{"bare mark", "❭ \r", inputEmpty},
-		{"placeholder after reset", "❭ \x1b[0m\x1b[38;2;9;9;9mAnything at all\x1b[0m\r", inputEmpty},
+		{"bare mark", "❭ \r\n─", inputEmpty},
+		{"placeholder after reset", "❭ \x1b[0m\x1b[38;2;9;9;9mAnything at all\x1b[0m\r\n─", inputEmpty},
 		{"typed after a reset", "❭ \x1b[0mhi\r", inputTyped},
 		{"typed after a bare reset", "❭ \x1b[2m \x1b[mhi\r", inputTyped},
 		{"typed after the placeholder style ends", "❭ \x1b[38;2;9;9;9m \x1b[0mhi", inputTyped},
 		{"typed before a styled tail", "❭ hi\x1b[38;2;9;9;9m tail", inputTyped},
 		{"no mark", "plain screen\n", inputMissing},
 		{"styled mark only", "\x1b[1m❭ \x1b[0mAllow", inputMissing},
-		{"last box wins", "❭ old\n❭ \x1b[2mplaceholder", inputEmpty},
+		{"last box wins", "❭ old\n❭ \x1b[2mplaceholder\n─", inputEmpty},
+		{"placeholder with no rule under it", "❭ \x1b[2mplaceholder\nsomething", inputMissing},
+		{"a dialog drawn below the box", "❭ \x1b[2mplaceholder\n─\n\x1b[1m❭ \x1b[0mAllow", inputMissing},
+		{"zero-padded reset", "❭ \x1b[2m \x1b[00mhi", inputTyped},
+		{"reset spelled 0;0", "❭ \x1b[2m \x1b[0;0mhi", inputTyped},
 	} {
 		if got := inputBox(tc.screen); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.name, got, tc.want)
@@ -69,10 +75,13 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 type fakeHerdr struct {
 	panes   string
 	screens []string
-	history string
-	status  []string
-	calls   [][]string
-	prompt  error
+	// before is the history until the prompt goes in, history after it.
+	before, history string
+	status          []string
+	calls           [][]string
+	prompt          error
+	typed           bool
+	statusErr       error
 }
 
 func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
@@ -84,17 +93,31 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 		}
 		return v
 	}
-	switch strings.Join(args[:2], " ") {
+	cmd := strings.Join(args[:2], " ")
+	if cmd != "pane list" && args[2] != "w2:p1" {
+		return nil, errors.New("herdr " + cmd + " on the wrong pane " + args[2])
+	}
+	switch cmd {
 	case "pane list":
 		return []byte(f.panes), nil
 	case "pane get":
+		if f.statusErr != nil {
+			return nil, f.statusErr
+		}
 		return []byte(`{"result":{"pane":{"agent_status":"` + next(&f.status) + `"}}}`), nil
 	case "agent read":
 		if args[4] == "recent-unwrapped" {
-			return []byte(f.history), nil
+			if f.typed {
+				return []byte(f.history), nil
+			}
+			return []byte(f.before), nil
+		}
+		if strings.Join(args[3:], " ") != "--source visible --format ansi" {
+			return nil, errors.New("unexpected read " + strings.Join(args, " "))
 		}
 		return []byte(next(&f.screens)), nil
 	case "agent prompt":
+		f.typed = f.prompt == nil
 		return nil, f.prompt
 	}
 	return nil, errors.New("unexpected herdr " + strings.Join(args, " "))
@@ -114,7 +137,7 @@ const (
 		{"pane_id":"w1:p1","agent":"claude","agent_status":"idle","agent_session":{"value":"claude-one"}},
 		{"pane_id":"w2:p1","agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}},
 		{"pane_id":"w3:p1","agent":"devin","agent_status":"idle","agent_session":null}]}}`
-	emptyBox = "history\n❭ \x1b[0m\x1b[38;2;124;124;124mAsk Devin\x1b[0m\r\n"
+	emptyBox = "history\n❭ \x1b[0m\x1b[38;2;124;124;124mAsk Devin\x1b[0m\r\n\x1b[0m\x1b[38;2;68;68;68m──────\x1b[0m\r\nfooter\n"
 	typedBox = "❭ half typed\r\n"
 )
 
@@ -145,7 +168,7 @@ func TestSendTypesHeaderAndBodyAndReportsSentThenWorking(t *testing.T) {
 	if p == nil || p[2] != "w2:p1" || p[3] != "ccx: claude-a1b2c3d4: review 3\nline 1\nline 2" {
 		t.Fatalf("prompt = %q", p)
 	}
-	if len(got) != 2 || got[0].State != ccxv1.SendResponse_STATE_SENT || got[1].State != ccxv1.SendResponse_STATE_WORKING {
+	if len(got) != 2 || got[0].State != ccxv1.SendResponse_STATE_SENT || got[0].Detail != "pane w2:p1" || got[1].State != ccxv1.SendResponse_STATE_WORKING || got[1].Detail != "agent_status working" {
 		t.Fatalf("events = %v", got)
 	}
 }
@@ -153,7 +176,7 @@ func TestSendTypesHeaderAndBodyAndReportsSentThenWorking(t *testing.T) {
 func TestSendCountsDoneAsStarted(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"done"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING {
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING || got[1].Detail != "agent_status done" {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -161,7 +184,7 @@ func TestSendCountsDoneAsStarted(t *testing.T) {
 func TestSendReportsNotStartedWhenStatusStaysIdle(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_NOT_STARTED {
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_NOT_STARTED || !strings.Contains(got[1].Detail, "last look: idle") {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -188,7 +211,7 @@ func TestSendFailsWhenThePromptNeverShowsAsSent(t *testing.T) {
 	// The box cleared but the header is not in the history: not counted as sent.
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ something else", status: []string{"working"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "did not show up as sent") || len(got) != 0 {
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "was not seen as sent") || len(got) != 0 {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -211,6 +234,7 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 		{"summary with a newline", &fakeHerdr{panes: devinPanes}, Request{Target: "excited-giraffe", Sender: "s", Summary: "a\nb", Body: "b"}, connect.CodeInvalidArgument, "one non-empty line"},
 		{"empty sender", &fakeHerdr{panes: devinPanes}, Request{Target: "excited-giraffe", Summary: "x", Body: "b"}, connect.CodeInvalidArgument, "one non-empty line"},
 		{"empty body", &fakeHerdr{panes: devinPanes}, Request{Target: "excited-giraffe", Sender: "s", Summary: "x"}, connect.CodeInvalidArgument, "body is empty"},
+		{"empty target", &fakeHerdr{panes: devinPanes}, Request{Sender: "s", Summary: "x", Body: "b"}, connect.CodeInvalidArgument, "target is empty"},
 	} {
 		got, err := send(newDevin(tc.f), tc.r)
 		if connect.CodeOf(err) != tc.code || !strings.Contains(err.Error(), tc.reason) {
@@ -262,5 +286,124 @@ func TestSendRefusesUnknownModeAndOversizedBody(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
 	if _, err := send(newDevin(f), ok); err != nil {
 		t.Errorf("a body at the limit: %v", err)
+	}
+}
+
+// A pane whose status before the send is st.
+func panesWith(st string) string {
+	return strings.Replace(devinPanes, `"agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}`, `"agent":"devin","agent_status":"`+st+`","agent_session":{"value":"excited-giraffe"}`, 1)
+}
+
+func TestSendDoesNotTakeADoneLeftFromThePreviousTurnAsStarted(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("done"), screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"done"}}
+	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_NOT_STARTED {
+		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+func TestUrgentToAWorkingDevinSaysItWasAlreadyWorking(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle"}}
+	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING || !strings.Contains(got[1].Detail, "already working") {
+		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+func TestSendDoesNotTakeAnEarlierSameHeaderAsSent(t *testing.T) {
+	line := "❭ ccx: claude-a1b2c3d4: review 3\n"
+	stale := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, before: line, history: line, status: []string{"working"}}
+	if _, err := send(newDevin(stale), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); connect.CodeOf(err) != connect.CodeUnknown {
+		t.Fatalf("stale header: err = %v", err)
+	}
+	again := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, before: line, history: line + line, status: []string{"working"}}
+	if got, err := send(newDevin(again), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); err != nil || len(got) != 2 {
+		t.Fatalf("second header: events = %v, err = %v", got, err)
+	}
+}
+
+func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
+	for _, body := range []string{"a\x1b[2Kb", "a\x07", "a\rb", "a\u009bb", "a\x9bb"} {
+		r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+		r.Body = body
+		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
+		if _, err := send(newDevin(f), r); connect.CodeOf(err) != connect.CodeInvalidArgument || f.prompted() != nil {
+			t.Errorf("%q: err = %v", body, err)
+		}
+	}
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	r.Body = "tab\there\nnext line"
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(f), r); err != nil {
+		t.Errorf("tab and newline: %v", err)
+	}
+}
+
+func TestServiceLogsEachSend(t *testing.T) {
+	var lines []string
+	f := &fakeHerdr{panes: devinPanes, screens: []string{typedBox}}
+	s := &Service{Devin: newDevin(f), Log: func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }}
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	err := s.Devin.Send(context.Background(), r, func(*ccxv1.SendResponse) error { return nil })
+	if err == nil {
+		t.Fatal("want a refusal")
+	}
+	_ = s.Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: r.Mode}), nil)
+	if len(lines) != 1 || !strings.Contains(lines[0], `to "excited-giraffe" from "claude-a1b2c3d4"`) || !strings.Contains(lines[0], "has text in its input box") {
+		t.Fatalf("log = %q", lines)
+	}
+}
+
+// Two sends to one pane at once: the second may not look at the box before the
+// first has typed, or both see it empty and type into it together.
+func TestSendsAreOneAtATime(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	inner := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	d := newDevin(inner)
+	d.Herdr = func(ctx context.Context, args ...string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, args[0]+" "+args[1])
+		if args[1] == "prompt" {
+			// The second send's history must grow past what it saw before.
+			inner.history += "❭ ccx: claude-a1b2c3d4: review 3\n"
+		}
+		out, err := inner.run(ctx, args...)
+		if args[1] == "list" {
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			mu.Lock()
+		}
+		return out, err
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+		}()
+	}
+	wg.Wait()
+	lists := 0
+	for _, o := range order {
+		if o == "agent prompt" {
+			break
+		}
+		if o == "pane list" {
+			lists++
+		}
+	}
+	if lists != 1 {
+		t.Fatalf("the second send looked before the first typed: %q", order)
+	}
+}
+
+func TestNotStartedSaysWhyStatusCouldNotBeRead(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", statusErr: errors.New("herdr pane get: socket gone")}
+	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_NOT_STARTED || !strings.Contains(got[1].Detail, "socket gone") {
+		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }

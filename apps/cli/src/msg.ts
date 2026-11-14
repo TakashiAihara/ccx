@@ -81,11 +81,14 @@ export function registerMsg(program: Command): void {
     .argument("<body...>", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
-    .option("--from <name>", "the sender name shown to the receiver", defaultSender())
+    .option("--from <name>", "the sender name shown to the receiver (default: claude-<session id prefix>, else user@host)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
     .action(async (target: string, body: string[], o: SendOptions) => {
       let acks = 0;
       try {
+        // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
+        // and that must not break every other ccx command.
+        o.from ||= defaultSender();
         await sendMessage(target, body.join(" "), o, (l) => {
           acks++;
           console.log(l);

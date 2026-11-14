@@ -771,7 +771,7 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 	}
 	waitDial(t, "unix", cfg.APISocketPath)
 
-	stream, err := MessageClient(cfg.APISocketPath).Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	stream, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
 	if err != nil {
 		t.Fatal(err)
 	}
