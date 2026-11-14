@@ -248,7 +248,7 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 		{"text in the box", &fakeHerdr{panes: devinPanes, screens: []string{typedBox}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), connect.CodeFailedPrecondition, "has text in its input box"},
 		{"a dialog is open", &fakeHerdr{panes: devinPanes, screens: []string{"\x1b[1m❭ \x1b[0mAllow"}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), connect.CodeFailedPrecondition, "not at its input box"},
 		{"later", &fakeHerdr{panes: devinPanes}, req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER), connect.CodeInvalidArgument, "it takes after-turn, urgent"},
-		{"after-turn while working", &fakeHerdr{panes: strings.Replace(devinPanes, `"agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}`, `"agent":"devin","agent_status":"working","agent_session":{"value":"excited-giraffe"}`, 1)}, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN), connect.CodeFailedPrecondition, "after-turn is refused"},
+		{"after-turn while working", &fakeHerdr{panes: strings.Replace(devinPanes, `"agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}`, `"agent":"devin","agent_status":"working","agent_session":{"value":"excited-giraffe"}`, 1), screens: []string{emptyBox}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN), connect.CodeFailedPrecondition, "after-turn is refused"},
 		{"unknown target", &fakeHerdr{panes: devinPanes}, Request{Target: "nobody", Sender: "s", Summary: "x", Body: "b"}, connect.CodeNotFound, `no herdr pane has session "nobody"`},
 		{"not a devin", &fakeHerdr{panes: devinPanes}, Request{Target: "claude-one", Sender: "s", Summary: "x", Body: "b"}, connect.CodeFailedPrecondition, "is a claude session"},
 		{"two panes", &fakeHerdr{panes: strings.Replace(devinPanes, `"agent_session":null`, `"agent_session":{"value":"excited-giraffe"}`, 1)}, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), connect.CodeFailedPrecondition, "2 herdr panes"},
@@ -582,5 +582,20 @@ func TestServiceStreamsAcksAndLogsTheLast(t *testing.T) {
 	}
 	if len(lines) != 1 || !strings.HasSuffix(lines[0], ": STATE_WORKING") {
 		t.Fatalf("log = %q", lines)
+	}
+}
+
+// herdr says idle while Devin is still writing; the screen says otherwise.
+func TestAfterTurnRefusedWhileTheScreenShowsATurn(t *testing.T) {
+	working := fixture(t, "working.ansi")
+	f := &fakeHerdr{panes: devinPanes, screens: []string{working}}
+	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "after-turn is refused") || f.prompted() != nil {
+		t.Fatalf("err = %v, typed %v", err, f.prompted() != nil)
+	}
+	// urgent still goes in.
+	g := &fakeHerdr{panes: devinPanes, screens: []string{working, emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(g), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); err != nil {
+		t.Fatalf("urgent: %v", err)
 	}
 }

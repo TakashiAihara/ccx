@@ -21,11 +21,11 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 | Mode | Meaning | Devin (this build) |
 |---|---|---|
 | `later` | Not woken; read on its next turn | Refused, listing `after-turn, urgent` |
-| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while working |
+| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn |
 | `urgent` | Read at the next break, even while working | Sent; to a working Devin `sent` is the last ack (its status cannot show this message being picked up) |
 
 - A mode the receiver lacks is refused, never swapped for a nearby one (#301).
-- `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). The end of the turn is Devin's `Stop` hook, not wired to ccx-agent yet. Until then `after-turn` is best effort: it is refused only while herdr says `working`, and a send while Devin is still writing goes in mid-turn.
+- `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). The end of the turn is Devin's `Stop` hook, not wired to ccx-agent yet. Until then ccx-agent also reads the screen: Devin draws `… (esc twice to interrupt)` while a turn runs (devin 3000.12.57), and `after-turn` is refused while it shows. A Devin that stops drawing that line would let `after-turn` in mid-turn again.
 
 ## Devin delivery
 

@@ -159,16 +159,16 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err != nil {
 		return err
 	}
-	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN && p.Status == "working" {
-		// This catches only what herdr reports as working. herdr also reports idle
-		// while Devin is still writing its answer (#302), and a send then goes in
-		// mid-turn; telling the end of the turn needs Devin's Stop hook.
-		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
-	}
-
 	screen, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi")
 	if err != nil {
 		return connect.NewError(connect.CodeUnavailable, err)
+	}
+	// herdr reports idle while Devin is still writing its answer (#302), so its
+	// status alone would let after-turn go in mid-turn. Devin shows the turn on
+	// screen ("Typing · 3s (esc twice to interrupt)", devin 3000.12.57) until its
+	// Stop hook is wired to ccx-agent to tell the end of the turn properly.
+	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN && (p.Status == "working" || midTurn(string(screen))) {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
 	}
 	switch inputBox(string(screen)) {
 	case inputMissing:
@@ -460,4 +460,10 @@ func isReset(params string) bool {
 		}
 	}
 	return plain
+}
+
+// midTurn says whether Devin's screen shows a turn in progress: the status line
+// it draws while working ends with "to interrupt)".
+func midTurn(screen string) bool {
+	return strings.Contains(sgr.ReplaceAllString(screen, ""), "to interrupt)")
 }
