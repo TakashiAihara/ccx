@@ -626,3 +626,28 @@ func TestNotTypedMarkCrossesTheWire(t *testing.T) {
 		t.Fatalf("err = %v, marked %v", err, notTyped(err))
 	}
 }
+
+func TestMidTurnReadsOnlyTheStatusLineAboveTheBox(t *testing.T) {
+	if !midTurn(fixture(t, "working.ansi")) {
+		t.Error("working.ansi: not mid-turn")
+	}
+	for _, name := range []string{"empty.ansi", "typed.ansi", "dialog.ansi", "question.ansi"} {
+		if midTurn(fixture(t, name)) {
+			t.Errorf("%s: mid-turn", name)
+		}
+	}
+	// The words in the history, not on the status line.
+	if midTurn("Typing · 3s (esc twice to interrupt)\nanswer line\n" + box("❭ \x1b[2mplaceholder")) {
+		t.Error("history text read as the status line")
+	}
+}
+
+// herdr says idle while Devin writes; an urgent send then ends at sent like one
+// to a working Devin, since its status cannot show this message being picked up.
+func TestUrgentToADevinMidTurnOnScreenEndsAtSent(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{fixture(t, "working.ansi"), emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_SENT || !strings.Contains(got[0].Detail, "was working") {
+		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}

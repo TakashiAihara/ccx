@@ -169,7 +169,8 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	// status alone would let after-turn go in mid-turn. Devin shows the turn on
 	// screen ("Typing · 3s (esc twice to interrupt)", devin 3000.12.57) until its
 	// Stop hook is wired to ccx-agent to tell the end of the turn properly.
-	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN && (p.Status == "working" || midTurn(string(screen))) {
+	working := p.Status == "working" || midTurn(string(screen))
+	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN && working {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
 	}
 	switch inputBox(string(screen)) {
@@ -197,7 +198,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err := d.waitSent(ctx, p.ID, header, seen, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
 		return err
 	}
-	if p.Status == "working" {
+	if working {
 		// An urgent send to a Devin that was already working: its status cannot
 		// show this message being picked up, so sent is the last ack.
 		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID + "; was working, reads it at its next break"})
@@ -371,30 +372,14 @@ const (
 // typed. Measured on devin 3000.12.57 (testdata).
 func inputBox(screen string) inputState {
 	lines := strings.Split(screen, "\n")
-	plain := func(l string) string { return strings.TrimSpace(sgr.ReplaceAllString(l, "")) }
-	rule := func(l string) bool { return strings.HasPrefix(plain(l), "─") }
-
-	bottom := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		if rule(lines[i]) {
-			bottom = i
-			break
-		}
-	}
+	top, bottom := boxRules(lines)
 	if bottom < 0 {
 		return inputMissing
 	}
 	for _, l := range lines[bottom+1:] {
 		// A mark below the box is a dialog drawn over it.
-		if strings.HasPrefix(plain(l), "❭") {
+		if strings.HasPrefix(plainLine(l), "❭") {
 			return inputMissing
-		}
-	}
-	top := -1
-	for i := bottom - 1; i >= 0; i-- {
-		if rule(lines[i]) {
-			top = i
-			break
 		}
 	}
 	box := lines[top+1 : bottom]
@@ -483,7 +468,30 @@ func isReset(params string) bool {
 }
 
 // midTurn says whether Devin's screen shows a turn in progress: the status line
-// it draws while working ends with "to interrupt)".
+// right above the box ends with "to interrupt)". Only that line is read, so the
+// same words in the history above do not count.
 func midTurn(screen string) bool {
-	return strings.Contains(sgr.ReplaceAllString(screen, ""), "to interrupt)")
+	lines := strings.Split(screen, "\n")
+	top, _ := boxRules(lines)
+	return top > 0 && strings.HasSuffix(plainLine(lines[top-1]), "to interrupt)")
+}
+
+func plainLine(l string) string { return strings.TrimSpace(sgr.ReplaceAllString(l, "")) }
+
+// boxRules finds the rules around Devin's input box: the last two lines of ─.
+// Either is -1 when it is not on the screen.
+func boxRules(lines []string) (top, bottom int) {
+	top, bottom = -1, -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(plainLine(lines[i]), "─") {
+			continue
+		}
+		if bottom < 0 {
+			bottom = i
+			continue
+		}
+		top = i
+		break
+	}
+	return top, bottom
 }
