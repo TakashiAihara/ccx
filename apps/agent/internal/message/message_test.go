@@ -38,6 +38,8 @@ func TestInputBoxOnDevinScreens(t *testing.T) {
 		{"typed.ansi", inputTyped},
 		// A permission prompt draws the mark styled and leaves no box.
 		{"dialog.ansi", inputMissing},
+		// An ask_user_question picker: its mark is indented and styled.
+		{"question.ansi", inputMissing},
 	} {
 		if got := inputBox(fixture(t, tc.file)); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.file, got, tc.want)
@@ -62,6 +64,8 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"placeholder with no rule under it", "❭ \x1b[2mplaceholder\nsomething", inputMissing},
 		{"a dialog drawn below the box", "❭ \x1b[2mplaceholder\n─\n\x1b[1m❭ \x1b[0mAllow", inputMissing},
 		{"zero-padded reset", "❭ \x1b[2m \x1b[00mhi", inputTyped},
+		{"only spaces typed", "❭    \r\n─", inputTyped},
+		{"spaces typed before a styled tail", "❭   \x1b[2mtail\x1b[0m\r\n─", inputTyped},
 		{"reset spelled 0;0", "❭ \x1b[2m \x1b[0;0mhi", inputTyped},
 		{"typed after default colour", "❭ \x1b[38;2;9;9;9m \x1b[39mhi", inputTyped},
 		{"typed after normal intensity", "❭ \x1b[1m \x1b[22;39mhi", inputTyped},
@@ -255,7 +259,7 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 func TestSendPassesOnAFailedPrompt(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, prompt: errors.New("herdr agent: exit status 1: agent_blocked")}
 	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if !strings.Contains(err.Error(), "agent_blocked") || notTyped(err) {
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "agent_blocked") || notTyped(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -329,7 +333,7 @@ func TestSendDoesNotTakeAnEarlierSameHeaderAsSent(t *testing.T) {
 }
 
 func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
-	for _, body := range []string{"a\x1b[2Kb", "a\x07", "a\rb", "a\u009bb", "a\x9bb"} {
+	for _, body := range []string{"a\x1b[2Kb", "a\x07", "a\rb", "a\u009bb", "a\x9bb", "a b", "a‮b", "a​b"} {
 		r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
 		r.Body = body
 		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
@@ -370,7 +374,7 @@ func TestServiceLogsEachSend(t *testing.T) {
 func TestSendsAreOneAtATime(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
-	inner := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	inner := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, status: []string{"working"}}
 	d := newDevin(inner)
 	d.Herdr = func(ctx context.Context, args ...string) ([]byte, error) {
 		mu.Lock()
@@ -389,14 +393,18 @@ func TestSendsAreOneAtATime(t *testing.T) {
 		return out, err
 	}
 	var wg sync.WaitGroup
-	for range 2 {
+	errs := make([]error, 2)
+	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+			_, errs[i] = send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 		}()
 	}
 	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("sends failed: %v", errs)
+	}
 	lists := 0
 	for _, o := range order {
 		if o == "agent prompt" {
@@ -473,6 +481,7 @@ func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
 		"broken summary": {Target: "excited-giraffe", Sender: "s", Summary: "a\xffb", Body: "b"},
 		"trailing space": {Target: "excited-giraffe", Sender: "s", Summary: "review 3 ", Body: "b"},
 		"leading space":  {Target: "excited-giraffe", Sender: " s", Summary: "x", Body: "b"},
+		"bidi override":  {Target: "excited-giraffe", Sender: "claude‮", Summary: "x", Body: "b"},
 	} {
 		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
 		if _, err := send(newDevin(f), r); connect.CodeOf(err) != connect.CodeInvalidArgument || f.prompted() != nil {

@@ -81,8 +81,10 @@ const MaxLabel = 120
 func headerLine(sender, summary string) string { return "ccx: " + sender + ": " + summary }
 
 var (
-	oneLine     = regexp.MustCompile(`^[^\r\n\p{Cc}\x{2028}\x{2029}]+$`)
-	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f]`)
+	// Format characters (bidi overrides, zero-width) are refused too: they can
+	// make the header show a different sender or summary than was sent.
+	oneLine     = regexp.MustCompile(`^[^\r\n\p{Cc}\p{Cf}\x{2028}\x{2029}]+$`)
+	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f\p{Cf}\x{2028}\x{2029}]`)
 )
 
 // NotTypedKey is the error metadata key set on a failure that came before
@@ -122,7 +124,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	}
 	if !utf8.ValidString(req.Body) || controlChar.MatchString(req.Body) {
 		// An ESC reaching the pane can cancel or clear Devin's input.
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is not UTF-8 text without control characters (newline and tab are fine)"))
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is not UTF-8 text without control or format characters (newline and tab are fine)"))
 	}
 	mode := req.Mode
 	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_UNSPECIFIED {
@@ -376,13 +378,14 @@ var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 func typed(s string) bool {
 	styled, at := false, 0
 	for _, m := range sgr.FindAllStringSubmatchIndex(s, -1) {
-		if !styled && strings.TrimSpace(s[at:m[0]]) != "" {
+		// Spaces count: a box holding only typed spaces has lost its placeholder.
+		if !styled && strings.Trim(s[at:m[0]], "\r") != "" {
 			return true
 		}
 		styled = !isReset(s[m[2]:m[3]])
 		at = m[1]
 	}
-	return !styled && strings.TrimSpace(s[at:]) != ""
+	return !styled && strings.Trim(s[at:], "\r") != ""
 }
 
 // Service answers MessageService. The api concern mounts it on the unix socket

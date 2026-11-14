@@ -4,8 +4,8 @@
  * The local ccx-agent (MessageService, unix socket only) picks how to deliver it. This CLI hands over the
  * request and prints each ack as one line; it never branches on the receiver's product.
  */
-import type { Command } from "commander";
-import { createClient, ConnectError, type Transport } from "@connectrpc/connect";
+import { InvalidArgumentError, type Command } from "commander";
+import { Code, createClient, ConnectError, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -63,14 +63,26 @@ const NOT_TYPED_KEY = "Ccx-Not-Typed";
  */
 export function failurePrefix(e: ConnectError, acks: number): string {
   if (acks > 0) return "sent, then lost the ack stream";
-  if (e.metadata.get(NOT_TYPED_KEY) || unreachable(e)) return "not sent";
+  if (e.metadata.get(NOT_TYPED_KEY) || unreachable(e) || NEVER_REACHED_SEND.has(e.code)) return "not sent";
   return "may have been sent (look at the receiver before sending again)";
 }
 
+/**
+ * Codes the Connect layer answers with before MessageService.Send runs: an older ccx-agent without the
+ * service (Unimplemented), a request over the read limit (ResourceExhausted). Send itself never returns them.
+ */
+const NEVER_REACHED_SEND = new Set([Code.Unimplemented, Code.ResourceExhausted]);
+
 /** The socket was never connected to, so ccx-agent did nothing. */
 function unreachable(e: ConnectError): boolean {
-  const code = (e.cause as { code?: string } | undefined)?.code;
-  return code === "ENOENT" || code === "ECONNREFUSED" || /ENOENT|ECONNREFUSED|Failed to connect/.test(String(e.cause ?? ""));
+  const cause = e.cause as { code?: string } | undefined;
+  return /ENOENT|ECONNREFUSED|EACCES|ENOTSOCK|Failed to connect/.test(`${cause?.code ?? ""} ${String(cause ?? "")}`);
+}
+
+function parseTimeout(v: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) throw new InvalidArgumentError("--timeout takes a positive number of milliseconds");
+  return n;
 }
 
 /** Hands each ack to out as one line. Throws a ConnectError when nothing was sent. */
@@ -99,7 +111,7 @@ export function registerMsg(program: Command): void {
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
     .option("--from <name>", "the sender name shown to the receiver (default: claude-<session id prefix>, else user@host)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
-    .option("--timeout <ms>", "give up waiting for acks after this long", (v) => Number(v), 60_000)
+    .option("--timeout <ms>", "give up waiting for acks after this long", parseTimeout, 60_000)
     .action(async (target: string, body: string[], o: SendOptions) => {
       let acks = 0;
       try {

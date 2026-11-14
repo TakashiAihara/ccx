@@ -157,3 +157,23 @@ test("a uid with no passwd entry still gets a sender name", () => {
   expect(defaultSender({ USER: "ci" }, throws)).toMatch(/^ci@/);
   expect(defaultSender({}, throws)).toMatch(/^uid\d*@/);
 });
+
+test("an older ccx-agent without the service, or an oversized request, is not sent", () => {
+  expect(failurePrefix(new ConnectError("x", Code.Unimplemented), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.ResourceExhausted), 0)).toBe("not sent");
+});
+
+test("a socket that refuses this user is not sent", () => {
+  const byCode = new ConnectError("x", Code.Unknown, undefined, undefined, Object.assign(new Error("connect failed"), { code: "EACCES" }));
+  expect(failurePrefix(byCode, 0)).toBe("not sent");
+  const byText = new ConnectError("x", Code.Unknown, undefined, undefined, new Error("ENOTSOCK: not a socket"));
+  expect(failurePrefix(byText, 0)).toBe("not sent");
+});
+
+test("--timeout must be a positive number", async () => {
+  for (const bad of ["abc", "-5", "0"]) {
+    const r = await runCli(["msg", "send", "t", "--socket", "/nonexistent.sock", "--summary", "s", "--from", "me", "--timeout", bad, "x"], {});
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("--timeout takes a positive number of milliseconds");
+  }
+});
