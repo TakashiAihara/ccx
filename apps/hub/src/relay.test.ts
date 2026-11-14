@@ -175,3 +175,37 @@ test("1 時間より古い行は次の置き方で消える", async () => {
   await client.putMessage({ request: req("newer") });
   expect(await code(client.getMessage({ id: old.id }))).toBe(Code.NotFound);
 });
+
+test("期限はロックを取ってから見る: ロック待ちの間に 30 秒を過ぎた行は取らない", async () => {
+  // 別プロセスが書き込みロックを握り、claim はそれを待つ (busy_timeout)。待つ前の時刻で期限を見ると、
+  // 送り手が expired と読んだ行を取ってしまう
+  const dir = await mkdtemp(join(tmpdir(), "ccx-relay-lock-"));
+  const file = join(dir, "center.db");
+  const fileDb = openDb(file);
+  const start = Date.now();
+  // put の時刻を T0 とし、claim を出す時点で 29.7 秒経っている時計
+  let offset = 0;
+  const clock = () => T0 + offset + (Date.now() - start);
+  const srv = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(fileDb, new ObjectStore(objectsDir), { now: clock }).fetch });
+  const c = createClient(MessageRelayService, createConnectTransport({ baseUrl: `http://127.0.0.1:${srv.port}`, httpVersion: "1.1" }));
+  try {
+    offset = -(Date.now() - start);
+    await c.putMessage({ request: req("late") });
+    offset = 29_700 - (Date.now() - start);
+
+    const holder = Bun.spawn(
+      ["bun", "-e", `const { Database } = require("bun:sqlite"); const d = new Database(${JSON.stringify(file)}); d.exec("BEGIN IMMEDIATE"); console.log("locked"); await Bun.sleep(1000); d.exec("COMMIT");`],
+      { stdout: "pipe", stderr: "inherit" },
+    );
+    const reader = holder.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("locked");
+
+    const got = await c.claimMessage({ machine: "m2", user: "dev" });
+    expect(got.message).toBeUndefined();
+    await holder.exited;
+  } finally {
+    void srv.stop(true);
+    fileDb.$client.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -103,11 +103,14 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
 
     claimMessage(req) {
       if (!req.machine || !req.user) throw invalid("machine and user are required");
-      const nowMs = now();
+      let nowMs = 0;
 
-      // 選ぶのと claimed_at を付けるのを 1 トランザクションにする: 同じ行を 2 つの agent に渡さない
+      // 選ぶのと claimed_at を付けるのを 1 トランザクションにする: 同じ行を 2 つの agent に渡さない。
+      // 時刻は書き込みロックを取ってから読む。ロック待ち (busy_timeout、最大 5 秒) の前の時刻で期限を見ると、
+      // 送り手が expired と読んで「送っていない」と言った行を取って打ってしまう
       const claimed = db.transaction(
         (tx) => {
+          nowMs = now();
           const row = tx
             .select()
             .from(relayMessages)
