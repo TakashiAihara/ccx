@@ -205,7 +205,6 @@ test("期限はロックを取ってから見る: ロック待ちの間に 30 �
   try {
     offset = -(Date.now() - start);
     await c.putMessage({ request: req("late") });
-    offset = 29_700 - (Date.now() - start);
 
     const holder = Bun.spawn(
       ["bun", "-e", `const { Database } = require("bun:sqlite"); const d = new Database(${JSON.stringify(file)}); d.exec("BEGIN IMMEDIATE"); console.log("locked"); await Bun.sleep(1000); d.exec("COMMIT");`],
@@ -213,6 +212,9 @@ test("期限はロックを取ってから見る: ロック待ちの間に 30 �
     );
     const reader = holder.stdout.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("locked");
+    // Set only now that the lock is held, so a clock read on entering the claim sees 29.7 s
+    // however long the holder took to start; the lock then holds the claim for about a second
+    offset = 29_700 - (Date.now() - start);
 
     const got = await c.claimMessage({ machine: "m2", user: "dev" });
     expect(got.message).toBeUndefined();
