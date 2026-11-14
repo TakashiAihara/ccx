@@ -48,6 +48,7 @@ import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { AmbiguousSession, showEvents } from "./session-show.ts";
 import { registerTranscript } from "./transcript.ts";
+import { registerMsg } from "./msg.ts";
 
 // release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
 // (bun run / 手元の build) は package.json の版。定数を別に持つと ccx.json の ccxVersion がずれる (#67)。
@@ -539,6 +540,7 @@ session
 registerSessionState(session);
 registerResume(session);
 registerTranscript(program, VERSION);
+registerMsg(program);
 
 const agent = program.command("agent").description("Inspect the local resident agent (ccx-agent)");
 
