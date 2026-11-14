@@ -88,6 +88,14 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"a dialog drawn below the box", box("❭ \x1b[2mplaceholder") + "\x1b[1m❭ \x1b[0mAllow", inputMissing},
 		{"an indented dialog below the box", box("❭ \x1b[2mplaceholder") + "  \x1b[1m❭ \x1b[0mAllow", inputMissing},
 		{"empty box", "─────\n─────\n", inputMissing},
+		{"only one rule", "❭ \x1b[2mplaceholder\r\n─────\nfooter\n", inputMissing},
+		{"placeholder colour with normal intensity", box("❭ \x1b[38;2;124;124;124;22mplaceholder\x1b[0m"), inputEmpty},
+		{"placeholder colour then default background", box("❭ \x1b[38;2;124;124;124m\x1b[49mplaceholder\x1b[0m"), inputEmpty},
+		{"bold stays after default colour", box("❭ \x1b[1;39mplaceholder\x1b[0m"), inputEmpty},
+		{"typed after the colour is turned back", box("❭ \x1b[38;2;9;9;9m \x1b[39mhi"), inputTyped},
+		{"an unknown code keeps styling until reset", box("❭ \x1b[73mplaceholder\x1b[0m"), inputEmpty},
+		{"typed after the background is turned back", box("❭ \x1b[48;2;1;1;1m \x1b[49mhi"), inputTyped},
+		{"256-colour index 0 is not a reset", box("❭ \x1b[38;5;0mplaceholder\x1b[0m"), inputEmpty},
 	} {
 		if got := inputBox(tc.screen); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.name, got, tc.want)
@@ -230,8 +238,8 @@ func TestSendWaitsUntilTheBoxClearsAndTheHeaderShows(t *testing.T) {
 			reads++
 		}
 	}
-	if reads != 4 {
-		t.Fatalf("visible reads = %d, want 4", reads)
+	if reads != 5 {
+		t.Fatalf("visible reads = %d, want 5 (the box before and after the history read)", reads)
 	}
 }
 
@@ -351,7 +359,7 @@ func TestSendDoesNotTakeAnEarlierSameHeaderAsSent(t *testing.T) {
 }
 
 func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
-	for _, body := range []string{"a\x1b[2Kb", "a\x07", "a\rb", "a\u009bb", "a\x9bb", "a b", "a‮b", "a​b"} {
+	for _, body := range []string{"a\x1b[2Kb", "a\x07", "a\rb", "a\u009bb", "a\x9bb", "a\u2028b", "a\u202eb", "a\u200bb"} {
 		r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
 		r.Body = body
 		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
@@ -360,7 +368,7 @@ func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
 		}
 	}
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
-	r.Body = "tab\there\nnext line 👨‍👩‍👧 क्‍ष"
+	r.Body = "tab\there\nnext line 👨\u200d👩\u200d👧 क्\u200dष"
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
 	if _, err := send(newDevin(f), r); err != nil {
 		t.Errorf("tab and newline: %v", err)
@@ -499,7 +507,7 @@ func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
 		"broken summary": {Target: "excited-giraffe", Sender: "s", Summary: "a\xffb", Body: "b"},
 		"trailing space": {Target: "excited-giraffe", Sender: "s", Summary: "review 3 ", Body: "b"},
 		"leading space":  {Target: "excited-giraffe", Sender: " s", Summary: "x", Body: "b"},
-		"bidi override":  {Target: "excited-giraffe", Sender: "claude‮", Summary: "x", Body: "b"},
+		"bidi override":  {Target: "excited-giraffe", Sender: "claude\u202e", Summary: "x", Body: "b"},
 	} {
 		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}}
 		if _, err := send(newDevin(f), r); connect.CodeOf(err) != connect.CodeInvalidArgument || f.prompted() != nil {
@@ -650,4 +658,44 @@ func TestUrgentToADevinMidTurnOnScreenEndsAtSent(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_SENT || !strings.Contains(got[0].Detail, "was working") {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
+}
+
+func TestBodyRefusesFormatCharactersButKeepsJoiners(t *testing.T) {
+	for _, r := range []rune{'\x1b', '\u00ad', '\u202e', '\u2066', '\ufeff', '\U000E0001', '\U00013430', '\u2028'} {
+		if !refusedInBody(r) {
+			t.Errorf("%U not refused", r)
+		}
+	}
+	for _, r := range []rune{'\n', '\t', '\u200c', '\u200d', 'a', 'क'} {
+		if refusedInBody(r) {
+			t.Errorf("%U refused", r)
+		}
+	}
+}
+
+// The box must still be empty after the history read: text that went back into
+// the box (or never left it) is not sent.
+func TestSentNeedsTheBoxEmptyAfterTheHistoryToo(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox, emptyBox, typedBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); err == nil || connect.CodeOf(err) != connect.CodeUnknown {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// The box is looked at right before typing: nothing runs between the screen read
+// and the prompt.
+func TestTheBoxIsReadRightBeforeTyping(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range f.calls {
+		if c[1] == "prompt" {
+			if prev := f.calls[i-1]; prev[1] != "read" || prev[4] != "visible" {
+				t.Fatalf("the call before the prompt was %q", prev)
+			}
+			return
+		}
+	}
+	t.Fatal("no prompt")
 }

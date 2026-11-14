@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
@@ -88,9 +90,8 @@ var (
 	// Format characters (bidi overrides, zero-width) are refused too: they can
 	// make the header show a different sender or summary than was sent.
 	oneLine     = regexp.MustCompile(`^[^\r\n\p{Cc}\p{Cf}\x{2028}\x{2029}]+$`)
-	// The body keeps the zero-width joiners (U+200C, U+200D) that emoji sequences
-	// and some scripts need; they cannot reorder text.
-	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f\x{00AD}\x{0600}-\x{0605}\x{061C}\x{06DD}\x{070F}\x{08E2}\x{180E}\x{200B}\x{200E}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{206F}\x{FEFF}\x{FFF9}-\x{FFFB}\x{2028}\x{2029}]`)
+
+
 )
 
 // NotTypedKey is the error metadata key set on a failure that came before
@@ -131,7 +132,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if req.Body == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is empty"))
 	}
-	if !utf8.ValidString(req.Body) || controlChar.MatchString(req.Body) {
+	if !utf8.ValidString(req.Body) || strings.ContainsFunc(req.Body, refusedInBody) {
 		// An ESC reaching the pane can cancel or clear Devin's input.
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is not UTF-8 text without control or format characters (newline and tab are fine)"))
 	}
@@ -161,6 +162,15 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err != nil {
 		return err
 	}
+	header := headerLine(req.Sender, req.Summary)
+	// A header sent before is already in the history; only a new one counts. Read
+	// before the screen, so the box is looked at right before typing.
+	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text")
+	if err != nil {
+		return connect.NewError(connect.CodeUnavailable, err)
+	}
+	seen := headerLines(string(before), header)
+
 	screen, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi")
 	if err != nil {
 		return connect.NewError(connect.CodeUnavailable, err)
@@ -181,13 +191,6 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s has text in its input box; nothing was sent", req.Target))
 	}
 
-	header := headerLine(req.Sender, req.Summary)
-	// A header sent before is already in the history; only a new one counts.
-	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text")
-	if err != nil {
-		return connect.NewError(connect.CodeUnavailable, err)
-	}
-	seen := headerLines(string(before), header)
 	*typed = true
 	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
 		// herdr may have written part of it before failing.
@@ -296,10 +299,9 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait 
 	wctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
 	defer cancel()
 	for {
-		hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
-		if err == nil && headerLines(string(hist), header) > seen {
-			screen, err := d.Herdr(wctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
-			if err == nil && inputBox(string(screen)) == inputEmpty {
+		if d.boxEmpty(wctx, id) {
+			hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
+			if err == nil && headerLines(string(hist), header) > seen && d.boxEmpty(wctx, id) {
 				return nil
 			}
 		}
@@ -382,6 +384,9 @@ func inputBox(screen string) inputState {
 			return inputMissing
 		}
 	}
+	if top < 0 {
+		return inputMissing
+	}
 	box := lines[top+1 : bottom]
 	if len(box) == 0 {
 		return inputMissing
@@ -399,18 +404,21 @@ func inputBox(screen string) inputState {
 var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
 
 // typed says whether s prints a visible character with no styling in effect.
+// The styling is the SGR state carried across sequences (sgrState).
 func typed(s string) bool {
-	styled, at := false, 0
+	var st sgrState
+	at := 0
 	for _, m := range sgr.FindAllStringSubmatchIndex(s, -1) {
 		// Spaces count: a box holding only typed spaces has lost its placeholder.
-		if !styled && strings.Trim(s[at:m[0]], "\r") != "" {
+		if !st.styled() && strings.Trim(s[at:m[0]], "\r") != "" {
 			return true
 		}
-		styled = !isReset(s[m[2]:m[3]])
+		st.apply(s[m[2]:m[3]])
 		at = m[1]
 	}
-	return !styled && strings.Trim(s[at:], "\r") != ""
+	return !st.styled() && strings.Trim(s[at:], "\r") != ""
 }
+
 
 // Service answers MessageService. The api concern mounts it on the unix socket
 // only (message.proto says why). Each send is logged, so "who typed this into my
@@ -437,23 +445,83 @@ func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendReque
 	return err
 }
 
-// isReset says whether text after these SGR parameters is plain. They apply left
-// to right, so "31;0" ends plain and "0;31" styled. Codes that turn one attribute
-// back to the default (22 normal intensity, 39 default colour, ...) count as
-// resets too: reading text after them as styled would take typed text for the
-// placeholder.
-func isReset(params string) bool {
-	plain := true
+// sgrState tracks which SGR attributes are away from the default. Each reset
+// code turns back only its own attribute (22 intensity, 39 foreground, ...), so
+// "bold; 39" stays styled and "38;..m then 39m" ends plain.
+type sgrState map[string]bool
+
+func (st *sgrState) styled() bool {
+	for _, on := range *st {
+		if on {
+			return true
+		}
+	}
+	return false
+}
+
+func (st *sgrState) apply(params string) {
+	if *st == nil {
+		*st = sgrState{}
+	}
+	set := func(attr string, on bool) { (*st)[attr] = on }
 	ps := strings.Split(params, ";")
 	for i := 0; i < len(ps); i++ {
-		switch p := strings.TrimLeft(ps[i], "0"); p {
-		case "", "22", "23", "24", "25", "27", "28", "29", "39", "49", "54", "55", "59":
-			plain = true
-		case "38", "48", "58":
+		n, err := strconv.Atoi(ps[i])
+		if ps[i] == "" {
+			n, err = 0, nil
+		}
+		switch {
+		case err != nil:
+			set("other", true)
+		case n == 0:
+			*st = sgrState{}
+		case n == 1 || n == 2:
+			set("intensity", true)
+		case n == 22:
+			set("intensity", false)
+		case n == 3:
+			set("italic", true)
+		case n == 23:
+			set("italic", false)
+		case n == 4 || n == 21:
+			set("underline", true)
+		case n == 24:
+			set("underline", false)
+		case n == 5 || n == 6:
+			set("blink", true)
+		case n == 25:
+			set("blink", false)
+		case n == 7:
+			set("inverse", true)
+		case n == 27:
+			set("inverse", false)
+		case n == 8:
+			set("conceal", true)
+		case n == 28:
+			set("conceal", false)
+		case n == 9:
+			set("strike", true)
+		case n == 29:
+			set("strike", false)
+		case n >= 30 && n <= 37 || n >= 90 && n <= 97:
+			set("fg", true)
+		case n == 39:
+			set("fg", false)
+		case n >= 40 && n <= 47 || n >= 100 && n <= 107:
+			set("bg", true)
+		case n == 49:
+			set("bg", false)
+		case n == 53:
+			set("overline", true)
+		case n == 55:
+			set("overline", false)
+		case n == 59:
+			set("ulcolor", false)
+		case n == 38 || n == 48 || n == 58:
+			set(map[int]string{38: "fg", 48: "bg", 58: "ulcolor"}[n], true)
 			// An extended colour: its arguments (5;n or 2;r;g;b) are not codes.
-			plain = false
 			if i+1 < len(ps) {
-				switch strings.TrimLeft(ps[i+1], "0") {
+				switch ps[i+1] {
 				case "5":
 					i += 2
 				case "2":
@@ -461,10 +529,9 @@ func isReset(params string) bool {
 				}
 			}
 		default:
-			plain = false
+			set("other", true)
 		}
 	}
-	return plain
 }
 
 // midTurn says whether Devin's screen shows a turn in progress: the status line
@@ -494,4 +561,23 @@ func boxRules(lines []string) (top, bottom int) {
 		break
 	}
 	return top, bottom
+}
+
+// refusedInBody is a control or format character other than newline, tab and
+// the zero-width joiners (U+200C, U+200D) that emoji sequences and some scripts
+// need. An ESC can cancel or clear Devin's input; a bidi override can reorder
+// what the receiver reads.
+func refusedInBody(r rune) bool {
+	switch r {
+	case '\n', '\t', '\u200c', '\u200d':
+		return false
+	case '\u2028', '\u2029':
+		return true
+	}
+	return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)
+}
+
+func (d *Devin) boxEmpty(ctx context.Context, id string) bool {
+	screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
+	return err == nil && inputBox(string(screen)) == inputEmpty
 }
