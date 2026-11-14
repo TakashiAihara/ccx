@@ -37,11 +37,11 @@ message SendRequest {
   // The receiver's session name. For Devin, its session name (the herdr pane's agent_session).
   string target = 1;
   DeliveryMode mode = 2;
-  // Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 120 bytes.
+  // Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 80 bytes.
   string summary = 3;
   // UTF-8 text up to 64 KiB, with no control characters but newline and tab.
   string body = 4;
-  // The sender's name. Only shown in that line, never used for auth. One line, at most 120 bytes.
+  // The sender's name. Only shown in that line, never used for auth. One line, at most 40 bytes.
   string sender = 5;
 }
 

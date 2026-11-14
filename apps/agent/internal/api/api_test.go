@@ -746,11 +746,29 @@ func tcpAddrFromLog(t *testing.T) (func(string, ...any), <-chan string) {
 	}, ch
 }
 
-type echoMessages struct{ got *ccxv1.SendRequest }
+// echoMessages records what reached it; the handler runs on the server's goroutine.
+type echoMessages struct {
+	mu   sync.Mutex
+	last *ccxv1.SendRequest
+}
 
 func (e *echoMessages) Send(_ context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
-	e.got = req.Msg
+	e.mu.Lock()
+	e.last = req.Msg
+	e.mu.Unlock()
 	return stream.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
+}
+
+func (e *echoMessages) got() *ccxv1.SendRequest {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.last
+}
+
+func (e *echoMessages) reset() {
+	e.mu.Lock()
+	e.last = nil
+	e.mu.Unlock()
 }
 
 // MessageService types into other sessions: the unix socket serves it, the TCP
@@ -779,8 +797,8 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 	for stream.Receive() {
 		states = append(states, stream.Msg().State)
 	}
-	if stream.Err() != nil || len(states) != 1 || states[0] != ccxv1.SendResponse_STATE_SENT || m.got.GetTarget() != "t" {
-		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got)
+	if stream.Err() != nil || len(states) != 1 || states[0] != ccxv1.SendResponse_STATE_SENT || m.got().GetTarget() != "t" {
+		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got())
 	}
 
 	// AgentService still answers on the same socket.
@@ -795,11 +813,11 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 	}
 	for big.Receive() {
 	}
-	if big.Err() != nil || len(m.got.GetBody()) != 64<<10 {
+	if big.Err() != nil || len(m.got().GetBody()) != 64<<10 {
 		t.Fatalf("64 KiB body: %v", big.Err())
 	}
 
-	m.got = nil
+	m.reset()
 	withToken := bearer("tok-tok-tok-tok-tok")
 	tcp, err := ccxv1connect.NewMessageServiceClient(http.DefaultClient, "http://"+addr, withToken).Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
 	if err == nil {
@@ -807,8 +825,8 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 		}
 		err = tcp.Err()
 	}
-	if connect.CodeOf(err) != connect.CodeUnimplemented || m.got != nil {
-		t.Fatalf("tcp: err %v, handler reached %v", err, m.got != nil)
+	if connect.CodeOf(err) != connect.CodeUnimplemented || m.got() != nil {
+		t.Fatalf("tcp: err %v, handler reached %v", err, m.got() != nil)
 	}
 }
 

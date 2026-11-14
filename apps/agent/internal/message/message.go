@@ -62,8 +62,9 @@ type Devin struct {
 	mu sync.Mutex
 }
 
-// NewDevin uses the herdr on PATH and the waits measured on #302: working showed
-// within 3 seconds of the prompt.
+// NewDevin uses the herdr on PATH. On #302 working showed within 3 seconds of
+// the prompt; StartWait leaves room above that, SentWait is the time to see it in
+// the history.
 func NewDevin() *Devin {
 	return &Devin{Herdr: CommandHerdr, Poll: 250 * time.Millisecond, SentWait: 3 * time.Second, StartWait: 5 * time.Second}
 }
@@ -72,10 +73,13 @@ func NewDevin() *Devin {
 // limit on a single argument (MAX_ARG_STRLEN), past which exec fails with E2BIG.
 const MaxBody = 64 << 10
 
-// MaxLabel bounds the sender and the summary. With MaxBody it keeps the whole
-// argument under the limit, and a short header line is less likely to wrap in
-// Devin's history, where a wrapped header is not recognised as sent.
-const MaxLabel = 120
+// MaxSender and MaxSummary keep the header line `ccx: <sender>: <summary>` under
+// about 130 columns, so it does not wrap in a usual pane: a wrapped header is not
+// recognised as sent. With MaxBody they keep the whole argument under the limit.
+const (
+	MaxSender  = 40
+	MaxSummary = 80
+)
 
 // headerLine is the line the receiver sees first (#301): who sent it and what it is.
 func headerLine(sender, summary string) string { return "ccx: " + sender + ": " + summary }
@@ -113,10 +117,13 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if req.Target == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("target is empty"))
 	}
-	for _, s := range []string{req.Sender, req.Summary} {
+	for _, l := range []struct {
+		name, s string
+		max     int
+	}{{"sender", req.Sender, MaxSender}, {"summary", req.Summary, MaxSummary}} {
 		// Leading or trailing spaces would not survive the history line Devin pads.
-		if !utf8.ValidString(s) || !oneLine.MatchString(s) || len(s) > MaxLabel || strings.TrimSpace(s) != s {
-			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("sender and summary must each be one non-empty line of at most %d bytes, without leading or trailing spaces", MaxLabel))
+		if !utf8.ValidString(l.s) || !oneLine.MatchString(l.s) || len(l.s) > l.max || strings.TrimSpace(l.s) != l.s {
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s must be one non-empty line of at most %d bytes, without leading or trailing spaces", l.name, l.max))
 		}
 	}
 	if req.Body == "" {
@@ -313,7 +320,12 @@ func (d *Devin) waitStarted(ctx context.Context, id, before string) (ccxv1.SendR
 			last, _, _ = strings.Cut(err.Error(), "\n")
 		} else {
 			last = st
-			if st == "working" || st == "blocked" || (st == "done" && before != "done") {
+			if st == "idle" {
+				before = st
+			}
+			// done and blocked left from before the prompt say nothing about it; once
+			// idle has been seen after the prompt, a later one does.
+			if st == "working" || (st == "blocked" && before != "blocked") || (st == "done" && before != "done") {
 				return ccxv1.SendResponse_STATE_WORKING, "agent_status " + st
 			}
 		}
@@ -365,7 +377,7 @@ func inputBox(screen string) inputState {
 				state = inputMissing
 			}
 		} else if strings.HasPrefix(strings.TrimLeft(sgr.ReplaceAllString(line, ""), " "), "❭ ") {
-			// A styled mark below the box is a dialog drawn over it.
+			// A mark drawn styled or indented below the box is a dialog over it.
 			state = inputMissing
 		}
 	}
@@ -413,17 +425,20 @@ func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendReque
 	return err
 }
 
-// isReset says whether SGR parameters only reset: "", "0", "00", "0;0", ";".
-// Codes that turn one attribute back to the default (22 normal intensity, 39
-// default colour, ...) count too: text drawn after them is plain, and reading it
-// as styled would take typed text for the placeholder.
+// isReset says whether text after these SGR parameters is plain. They apply left
+// to right, so "31;0" ends plain and "0;31" styled. Codes that turn one attribute
+// back to the default (22 normal intensity, 39 default colour, ...) count as
+// resets too: reading text after them as styled would take typed text for the
+// placeholder.
 func isReset(params string) bool {
+	plain := true
 	for _, p := range strings.Split(params, ";") {
 		switch strings.TrimLeft(p, "0") {
 		case "", "22", "23", "24", "25", "27", "28", "29", "39", "49", "54", "55", "59":
+			plain = true
 		default:
-			return false
+			plain = false
 		}
 	}
-	return true
+	return plain
 }

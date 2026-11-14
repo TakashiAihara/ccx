@@ -177,3 +177,9 @@ test("--timeout must be a positive number", async () => {
     expect(r.err).toContain("--timeout takes a positive number of milliseconds");
   }
 });
+
+test("a default sender is cut to the 40 bytes ccx-agent takes", () => {
+  const name = defaultSender({}, () => ({ username: "u".repeat(60) }));
+  expect(Buffer.byteLength(name)).toBeLessThanOrEqual(40);
+  expect(name).toBe("u".repeat(40));
+});

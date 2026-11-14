@@ -12,8 +12,8 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 
 - Each line is an ack, printed as it happens. Exit 0 means the message was sent.
 - A refusal prints `not sent: <reason>` and exits 1. Nothing was typed into the receiver.
-- Any other failure prints `may have been sent` (or `sent, then lost the ack stream`) and exits 1: the text may be there already, so look before sending again. "not sent" needs ccx-agent's word for it (the error metadata `Ccx-Not-Typed: 1`, set on refusals before typing) or a socket that could not be connected to; a dropped stream or a timeout (`--timeout`, 60 s) is not proof.
-- The body is UTF-8 text up to 64 KiB with no control characters but newline and tab; sender and summary are one line of at most 120 bytes. The sender name is a label anyone on the machine can choose, not a checked identity.
+- Any other failure prints `may have been sent` (or `sent, then lost the ack stream`) and exits 1: the text may be there already, so look before sending again. "not sent" needs ccx-agent's word for it (the error metadata `Ccx-Not-Typed: 1`, set on refusals before typing), a socket that could not be connected to, or a code the Connect layer answers before Send runs (Unimplemented from an older ccx-agent, ResourceExhausted for an oversized request); a dropped stream or a timeout (`--timeout`, 60 s) is not proof.
+- The body is UTF-8 text up to 64 KiB with no control characters but newline and tab; sender and summary are one line of at most 40 and 80 bytes, so the header does not wrap in a usual pane. Format characters (bidi overrides, zero-width) are refused everywhere. The sender name is a label anyone on the machine can choose, not a checked identity.
 - The receiver sees the first line `ccx: <sender>: <summary>`, then the body.
 
 ## Modes

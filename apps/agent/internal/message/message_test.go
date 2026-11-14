@@ -40,6 +40,8 @@ func TestInputBoxOnDevinScreens(t *testing.T) {
 		{"dialog.ansi", inputMissing},
 		// An ask_user_question picker: its mark is indented and styled.
 		{"question.ansi", inputMissing},
+		// Devin mid-turn keeps its box, with another placeholder.
+		{"working.ansi", inputEmpty},
 	} {
 		if got := inputBox(fixture(t, tc.file)); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.file, got, tc.want)
@@ -69,6 +71,8 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"reset spelled 0;0", "❭ \x1b[2m \x1b[0;0mhi", inputTyped},
 		{"typed after default colour", "❭ \x1b[38;2;9;9;9m \x1b[39mhi", inputTyped},
 		{"typed after normal intensity", "❭ \x1b[1m \x1b[22;39mhi", inputTyped},
+		{"set then reset in one sequence", "❭ \x1b[2m \x1b[31;0mhi", inputTyped},
+		{"reset then set in one sequence", "❭ \x1b[0;31mplaceholder\x1b[0m\r\n─", inputEmpty},
 		{"an indented dialog below the box", "❭ \x1b[2mplaceholder\n─\n  \x1b[1m❭ \x1b[0mAllow", inputMissing},
 	} {
 		if got := inputBox(tc.screen); got != tc.want {
@@ -473,10 +477,9 @@ func TestStoppingWhileWaitingIsCanceledAndMarkedTyped(t *testing.T) {
 }
 
 func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
-	long := strings.Repeat("s", MaxLabel+1)
 	for name, r := range map[string]Request{
-		"long sender":    {Target: "excited-giraffe", Sender: long, Summary: "x", Body: "b"},
-		"long summary":   {Target: "excited-giraffe", Sender: "s", Summary: long, Body: "b"},
+		"long sender":    {Target: "excited-giraffe", Sender: strings.Repeat("s", 41), Summary: "x", Body: "b"},
+		"long summary":   {Target: "excited-giraffe", Sender: "s", Summary: strings.Repeat("s", 81), Body: "b"},
 		"broken sender":  {Target: "excited-giraffe", Sender: "a\xffb", Summary: "x", Body: "b"},
 		"broken summary": {Target: "excited-giraffe", Sender: "s", Summary: "a\xffb", Body: "b"},
 		"trailing space": {Target: "excited-giraffe", Sender: "s", Summary: "review 3 ", Body: "b"},
@@ -489,10 +492,10 @@ func TestSendRefusesLongOrBrokenLabels(t *testing.T) {
 		}
 	}
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
-	r.Summary = strings.Repeat("s", MaxLabel)
-	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: " + r.Summary, status: []string{"working"}}
+	r.Sender, r.Summary = strings.Repeat("f", 40), strings.Repeat("s", 80)
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: " + r.Sender + ": " + r.Summary, status: []string{"working"}}
 	if _, err := send(newDevin(f), r); err != nil {
-		t.Errorf("a summary at the limit: %v", err)
+		t.Errorf("labels at the limit: %v", err)
 	}
 }
 
@@ -506,5 +509,20 @@ func TestALongBodyGetsLongerToShowAsSent(t *testing.T) {
 	r.Body = strings.Repeat("x", 16<<10)
 	if got, err := send(d, r); err != nil || len(got) != 2 {
 		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+func TestStartedStatusesLeftFromBeforeDoNotCount(t *testing.T) {
+	// blocked before the prompt, still blocked after: not this message.
+	f := &fakeHerdr{panes: panesWith("blocked"), screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"blocked"}}
+	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_NOT_STARTED {
+		t.Fatalf("blocked: events = %v, err = %v", got, err)
+	}
+	// done before, then idle, then done: the second done is this message's turn.
+	g := &fakeHerdr{panes: panesWith("done"), screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"done", "idle", "done"}}
+	got, err = send(newDevin(g), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("done after idle: events = %v, err = %v", got, err)
 	}
 }

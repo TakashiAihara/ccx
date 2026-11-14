@@ -41,7 +41,8 @@ export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => 
     // A uid with no passwd entry (some containers).
     user = env.USER || `uid${process.getuid?.() ?? ""}`;
   }
-  return `${user}@${hostname()}`;
+  // ccx-agent takes at most 40 bytes (MaxSender); a long FQDN would refuse every send.
+  return Buffer.from(`${user}@${hostname()}`).subarray(0, 40).toString().replace(/�$/, "").trimEnd();
 }
 
 export function unixTransport(socketPath: string): Transport {

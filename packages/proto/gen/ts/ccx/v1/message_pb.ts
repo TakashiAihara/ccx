@@ -29,7 +29,7 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
   mode: DeliveryMode;
 
   /**
-   * Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 120 bytes.
+   * Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 80 bytes.
    *
    * @generated from field: string summary = 3;
    */
@@ -43,7 +43,7 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
   body: string;
 
   /**
-   * The sender's name. Only shown in that line, never used for auth. One line, at most 120 bytes.
+   * The sender's name. Only shown in that line, never used for auth. One line, at most 40 bytes.
    *
    * @generated from field: string sender = 5;
    */

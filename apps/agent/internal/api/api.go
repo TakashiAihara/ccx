@@ -241,7 +241,7 @@ func (c *Concern) retry() time.Duration {
 }
 
 func (c *Concern) run(ctx context.Context) error {
-	// The request is two short strings.
+	// The AgentService request is two short strings.
 	handler := func(s *Server, local bool) http.Handler {
 		path, h := ccxv1connect.NewAgentServiceHandler(s, connect.WithReadMaxBytes(64<<10))
 		mux := http.NewServeMux()
