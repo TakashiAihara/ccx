@@ -64,6 +64,10 @@ func NewDevin() *Devin {
 	return &Devin{Herdr: CommandHerdr, Poll: 250 * time.Millisecond, SentWait: 3 * time.Second, StartWait: 5 * time.Second}
 }
 
+// MaxBody keeps the text herdr gets as one argument well under Linux's 128 KiB
+// limit on a single argument (MAX_ARG_STRLEN), past which exec fails with E2BIG.
+const MaxBody = 64 << 10
+
 // Header is the line the receiver sees first (#301): who sent it and what it is.
 func Header(sender, summary string) string { return "ccx: " + sender + ": " + summary }
 
@@ -85,10 +89,17 @@ func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_UNSPECIFIED {
 		mode = ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN
 	}
-	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_LATER {
+	switch mode {
+	case ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN, ccxv1.DeliveryMode_DELIVERY_MODE_URGENT:
+	case ccxv1.DeliveryMode_DELIVERY_MODE_LATER:
 		// Getting it in without waking Devin (UserPromptSubmit's additionalContext)
 		// is not measured yet.
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("devin does not take mode later; it takes after-turn, urgent"))
+	default:
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode %d", mode))
+	}
+	if len(req.Body) > MaxBody {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("body is %d bytes, over the %d-byte limit", len(req.Body), MaxBody))
 	}
 
 	p, err := d.find(ctx, req.Target)

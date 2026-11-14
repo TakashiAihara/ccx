@@ -5,7 +5,7 @@
  * request and prints each ack as one line; it never branches on the receiver's product.
  */
 import type { Command } from "commander";
-import { createClient, ConnectError, type Transport } from "@connectrpc/connect";
+import { Code, createClient, ConnectError, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,6 +47,18 @@ export function unixTransport(socketPath: string): Transport {
 
 export type SendOptions = { mode: string; summary: string; from: string; socket: string };
 
+/**
+ * ccx-agent refuses before typing with these codes. Any other failure may come after the text went into
+ * the pane (it was typed but not confirmed, or the stream broke), so it is not called "not sent": a
+ * resend could type the message twice.
+ */
+const REFUSED = new Set([Code.InvalidArgument, Code.NotFound, Code.FailedPrecondition]);
+
+export function failurePrefix(code: Code, acks: number): string {
+  if (acks > 0) return "sent, then lost the ack stream";
+  return REFUSED.has(code) ? "not sent" : "may have been sent (look at the receiver before sending again)";
+}
+
 /** Hands each ack to out as one line. Throws a ConnectError when nothing was sent. */
 export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void, transport?: Transport): Promise<void> {
   const mode = MODES[o.mode];
@@ -80,8 +92,7 @@ export function registerMsg(program: Command): void {
         });
       } catch (e) {
         if (!(e instanceof ConnectError)) throw e;
-        // Lost after "sent" means it did arrive; "not sent" only when no ack came at all.
-        throw new Error(acks === 0 ? `not sent: ${e.rawMessage}` : `sent, then lost the ack stream: ${e.rawMessage}`);
+        throw new Error(`${failurePrefix(e.code, acks)}: ${e.rawMessage}`);
       }
     });
 }

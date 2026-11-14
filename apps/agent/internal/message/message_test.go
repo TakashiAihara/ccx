@@ -246,3 +246,21 @@ func TestUnspecifiedModeIsAfterTurn(t *testing.T) {
 		t.Fatalf("err = %v, typed %q", err, f.prompted())
 	}
 }
+
+func TestSendRefusesUnknownModeAndOversizedBody(t *testing.T) {
+	big := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	big.Body = strings.Repeat("x", 64<<10+1)
+	for name, r := range map[string]Request{"unknown mode": req(ccxv1.DeliveryMode(99)), "oversized body": big} {
+		f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+		_, err := send(newDevin(f), r)
+		if connect.CodeOf(err) != connect.CodeInvalidArgument || f.prompted() != nil {
+			t.Errorf("%s: err = %v, typed %v", name, err, f.prompted() != nil)
+		}
+	}
+	ok := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	ok.Body = strings.Repeat("x", 64<<10)
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
+	if _, err := send(newDevin(f), ok); err != nil {
+		t.Errorf("a body at the limit: %v", err)
+	}
+}

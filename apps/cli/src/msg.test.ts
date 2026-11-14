@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { DeliveryMode, MessageService, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { defaultApiSocketPath, defaultSender, sendMessage } from "./msg.ts";
+import { defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -71,4 +71,13 @@ test("the API socket sits beside the hook socket unless CCX_API_SOCKET names one
 
 test("a Claude Code sender is named from its session id", () => {
   expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" })).toBe("claude-f61d5ded");
+});
+
+test("only a refusal before typing is called not sent", () => {
+  expect(failurePrefix(Code.FailedPrecondition, 0)).toBe("not sent");
+  expect(failurePrefix(Code.NotFound, 0)).toBe("not sent");
+  expect(failurePrefix(Code.InvalidArgument, 0)).toBe("not sent");
+  expect(failurePrefix(Code.Unknown, 0)).toStartWith("may have been sent");
+  expect(failurePrefix(Code.Unavailable, 0)).toStartWith("may have been sent");
+  expect(failurePrefix(Code.FailedPrecondition, 1)).toBe("sent, then lost the ack stream");
 });
