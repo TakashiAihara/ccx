@@ -88,7 +88,9 @@ var (
 	// Format characters (bidi overrides, zero-width) are refused too: they can
 	// make the header show a different sender or summary than was sent.
 	oneLine     = regexp.MustCompile(`^[^\r\n\p{Cc}\p{Cf}\x{2028}\x{2029}]+$`)
-	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f\p{Cf}\x{2028}\x{2029}]`)
+	// The body keeps the zero-width joiners (U+200C, U+200D) that emoji sequences
+	// and some scripts need; they cannot reorder text.
+	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f\x{00AD}\x{0600}-\x{0605}\x{061C}\x{06DD}\x{070F}\x{08E2}\x{180E}\x{200B}\x{200E}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{206F}\x{FEFF}\x{FFF9}-\x{FFFB}\x{2028}\x{2029}]`)
 )
 
 // NotTypedKey is the error metadata key set on a failure that came before
@@ -360,35 +362,53 @@ const (
 )
 
 // inputBox reads Devin's input box off an ANSI snapshot of the visible screen.
-// The box is the last line that starts with "❭ " with no styling before it;
-// history lines and dialogs (a question, a permission prompt) draw the same mark
-// after a background colour. The box is empty when every visible character after
-// the mark is styled (the grey placeholder) and the box's rule is right below it;
-// typed text is drawn unstyled. Anything else reads as no box, so nothing is
-// typed. Measured on devin 3000.12.57.
+// The box is what lies between the last two rules (lines of ─), and it must start
+// with "❭ " drawn unstyled: history lines above it and dialogs (a question, a
+// permission prompt) draw the mark after a background colour or indented. The box
+// is empty when it is that one line and every visible character after the mark is
+// styled (the grey placeholder); typed text is drawn unstyled, and a second line
+// in the box is typed text too. Anything else reads as no box, so nothing is
+// typed. Measured on devin 3000.12.57 (testdata).
 func inputBox(screen string) inputState {
-	state := inputMissing
 	lines := strings.Split(screen, "\n")
-	for i, line := range lines {
-		if rest, ok := strings.CutPrefix(line, "❭ "); ok {
-			switch {
-			case typed(rest):
-				state = inputTyped
-			case state == inputTyped:
-				// A later "❭ " line under typed text is that text's next line.
-			case i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(sgr.ReplaceAllString(lines[i+1], "")), "─"):
-				// The box's rule right under it: a placeholder line anywhere else is
-				// not taken for the box.
-				state = inputEmpty
-			default:
-				state = inputMissing
-			}
-		} else if strings.HasPrefix(strings.TrimLeft(sgr.ReplaceAllString(line, ""), " "), "❭ ") {
-			// A mark drawn styled or indented below the box is a dialog over it.
-			state = inputMissing
+	plain := func(l string) string { return strings.TrimSpace(sgr.ReplaceAllString(l, "")) }
+	rule := func(l string) bool { return strings.HasPrefix(plain(l), "─") }
+
+	bottom := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if rule(lines[i]) {
+			bottom = i
+			break
 		}
 	}
-	return state
+	if bottom < 0 {
+		return inputMissing
+	}
+	for _, l := range lines[bottom+1:] {
+		// A mark below the box is a dialog drawn over it.
+		if strings.HasPrefix(plain(l), "❭") {
+			return inputMissing
+		}
+	}
+	top := -1
+	for i := bottom - 1; i >= 0; i-- {
+		if rule(lines[i]) {
+			top = i
+			break
+		}
+	}
+	box := lines[top+1 : bottom]
+	if len(box) == 0 {
+		return inputMissing
+	}
+	rest, ok := strings.CutPrefix(box[0], "❭ ")
+	if !ok {
+		return inputMissing
+	}
+	if len(box) > 1 || typed(rest) {
+		return inputTyped
+	}
+	return inputEmpty
 }
 
 var sgr = regexp.MustCompile(`\x1b\[([0-9;]*)m`)

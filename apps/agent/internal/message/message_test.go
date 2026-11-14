@@ -53,34 +53,41 @@ func TestInputBoxOnDevinScreens(t *testing.T) {
 	}
 }
 
+// box frames a box line between the two rules Devin draws around it.
+func box(line string) string { return "history\n─────\n" + line + "\r\n─────\nfooter\n" }
+
 func TestInputBoxReadsStylingNotWords(t *testing.T) {
 	for _, tc := range []struct {
 		name, screen string
 		want         inputState
 	}{
-		{"bare mark", "❭ \r\n─", inputEmpty},
-		{"placeholder after reset", "❭ \x1b[0m\x1b[38;2;9;9;9mAnything at all\x1b[0m\r\n─", inputEmpty},
-		{"typed after a reset", "❭ \x1b[0mhi\r", inputTyped},
-		{"typed after a bare reset", "❭ \x1b[2m \x1b[mhi\r", inputTyped},
-		{"typed after the placeholder style ends", "❭ \x1b[38;2;9;9;9m \x1b[0mhi", inputTyped},
-		{"typed before a styled tail", "❭ hi\x1b[38;2;9;9;9m tail", inputTyped},
-		{"no mark", "plain screen\n", inputMissing},
-		{"styled mark only", "\x1b[1m❭ \x1b[0mAllow", inputMissing},
-		{"an unstyled typed line above a placeholder stays typed", "❭ old\n❭ \x1b[2mplaceholder\n─", inputTyped},
-		{"placeholder with no rule under it", "❭ \x1b[2mplaceholder\nsomething", inputMissing},
-		{"a dialog drawn below the box", "❭ \x1b[2mplaceholder\n─\n\x1b[1m❭ \x1b[0mAllow", inputMissing},
-		{"zero-padded reset", "❭ \x1b[2m \x1b[00mhi", inputTyped},
-		{"only spaces typed", "❭    \r\n─", inputTyped},
-		{"spaces typed before a styled tail", "❭   \x1b[2mtail\x1b[0m\r\n─", inputTyped},
-		{"reset spelled 0;0", "❭ \x1b[2m \x1b[0;0mhi", inputTyped},
-		{"typed after default colour", "❭ \x1b[38;2;9;9;9m \x1b[39mhi", inputTyped},
-		{"typed after normal intensity", "❭ \x1b[1m \x1b[22;39mhi", inputTyped},
-		{"set then reset in one sequence", "❭ \x1b[2m \x1b[31;0mhi", inputTyped},
-		{"256-colour placeholder whose index looks like a reset", "❭ \x1b[38;5;59mplaceholder\x1b[0m\r\n─", inputEmpty},
-		{"truecolour placeholder whose blue looks like a reset", "❭ \x1b[38;2;124;124;0mplaceholder\x1b[0m\r\n─", inputEmpty},
-		{"typed text whose next line starts with the mark", "❭ first line\r\n❭ \r\n─", inputTyped},
-		{"reset then set in one sequence", "❭ \x1b[0;31mplaceholder\x1b[0m\r\n─", inputEmpty},
-		{"an indented dialog below the box", "❭ \x1b[2mplaceholder\n─\n  \x1b[1m❭ \x1b[0mAllow", inputMissing},
+		{"bare mark", box("❭ "), inputEmpty},
+		{"placeholder after reset", box("❭ \x1b[0m\x1b[38;2;9;9;9mAnything at all\x1b[0m"), inputEmpty},
+		{"typed after a reset", box("❭ \x1b[0mhi"), inputTyped},
+		{"typed after a bare reset", box("❭ \x1b[2m \x1b[mhi"), inputTyped},
+		{"typed after the placeholder style ends", box("❭ \x1b[38;2;9;9;9m \x1b[0mhi"), inputTyped},
+		{"typed before a styled tail", box("❭ hi\x1b[38;2;9;9;9m tail"), inputTyped},
+		{"zero-padded reset", box("❭ \x1b[2m \x1b[00mhi"), inputTyped},
+		{"reset spelled 0;0", box("❭ \x1b[2m \x1b[0;0mhi"), inputTyped},
+		{"typed after default colour", box("❭ \x1b[38;2;9;9;9m \x1b[39mhi"), inputTyped},
+		{"typed after normal intensity", box("❭ \x1b[1m \x1b[22;39mhi"), inputTyped},
+		{"set then reset in one sequence", box("❭ \x1b[2m \x1b[31;0mhi"), inputTyped},
+		{"reset then set in one sequence", box("❭ \x1b[0;31mplaceholder\x1b[0m"), inputEmpty},
+		{"256-colour placeholder whose index looks like a reset", box("❭ \x1b[38;5;59mplaceholder\x1b[0m"), inputEmpty},
+		{"truecolour placeholder whose blue looks like a reset", box("❭ \x1b[38;2;124;124;0mplaceholder\x1b[0m"), inputEmpty},
+		{"only spaces typed", box("❭    "), inputTyped},
+		{"spaces typed before a styled tail", box("❭   \x1b[2mtail\x1b[0m"), inputTyped},
+		{"typed text on two lines, the second starting with the mark", box("❭ first line\r\n❭ "), inputTyped},
+		{"a placeholder with a second line", box("❭ \x1b[2mplaceholder\x1b[0m\r\n  more"), inputTyped},
+		// An unstyled "❭ " line in the output above the box does not decide anything.
+		{"an unstyled mark in the output above", "❭ output line\n" + box("❭ \x1b[2mplaceholder"), inputEmpty},
+		{"styled mark in the box", box("\x1b[1m❭ \x1b[0mAllow"), inputMissing},
+		{"indented mark in the box", box("  \x1b[1m❭ \x1b[0mAllow"), inputMissing},
+		{"no rules at all", "❭ \x1b[2mplaceholder\n", inputMissing},
+		{"no rules and no mark", "plain screen\n", inputMissing},
+		{"a dialog drawn below the box", box("❭ \x1b[2mplaceholder") + "\x1b[1m❭ \x1b[0mAllow", inputMissing},
+		{"an indented dialog below the box", box("❭ \x1b[2mplaceholder") + "  \x1b[1m❭ \x1b[0mAllow", inputMissing},
+		{"empty box", "─────\n─────\n", inputMissing},
 	} {
 		if got := inputBox(tc.screen); got != tc.want {
 			t.Errorf("%s: inputBox = %v, want %v", tc.name, got, tc.want)
@@ -158,8 +165,8 @@ const (
 		{"pane_id":"w1:p1","agent":"claude","agent_status":"idle","agent_session":{"value":"claude-one"}},
 		{"pane_id":"w2:p1","agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}},
 		{"pane_id":"w3:p1","agent":"devin","agent_status":"idle","agent_session":null}]}}`
-	emptyBox = "history\n❭ \x1b[0m\x1b[38;2;124;124;124mAsk Devin\x1b[0m\r\n\x1b[0m\x1b[38;2;68;68;68m──────\x1b[0m\r\nfooter\n"
-	typedBox = "❭ half typed\r\n"
+	emptyBox = "history\n\x1b[0m\x1b[38;2;68;68;68m──────\x1b[0m\r\n❭ \x1b[0m\x1b[38;2;124;124;124mAsk Devin\x1b[0m\r\n\x1b[0m\x1b[38;2;68;68;68m──────\x1b[0m\r\nfooter\n"
+	typedBox = "──────\n❭ half typed\r\n──────\n"
 )
 
 func newDevin(f *fakeHerdr) *Devin {
@@ -353,7 +360,7 @@ func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
 		}
 	}
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
-	r.Body = "tab\there\nnext line"
+	r.Body = "tab\there\nnext line 👨‍👩‍👧 क्‍ष"
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
 	if _, err := send(newDevin(f), r); err != nil {
 		t.Errorf("tab and newline: %v", err)
@@ -597,5 +604,25 @@ func TestAfterTurnRefusedWhileTheScreenShowsATurn(t *testing.T) {
 	g := &fakeHerdr{panes: devinPanes, screens: []string{working, emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"working"}}
 	if _, err := send(newDevin(g), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)); err != nil {
 		t.Fatalf("urgent: %v", err)
+	}
+}
+
+// The not-typed mark reaches a Connect client over the wire, on a streaming error.
+func TestNotTypedMarkCrossesTheWire(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{typedBox}}
+	path, h := ccxv1connect.NewMessageServiceHandler(&Service{Devin: newDevin(f)})
+	mux := http.NewServeMux()
+	mux.Handle(path, h)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	stream, err := ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL).Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: r.Mode}))
+	if err == nil {
+		for stream.Receive() {
+		}
+		err = stream.Err()
+	}
+	if !notTyped(err) || !strings.Contains(err.Error(), "has text in its input box") {
+		t.Fatalf("err = %v, marked %v", err, notTyped(err))
 	}
 }
