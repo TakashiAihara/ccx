@@ -404,7 +404,6 @@ func UnixClient(socketPath string) ccxv1connect.AgentServiceClient {
 	return ccxv1connect.NewAgentServiceClient(unixHTTP(socketPath), "http://ccx-agent")
 }
 
-
 func unixHTTP(socketPath string) *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

@@ -73,13 +73,15 @@ test("a Claude Code sender is named from its session id", () => {
   expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" })).toBe("claude-f61d5ded");
 });
 
-test("only a refusal before typing is called not sent", () => {
-  expect(failurePrefix(Code.FailedPrecondition, 0)).toBe("not sent");
-  expect(failurePrefix(Code.NotFound, 0)).toBe("not sent");
-  expect(failurePrefix(Code.InvalidArgument, 0)).toBe("not sent");
-  expect(failurePrefix(Code.Unknown, 0)).toStartWith("may have been sent");
-  expect(failurePrefix(Code.Unavailable, 0)).toStartWith("may have been sent");
-  expect(failurePrefix(Code.FailedPrecondition, 1)).toBe("sent, then lost the ack stream");
+test("only a failure after typing is called may have been sent", () => {
+  expect(failurePrefix(new ConnectError("x", Code.Unknown), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown, { "Ccx-Typed": "1" }), 0)).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 1)).toBe("sent, then lost the ack stream");
+});
+
+test("a sender outside Claude Code is user@host", () => {
+  expect(defaultSender({})).toMatch(/^[^@\s]+@[^@\s]+$/);
 });
 
 async function runCli(args: string[], env: Record<string, string>): Promise<{ code: number; out: string; err: string }> {
@@ -106,4 +108,40 @@ test("the command says not sent for a refusal and exits 1", async () => {
   const r = await runCli(["msg", "send", "nobody", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
   expect(r.code).toBe(1);
   expect(r.err).toContain("not sent: no herdr pane has session");
+});
+
+test("the command says may have been sent for a failure marked typed", async () => {
+  const socket = fakeAgent(async function* () {
+    throw new ConnectError("herdr took the prompt but it was not seen as sent", Code.Unknown, { "Ccx-Typed": "1" });
+  });
+  const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("may have been sent (look at the receiver before sending again): herdr took the prompt");
+});
+
+test("later maps to LATER and not-started is printed by name", async () => {
+  let mode: DeliveryMode | undefined;
+  const socket = fakeAgent(async function* (req) {
+    mode = req.mode;
+    yield { state: SendResponse_State.SENT };
+    yield { state: SendResponse_State.NOT_STARTED, detail: "no sign" };
+  });
+  const lines: string[] = [];
+  await sendMessage("t", "b", { mode: "later", summary: "s", from: "f", socket }, (l) => lines.push(l));
+  expect(mode).toBe(DeliveryMode.LATER);
+  expect(lines).toEqual(["sent", "not-started  no sign"]);
+});
+
+test("a mode name that is an Object property is still unknown", async () => {
+  await expect(sendMessage("t", "b", { mode: "toString", summary: "s", from: "f", socket: "/nonexistent.sock" }, () => {})).rejects.toThrow("--mode must be one of");
+});
+
+test("an explicit empty --from is passed on for ccx-agent to refuse, not replaced", async () => {
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "", "x"], { CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" });
+  expect(got?.sender).toBe("");
 });

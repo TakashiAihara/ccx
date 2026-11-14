@@ -29,19 +29,21 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
   mode: DeliveryMode;
 
   /**
-   * Shown to the receiver as the line `ccx: <sender>: <summary>`. One line.
+   * Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 120 bytes.
    *
    * @generated from field: string summary = 3;
    */
   summary: string;
 
   /**
+   * UTF-8 text up to 64 KiB, with no control characters but newline and tab.
+   *
    * @generated from field: string body = 4;
    */
   body: string;
 
   /**
-   * The sender's name. Only shown in that line, never used for auth. One line.
+   * The sender's name. Only shown in that line, never used for auth. One line, at most 120 bytes.
    *
    * @generated from field: string sender = 5;
    */
@@ -174,8 +176,10 @@ export const MessageService: GenService<{
   /**
    * Sends one message and streams the acks in the order they happen. A target that is not found, an
    * input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
-   * (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT). The error text is for people; for a missing
-   * mode it lists the modes the receiver has.
+   * (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT; UNAVAILABLE when herdr cannot be asked). The
+   * error text is for people; for a missing mode it lists the modes the receiver has. An error that
+   * came after the text was handed to the receiver carries the metadata `Ccx-Typed: 1`: the message
+   * may be there, so do not resend without looking.
    *
    * @generated from rpc ccx.v1.MessageService.Send
    */

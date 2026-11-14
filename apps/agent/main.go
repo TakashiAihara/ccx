@@ -166,7 +166,8 @@ func cmdServe() int {
 		concerns = append(concerns, h)
 		srv.Heartbeat = h
 	}
-	// Not a toggle: the API only reads, and it is how a person sees the rest.
+	// Not a toggle: it is how a person sees the rest. Its one write (MessageService)
+	// is served on the unix socket only.
 	concerns = append(concerns, api.New(cfg, srv, logger))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

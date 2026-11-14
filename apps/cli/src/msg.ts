@@ -5,7 +5,7 @@
  * request and prints each ack as one line; it never branches on the receiver's product.
  */
 import type { Command } from "commander";
-import { Code, createClient, ConnectError, type Transport } from "@connectrpc/connect";
+import { createClient, ConnectError, type Transport } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -47,22 +47,22 @@ export function unixTransport(socketPath: string): Transport {
 
 export type SendOptions = { mode: string; summary: string; from: string; socket: string };
 
-/**
- * ccx-agent refuses before typing with these codes. Any other failure may come after the text went into
- * the pane (it was typed but not confirmed, or the stream broke), so it is not called "not sent": a
- * resend could type the message twice.
- */
-const REFUSED = new Set([Code.InvalidArgument, Code.NotFound, Code.FailedPrecondition]);
+/** ccx-agent's TypedKey (apps/agent/internal/message): the failure came after the text was handed to the pane. */
+const TYPED_KEY = "Ccx-Typed";
 
-export function failurePrefix(code: Code, acks: number): string {
+/**
+ * "not sent" only when ccx-agent says nothing was typed (or it was never reached). A failure after
+ * typing may have left the message in the receiver, and a resend could type it twice.
+ */
+export function failurePrefix(e: ConnectError, acks: number): string {
   if (acks > 0) return "sent, then lost the ack stream";
-  return REFUSED.has(code) ? "not sent" : "may have been sent (look at the receiver before sending again)";
+  return e.metadata.get(TYPED_KEY) ? "may have been sent (look at the receiver before sending again)" : "not sent";
 }
 
 /** Hands each ack to out as one line. Throws a ConnectError when nothing was sent. */
 export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void, transport?: Transport): Promise<void> {
+  if (!Object.hasOwn(MODES, o.mode)) throw new Error(`--mode must be one of ${Object.keys(MODES).join(", ")}`);
   const mode = MODES[o.mode];
-  if (mode === undefined) throw new Error(`--mode must be one of ${Object.keys(MODES).join(", ")}`);
 
   const client = createClient(MessageService, transport ?? unixTransport(o.socket));
   for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from })) {
@@ -88,14 +88,14 @@ export function registerMsg(program: Command): void {
       try {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
-        o.from ||= defaultSender();
+        o.from ??= defaultSender();
         await sendMessage(target, body.join(" "), o, (l) => {
           acks++;
           console.log(l);
         });
       } catch (e) {
         if (!(e instanceof ConnectError)) throw e;
-        throw new Error(`${failurePrefix(e.code, acks)}: ${e.rawMessage}`);
+        throw new Error(`${failurePrefix(e, acks)}: ${e.rawMessage}`);
       }
     });
 }

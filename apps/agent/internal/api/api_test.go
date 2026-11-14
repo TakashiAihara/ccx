@@ -783,16 +783,47 @@ func TestMessageServiceOnlyOnTheUnixSocket(t *testing.T) {
 		t.Fatalf("unix: states %v err %v got %v", states, stream.Err(), m.got)
 	}
 
-	m.got = nil
-	req, _ := http.NewRequest("POST", "http://"+addr+"/ccx.v1.MessageService/Send", strings.NewReader("{}"))
-	req.Header.Set("content-type", "application/connect+json")
-	req.Header.Set("authorization", "Bearer tok-tok-tok-tok-tok")
-	res, err := http.DefaultClient.Do(req)
+	// A body as large as the message package takes fits the unix side's read limit.
+	big, err := ccxv1connect.NewMessageServiceClient(unixHTTP(cfg.APISocketPath), "http://ccx-agent").Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Sender: strings.Repeat("s", 120), Summary: strings.Repeat("s", 120), Body: strings.Repeat("b", 64<<10)}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusNotFound || m.got != nil {
-		t.Fatalf("tcp: status %d, handler reached %v", res.StatusCode, m.got != nil)
+	for big.Receive() {
 	}
+	if big.Err() != nil || len(m.got.GetBody()) != 64<<10 {
+		t.Fatalf("64 KiB body: %v", big.Err())
+	}
+
+	m.got = nil
+	withToken := bearer("tok-tok-tok-tok-tok")
+	tcp, err := ccxv1connect.NewMessageServiceClient(http.DefaultClient, "http://"+addr, withToken).Send(ctx, connect.NewRequest(&ccxv1.SendRequest{Target: "t", Body: "b"}))
+	if err == nil {
+		for tcp.Receive() {
+		}
+		err = tcp.Err()
+	}
+	if connect.CodeOf(err) != connect.CodeUnimplemented || m.got != nil {
+		t.Fatalf("tcp: err %v, handler reached %v", err, m.got != nil)
+	}
+}
+
+// bearer adds the Authorization header to streaming calls too.
+func bearer(token string) connect.Option {
+	return connect.WithInterceptors(streamBearer(token))
+}
+
+type streamBearer string
+
+func (b streamBearer) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc { return next }
+
+func (b streamBearer) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
+		conn := next(ctx, spec)
+		conn.RequestHeader().Set("Authorization", "Bearer "+string(b))
+		return conn
+	}
+}
+
+func (b streamBearer) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return next
 }

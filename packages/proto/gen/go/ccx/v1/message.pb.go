@@ -138,10 +138,11 @@ type SendRequest struct {
 	// The receiver's session name. For Devin, its session name (the herdr pane's agent_session).
 	Target string       `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
 	Mode   DeliveryMode `protobuf:"varint,2,opt,name=mode,proto3,enum=ccx.v1.DeliveryMode" json:"mode,omitempty"`
-	// Shown to the receiver as the line `ccx: <sender>: <summary>`. One line.
+	// Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 120 bytes.
 	Summary string `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
-	Body    string `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
-	// The sender's name. Only shown in that line, never used for auth. One line.
+	// UTF-8 text up to 64 KiB, with no control characters but newline and tab.
+	Body string `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
+	// The sender's name. Only shown in that line, never used for auth. One line, at most 120 bytes.
 	Sender        string `protobuf:"bytes,5,opt,name=sender,proto3" json:"sender,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

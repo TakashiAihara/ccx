@@ -72,6 +72,11 @@ func NewDevin() *Devin {
 // limit on a single argument (MAX_ARG_STRLEN), past which exec fails with E2BIG.
 const MaxBody = 64 << 10
 
+// MaxLabel bounds the sender and the summary. With MaxBody it keeps the whole
+// argument under the limit, and a short header line is less likely to wrap in
+// Devin's history, where a wrapped header is not recognised as sent.
+const MaxLabel = 120
+
 // headerLine is the line the receiver sees first (#301): who sent it and what it is.
 func headerLine(sender, summary string) string { return "ccx: " + sender + ": " + summary }
 
@@ -80,15 +85,30 @@ var (
 	controlChar = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f-\x9f]`)
 )
 
-// Send delivers req and hands each ack to emit as it happens. A refusal before
-// typing is INVALID_ARGUMENT / NOT_FOUND / FAILED_PRECONDITION and nothing went
-// into the pane. Any other error may come after the text was typed.
+// TypedKey is the error metadata key set on a failure that came after the text
+// was handed to herdr: the message may be in the receiver, so the sender must not
+// resend blindly. A failure without it typed nothing.
+const TypedKey = "Ccx-Typed"
+
+func typedErr(err error) error {
+	ce := new(connect.Error)
+	if !errors.As(err, &ce) {
+		ce = connect.NewError(connect.CodeUnknown, err)
+	}
+	ce.Meta().Set(TypedKey, "1")
+	return ce
+}
+
+// Send delivers req and hands each ack to emit as it happens. An error carries
+// TypedKey when it came after the text was handed to herdr.
 func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error) error {
 	if req.Target == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("target is empty"))
 	}
-	if !oneLine.MatchString(req.Sender) || !oneLine.MatchString(req.Summary) {
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("sender and summary must each be one non-empty line"))
+	for _, s := range []string{req.Sender, req.Summary} {
+		if !utf8.ValidString(s) || !oneLine.MatchString(s) || len(s) > MaxLabel {
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("sender and summary must each be one non-empty line of at most %d bytes", MaxLabel))
+		}
 	}
 	if req.Body == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is empty"))
@@ -144,29 +164,42 @@ func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 
 	header := headerLine(req.Sender, req.Summary)
 	// A header sent before is already in the history; only a new one counts.
-	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped")
+	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text")
 	if err != nil {
 		return connect.NewError(connect.CodeUnavailable, err)
 	}
-	seen := strings.Count(string(before), "❭ "+header)
+	seen := headerLines(string(before), header)
 	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
-		return connect.NewError(connect.CodeUnavailable, err)
+		// herdr may have written part of it before failing.
+		return typedErr(connect.NewError(connect.CodeUnknown, err))
 	}
 
 	if err := d.waitSent(ctx, p.ID, header, seen); err != nil {
-		return err
+		return typedErr(err)
 	}
 	if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID}); err != nil {
 		return err
 	}
 
 	if p.Status == "working" {
-		// An urgent send to a working Devin: its status cannot show the new
-		// message being picked up.
-		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_WORKING, Detail: "was already working; reads it at its next break"})
+		// An urgent send to a Devin that was working when it was looked at: its
+		// status cannot show the new message being picked up.
+		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_WORKING, Detail: "was working when sent; reads it at its next break"})
 	}
 	state, detail := d.waitStarted(ctx, p.ID, p.Status)
 	return emit(&ccxv1.SendResponse{State: state, Detail: detail})
+}
+
+// headerLines counts the history lines that are exactly the header ("review 1"
+// must not count "review 10"). Devin pads the line to the pane width.
+func headerLines(hist, header string) int {
+	n := 0
+	for _, line := range strings.Split(hist, "\n") {
+		if strings.TrimRight(line, " \r") == "❭ "+header {
+			n++
+		}
+	}
+	return n
 }
 
 type pane struct{ ID, Agent, Status string }
@@ -235,11 +268,16 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int) error
 	deadline := time.Now().Add(d.SentWait)
 	for {
 		screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
-		if err == nil && inputBox(string(screen)) == inputEmpty {
-			hist, err := d.Herdr(ctx, "agent", "read", id, "--source", "recent-unwrapped")
-			if err == nil && strings.Count(string(hist), "❭ "+header) > seen {
+		// Not typed: the box is empty again, or a dialog the message opened (a
+		// permission prompt) has replaced it.
+		if err == nil && inputBox(string(screen)) != inputTyped {
+			hist, err := d.Herdr(ctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
+			if err == nil && headerLines(string(hist), header) > seen {
 				return nil
 			}
+		}
+		if ctx.Err() != nil {
+			return connect.NewError(connect.CodeCanceled, fmt.Errorf("stopped while waiting to see the message as sent in pane %s", id))
 		}
 		if !time.Now().Before(deadline) || sleep(ctx, d.Poll) != nil {
 			return connect.NewError(connect.CodeUnknown, fmt.Errorf("herdr took the prompt but it was not seen as sent in pane %s; look at the pane before sending again", id))
@@ -257,7 +295,7 @@ func (d *Devin) waitStarted(ctx context.Context, id, before string) (ccxv1.SendR
 	for {
 		st, err := d.status(ctx, id)
 		if err != nil {
-			last = err.Error()
+			last, _, _ = strings.Cut(err.Error(), "\n")
 		} else {
 			last = st
 			if st == "working" || st == "blocked" || (st == "done" && before != "done") {

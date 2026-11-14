@@ -41,8 +41,10 @@ const (
 type MessageServiceClient interface {
 	// Sends one message and streams the acks in the order they happen. A target that is not found, an
 	// input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
-	// (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT). The error text is for people; for a missing
-	// mode it lists the modes the receiver has.
+	// (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT; UNAVAILABLE when herdr cannot be asked). The
+	// error text is for people; for a missing mode it lists the modes the receiver has. An error that
+	// came after the text was handed to the receiver carries the metadata `Ccx-Typed: 1`: the message
+	// may be there, so do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest]) (*connect.ServerStreamForClient[v1.SendResponse], error)
 }
 
@@ -80,8 +82,10 @@ func (c *messageServiceClient) Send(ctx context.Context, req *connect.Request[v1
 type MessageServiceHandler interface {
 	// Sends one message and streams the acks in the order they happen. A target that is not found, an
 	// input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
-	// (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT). The error text is for people; for a missing
-	// mode it lists the modes the receiver has.
+	// (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT; UNAVAILABLE when herdr cannot be asked). The
+	// error text is for people; for a missing mode it lists the modes the receiver has. An error that
+	// came after the text was handed to the receiver carries the metadata `Ccx-Typed: 1`: the message
+	// may be there, so do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest], *connect.ServerStream[v1.SendResponse]) error
 }
 

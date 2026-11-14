@@ -14,8 +14,10 @@ package ccx.v1;
 service MessageService {
   // Sends one message and streams the acks in the order they happen. A target that is not found, an
   // input box with text in it, or a mode the receiver lacks sends nothing and comes back as an error
-  // (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT). The error text is for people; for a missing
-  // mode it lists the modes the receiver has.
+  // (NOT_FOUND / FAILED_PRECONDITION / INVALID_ARGUMENT; UNAVAILABLE when herdr cannot be asked). The
+  // error text is for people; for a missing mode it lists the modes the receiver has. An error that
+  // came after the text was handed to the receiver carries the metadata `Ccx-Typed: 1`: the message
+  // may be there, so do not resend without looking.
   rpc Send(SendRequest) returns (stream SendResponse);
 }
 
@@ -35,10 +37,11 @@ message SendRequest {
   // The receiver's session name. For Devin, its session name (the herdr pane's agent_session).
   string target = 1;
   DeliveryMode mode = 2;
-  // Shown to the receiver as the line `ccx: <sender>: <summary>`. One line.
+  // Shown to the receiver as the line `ccx: <sender>: <summary>`. One line, at most 120 bytes.
   string summary = 3;
+  // UTF-8 text up to 64 KiB, with no control characters but newline and tab.
   string body = 4;
-  // The sender's name. Only shown in that line, never used for auth. One line.
+  // The sender's name. Only shown in that line, never used for auth. One line, at most 120 bytes.
   string sender = 5;
 }
 
