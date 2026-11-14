@@ -374,6 +374,8 @@ func inputBox(screen string) inputState {
 			switch {
 			case typed(rest):
 				state = inputTyped
+			case state == inputTyped:
+				// A later "❭ " line under typed text is that text's next line.
 			case i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(sgr.ReplaceAllString(lines[i+1], "")), "─"):
 				// The box's rule right under it: a placeholder line anywhere else is
 				// not taken for the box.
@@ -437,10 +439,22 @@ func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendReque
 // placeholder.
 func isReset(params string) bool {
 	plain := true
-	for _, p := range strings.Split(params, ";") {
-		switch strings.TrimLeft(p, "0") {
+	ps := strings.Split(params, ";")
+	for i := 0; i < len(ps); i++ {
+		switch p := strings.TrimLeft(ps[i], "0"); p {
 		case "", "22", "23", "24", "25", "27", "28", "29", "39", "49", "54", "55", "59":
 			plain = true
+		case "38", "48", "58":
+			// An extended colour: its arguments (5;n or 2;r;g;b) are not codes.
+			plain = false
+			if i+1 < len(ps) {
+				switch strings.TrimLeft(ps[i+1], "0") {
+				case "5":
+					i += 2
+				case "2":
+					i += 4
+				}
+			}
 		default:
 			plain = false
 		}

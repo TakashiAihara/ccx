@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"net/http"
+	"net/http/httptest"
+
+	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
 
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
@@ -62,7 +66,7 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"typed before a styled tail", "❭ hi\x1b[38;2;9;9;9m tail", inputTyped},
 		{"no mark", "plain screen\n", inputMissing},
 		{"styled mark only", "\x1b[1m❭ \x1b[0mAllow", inputMissing},
-		{"last box wins", "❭ old\n❭ \x1b[2mplaceholder\n─", inputEmpty},
+		{"an unstyled typed line above a placeholder stays typed", "❭ old\n❭ \x1b[2mplaceholder\n─", inputTyped},
 		{"placeholder with no rule under it", "❭ \x1b[2mplaceholder\nsomething", inputMissing},
 		{"a dialog drawn below the box", "❭ \x1b[2mplaceholder\n─\n\x1b[1m❭ \x1b[0mAllow", inputMissing},
 		{"zero-padded reset", "❭ \x1b[2m \x1b[00mhi", inputTyped},
@@ -72,6 +76,9 @@ func TestInputBoxReadsStylingNotWords(t *testing.T) {
 		{"typed after default colour", "❭ \x1b[38;2;9;9;9m \x1b[39mhi", inputTyped},
 		{"typed after normal intensity", "❭ \x1b[1m \x1b[22;39mhi", inputTyped},
 		{"set then reset in one sequence", "❭ \x1b[2m \x1b[31;0mhi", inputTyped},
+		{"256-colour placeholder whose index looks like a reset", "❭ \x1b[38;5;59mplaceholder\x1b[0m\r\n─", inputEmpty},
+		{"truecolour placeholder whose blue looks like a reset", "❭ \x1b[38;2;124;124;0mplaceholder\x1b[0m\r\n─", inputEmpty},
+		{"typed text whose next line starts with the mark", "❭ first line\r\n❭ \r\n─", inputTyped},
 		{"reset then set in one sequence", "❭ \x1b[0;31mplaceholder\x1b[0m\r\n─", inputEmpty},
 		{"an indented dialog below the box", "❭ \x1b[2mplaceholder\n─\n  \x1b[1m❭ \x1b[0mAllow", inputMissing},
 	} {
@@ -364,11 +371,12 @@ func TestServiceLogsEachSend(t *testing.T) {
 	}
 	// after-turn to a working pane: refused only if the mode reaches Devin.Send.
 	f.panes = panesWith("working")
-	serr := s.Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN}), nil)
-	if serr == nil || !strings.Contains(serr.Error(), "after-turn is refused") {
+	// later is refused only if the mode reaches Devin.Send (unspecified would be after-turn).
+	serr := s.Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER}), nil)
+	if serr == nil || !strings.Contains(serr.Error(), "does not take mode later") {
 		t.Fatalf("Service.Send err = %v", serr)
 	}
-	if len(lines) != 1 || !strings.Contains(lines[0], `to "excited-giraffe" from "claude-a1b2c3d4"`) || !strings.Contains(lines[0], "after-turn is refused") {
+	if len(lines) != 1 || !strings.Contains(lines[0], `to "excited-giraffe" from "claude-a1b2c3d4"`) || !strings.Contains(lines[0], "does not take mode later") {
 		t.Fatalf("log = %q", lines)
 	}
 }
@@ -547,5 +555,32 @@ func TestTheWaitBoundsAHangingHerdrCall(t *testing.T) {
 	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if err == nil || connect.CodeOf(err) != connect.CodeUnknown || time.Since(start) > 3*time.Second {
 		t.Fatalf("err = %v after %s", err, time.Since(start))
+	}
+}
+
+// Through the real handler: acks reach the client and the last one is logged.
+func TestServiceStreamsAcksAndLogsTheLast(t *testing.T) {
+	var lines []string
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle", "working"}}
+	s := &Service{Devin: newDevin(f), Log: func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }}
+	path, h := ccxv1connect.NewMessageServiceHandler(s)
+	mux := http.NewServeMux()
+	mux.Handle(path, h)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	stream, err := ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL).Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: r.Mode}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states []ccxv1.SendResponse_State
+	for stream.Receive() {
+		states = append(states, stream.Msg().State)
+	}
+	if stream.Err() != nil || len(states) != 2 || states[1] != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("states %v err %v", states, stream.Err())
+	}
+	if len(lines) != 1 || !strings.HasSuffix(lines[0], ": STATE_WORKING") {
+		t.Fatalf("log = %q", lines)
 	}
 }
