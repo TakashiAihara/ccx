@@ -319,7 +319,7 @@ func TestSendDoesNotTakeADoneLeftFromThePreviousTurnAsStarted(t *testing.T) {
 func TestUrgentToAWorkingDevinSaysItWasAlreadyWorking(t *testing.T) {
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle"}}
 	got, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING || !strings.Contains(got[1].Detail, "was working when sent") {
+	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_SENT || !strings.Contains(got[0].Detail, "was working, reads it at its next break") {
 		t.Fatalf("events = %v, err = %v", got, err)
 	}
 }
@@ -524,5 +524,28 @@ func TestStartedStatusesLeftFromBeforeDoNotCount(t *testing.T) {
 	got, err = send(newDevin(g), req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING {
 		t.Fatalf("done after idle: events = %v, err = %v", got, err)
+	}
+}
+
+// A herdr read that hangs is cut off by the wait, not by herdr's own timeout.
+func TestTheWaitBoundsAHangingHerdrCall(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, status: []string{"working"}}
+	d := newDevin(f)
+	inner := d.Herdr
+	typed := false
+	d.Herdr = func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[1] == "prompt" {
+			typed = true
+		}
+		if typed && args[1] == "read" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return inner(ctx, args...)
+	}
+	start := time.Now()
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err == nil || connect.CodeOf(err) != connect.CodeUnknown || time.Since(start) > 3*time.Second {
+		t.Fatalf("err = %v after %s", err, time.Since(start))
 	}
 }

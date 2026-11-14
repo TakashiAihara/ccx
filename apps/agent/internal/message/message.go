@@ -195,14 +195,13 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err := d.waitSent(ctx, p.ID, header, seen, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
 		return err
 	}
+	if p.Status == "working" {
+		// An urgent send to a Devin that was already working: its status cannot
+		// show this message being picked up, so sent is the last ack.
+		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID + "; was working, reads it at its next break"})
+	}
 	if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID}); err != nil {
 		return err
-	}
-
-	if p.Status == "working" {
-		// An urgent send to a Devin that was working when it was looked at: its
-		// status cannot show the new message being picked up.
-		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_WORKING, Detail: "was working when sent; reads it at its next break"})
 	}
 	state, detail := d.waitStarted(ctx, p.ID, p.Status)
 	return emit(&ccxv1.SendResponse{State: state, Detail: detail})
@@ -289,10 +288,14 @@ func (d *Devin) status(ctx context.Context, id string) (string, error) {
 // the screen) is not taken as sent; that ends as "may have been sent".
 func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
+	// The wait bounds the herdr calls too, not only the looks between them: a
+	// stuck read would otherwise hold every other send behind the mutex.
+	wctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
+	defer cancel()
 	for {
-		hist, err := d.Herdr(ctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
+		hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text")
 		if err == nil && headerLines(string(hist), header) > seen {
-			screen, err := d.Herdr(ctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
+			screen, err := d.Herdr(wctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
 			if err == nil && inputBox(string(screen)) == inputEmpty {
 				return nil
 			}
@@ -313,9 +316,11 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, wait 
 // prompt: a done left from the previous turn says nothing about this one.
 func (d *Devin) waitStarted(ctx context.Context, id, before string) (ccxv1.SendResponse_State, string) {
 	deadline := time.Now().Add(d.StartWait)
+	wctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
+	defer cancel()
 	last := ""
 	for {
-		st, err := d.status(ctx, id)
+		st, err := d.status(wctx, id)
 		if err != nil {
 			last, _, _ = strings.Cut(err.Error(), "\n")
 		} else {
