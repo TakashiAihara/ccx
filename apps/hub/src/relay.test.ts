@@ -148,6 +148,20 @@ test("ack は報告のたびに置き換わり、終わった後の報告と tok
   expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: [], finished: true }))).toBe(Code.FailedPrecondition);
 });
 
+test("報告の ack の数・エラーコードは上限を超えれば断り、文は 4096 バイトに切る", async () => {
+  const a = (await client.putMessage({ request: req("a") })).message!;
+  const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;
+  const acks = (n: number) => Array.from({ length: n }, () => ({ state: SendResponse_State.SENT }));
+  expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: acks(17) }))).toBe(Code.InvalidArgument);
+  expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: acks(16) }))).toBe("ok");
+  expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: [], errorCode: 17 }))).toBe(Code.InvalidArgument);
+  expect(await code(client.reportMessage({ id: a.id, claimToken: token, acks: [], errorCode: -1 }))).toBe(Code.InvalidArgument);
+
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [{ state: SendResponse_State.SENT, detail: "d".repeat(5000) }], finished: true, errorCode: 16, errorMessage: "e".repeat(5000) });
+  const m = (await client.getMessage({ id: a.id })).message!;
+  expect([m.errorCode, m.errorMessage.length, m.acks[0]!.detail.length]).toEqual([16, 4096, 4096]);
+});
+
 test("finished の無い報告は終わりにしない", async () => {
   const a = (await client.putMessage({ request: req("a") })).message!;
   const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;

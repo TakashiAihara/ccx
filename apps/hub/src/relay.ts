@@ -5,7 +5,7 @@ import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
 import { relayMessages } from "./db/schema.ts";
-import { wakeAgent } from "./resume.ts";
+import { capDetail, wakeAgent } from "./resume.ts";
 import {
   MessageRelayService,
   RelayedMessageSchema,
@@ -29,6 +29,12 @@ export const KEEP_MS = 60 * 60 * 1000;
 /** 置ける SendRequest の大きさ。本文の上限 (agent の MaxBody、64 KiB) に宛先と見出しの分を足した程度 */
 export const MAX_REQUEST_BYTES = 70 * 1024;
 
+/** 1 通の ack の数の上限。届け方が出す ack は sent / working・not-started の 2 つまで */
+export const MAX_ACKS = 16;
+
+/** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
+const MAX_CODE = 16;
+
 type Row = typeof relayMessages.$inferSelect;
 type Ack = { state: number; detail: string };
 
@@ -51,7 +57,7 @@ function toMessage(r: Row, nowMs: number, withToken = false): RelayedMessage {
   });
 }
 
-const ackRows = (acks: SendResponse[]): string => JSON.stringify(acks.map((a) => ({ state: a.state, detail: a.detail })));
+const ackRows = (acks: SendResponse[]): string => JSON.stringify(acks.map((a) => ({ state: a.state, detail: capDetail(a.detail) })));
 
 export function relayImpl(db: Db, now: () => number, agentToken?: string): ServiceImpl<typeof MessageRelayService> {
   return {
@@ -136,6 +142,8 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
     },
 
     reportMessage(req) {
+      if (req.acks.length > MAX_ACKS) throw invalid(`at most ${MAX_ACKS} acks: ${req.acks.length}`);
+      if (!Number.isInteger(req.errorCode) || req.errorCode < 0 || req.errorCode > MAX_CODE) throw invalid(`error_code is not a Connect code: ${req.errorCode}`);
       const nowMs = now();
       db.transaction(
         (tx) => {
@@ -147,7 +155,7 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
           tx.update(relayMessages)
             .set({
               acks: ackRows(req.acks),
-              ...(req.finished ? { finishedAtMs: nowMs, errorCode: req.errorCode, errorMessage: req.errorMessage, notTyped: req.notTyped } : {}),
+              ...(req.finished ? { finishedAtMs: nowMs, errorCode: req.errorCode, errorMessage: capDetail(req.errorMessage), notTyped: req.notTyped } : {}),
             })
             .where(eq(relayMessages.id, req.id))
             .run();

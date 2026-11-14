@@ -70,7 +70,7 @@ type Relay struct {
 	// Machine and User are this agent's origin: the center hands it the messages
 	// put for them.
 	Machine, User string
-	// Deliver sends one claimed message here (Service.deliver).
+	// Deliver sends one claimed message here (Service.Deliver).
 	Deliver func(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error
 	// Poll is how often the sender reads the acks back; Claim how often the
 	// receiver asks for messages when not woken.
@@ -129,7 +129,7 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 	}
 	put, err := r.Center.PutMessage(ctx, connect.NewRequest(&ccxv1.PutMessageRequest{Request: m}))
 	if err != nil {
-		err = connect.NewError(connect.CodeOf(err), fmt.Errorf("center, putting the message for %s: %w", where, err))
+		err = connect.NewError(connect.CodeOf(err), fmt.Errorf("%s: center, putting the message: %w", where, err))
 		if putNeverStored(err) {
 			return markNotTyped(err)
 		}
@@ -147,8 +147,12 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 		case <-tick.C:
 		}
 		got, err := r.Center.GetMessage(ctx, connect.NewRequest(&ccxv1.GetMessageRequest{Id: id}))
+		if connect.CodeOf(err) == connect.CodeNotFound {
+			// The center dropped the row (an hour after the put): no ack will come.
+			return connect.NewError(connect.CodeUnknown, fmt.Errorf("the center no longer has message %s for %s; it may have been delivered", id, where))
+		}
 		if err != nil {
-			// The message is stored; a failed read says nothing about it. Keep
+			// Any other failed read says nothing about the stored message. Keep
 			// reading until the caller gives up.
 			continue
 		}
@@ -161,7 +165,7 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 		}
 		switch {
 		case msg.GetExpired():
-			return markNotTyped(connect.NewError(connect.CodeUnavailable, fmt.Errorf("no ccx-agent for %s took the message within 30 s (is it running and pointed at this center?)", where)))
+			return markNotTyped(connect.NewError(connect.CodeUnavailable, fmt.Errorf("%s: the message was not taken within 30 s, so it will not be delivered (is that ccx-agent running and pointed at this center?)", where)))
 		case msg.GetFinishedAt() == nil:
 			continue
 		case msg.GetErrorCode() == 0:
@@ -175,13 +179,38 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 	}
 }
 
-// Run is the receiver: it claims the messages put for this machine and user,
-// one at a time, until the context ends.
+// queueLen bounds the claimed messages waiting to be delivered. Past it the
+// receiver stops claiming until the queue drains.
+const queueLen = 64
+
+// ackReportTimeout bounds a report of one ack. It only lets the sender see the
+// ack sooner (the end report carries every ack again), so a stalled center must
+// not hold the delivery queue for a full callTimeout per ack.
+const ackReportTimeout = 5 * time.Second
+
+// Run is the receiver: it claims the messages put for this machine and user as
+// soon as they come, and delivers them one at a time in the order claimed.
+// Claiming does not wait for the delivery before it: a message waiting behind
+// another one would otherwise pass the center's 30 s claim window and be refused
+// as not sent while this agent was up and busy.
 func (r *Relay) Run(ctx context.Context) error {
+	queue := make(chan *ccxv1.RelayedMessage, queueLen)
+	defer close(queue)
+	go func() {
+		for msg := range queue {
+			r.deliver(ctx, msg)
+		}
+	}()
+
 	tick := time.NewTicker(r.Claim)
 	defer tick.Stop()
 	for {
-		for r.claimOne(ctx) {
+		for msg := r.claim(ctx); msg != nil; msg = r.claim(ctx) {
+			select {
+			case queue <- msg:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -192,29 +221,38 @@ func (r *Relay) Run(ctx context.Context) error {
 	}
 }
 
-// claimOne delivers one claimed message and says whether there was one.
-func (r *Relay) claimOne(ctx context.Context) bool {
+// claim takes the oldest message put for this agent, or nil when there is none
+// or the center could not be asked.
+func (r *Relay) claim(ctx context.Context) *ccxv1.RelayedMessage {
 	got, err := r.Center.ClaimMessage(ctx, connect.NewRequest(&ccxv1.ClaimMessageRequest{Machine: r.Machine, User: r.User}))
 	if err != nil {
 		if ctx.Err() == nil {
 			r.log("message relay: claim: %v", err)
 		}
-		return false
+		return nil
 	}
 	msg := got.Msg.GetMessage()
-	if msg == nil {
-		return false
+	if msg != nil {
+		// The relayed request names where it goes, not where it came from; the id
+		// ties this line to the delivery logged next and to the center's row.
+		r.log("message relay: claimed %s for %q", msg.GetId(), msg.GetRequest().GetTarget())
 	}
+	return msg
+}
 
+// deliver sends one claimed message here and reports each ack, then the end.
+func (r *Relay) deliver(ctx context.Context, msg *ccxv1.RelayedMessage) {
 	var acks []*ccxv1.SendResponse
-	report := func(rep *ccxv1.ReportMessageRequest) error {
+	report := func(ctx context.Context, rep *ccxv1.ReportMessageRequest) error {
 		rep.Id, rep.ClaimToken, rep.Acks = msg.GetId(), msg.GetClaimToken(), acks
 		_, err := r.Center.ReportMessage(ctx, connect.NewRequest(rep))
 		return err
 	}
-	err = r.Deliver(ctx, msg.GetRequest(), func(a *ccxv1.SendResponse) error {
+	err := r.Deliver(ctx, msg.GetRequest(), func(a *ccxv1.SendResponse) error {
 		acks = append(acks, a)
-		if err := report(&ccxv1.ReportMessageRequest{}); err != nil {
+		actx, cancel := context.WithTimeout(ctx, ackReportTimeout)
+		defer cancel()
+		if err := report(actx, &ccxv1.ReportMessageRequest{}); err != nil {
 			// The final report carries every ack again.
 			r.log("message relay: report an ack of %s: %v", msg.GetId(), err)
 		}
@@ -233,7 +271,7 @@ func (r *Relay) claimOne(ctx context.Context) bool {
 	}
 	// The sender waits on this one, so a failed report is tried again a few times.
 	for try := 0; try < 3; try++ {
-		if err = report(final); err == nil || connect.CodeOf(err) == connect.CodeFailedPrecondition || ctx.Err() != nil {
+		if err = report(ctx, final); err == nil || connect.CodeOf(err) == connect.CodeFailedPrecondition || ctx.Err() != nil {
 			break
 		}
 		_ = sleep(ctx, time.Second)
@@ -241,7 +279,6 @@ func (r *Relay) claimOne(ctx context.Context) bool {
 	if err != nil {
 		r.log("message relay: report the end of %s: %v", msg.GetId(), err)
 	}
-	return true
 }
 
 func (r *Relay) log(format string, a ...any) {

@@ -26,7 +26,10 @@ type fakeCenter struct {
 	gets    []*ccxv1.RelayedMessage
 	getErrs []error
 	claims  []*ccxv1.RelayedMessage
-	reports []*ccxv1.ReportMessageRequest
+	// claimCalls counts ClaimMessage calls, so a test can wait for Run to have
+	// asked once and found nothing.
+	claimCalls int
+	reports    []*ccxv1.ReportMessageRequest
 	// reportErrs are answered to the reports in turn; past the end, nil.
 	reportErrs []error
 }
@@ -65,6 +68,7 @@ func (f *fakeCenter) ClaimMessage(_ context.Context, r *connect.Request[ccxv1.Cl
 	if r.Msg.GetMachine() != "m2" || r.Msg.GetUser() != "dev" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("claimed as %s/%s", r.Msg.GetMachine(), r.Msg.GetUser()))
 	}
+	f.claimCalls++
 	if len(f.claims) == 0 {
 		return connect.NewResponse(&ccxv1.ClaimMessageResponse{}), nil
 	}
@@ -85,6 +89,19 @@ func (f *fakeCenter) ReportMessage(_ context.Context, r *connect.Request[ccxv1.R
 		return nil, err
 	}
 	return connect.NewResponse(&ccxv1.ReportMessageResponse{}), nil
+}
+
+func (f *fakeCenter) waitClaims(t *testing.T, n int) {
+	t.Helper()
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		f.mu.Lock()
+		got := f.claimCalls
+		f.mu.Unlock()
+		if got >= n {
+			return
+		}
+	}
+	t.Fatalf("Run did not ask the center %d times", n)
 }
 
 func testRelay(c Center) *Relay {
@@ -143,7 +160,7 @@ func TestRelaySendKeepsTheReceiversCodeAndNotTypedMark(t *testing.T) {
 func TestRelaySendSaysNotSentWhenNoAgentClaimedIt(t *testing.T) {
 	f := &fakeCenter{gets: []*ccxv1.RelayedMessage{{Id: "m1"}, {Id: "m1", Expired: true}}}
 	_, err := collectSend(testRelay(f), context.Background(), remoteReq())
-	if connect.CodeOf(err) != connect.CodeUnavailable || !notTyped(err) || !strings.Contains(err.Error(), "no ccx-agent for m2/dev took the message") {
+	if connect.CodeOf(err) != connect.CodeUnavailable || !notTyped(err) || !strings.Contains(err.Error(), "m2/dev: the message was not taken within 30 s") {
 		t.Fatalf("err %v, marked %v", err, notTyped(err))
 	}
 }
@@ -170,7 +187,7 @@ func TestRelaySendSaysNotSentOnlyWhenThePutStoredNothing(t *testing.T) {
 		{"answer lost", connect.NewError(connect.CodeUnavailable, errors.New("connection reset")), false},
 	} {
 		_, err := collectSend(testRelay(&fakeCenter{putErr: tc.err}), context.Background(), remoteReq())
-		if err == nil || notTyped(err) != tc.notTyped || !strings.Contains(err.Error(), "putting the message for m2/dev") {
+		if err == nil || notTyped(err) != tc.notTyped || !strings.Contains(err.Error(), "m2/dev: center, putting the message") {
 			t.Errorf("%s: err %v, marked %v", tc.name, err, notTyped(err))
 		}
 	}
@@ -203,9 +220,11 @@ func TestRelayReceiverDeliversAndReportsEachAckThenTheEnd(t *testing.T) {
 		_ = emit(ack(ccxv1.SendResponse_STATE_WORKING, ""))
 		return nil
 	}
-	if !r.claimOne(context.Background()) || r.claimOne(context.Background()) {
-		t.Fatal("claimOne should deliver the one message, then find none")
+	msg := r.claim(context.Background())
+	if msg == nil || r.claim(context.Background()) != nil {
+		t.Fatal("claim should take the one message, then find none")
 	}
+	r.deliver(context.Background(), msg)
 	if len(delivered) != 1 || delivered[0].GetTarget() != "devin-x" {
 		t.Fatalf("delivered %v", delivered)
 	}
@@ -238,7 +257,7 @@ func TestRelayReceiverReportsTheDeliveryError(t *testing.T) {
 		f := &fakeCenter{claims: []*ccxv1.RelayedMessage{{Id: "m1", ClaimToken: "tok", Request: remoteReq()}}}
 		r := testRelay(f)
 		r.Deliver = func(context.Context, *ccxv1.SendRequest, func(*ccxv1.SendResponse) error) error { return tc.err }
-		r.claimOne(context.Background())
+		r.deliver(context.Background(), r.claim(context.Background()))
 		end := f.reports[len(f.reports)-1]
 		if !end.GetFinished() || connect.Code(end.GetErrorCode()) != tc.code || end.GetErrorMessage() != tc.msg || end.GetNotTyped() != tc.notTyped {
 			t.Errorf("%s: end report %v", tc.name, end)
@@ -261,7 +280,7 @@ func TestRelayReceiverRetriesTheEndReportButNotARefusedOne(t *testing.T) {
 		r := testRelay(f)
 		r.Deliver = func(context.Context, *ccxv1.SendRequest, func(*ccxv1.SendResponse) error) error { return nil }
 		start := time.Now()
-		r.claimOne(context.Background())
+		r.deliver(context.Background(), r.claim(context.Background()))
 		if len(f.reports) != tc.tries {
 			t.Errorf("%s: %d reports, want %d (%v)", tc.name, len(f.reports), tc.tries, time.Since(start))
 		}
@@ -280,7 +299,7 @@ func TestRelayRunClaimsWhenWoken(t *testing.T) {
 	defer cancel()
 	go func() { _ = r.Run(ctx) }()
 	// Let Run find nothing first and settle on its hour-long tick.
-	time.Sleep(50 * time.Millisecond)
+	f.waitClaims(t, 1)
 	f.mu.Lock()
 	f.claims = []*ccxv1.RelayedMessage{{Id: "m1", ClaimToken: "tok", Request: remoteReq()}}
 	f.mu.Unlock()
@@ -329,7 +348,7 @@ func TestServiceSendsHereForItsOwnMachineAndThroughTheCenterOtherwise(t *testing
 
 	svc.Relay = nil
 	err := route("m2", "dev")
-	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !notTyped(err) || !strings.Contains(err.Error(), "no http(s) center") {
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !notTyped(err) || !strings.Contains(err.Error(), "does not relay") {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -354,7 +373,7 @@ func TestRelayRunDeliversEveryQueuedMessageOnOneWake(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = r.Run(ctx) }()
-	time.Sleep(50 * time.Millisecond)
+	f.waitClaims(t, 1)
 	f.mu.Lock()
 	for _, b := range []string{"a", "b", "c"} {
 		m := remoteReq()
@@ -372,4 +391,74 @@ func TestRelayRunDeliversEveryQueuedMessageOnOneWake(t *testing.T) {
 			t.Fatalf("delivered only %v after one wake", got)
 		}
 	}
+}
+
+func TestRelaySendEndsWhenTheCenterDroppedTheMessage(t *testing.T) {
+	f := &fakeCenter{getErrs: []error{connect.NewError(connect.CodeNotFound, errors.New("no message"))}}
+	_, err := collectSend(testRelay(f), context.Background(), remoteReq())
+	if err == nil || notTyped(err) || !strings.Contains(err.Error(), "no longer has message m1") {
+		t.Fatalf("err %v, marked %v", err, notTyped(err))
+	}
+}
+
+func TestRelayRunClaimsTheNextWhileOneIsBeingDelivered(t *testing.T) {
+	f := &fakeCenter{}
+	for _, b := range []string{"a", "b"} {
+		m := remoteReq()
+		m.Body = b
+		f.claims = append(f.claims, &ccxv1.RelayedMessage{Id: "m-" + b, ClaimToken: "tok", Request: m})
+	}
+	r := testRelay(f)
+	release := make(chan struct{})
+	order := make(chan string, 2)
+	r.Deliver = func(_ context.Context, m *ccxv1.SendRequest, _ func(*ccxv1.SendResponse) error) error {
+		order <- m.GetBody()
+		<-release
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = r.Run(ctx) }()
+	// Both claimed (and a third ask that found none) while "a" is still being delivered.
+	f.waitClaims(t, 3)
+	f.mu.Lock()
+	left := len(f.claims)
+	f.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d message(s) left unclaimed while the first was delivered", left)
+	}
+	if got := <-order; got != "a" {
+		t.Fatalf("first delivered %q", got)
+	}
+	close(release)
+	if got := <-order; got != "b" {
+		t.Fatalf("second delivered %q", got)
+	}
+}
+
+func TestRelayAckReportsHaveTheirOwnShortBound(t *testing.T) {
+	f := &blockingReports{fakeCenter: fakeCenter{claims: []*ccxv1.RelayedMessage{{Id: "m1", ClaimToken: "tok", Request: remoteReq()}}}}
+	r := testRelay(f)
+	r.Deliver = func(_ context.Context, _ *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
+		return emit(ack(ccxv1.SendResponse_STATE_SENT, ""))
+	}
+	r.deliver(context.Background(), r.claim(context.Background()))
+	if f.ackLeft <= 0 || f.ackLeft > ackReportTimeout {
+		t.Fatalf("an ack report ran with %v left, want at most %v", f.ackLeft, ackReportTimeout)
+	}
+}
+
+// blockingReports records how long an ack report had before its deadline.
+type blockingReports struct {
+	fakeCenter
+	ackLeft time.Duration
+}
+
+func (b *blockingReports) ReportMessage(ctx context.Context, r *connect.Request[ccxv1.ReportMessageRequest]) (*connect.Response[ccxv1.ReportMessageResponse], error) {
+	if !r.Msg.GetFinished() {
+		if d, ok := ctx.Deadline(); ok {
+			b.ackLeft = time.Until(d)
+		}
+	}
+	return b.fakeCenter.ReportMessage(ctx, r)
 }

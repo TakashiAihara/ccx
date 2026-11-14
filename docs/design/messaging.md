@@ -67,7 +67,7 @@ ccx msg send -m ccx1 excited-giraffe --summary "review: 3 findings" --mode urgen
 ```
 
 - `-m <machine>` / `-u <user>` name the ccx-agent that delivers it, the same flags as `ccx session resume`. Either left out is this agent's own; both left out (or naming this agent) is a local send.
-- The receiving ccx-agent delivers it exactly as a local send, so the modes, refusals and acks above hold unchanged. The sender sees the same lines, and the error text starts with `<machine>/<user>:`.
+- The receiving ccx-agent delivers it exactly as a local send, so the modes, refusals and acks above hold unchanged. The sender sees the same lines; an error names the other side as `<machine>/<user>:` at its start.
 
 ```mermaid
 sequenceDiagram
@@ -90,8 +90,10 @@ sequenceDiagram
 ```
 
 - The connections go ccx-agent → center, as for ingest and resume; the center reaches a ccx-agent only to wake it, and a missed wake waits for the receiver's 5 s poll.
-- A message is handed out once. One the receiver claimed and never finished (it died mid-send) is not handed out again, so it is never typed twice, and the sender ends at its `--timeout` as `may have been sent`. One not claimed within 30 s is never handed out, and the sender says `not sent` (no ccx-agent there took it).
-- A put the center refused (bad token, invalid request) or that could not connect is `not sent`; a put that timed out or lost its answer may have been stored, so it is not.
+- A message is handed out once. One the receiver claimed and never finished (it died mid-send) is not handed out again, so it is never typed twice; the sender ends at its `--timeout` as `may have been sent`, or `sent, then lost the ack stream` when `sent` had come back.
+- One not claimed within 30 s of the put is never handed out, and the sender says `not sent`. The receiver claims each message as it comes and keeps the claimed ones in a queue it delivers in order, so a message waiting behind another one is not lost to the 30 s; only a receiver that is down, or not pointed at this center, lets it pass.
+- A put the center refused (bad token, invalid request) or whose connection was refused is `not sent`. Any other failure (a timeout, a lost answer, and also a DNS or TLS failure, which this does not tell apart) may have stored it, so it ends as `may have been sent`.
+- The relayed message names where it goes, not where it came from: the receiver logs the center's id with the delivery, and the sender is only the `--from` label. Which machine sent it is not recorded.
 - The center keeps a message, body included, for an hour after it was put, and drops it on a later put.
 - The relay runs on every ccx-agent with an http(s) center and a machine and user name. Receiving needs no other setting; the wake needs the API url that the resume concern advertises (`docs/design/resume.md`).
 - Anyone holding the center's token can put a message for any machine. That is the reach the token already has through resume, which starts sessions anywhere; MessageService itself stays off the agent's TCP listener.

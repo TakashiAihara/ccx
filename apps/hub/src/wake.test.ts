@@ -363,10 +363,14 @@ test("a message put for a machine wakes that machine's agent, and only that one 
   startCenter(AGENT_TOKEN);
   const relay = createClient(MessageRelayService, createConnectTransport({ baseUrl: `http://127.0.0.1:${center!.port}`, httpVersion: "1.1" }));
   ingest(db, [running({ session_ids: [], api_url: agentUrl() }, "m2")], now);
+  // Another machine with an endpoint that must not be woken
+  const other = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { hits.push({ path: "other", auth: null, method: "POST" }); return Response.json({}); } });
+  ingest(db, [running({ session_ids: [], api_url: `http://127.0.0.1:${other.port}` }, "m3")], now);
   const msg = (machine: string) => ({ request: { target: "d", mode: DeliveryMode.URGENT, summary: "s", sender: "me", body: "b", machine, user: "dev" } });
 
   await relay.putMessage(msg("m1"));
   expect(await hitsAfter(300)).toEqual([]);
   await relay.putMessage(msg("m2"));
   expect(await hitsAfter()).toEqual([{ path: "/ccx.v1.AgentService/Wake", auth: `Bearer ${AGENT_TOKEN}`, method: "POST" }]);
+  void other.stop(true);
 });

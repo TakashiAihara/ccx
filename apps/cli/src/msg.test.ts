@@ -208,3 +208,17 @@ test("the command takes -m and -u", async () => {
   expect(r.code).toBe(0);
   expect(got).toMatchObject({ machine: "ccx1", user: "dev" });
 });
+
+test("-m alone leaves the user for ccx-agent to fill, and -u alone the machine", async () => {
+  const got: SendRequest[] = [];
+  const socket = fakeAgent(async function* (req) {
+    got.push(req);
+    yield { state: SendResponse_State.SENT };
+  });
+  await runCli(["msg", "send", "t", "-m", "ccx1", "--socket", socket, "--summary", "s", "b"], {});
+  await runCli(["msg", "send", "t", "-u", "dev", "--socket", socket, "--summary", "s", "b"], {});
+  expect(got.map((r) => [r.machine, r.user])).toEqual([
+    ["ccx1", ""],
+    ["", "dev"],
+  ]);
+});

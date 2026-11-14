@@ -91,7 +91,7 @@ function toRequest(r: Row, nowMs: number): ResumeRequest {
 }
 
 /** UTF-8 で DETAIL_CAP バイトを超えたら末尾だけを残す。切り口が文字の途中なら次の文字の頭まで進める */
-function capDetail(detail: string): string {
+export function capDetail(detail: string): string {
   const bytes = new TextEncoder().encode(detail);
   if (bytes.length <= DETAIL_CAP) return detail;
   let start = bytes.length - DETAIL_CAP;

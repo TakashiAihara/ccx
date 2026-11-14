@@ -460,7 +460,7 @@ func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*cc
 	// The other side fills what the sender left out with this agent's own.
 	m.Machine, m.User = cmp.Or(m.GetMachine(), s.Machine), cmp.Or(m.GetUser(), s.User)
 	if s.Relay == nil {
-		return markNotTyped(connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s/%s is another machine or user, and this ccx-agent has no http(s) center to relay through", m.Machine, m.User)))
+		return markNotTyped(connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s/%s is another machine or user, and this ccx-agent does not relay (it needs an http(s) center and its own machine and user names)", m.Machine, m.User)))
 	}
 	var last ccxv1.SendResponse_State
 	err := s.Relay.Send(ctx, m, func(r *ccxv1.SendResponse) error {
