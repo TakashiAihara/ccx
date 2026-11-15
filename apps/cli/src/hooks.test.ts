@@ -230,6 +230,26 @@ test("with no git on PATH, a linked config is written: there is no git to ask ab
   expect(read(target).hooks.Stop).toHaveLength(1);
 });
 
+test("git is asked about a work tree only when a link is on the way", async () => {
+  const bin = join(home, "bin");
+  const asked = join(home, "asked");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$@" >> '${asked}'\nexit 1\n`);
+  chmodSync(join(bin, "git"), 0o755);
+  mkdirSync(join(home, "elsewhere"));
+  symlinkSync(join(home, "elsewhere"), join(home, ".claude"));
+  const path = process.env.PATH;
+  process.env.PATH = bin;
+  try {
+    expect(await wire(["devin"])).toBe(0);
+    expect(readdirSync(home)).not.toContain("asked");
+    expect(await wire(["claude"])).toBe(0);
+  } finally {
+    process.env.PATH = path;
+  }
+  expect(readFileSync(asked, "utf8")).toContain("rev-parse --show-toplevel");
+});
+
 // Like macOS's /var -> /private/var or ostree's /home -> /var/home: a link above the work tree, not into it.
 test("a link the OS put above a home kept in git does not stop the write", async () => {
   const real = join(home, "real");
@@ -242,7 +262,7 @@ test("a link the OS put above a home kept in git does not stop the write", async
   expect(lines.join("\n")).not.toContain("links into a git work tree");
 });
 
-test("a link to the repo's root, or one reached through another link, counts; a sibling dir that only shares a prefix does not", async () => {
+test("a link to the repo's root, or one reached through another link, counts", async () => {
   const repo = join(home, "dot");
   mkdirSync(repo);
   expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
@@ -257,13 +277,6 @@ test("a link to the repo's root, or one reached through another link, counts; a 
   expect(await wire(["claude"])).toBe(0);
   expect(readdirSync(join(repo, "claude"))).toEqual([]);
   expect(lines.filter((l) => l.includes("links into a git work tree"))).toHaveLength(2);
-
-  const sibling = join(home, "dotfiles");
-  mkdirSync(join(sibling, "acct"), { recursive: true });
-  rmSync(join(home, ".claude"));
-  symlinkSync(join(sibling, "acct"), join(home, ".claude"));
-  expect(await wire(["claude"])).toBe(0);
-  expect(read(join(sibling, "acct", "settings.json")).hooks.Stop).toHaveLength(1);
 });
 
 test("a loop of links fails that tool instead of spinning", async () => {

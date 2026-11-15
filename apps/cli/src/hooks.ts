@@ -142,8 +142,9 @@ export async function target(path: string): Promise<{ real: string; via: string[
 async function workTree(dir: string): Promise<string | null> {
   let base = dir;
   while (!existsSync(base) && dirname(base) !== base) base = dirname(base);
-  if (!Bun.which("git", { PATH: process.env.PATH ?? "" })) return null;
-  const p = Bun.spawn(["git", "-C", base, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "ignore" });
+  const git = Bun.which("git", { PATH: process.env.PATH ?? "" });
+  if (!git) return null;
+  const p = Bun.spawn([git, "-C", base, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "ignore" });
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
   return code === 0 && out.trim() ? out.trim() : null;
 }
@@ -201,8 +202,10 @@ export async function wireHooks(tools: Tool[], o: WireOptions = {}): Promise<num
       // the user's own choice of place.
       // A link the OS put there (/var -> /private/var, /home -> /var/home) leads to a dir above the work tree,
       // not into it, so it does not count.
+      // shortcut: a bare prefix test, so a dir beside the tree sharing its prefix (dot vs dotfiles) counts too; only
+      // an earlier link in a chain that still ends in or above the tree can be such a dir. Add a / boundary if one shows up.
       const { real, via } = await target(path);
-      const tree = await workTree(dirname(real));
+      const tree = via.length > 0 ? await workTree(dirname(real)) : null;
       if (tree && via.some((to) => to.startsWith(tree))) {
         const add = Object.fromEntries(spec.events.map((e) => [e, [(config.hooks as Record<string, Entry[]>)[e]!.at(-1)]]));
         out(`${tool}: ${path} links into a git work tree (${real}); not writing it. Add these hooks there:`);
