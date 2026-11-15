@@ -223,15 +223,18 @@ func TestClaudeWatchesTheTranscriptOfTheHomeItPushedTo(t *testing.T) {
 
 func TestClaudeWatchesTheTranscriptWrittenLast(t *testing.T) {
 	home := t.TempDir()
-	old := filepath.Join(home, "projects", "-a", claudeID+".jsonl")
+	// The live one sorts between two older ones, so neither the first nor the last
+	// match is it.
 	live := filepath.Join(home, "projects", "-b", claudeID+".jsonl")
-	for _, p := range []string{old, live} {
+	old := filepath.Join(home, "projects", "-a", claudeID+".jsonl")
+	older := filepath.Join(home, "projects", "-c", claudeID+".jsonl")
+	for _, p := range []string{old, live, older} {
 		_ = os.MkdirAll(filepath.Dir(p), 0o755)
 		_ = os.WriteFile(p, []byte("x\n"), 0o644)
 	}
-	// -a sorts first; -b was written last.
 	past := time.Now().Add(-time.Hour)
 	_ = os.Chtimes(old, past, past)
+	_ = os.Chtimes(older, past.Add(-time.Hour), past.Add(-time.Hour))
 	f := &fakeChannels{home: home, registered: true}
 	f.onPush = func(ev heartbeat.Event) { appendTo(live, ev.Meta["msg_id"]+"\n") }
 	got, err := sendClaude(testClaude(f), claudeReq(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))

@@ -19,7 +19,8 @@ import (
 )
 
 // sendTimeout bounds one send_message call, as `ccx msg send --timeout` does.
-const sendTimeout = 60 * time.Second
+// A variable so a test can shorten it.
+var sendTimeout = 60 * time.Second
 
 var modes = map[string]ccxv1.DeliveryMode{
 	"later":      ccxv1.DeliveryMode_DELIVERY_MODE_LATER,
@@ -46,8 +47,9 @@ type sendArgs struct {
 // this machine's ccx-agent (MessageService on its API socket). The sender name is
 // the whole session id, as the CLI names a Claude Code sender, so the receiver can
 // answer to it. Sends go one at a time and the 60 s starts when a send's turn
-// comes: Claude Code calls tools in parallel, and a send waiting behind another
-// must not run out its time unsent and be reported as "may have been sent".
+// comes: Claude Code calls tools in parallel, and a send that had spent part of
+// its time waiting behind others would have less left for its own delivery,
+// running out mid-send and ending as "may have been sent".
 func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 	var mu sync.Mutex
 	return Tool{

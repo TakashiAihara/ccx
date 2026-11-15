@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -227,4 +228,50 @@ func TestSendToolSendsOneAtATime(t *testing.T) {
 	if p := s.peak.Load(); p != 1 {
 		t.Fatalf("%d sends ran at once", p)
 	}
+}
+
+// A send waiting behind others gets its whole time once its turn comes, not what
+// is left after the wait.
+func TestSendToolStartsTheTimeoutWhenTheSendsTurnComes(t *testing.T) {
+	old := sendTimeout
+	sendTimeout = 300 * time.Millisecond
+	defer func() { sendTimeout = old }()
+
+	var n atomic.Int32
+	mux := http.NewServeMux()
+	mux.Handle(ccxv1connect.NewMessageServiceHandler(sendFunc(func(ctx context.Context, st *connect.ServerStream[ccxv1.SendResponse]) error {
+		// Each send takes two thirds of the timeout: one that has already spent
+		// part of its time waiting would run out in the middle of its own.
+		n.Add(1)
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return st.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
+	})))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	tool := SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = tool.Call(context.Background(), json.RawMessage(`{"target":"t","body":"b","summary":"s"}`))
+		}()
+		time.Sleep(30 * time.Millisecond)
+	}
+	text, isErr := tool.Call(context.Background(), json.RawMessage(`{"target":"t","body":"b","summary":"s"}`))
+	wg.Wait()
+	if isErr || text != "sent" {
+		t.Fatalf("the third send: %q (its time ran out while it waited)", text)
+	}
+}
+
+type sendFunc func(context.Context, *connect.ServerStream[ccxv1.SendResponse]) error
+
+func (f sendFunc) Send(ctx context.Context, _ *connect.Request[ccxv1.SendRequest], st *connect.ServerStream[ccxv1.SendResponse]) error {
+	return f(ctx, st)
 }

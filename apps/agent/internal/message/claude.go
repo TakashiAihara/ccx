@@ -140,7 +140,8 @@ func newMsgID() string {
 
 // transcriptEnd finds the session's transcript and its size now, or "" when it
 // has none yet. With several (the session ran from more than one directory), the
-// one written last is the one being written.
+// one written last is taken as the one being written; something else touching
+// an old one would pick it, and the send would end at not-started.
 func transcriptEnd(home, session string) (string, int64) {
 	// Listed rather than globbed: a home with [ or * in it would be read as a
 	// pattern and match nothing.
