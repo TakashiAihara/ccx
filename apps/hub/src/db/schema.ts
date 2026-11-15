@@ -254,7 +254,7 @@ export const relayMessages = sqliteTable(
     putAtMs: integer("put_at_ms").notNull(),
     claimedAtMs: integer("claimed_at_ms"),
     finishedAtMs: integer("finished_at_ms"),
-    // ccx.v1.SendResponse の列を JSON で ([{state, detail}])。報告のたびに丸ごと置き換える。
+    // ccx.v1.SendResponse の列を JSON で ([{state, detail}])。報告のたびに丸ごと置き換える (保存済みより短い報告では置き換えない)。
     acks: text("acks").notNull().default("[]"),
     errorCode: integer("error_code").notNull().default(0),
     errorMessage: text("error_message").notNull().default(""),

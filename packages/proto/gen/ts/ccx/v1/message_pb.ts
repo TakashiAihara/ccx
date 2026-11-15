@@ -473,7 +473,8 @@ export const MessageService: GenService<{
  * twice; the sender then ends as "may have been sent". One not claimed within 30 seconds is expired and never
  * handed out, so the sender can say "not sent".
  *
- * Anyone holding the center's token can put a message for any machine, the same reach as resume.
+ * Anyone holding the center's token can put, claim and read a message for any machine, the same reach as
+ * resume.
  *
  * @generated from service ccx.v1.MessageRelayService
  */
@@ -509,8 +510,9 @@ export const MessageRelayService: GenService<{
     output: typeof ClaimMessageResponseSchema;
   },
   /**
-   * Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
-   * message that is not claimed, already finished, or claimed with another claim_token.
+   * Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+   * (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+   * claimed, already finished, or claimed with another claim_token.
    *
    * @generated from rpc ccx.v1.MessageRelayService.ReportMessage
    */

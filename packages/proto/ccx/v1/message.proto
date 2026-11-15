@@ -76,7 +76,8 @@ message SendResponse {
 // twice; the sender then ends as "may have been sent". One not claimed within 30 seconds is expired and never
 // handed out, so the sender can say "not sent".
 //
-// Anyone holding the center's token can put a message for any machine, the same reach as resume.
+// Anyone holding the center's token can put, claim and read a message for any machine, the same reach as
+// resume.
 service MessageRelayService {
   // Stores a message for request.machine / request.user. Both are required.
   rpc PutMessage(PutMessageRequest) returns (PutMessageResponse);
@@ -84,8 +85,9 @@ service MessageRelayService {
   rpc GetMessage(GetMessageRequest) returns (GetMessageResponse);
   // Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
   rpc ClaimMessage(ClaimMessageRequest) returns (ClaimMessageResponse);
-  // Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
-  // message that is not claimed, already finished, or claimed with another claim_token.
+  // Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+  // (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+  // claimed, already finished, or claimed with another claim_token.
   rpc ReportMessage(ReportMessageRequest) returns (ReportMessageResponse);
 }
 

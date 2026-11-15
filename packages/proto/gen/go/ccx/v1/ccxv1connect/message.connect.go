@@ -141,8 +141,9 @@ type MessageRelayServiceClient interface {
 	GetMessage(context.Context, *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error)
 	// Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
 	ClaimMessage(context.Context, *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error)
-	// Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
-	// message that is not claimed, already finished, or claimed with another claim_token.
+	// Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+	// (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+	// claimed, already finished, or claimed with another claim_token.
 	ReportMessage(context.Context, *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error)
 }
 
@@ -220,8 +221,9 @@ type MessageRelayServiceHandler interface {
 	GetMessage(context.Context, *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error)
 	// Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
 	ClaimMessage(context.Context, *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error)
-	// Replaces the acks of a claimed message, and finishes it when finished is set. FAILED_PRECONDITION for a
-	// message that is not claimed, already finished, or claimed with another claim_token.
+	// Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+	// (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+	// claimed, already finished, or claimed with another claim_token.
 	ReportMessage(context.Context, *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error)
 }
 
