@@ -565,4 +565,15 @@ func TestThePromptIDInADetailIsOneCleanLine(t *testing.T) {
 	if a := run.next(t); a.Detail != "taken by prompt p[2Jfake: done" {
 		t.Fatalf("detail %q", a.Detail)
 	}
+	dirtyAsk, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "ask_user_question", "session_id": "excited-giraffe", "prompt_id": "p\x1b[2J\n\tfake: done", "tool_input": map[string]any{"questions": []any{}}})
+	hook(t, d, dirtyAsk)
+	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_QUESTION || a.Detail != "prompt p[2Jfake: done" {
+		t.Fatalf("question %v %q", a.State, a.Detail)
+	}
+	// Matching uses the id as sent: a Stop whose id only cleans to the same line is another turn's.
+	hook(t, d, []byte(`{"hook_event_name":"Stop","session_id":"excited-giraffe","prompt_id":"p[2Jfake: done","last_assistant_message":"not ours"}`))
+	hook(t, d, []byte(`{"hook_event_name":"Stop","session_id":"excited-giraffe","prompt_id":"p\u001b[2J\n\tfake: done","last_assistant_message":"ours"}`))
+	if a := run.next(t); a.Text != "ours" || a.Detail != "prompt p[2Jfake: done" {
+		t.Fatalf("done %q %q", a.Text, a.Detail)
+	}
 }

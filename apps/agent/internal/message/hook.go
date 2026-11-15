@@ -193,13 +193,7 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 	if e.Name == "" || e.Session == "" {
 		return "", connect.NewError(connect.CodeInvalidArgument, errors.New("devin hook payload without hook_event_name or session_id"))
 	}
-	// The prompt id goes into the acks' detail line: no escapes, no line breaks.
-	e.PromptID = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || refusedInBody(r) {
-			return -1
-		}
-		return r
-	}, e.PromptID)
+
 	h := d.hooks()
 	out := ""
 	if e.Name == "UserPromptSubmit" {
@@ -263,7 +257,7 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 			switch {
 			case e.Name == "PreToolUse" && e.ToolName == askTool && asked < MaxQuestionAcks:
 				asked++
-				if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_QUESTION, Questions: questions(e), Detail: "prompt " + e.PromptID}); err != nil {
+				if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_QUESTION, Questions: questions(e), Detail: "prompt " + idLine(e.PromptID)}); err != nil {
 					return err
 				}
 			case e.Name == "Stop":
@@ -271,7 +265,7 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 				if len(text) > MaxText {
 					text = strings.ToValidUTF8(text[:MaxText], "")
 				}
-				return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_DONE, Text: text, Detail: "prompt " + e.PromptID})
+				return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_DONE, Text: text, Detail: "prompt " + idLine(e.PromptID)})
 			}
 		}
 	}
@@ -310,6 +304,17 @@ func clean(s string) string {
 }
 
 // short keeps the last MaxQuestionBytes, as the center does (capDetail).
+// idLine is a prompt id as it goes into an ack's detail line: no escapes, no
+// line breaks. Matching uses the id as Devin sent it.
+func idLine(id string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || refusedInBody(r) {
+			return -1
+		}
+		return r
+	}, id)
+}
+
 func short(s string) string {
 	s = clean(s)
 	if len(s) > MaxQuestionBytes {
@@ -348,7 +353,7 @@ func (d *Devin) sendLater(ctx context.Context, req Request, wait time.Duration, 
 
 	mine := func(e hookEvent) bool { return e.Name == "UserPromptSubmit" && slices.Contains(e.taken, q) }
 	sent := func(e hookEvent) error {
-		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "taken by prompt " + e.PromptID})
+		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "taken by prompt " + idLine(e.PromptID)})
 	}
 	return watch(ctx, events, wait, mine, sent, emit)
 }
