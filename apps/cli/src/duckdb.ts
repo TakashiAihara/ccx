@@ -26,9 +26,31 @@ export type OpenOptions = {
   session?: string;
   /** `history` view も作る (`--sql` 用。作ると history/ を全部読む) */
   withHistory?: boolean;
+  /**
+   * `transcripts` view も作る。作るだけで全 transcript の型を推定する: union_by_name は保存先 705 本 (2.7 GB) で
+   * 6 GB を越えて OOM になった (memory_limit=2GB でも、threads=1 でも。#300)。使う問い合わせのときだけ作る
+   */
+  withTranscripts?: boolean;
 };
 
+/**
+ * DuckDB の memory_limit は上の型推定の分を数えない (2GB を入れても 6 GB で OOM) ので、プロセスの RSS を見て
+ * 越えたら失敗で抜ける。共有ホストを道連れにするより問い合わせが落ちるほうがよい (#300)。
+ * 既定 6 GiB: d1 の保存先 (705 本 / 2.7 GB) でキーワード検索の cgroup のピークは 4.3 GB (2026-11-15)。
+ * cgroup の MemoryMax がこれより小さいホストでは OOM が先に来るので、CCX_SEARCH_MAX_RSS_MB をその下に置く
+ */
+function guardRss() {
+  const mib = Number(process.env.CCX_SEARCH_MAX_RSS_MB) || 6144;
+  setInterval(() => {
+    const rss = process.memoryUsage.rss();
+    if (rss <= mib * 1024 ** 2) return;
+    console.error(`ccx: DuckDB grew to ${Math.round(rss / 1024 ** 2)} MiB, over ${mib} MiB; stopped before it takes the host down (raise CCX_SEARCH_MAX_RSS_MB to allow more)`);
+    process.exit(1);
+  }, 100).unref();
+}
+
 export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {}) {
+  guardRss();
   const cache = join(
     process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
     "ccx",
@@ -84,7 +106,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     await c.run(
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
-    await c.run(
+    if (opts.withTranscripts) await c.run(
       // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
       // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
       // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.

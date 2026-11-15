@@ -91,7 +91,7 @@ afterEach(async () => {
 
 describe("search: embedded DuckDB over the store", () => {
   test("transcripts view carries the hive columns and message fields; a present word hits, an absent one does not", async () => {
-    const c = await openDuckDB(store, { withHistory: true });
+    const c = await openDuckDB(store, { withHistory: true, withTranscripts: true });
 
     const rows = await c.runAndReadAll(`SELECT session_id, machine, "user", type FROM transcripts ORDER BY timestamp`);
     expect(rows.getRowObjectsJson()).toEqual([
@@ -169,6 +169,28 @@ describe("search: embedded DuckDB over the store", () => {
     ]);
   });
 
+  test("only a query that names `transcripts` builds it: building it reads every transcript's types (#300)", async () => {
+    const c = await openDuckDB(store);
+    await expect(c.runAndReadAll("SELECT 1 FROM transcripts")).rejects.toThrow("Table with name transcripts does not exist");
+    expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
+  });
+
+  test("a search that grows past CCX_SEARCH_MAX_RSS_MB stops with an error instead of running on (#300)", async () => {
+    const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", "--sql", "SELECT count(*) FROM range(1000000000000)"], {
+      env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome, CCX_SEARCH_MAX_RSS_MB: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const started = Date.now();
+    const killer = setTimeout(() => p.kill(9), 20_000);
+    const [, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    clearTimeout(killer);
+    expect(code).toBe(1);
+    expect(err).toContain("over 1 MiB; stopped before it takes the host down");
+    // range(1e11) took 16 s on d1, so this one takes minutes; only the guard ends it this soon
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, 30_000);
+
   test("sessions view: label, its history and metadata from state.json, and the default search finds a session by a past name", async () => {
     const c = await openDuckDB(store);
     const rows = (await c.runAndReadAll(`SELECT session_id, machine, label, role, archived, metadata, label_history, label_recorded_at FROM sessions`)).getRowObjectsJson();
@@ -207,7 +229,7 @@ describe("search: embedded DuckDB over the store", () => {
       const client = new TranscriptClient(trap, { machine: "host-a", user: "alice" });
       for (const t of await localTranscripts(home)) await client.push(t, home);
 
-      const c = await openDuckDB(trap, { withHistory: true });
+      const c = await openDuckDB(trap, { withHistory: true, withTranscripts: true });
       const want = [
         { session_id: SID, machine: "host-a", user: "alice" },
         { session_id: SID2, machine: "host-a", user: "alice" },
@@ -223,7 +245,7 @@ describe("search: embedded DuckDB over the store", () => {
   test("transcripts keeps the path's session_id / machine / user over a record's own keys, without the reader's path column, in hive order (#171)", async () => {
     const recDir = join(root, "ccx", "pre", "transcripts", "machine=host-q", "user=quinn", "session_id=rec-1");
     await Bun.write(join(recDir, "transcript.jsonl"), line({ type: "user", session_id: "REC-S", machine: "REC-M", user: "REC-U" }));
-    const c = await openDuckDB(store);
+    const c = await openDuckDB(store, { withTranscripts: true });
     const pick = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
     expect(await pick(`SELECT DISTINCT session_id, machine, "user" FROM transcripts ORDER BY session_id`)).toEqual([
       { session_id: SID, machine: "host-a", user: "alice" },
