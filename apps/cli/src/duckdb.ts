@@ -36,7 +36,8 @@ export type OpenOptions = {
 /**
  * DuckDB の memory_limit は上の型推定の分を数えない (2GB を入れても 6 GB で OOM) ので、プロセスの RSS を見て
  * 越えたら失敗で抜ける。共有ホストを道連れにするより問い合わせが落ちるほうがよい (#300)。
- * 既定 6 GiB: d1 の保存先 (705 本 / 2.7 GB) でキーワード検索のピークは 2.2 GB (2026-11-15)
+ * 既定 6 GiB: d1 の保存先 (705 本 / 2.7 GB) でキーワード検索の cgroup のピークは 4.3 GB (2026-11-15)。
+ * cgroup の MemoryMax がこれより小さいホストでは OOM が先に来るので、CCX_SEARCH_MAX_RSS_MB をその下に置く
  */
 function guardRss() {
   const mib = Number(process.env.CCX_SEARCH_MAX_RSS_MB) || 6144;

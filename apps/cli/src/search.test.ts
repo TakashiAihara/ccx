@@ -171,7 +171,7 @@ describe("search: embedded DuckDB over the store", () => {
 
   test("only a query that names `transcripts` builds it: building it reads every transcript's types (#300)", async () => {
     const c = await openDuckDB(store);
-    expect(c.runAndReadAll("SELECT 1 FROM transcripts")).rejects.toThrow("Table with name transcripts does not exist");
+    await expect(c.runAndReadAll("SELECT 1 FROM transcripts")).rejects.toThrow("Table with name transcripts does not exist");
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
   });
 
