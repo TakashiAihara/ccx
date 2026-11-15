@@ -21,6 +21,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -60,6 +61,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "hook":
 		return cmdHook()
+	case "devin-hook":
+		return cmdDevinHook(os.Stdin, os.Stdout)
 	case "serve":
 		return cmdServe()
 	case "channel":
@@ -95,6 +98,28 @@ func cmdHook() int {
 		return collect.Hook("", filepath.Join(home, ".ccx", "spool"), os.Stdin)
 	}
 	return collect.Hook(cfg.SocketPath, cfg.SpoolDir, os.Stdin)
+}
+
+// devinHookBudget bounds the whole devin-hook: Devin waits for it before the
+// turn goes on, and a missing agent must not hold the turn.
+const devinHookBudget = 2 * time.Second
+
+// cmdDevinHook is Devin's hook. Like hook it always exits 0: a down agent never
+// fails Devin's turn; the acks and later messages are simply not there.
+func cmdDevinHook(in io.Reader, out io.Writer) int {
+	payload, err := io.ReadAll(io.LimitReader(in, 1<<20))
+	if err != nil || !message.Wanted(payload) {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), devinHookBudget)
+	defer cancel()
+	res, err := api.MessageClient(config.APISocket()).DevinHook(ctx, connect.NewRequest(&ccxv1.DevinHookRequest{Payload: payload}))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ccx-agent devin-hook: %v\n", err)
+		return 0
+	}
+	fmt.Fprint(out, res.Msg.GetOutput())
+	return 0
 }
 
 func cmdServe() int {
@@ -385,6 +410,9 @@ func usage() {
 usage:
   ccx-agent serve    run the resident agent (the enabled concerns)
   ccx-agent hook     forward one hook payload from stdin to the running agent
+  ccx-agent devin-hook
+                     hand one Devin hook payload to the running agent (question /
+                     done acks, later messages); prints what Devin should read
   ccx-agent channel  the per-session MCP channel server (spawned by Claude Code)
   ccx-agent status --session <id> [--json]
                      ask the running serve about one session; prints JSON

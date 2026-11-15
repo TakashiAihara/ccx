@@ -162,6 +162,25 @@ test("報告の ack の数・エラーコードは上限を超えれば断り、
   expect([m.errorCode, m.errorMessage.length, m.acks[0]!.detail.length]).toEqual([16, 4096, 4096]);
 });
 
+test("question の問い・選択肢と done の文を残し、数は 8 問 / 16 個、文は 4096 バイトに切る", async () => {
+  const a = (await client.putMessage({ request: req("a") })).message!;
+  const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;
+  const options = Array.from({ length: 17 }, (_, i) => ({ label: `o${i}`, description: `d${i}` }));
+  const questions = Array.from({ length: 9 }, (_, i) => ({ question: `q${i}`, header: `h${i}`, options }));
+  await client.reportMessage({
+    id: a.id,
+    claimToken: token,
+    acks: [
+      { state: SendResponse_State.QUESTION, questions },
+      { state: SendResponse_State.DONE, text: "t".repeat(5000) },
+    ],
+  });
+  const [q, d] = (await client.getMessage({ id: a.id })).message!.acks;
+  expect(q!.questions.map((x) => x.question)).toEqual(["q0", "q1", "q2", "q3", "q4", "q5", "q6", "q7"]);
+  expect([q!.questions[3]!.header, q!.questions[3]!.options.length, q!.questions[3]!.options[15]!.label, q!.questions[3]!.options[15]!.description]).toEqual(["h3", 16, "o15", "d15"]);
+  expect([d!.state, d!.text.length]).toEqual([SendResponse_State.DONE, 4096]);
+});
+
 test("後から届いた短い ack の一覧で、保存済みの ack を戻さない", async () => {
   const a = (await client.putMessage({ request: req("a") })).message!;
   const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;
@@ -195,9 +214,9 @@ test("知らない id は NOT_FOUND", async () => {
   expect(await code(client.reportMessage({ id: "nope", claimToken: "x" }))).toBe(Code.NotFound);
 });
 
-test("1 時間より古い行は次の置き方で消える", async () => {
+test("2 時間より古い行は次の置き方で消える", async () => {
   const old = (await client.putMessage({ request: req("old") })).message!;
-  now += 60 * 60 * 1000;
+  now += 2 * 60 * 60 * 1000;
   await client.putMessage({ request: req("new") });
   expect((await client.getMessage({ id: old.id })).message?.request?.body).toBe("old");
   now += 1;

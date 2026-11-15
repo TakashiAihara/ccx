@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"syscall"
 	"time"
 
@@ -124,7 +125,7 @@ func putNeverStored(err error) bool {
 // when that side typed nothing, or when no agent there claimed it in time.
 func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	where := m.GetMachine() + "/" + m.GetUser()
-	if err := Validate(Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}); err != nil {
+	if err := Validate(Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds()}); err != nil {
 		return markNotTyped(err)
 	}
 	put, err := r.Center.PutMessage(ctx, connect.NewRequest(&ccxv1.PutMessageRequest{Request: m}))
@@ -179,8 +180,8 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 	}
 }
 
-// queueLen bounds the claimed messages waiting to be delivered. Past it the
-// receiver stops claiming until the queue drains.
+// queueLen bounds the claimed messages waiting to be delivered, and the
+// deliveries running at once. Past it the receiver stops claiming until one ends.
 const queueLen = 64
 
 // ackReportTimeout bounds a report of one ack. It only lets the sender see the
@@ -197,8 +198,21 @@ func (r *Relay) Run(ctx context.Context) error {
 	queue := make(chan *ccxv1.RelayedMessage, queueLen)
 	defer close(queue)
 	go func() {
+		// Deliveries type in claim order, one after another; once one has typed
+		// (or given up), the next starts while it waits for the receiver's
+		// question / done (wait_seconds), so a long wait does not hold the rest.
+		running := make(chan struct{}, queueLen)
 		for msg := range queue {
-			r.deliver(ctx, msg)
+			running <- struct{}{}
+			typed := make(chan struct{})
+			var once sync.Once
+			next := func() { once.Do(func() { close(typed) }) }
+			go func() {
+				defer func() { <-running }()
+				defer next()
+				r.deliver(WithAfterTyping(ctx, next), msg)
+			}()
+			<-typed
 		}
 	}()
 

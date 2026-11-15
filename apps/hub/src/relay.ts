@@ -23,20 +23,36 @@ import {
 /** 取られないまま置いておく時間。過ぎた行は渡さないので、送り手は「送っていない」と言える */
 export const CLAIM_TTL_MS = 30_000;
 
-/** 行を残す時間。送り手が ack を読み終えるには足りる長さで、本文を center に溜め続けない */
-export const KEEP_MS = 60 * 60 * 1000;
+/**
+ * 行を残す時間。送り手が ack を読み終えるには足りる長さで、本文を center に溜め続けない。送り手は question / done を
+ * 最長 1 時間待てる (SendRequest.wait_seconds、agent の MaxWait) ので、それより長く取る
+ */
+export const KEEP_MS = 2 * 60 * 60 * 1000;
 
 /** 置ける SendRequest の大きさ。本文の上限 (agent の MaxBody、64 KiB) に宛先と見出しの分を足した程度 */
 export const MAX_REQUEST_BYTES = 70 * 1024;
 
-/** 1 通の ack の数の上限。届け方が出す ack は sent / working・not-started の 2 つまで */
+/**
+ * 1 通の ack の数の上限。届け方が出す ack は queued / sent / working・not-started / done の 4 つと、question が agent
+ * の上限 (MaxQuestionAcks、8) まで
+ */
 export const MAX_ACKS = 16;
+
+/** 1 つの question の ack に残す問いの数と、1 問の選択肢の数 */
+const MAX_QUESTIONS = 8;
+const MAX_OPTIONS = 16;
 
 /** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
 const MAX_CODE = 16;
 
 type Row = typeof relayMessages.$inferSelect;
-type Ack = { state: number; detail: string };
+type Ack = {
+  state: number;
+  detail: string;
+  // question / done の中身。古い行には無い
+  text?: string;
+  questions?: { question: string; header: string; options: { label: string; description: string }[] }[];
+};
 
 const invalid = (why: string): ConnectError => new ConnectError(why, Code.InvalidArgument);
 
@@ -57,7 +73,22 @@ function toMessage(r: Row, nowMs: number, withToken = false): RelayedMessage {
   });
 }
 
-const ackRows = (acks: SendResponse[]): string => JSON.stringify(acks.map((a) => ({ state: a.state, detail: capDetail(a.detail) })));
+/** ack を行に書く形。文字列は detail と同じく末尾の 4096 バイトに切り、問いと選択肢の数にも上限を置く */
+const ackRows = (acks: SendResponse[]): string =>
+  JSON.stringify(
+    acks.map(
+      (a): Ack => ({
+        state: a.state,
+        detail: capDetail(a.detail),
+        text: capDetail(a.text),
+        questions: a.questions.slice(0, MAX_QUESTIONS).map((q) => ({
+          question: capDetail(q.question),
+          header: capDetail(q.header),
+          options: q.options.slice(0, MAX_OPTIONS).map((o) => ({ label: capDetail(o.label), description: capDetail(o.description) })),
+        })),
+      }),
+    ),
+  );
 
 export function relayImpl(db: Db, now: () => number, agentToken?: string): ServiceImpl<typeof MessageRelayService> {
   return {

@@ -43,6 +43,12 @@ ccx-agent serve    the resident agent: owns the socket, spools what arrives,
 ccx-agent hook     thin: read a hook payload from stdin, hand it to the running
                    ccx-agent over the local socket, exit. This is what Claude Code hooks
                    invoke. It never fails a session — it always exits 0.
+
+ccx-agent devin-hook
+                   the same for Devin's hooks, for `ccx msg send`: passes the payload
+                   to the running ccx-agent and prints what it answers (a `later`
+                   message for the turn). Kept on this machine, not forwarded.
+                   Always exits 0.
 ```
 
 ## Asking the agent (status API)
@@ -293,6 +299,22 @@ TLS in front of it.
 Any other event can be added the same way; `ccx session show` then has more to show.
 `PostToolUse` is the one to think about: its payload is often tens of KB, and it
 fires on every tool call.
+
+### Devin (messages)
+
+`ccx msg send --mode later` and `--wait` read Devin's hooks (`docs/design/messaging.md`).
+Add to `~/.config/devin/config.json`, next to any hooks already there:
+
+```json
+{ "hooks": {
+  "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ],
+  "PreToolUse":       [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ],
+
+  "Stop":             [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ]
+} }
+```
+
+Tool events other than `ask_user_question` end in `devin-hook` without a call to ccx-agent.
 
 ## Checking it end to end
 

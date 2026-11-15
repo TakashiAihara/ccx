@@ -37,6 +37,9 @@ const (
 const (
 	// MessageServiceSendProcedure is the fully-qualified name of the MessageService's Send RPC.
 	MessageServiceSendProcedure = "/ccx.v1.MessageService/Send"
+	// MessageServiceDevinHookProcedure is the fully-qualified name of the MessageService's DevinHook
+	// RPC.
+	MessageServiceDevinHookProcedure = "/ccx.v1.MessageService/DevinHook"
 	// MessageRelayServicePutMessageProcedure is the fully-qualified name of the MessageRelayService's
 	// PutMessage RPC.
 	MessageRelayServicePutMessageProcedure = "/ccx.v1.MessageRelayService/PutMessage"
@@ -60,6 +63,10 @@ type MessageServiceClient interface {
 	// before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
 	// that breaks, may come after the text went in: do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest]) (*connect.ServerStreamForClient[v1.SendResponse], error)
+	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
+	// PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+	// with the later messages to put into that turn. Nothing goes to the center.
+	DevinHook(context.Context, *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error)
 }
 
 // NewMessageServiceClient constructs a client for the ccx.v1.MessageService service. By default, it
@@ -79,17 +86,29 @@ func NewMessageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(messageServiceMethods.ByName("Send")),
 			connect.WithClientOptions(opts...),
 		),
+		devinHook: connect.NewClient[v1.DevinHookRequest, v1.DevinHookResponse](
+			httpClient,
+			baseURL+MessageServiceDevinHookProcedure,
+			connect.WithSchema(messageServiceMethods.ByName("DevinHook")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // messageServiceClient implements MessageServiceClient.
 type messageServiceClient struct {
-	send *connect.Client[v1.SendRequest, v1.SendResponse]
+	send      *connect.Client[v1.SendRequest, v1.SendResponse]
+	devinHook *connect.Client[v1.DevinHookRequest, v1.DevinHookResponse]
 }
 
 // Send calls ccx.v1.MessageService.Send.
 func (c *messageServiceClient) Send(ctx context.Context, req *connect.Request[v1.SendRequest]) (*connect.ServerStreamForClient[v1.SendResponse], error) {
 	return c.send.CallServerStream(ctx, req)
+}
+
+// DevinHook calls ccx.v1.MessageService.DevinHook.
+func (c *messageServiceClient) DevinHook(ctx context.Context, req *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error) {
+	return c.devinHook.CallUnary(ctx, req)
 }
 
 // MessageServiceHandler is an implementation of the ccx.v1.MessageService service.
@@ -101,6 +120,10 @@ type MessageServiceHandler interface {
 	// before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
 	// that breaks, may come after the text went in: do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest], *connect.ServerStream[v1.SendResponse]) error
+	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
+	// PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+	// with the later messages to put into that turn. Nothing goes to the center.
+	DevinHook(context.Context, *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error)
 }
 
 // NewMessageServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -116,10 +139,18 @@ func NewMessageServiceHandler(svc MessageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(messageServiceMethods.ByName("Send")),
 		connect.WithHandlerOptions(opts...),
 	)
+	messageServiceDevinHookHandler := connect.NewUnaryHandler(
+		MessageServiceDevinHookProcedure,
+		svc.DevinHook,
+		connect.WithSchema(messageServiceMethods.ByName("DevinHook")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ccx.v1.MessageService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case MessageServiceSendProcedure:
 			messageServiceSendHandler.ServeHTTP(w, r)
+		case MessageServiceDevinHookProcedure:
+			messageServiceDevinHookHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -131,6 +162,10 @@ type UnimplementedMessageServiceHandler struct{}
 
 func (UnimplementedMessageServiceHandler) Send(context.Context, *connect.Request[v1.SendRequest], *connect.ServerStream[v1.SendResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageService.Send is not implemented"))
+}
+
+func (UnimplementedMessageServiceHandler) DevinHook(context.Context, *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageService.DevinHook is not implemented"))
 }
 
 // MessageRelayServiceClient is a client for the ccx.v1.MessageRelayService service.

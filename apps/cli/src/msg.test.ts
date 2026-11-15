@@ -1,3 +1,4 @@
+import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
 import { createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
@@ -5,9 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DeliveryMode, MessageService, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
+import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -221,4 +222,56 @@ test("-m alone leaves the user for ccx-agent to fill, and -u alone the machine",
     ["ccx1", ""],
     ["", "dev"],
   ]);
+});
+
+test("a question lists its options and done carries the last answer indented", () => {
+  const q = create(SendResponseSchema, {
+    state: SendResponse_State.QUESTION,
+    detail: "prompt p1",
+    questions: [
+      { header: "好きな果物", question: "どちら？", options: [{ label: "りんご", description: "りんごを選ぶ" }, { label: "みかん" }] },
+      { question: "理由は？", options: [] },
+    ],
+  });
+  expect(ackLines(q)).toEqual(["question  prompt p1", "  好きな果物: どちら？", "    - りんご (りんごを選ぶ)", "    - みかん", "  理由は？"]);
+  const d = create(SendResponseSchema, { state: SendResponse_State.DONE, text: "了解\n2 行目" });
+  expect(ackLines(d)).toEqual(["done", "  了解", "  2 行目"]);
+  expect(ackLines(create(SendResponseSchema, { state: SendResponse_State.QUEUED, detail: "next turn" }))).toEqual(["queued  next turn"]);
+});
+
+test("--wait is passed on and outlasts the timeout", async () => {
+  let wait: number | undefined;
+  const socket = fakeAgent(async function* (req) {
+    wait = req.waitSeconds;
+    await Bun.sleep(150);
+    yield { state: SendResponse_State.DONE, text: "ok" };
+  });
+  const lines: string[] = [];
+  // A 50 ms timeout alone would cut the 150 ms answer; the wait keeps the stream for wait + 60 s.
+  await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket, timeout: 50, wait: 30 }, (l) => lines.push(l));
+  expect(wait).toBe(30);
+  expect(lines).toEqual(["done", "  ok"]);
+});
+
+test("without --wait the timeout is the timeout; with it, the wait gets a minute on top", async () => {
+  const slow = (ms: number) =>
+    fakeAgent(async function* () {
+      await Bun.sleep(ms);
+      yield { state: SendResponse_State.DONE, text: "ok" };
+    });
+  const lines: string[] = [];
+  const base = { mode: "urgent", summary: "s", from: "f", timeout: 50 };
+  // 50 ms cuts a 150 ms answer when nothing asked to wait
+  expect(await sendMessage("t", "b", { ...base, socket: slow(150) }, (l) => lines.push(l)).catch((e: unknown) => e)).toBeInstanceOf(Error);
+  // --wait 1 holds past 1 s: the typing part comes before the wait
+  await sendMessage("t", "b", { ...base, socket: slow(1100), wait: 1 }, (l) => lines.push(l));
+  expect(lines).toEqual(["done", "  ok"]);
+});
+
+test("--wait takes whole seconds up to an hour", async () => {
+  for (const bad of ["-1", "3601", "1.5", "x"]) {
+    const r = await runCli(["msg", "send", "t", "--socket", "/nonexistent.sock", "--summary", "s", "--from", "me", "--wait", bad, "x"], {});
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("--wait takes whole seconds from 0 to 3600");
+  }
 });

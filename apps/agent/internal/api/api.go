@@ -407,6 +407,11 @@ func UnixClient(socketPath string) ccxv1connect.AgentServiceClient {
 	return ccxv1connect.NewAgentServiceClient(unixHTTP(socketPath), "http://ccx-agent")
 }
 
+// MessageClient is a MessageService client over the unix socket.
+func MessageClient(socketPath string) ccxv1connect.MessageServiceClient {
+	return ccxv1connect.NewMessageServiceClient(unixHTTP(socketPath), "http://ccx-agent")
+}
+
 func unixHTTP(socketPath string) *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

@@ -10,7 +10,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 
-import { DeliveryMode, MessageService, SendResponse_State } from "@ccx/proto/ccx/v1/message_pb.ts";
+import { DeliveryMode, MessageService, SendResponse_State, type SendResponse } from "@ccx/proto/ccx/v1/message_pb.ts";
 
 import { defaultSocketPath } from "./agent.ts";
 
@@ -24,7 +24,23 @@ const STATES: Record<number, string> = {
   [SendResponse_State.SENT]: "sent",
   [SendResponse_State.WORKING]: "working",
   [SendResponse_State.NOT_STARTED]: "not-started",
+  [SendResponse_State.QUEUED]: "queued",
+  [SendResponse_State.QUESTION]: "question",
+  [SendResponse_State.DONE]: "done",
 };
+
+/** One ack as lines: a question lists its options, done carries the receiver's last answer indented. */
+export function ackLines(ev: SendResponse): string[] {
+  const state = STATES[ev.state] ?? `state ${ev.state}`;
+  const lines = [ev.detail ? `${state}  ${ev.detail}` : state];
+  for (const q of ev.questions) {
+    const head = q.header ? `${q.header}: ${q.question}` : q.question;
+    lines.push(`  ${head}`);
+    for (const o of q.options) lines.push(o.description ? `    - ${o.label} (${o.description})` : `    - ${o.label}`);
+  }
+  if (ev.state === SendResponse_State.DONE) for (const l of ev.text.split("\n")) lines.push(`  ${l}`);
+  return lines;
+}
 
 // The same rule as apiSocketPath in packages/core/config/config.go (change both).
 export function defaultApiSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -45,7 +61,7 @@ export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => 
     user = env.USER || `uid${process.getuid?.() ?? ""}`;
   }
   // ccx-agent takes at most 40 bytes (MaxSender); a long FQDN would refuse every send.
-  return Buffer.from(`${user}@${hostname()}`).subarray(0, 40).toString().replace(/�$/, "").trimEnd();
+  return Buffer.from(`${user}@${hostname()}`).subarray(0, 40).toString().replace(/\uFFFD$/, "").trimEnd();
 }
 
 export function unixTransport(socketPath: string): Transport {
@@ -56,7 +72,7 @@ export function unixTransport(socketPath: string): Transport {
   });
 }
 
-export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number; machine?: string; user?: string };
+export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number; machine?: string; user?: string; wait?: number };
 
 /** ccx-agent's NotTypedKey (apps/agent/internal/message): the failure came before anything was typed. */
 const NOT_TYPED_KEY = "Ccx-Not-Typed";
@@ -83,6 +99,12 @@ function unreachable(e: ConnectError): boolean {
   return /ENOENT|ECONNREFUSED|EACCES|ENOTSOCK|Failed to connect/.test(`${cause?.code ?? ""} ${String(cause ?? "")}`);
 }
 
+function parseWait(v: string): number {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 3600) throw new InvalidArgumentError("--wait takes whole seconds from 0 to 3600");
+  return n;
+}
+
 function parseTimeout(v: string): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) throw new InvalidArgumentError("--timeout takes a positive number of milliseconds");
@@ -96,11 +118,13 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
 
   const client = createClient(MessageService, unixTransport(o.socket));
   // A wedged herdr or agent must not hold the sender forever. Running out ends as "may have been sent".
-  const signal = AbortSignal.timeout(o.timeout ?? 60_000);
+  // A --wait outlasts the timeout by a minute (the typing part comes first).
+  const wait = o.wait ?? 0;
+  const timeout = o.timeout ?? 60_000;
+  const signal = AbortSignal.timeout(wait > 0 ? Math.max(timeout, (wait + 60) * 1000) : timeout);
   const where = { machine: o.machine ?? "", user: o.user ?? "" };
-  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, ...where }, { signal })) {
-    const state = STATES[ev.state] ?? `state ${ev.state}`;
-    out(ev.detail ? `${state}  ${ev.detail}` : state);
+  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where }, { signal })) {
+    for (const l of ackLines(ev)) out(l);
   }
 }
 
@@ -109,7 +133,7 @@ export function registerMsg(program: Command): void {
 
   msg
     .command("send")
-    .description("Type a message into a running session (Devin in a herdr pane, for now), here or on another machine through the center, and print each ack: sent, then working or not-started")
+    .description("Type a message into a running session (Devin in a herdr pane, for now), here or on another machine through the center, and print each ack: sent, then working or not-started; with --wait also the receiver's question and done (its last answer). later is queued for the receiver's next turn")
     .argument("<target>", "the session name (Devin's session name as herdr shows it on that machine)")
     .argument("<body...>", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
@@ -119,6 +143,7 @@ export function registerMsg(program: Command): void {
     .option("-u, --user <name>", "have that user's ccx-agent deliver it, through the center (default: this agent's user)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
     .option("--timeout <ms>", "give up waiting for acks after this long", parseTimeout, 60_000)
+    .option("--wait <seconds>", "after sent, wait this long for the receiver's question / done (needs Devin's hooks wired to `ccx-agent devin-hook`)", parseWait, 0)
     .action(async (target: string, body: string[], o: SendOptions) => {
       let acks = 0;
       try {

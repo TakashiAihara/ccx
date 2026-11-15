@@ -24,6 +24,7 @@ import (
 
 // fakeMessages stands in for ccx-agent's MessageService.
 type fakeMessages struct {
+	ccxv1connect.UnimplementedMessageServiceHandler
 	got  *ccxv1.SendRequest
 	acks []*ccxv1.SendResponse
 	err  error
@@ -191,6 +192,7 @@ func TestSendToolRefusesThisSessionAsTheTarget(t *testing.T) {
 
 // slowMessages holds each send until released, and counts the sends running at once.
 type slowMessages struct {
+	ccxv1connect.UnimplementedMessageServiceHandler
 	release       chan struct{}
 	running, peak atomic.Int32
 }
@@ -272,6 +274,10 @@ type sendFunc func(context.Context, *connect.ServerStream[ccxv1.SendResponse]) e
 
 func (f sendFunc) Send(ctx context.Context, _ *connect.Request[ccxv1.SendRequest], st *connect.ServerStream[ccxv1.SendResponse]) error {
 	return f(ctx, st)
+}
+
+func (sendFunc) DevinHook(context.Context, *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, nil)
 }
 
 // A ccx-agent that never answers ends the call at the timeout, as "may have been sent".
