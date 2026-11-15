@@ -102,7 +102,8 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 
 	for end := time.Now().Add(c.StartWait); ; {
 		if file == "" {
-			file, from = transcriptEnd(home, req.Target)
+			// It appeared after the push, so all of it is new.
+			file, _ = transcriptEnd(home, req.Target)
 			from = 0
 		}
 		if file != "" && transcriptHas(file, from, id) {
@@ -112,7 +113,11 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 			return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_NOT_STARTED, Detail: fmt.Sprintf("not in its transcript within %v; a session in the middle of a turn takes it when the turn ends", c.StartWait)})
 		}
 		if err := sleep(ctx, c.Poll); err != nil {
-			return connect.NewError(connect.CodeCanceled, err)
+			code := connect.CodeCanceled
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = connect.CodeDeadlineExceeded
+			}
+			return connect.NewError(code, err)
 		}
 	}
 }
@@ -137,10 +142,13 @@ func newMsgID() string {
 // has none yet. With several (the session ran from more than one directory), the
 // one written last is the one being written.
 func transcriptEnd(home, session string) (string, int64) {
-	m, _ := filepath.Glob(filepath.Join(home, "projects", "*", session+".jsonl"))
+	// Listed rather than globbed: a home with [ or * in it would be read as a
+	// pattern and match nothing.
+	dirs, _ := os.ReadDir(filepath.Join(home, "projects"))
 	var file string
 	var latest os.FileInfo
-	for _, p := range m {
+	for _, d := range dirs {
+		p := filepath.Join(home, "projects", d.Name(), session+".jsonl")
 		if st, err := os.Stat(p); err == nil && (latest == nil || st.ModTime().After(latest.ModTime())) {
 			file, latest = p, st
 		}

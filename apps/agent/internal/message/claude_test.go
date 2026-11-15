@@ -239,3 +239,27 @@ func TestClaudeWatchesTheTranscriptWrittenLast(t *testing.T) {
 		t.Fatalf("acks %v, err %v (watched the older transcript)", got, err)
 	}
 }
+
+func TestClaudeFindsTheTranscriptUnderAHomeWithPatternCharacters(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "[work]*")
+	file := filepath.Join(home, "projects", "-cwd", claudeID+".jsonl")
+	_ = os.MkdirAll(filepath.Dir(file), 0o755)
+	_ = os.WriteFile(file, nil, 0o644)
+	f := &fakeChannels{home: home, registered: true}
+	f.onPush = func(ev heartbeat.Event) { appendTo(file, ev.Meta["msg_id"]+"\n") }
+	got, err := sendClaude(testClaude(f), claudeReq(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 2 || got[1].GetState() != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("acks %v, err %v", got, err)
+	}
+}
+
+func TestClaudeGivingUpKeepsTheContextsCode(t *testing.T) {
+	home, _ := newTranscript(t, "")
+	c := &Claude{Channels: &fakeChannels{home: home, registered: true}, Poll: time.Millisecond, StartWait: time.Hour}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := c.Send(ctx, claudeReq(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN), func(*ccxv1.SendResponse) error { return nil })
+	if connect.CodeOf(err) != connect.CodeDeadlineExceeded || notTyped(err) {
+		t.Fatalf("err %v", err)
+	}
+}
