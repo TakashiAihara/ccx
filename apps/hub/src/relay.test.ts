@@ -63,7 +63,7 @@ async function code(p: Promise<unknown>): Promise<Code | "ok"> {
   }
 }
 
-test("一覧を送ってきたことの無い宛先は待たずに断り、大文字小文字だけ違う宛先を先頭に挙げる", async () => {
+test("取りに来たことの無い宛先は待たずに断り、大文字小文字だけ違う宛先を先頭に挙げる", async () => {
   await claimed("WIN-TAKASHI", "other");
   await claimed("WIN-TAKASHI", "root");
   await claimed("a-host", "root");
@@ -71,7 +71,7 @@ test("一覧を送ってきたことの無い宛先は待たずに断り、大�
   expect(e).toBeInstanceOf(ConnectError);
   expect((e as ConnectError).code).toBe(Code.InvalidArgument);
   // Only the one that differs in case alone comes first: the same machine as another user is not it.
-  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has taken messages from this center as win-takashi/root; these have: WIN-TAKASHI/root, a-host/root, m2/dev, WIN-TAKASHI/other");
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as win-takashi/root; these have: WIN-TAKASHI/root, a-host/root, m2/dev, WIN-TAKASHI/other");
 
   expect(await code(client.putMessage({ request: req("b", "m2", "root") }))).toBe(Code.InvalidArgument);
   expect(await code(client.putMessage({ request: req("b", "WIN-TAKASHI", "root") }))).toBe("ok");
@@ -81,7 +81,7 @@ test("一覧を送ってきたことの無い宛先は待たずに断り、大�
 test("どの agent も取りに来ていなければ、そう言って断る", async () => {
   db.$client.run("delete from relay_receivers");
   const e = await client.putMessage({ request: req("b") }).catch((x: unknown) => ConnectError.from(x));
-  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has taken messages from this center as m2/dev; none has yet");
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as m2/dev; none has yet");
 });
 
 test("宛先の名前がどれだけ長くても、断る理由の文は detail と同じ長さまで", async () => {
@@ -91,11 +91,11 @@ test("宛先の名前がどれだけ長くても、断る理由の文は detail 
   expect((e as ConnectError).rawMessage).toEndWith("these have: m2/dev");
 });
 
-test("名乗っている宛先は 10 件まで挙げる", async () => {
+test("取りに来た宛先は 10 件まで挙げる", async () => {
   db.$client.run("delete from relay_receivers");
   for (let i = 0; i < 11; i++) await claimed(`h${String(i).padStart(2, "0")}`, "u");
   const e = await client.putMessage({ request: req("b", "zz", "u") }).catch((x: unknown) => ConnectError.from(x));
-  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has taken messages from this center as zz/u; these have: h00/u, h01/u, h02/u, h03/u, h04/u, h05/u, h06/u, h07/u, h08/u, h09/u, …");
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as zz/u; these have: h00/u, h01/u, h02/u, h03/u, h04/u, h05/u, h06/u, h07/u, h08/u, h09/u, …");
 });
 
 test("宛先の machine と user が無い置き方は断る", async () => {

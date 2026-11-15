@@ -60,7 +60,7 @@ function unknownTarget(db: Db, machine: string, user: string): string | null {
     .sort((a, b) => Number(near(b)) - Number(near(a)) || `${a.machine}/${a.user}`.localeCompare(`${b.machine}/${b.user}`))
     .map((k) => `${k.machine}/${k.user}`);
   const listed = names.length === 0 ? "none has yet" : `these have: ${names.slice(0, MAX_KNOWN).join(", ")}${names.length > MAX_KNOWN ? ", …" : ""}`;
-  return capDetail(`no ccx-agent has taken messages from this center as ${machine}/${user}; ${listed}`);
+  return capDetail(`no ccx-agent has asked this center for messages as ${machine}/${user}; ${listed}`);
 }
 
 /** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
