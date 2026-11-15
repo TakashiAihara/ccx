@@ -8,6 +8,7 @@
 package message
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -106,17 +107,16 @@ func (d *Devin) Send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	typed := false
 	err := d.send(ctx, req, emit, &typed)
 	if err != nil && !typed {
-		ce := new(connect.Error)
-		if !errors.As(err, &ce) {
-			ce = connect.NewError(connect.CodeUnknown, err)
-		}
-		ce.Meta().Set(NotTypedKey, "1")
-		return ce
+		return markNotTyped(err)
 	}
 	return err
 }
 
-func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error, typed *bool) error {
+// Validate refuses a request whatever the receiver is: the target, the sender and
+// summary lines, the body, and an unknown mode. A mode the receiver lacks is the
+// receiver's call. The relay runs it before handing a message to the center, so a
+// bad one is refused here as not sent.
+func Validate(req Request) error {
 	if req.Target == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("target is empty"))
 	}
@@ -136,21 +136,23 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		// An ESC reaching the pane can cancel or clear Devin's input.
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("body is not UTF-8 text without control or format characters (newline and tab are fine)"))
 	}
-	mode := req.Mode
-	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_UNSPECIFIED {
-		mode = ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN
-	}
-	switch mode {
-	case ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN, ccxv1.DeliveryMode_DELIVERY_MODE_URGENT:
-	case ccxv1.DeliveryMode_DELIVERY_MODE_LATER:
-		// Getting it in without waking Devin (UserPromptSubmit's additionalContext)
-		// is not measured yet.
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("devin does not take mode later; it takes after-turn, urgent"))
-	default:
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode %d", mode))
+	if _, ok := ccxv1.DeliveryMode_name[int32(req.Mode)]; !ok {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown mode %d", req.Mode))
 	}
 	if len(req.Body) > MaxBody {
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("body is %d bytes, over the %d-byte limit", len(req.Body), MaxBody))
+	}
+	return nil
+}
+
+func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error, typed *bool) error {
+	if err := Validate(req); err != nil {
+		return err
+	}
+	if req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_LATER {
+		// Getting it in without waking Devin (UserPromptSubmit's additionalContext)
+		// is not measured yet.
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("devin does not take mode later; it takes after-turn, urgent"))
 	}
 
 	// One send at a time: two that both saw an empty box would type into it
@@ -192,7 +194,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	// screen ("Typing · 3s (esc twice to interrupt)", devin 3000.12.57) until its
 	// Stop hook is wired to ccx-agent to tell the end of the turn properly.
 	working := p.Status == "working" || midTurn(string(screen))
-	if mode == ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN && working {
+	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
 	}
 	switch inputBox(string(screen)) {
@@ -438,24 +440,58 @@ func typed(s string) bool {
 // Devin" has an answer.
 type Service struct {
 	Devin *Devin
-	Log   func(string, ...any)
+	// Machine and User are this agent's origin. A request naming another goes
+	// through Relay (#138); without a Relay it is refused.
+	Machine, User string
+	Relay         *Relay
+	Log           func(string, ...any)
 }
 
 func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
-	m := req.Msg
+	return s.route(ctx, req.Msg, stream.Send, s.Deliver)
+}
+
+// route hands m to local when it is for this agent, and to the relay otherwise.
+func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error, local func(context.Context, *ccxv1.SendRequest, func(*ccxv1.SendResponse) error) error) error {
+	if (m.GetMachine() == "" || m.GetMachine() == s.Machine) && (m.GetUser() == "" || m.GetUser() == s.User) {
+		return local(ctx, m, emit)
+	}
+
+	// The other side fills what the sender left out with this agent's own.
+	m.Machine, m.User = cmp.Or(m.GetMachine(), s.Machine), cmp.Or(m.GetUser(), s.User)
+	if s.Relay == nil {
+		return markNotTyped(connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s/%s is another machine or user, and this ccx-agent does not relay (it needs an http(s) center and its own machine and user names)", m.Machine, m.User)))
+	}
+	var last ccxv1.SendResponse_State
+	err := s.Relay.Send(ctx, m, func(r *ccxv1.SendResponse) error {
+		last = r.GetState()
+		return emit(r)
+	})
+	s.logSend(m, "relayed to "+m.Machine+"/"+m.User+", ", last, err)
+	return err
+}
+
+// Deliver sends m here, the same whether it came from the socket or was claimed
+// from the center for this machine.
+func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	var last ccxv1.SendResponse_State
 	err := s.Devin.Send(ctx, Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
-		return stream.Send(r)
+		return emit(r)
 	})
-	if s.Log != nil {
-		outcome := last.String()
-		if err != nil {
-			outcome = fmt.Sprintf("%s, error: %v", outcome, err)
-		}
-		s.Log("message: to %q from %q (%q, %s): %s", m.GetTarget(), m.GetSender(), m.GetSummary(), m.GetMode(), outcome)
-	}
+	s.logSend(m, "", last, err)
 	return err
+}
+
+func (s *Service) logSend(m *ccxv1.SendRequest, via string, last ccxv1.SendResponse_State, err error) {
+	if s.Log == nil {
+		return
+	}
+	outcome := last.String()
+	if err != nil {
+		outcome = fmt.Sprintf("%s, error: %v", outcome, err)
+	}
+	s.Log("message: to %q from %q (%q, %s): %s%s", m.GetTarget(), m.GetSender(), m.GetSummary(), m.GetMode(), via, outcome)
 }
 
 // sgrState tracks which SGR attributes are away from the default. Each reset

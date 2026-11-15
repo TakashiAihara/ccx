@@ -214,4 +214,53 @@ export const ddl = [
   `,
   sql`CREATE INDEX IF NOT EXISTS resume_requests_pending_idx ON resume_requests (machine, os_user, finished_at_ms, requested_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS resume_requests_requested_at_idx ON resume_requests (requested_at_ms)`,
+  sql`
+    CREATE TABLE IF NOT EXISTS relay_messages (
+      id TEXT PRIMARY KEY,
+      machine TEXT NOT NULL,
+      os_user TEXT NOT NULL,
+      request BLOB NOT NULL,
+      put_at_ms INTEGER NOT NULL,
+      claimed_at_ms INTEGER,
+      finished_at_ms INTEGER,
+      acks TEXT NOT NULL DEFAULT '[]',
+      error_code INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT NOT NULL DEFAULT '',
+      not_typed INTEGER NOT NULL DEFAULT 0,
+      claim_token TEXT NOT NULL DEFAULT ''
+    )
+  `,
+  sql`CREATE INDEX IF NOT EXISTS relay_messages_pending_idx ON relay_messages (machine, os_user, claimed_at_ms, put_at_ms)`,
+  sql`CREATE INDEX IF NOT EXISTS relay_messages_put_at_idx ON relay_messages (put_at_ms)`,
 ];
+
+/**
+ * 別マシンの ccx-agent へ運ぶメッセージ (#138、message.proto の MessageRelayService)。送り手の ccx-agent が
+ * 置いて ack を読み返し、宛先の ccx-agent が取りに来て、届けた ack を書く。
+ *
+ * resume_requests と違い、取られた行は二度と渡さない (取り直しが無い)。届けた途中で落ちた agent の分を
+ * 渡し直すと、同じ本文が 2 度打たれるため。
+ */
+export const relayMessages = sqliteTable(
+  "relay_messages",
+  {
+    // center が振る UUIDv7。
+    id: text("id").primaryKey(),
+    // 宛先。送り手が名指しした値で、取りに来た agent の origin と照合する。
+    machine: text("machine").notNull(),
+    user: text("os_user").notNull(),
+    // ccx.v1.SendRequest をそのまま protobuf のバイト列で持つ。中身は宛先の agent が検める。
+    request: blob("request", { mode: "buffer" }).notNull(),
+    putAtMs: integer("put_at_ms").notNull(),
+    claimedAtMs: integer("claimed_at_ms"),
+    finishedAtMs: integer("finished_at_ms"),
+    // ccx.v1.SendResponse の列を JSON で ([{state, detail}])。報告のたびに丸ごと置き換える (保存済みより短い報告では置き換えない)。
+    acks: text("acks").notNull().default("[]"),
+    errorCode: integer("error_code").notNull().default(0),
+    errorMessage: text("error_message").notNull().default(""),
+    notTyped: integer("not_typed", { mode: "boolean" }).notNull().default(false),
+    claimToken: text("claim_token").notNull().default(""),
+  },
+  (t) => [index("relay_messages_pending_idx").on(t.machine, t.user, t.claimedAtMs, t.putAtMs), index("relay_messages_put_at_idx").on(t.putAtMs)],
+);
+

@@ -24,9 +24,9 @@ believed.
 - **hub** vs **center** — the same thing. *hub* is the older word and survives in `apps/hub`, the
   config keys (`CCX_HUB_URL` / `ccx.hubUrl` / `hub.url`) and the design docs; prose says "center".
 - **broker** vs **center** — the design docs (`architecture.md`, `transport.md`) draw the *broker* as
-  a separate transport between center and ccx-agent. It does not exist; whether the center takes its
-  place (#155 assumes the center fans a message out) is not decided. Don't write "broker" for the
-  center.
+  a separate transport between center and ccx-agent. It does not exist. Messages to another machine go
+  through the center (`MessageRelayService`, #138); whether anything else needs a broker is not decided.
+  Don't write "broker" for the center.
 
 ## Sessions
 
@@ -69,6 +69,9 @@ believed.
   choice and is not a mode.
 - **ack** — what ccx-agent tells the sender happened to a message (`SendResponse.State`): `sent`,
   `working`, `not-started`. A refusal is not an ack; nothing was sent.
+- **relay (message)** — carrying a message to another machine's ccx-agent through the center
+  (`MessageRelayService` in `message.proto`, the `relay_messages` table, `apps/agent/internal/message/relay.go`).
+  The sender's ccx-agent puts it; the receiver's claims it once and reports the acks.
 
 ## Repodirs
 

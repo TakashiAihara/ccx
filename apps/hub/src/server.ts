@@ -9,8 +9,10 @@ import type { Db } from "./db/open.ts";
 import { mountObjects, type ObjectStore } from "./objects.ts";
 import { FleetService } from "@ccx/proto/ccx/v1/fleet_pb.ts";
 import { IngestService } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+import { MessageRelayService } from "@ccx/proto/ccx/v1/message_pb.ts";
 import { ResumeService } from "@ccx/proto/ccx/v1/resume_pb.ts";
 import { TranscriptService } from "@ccx/proto/ccx/v1/transcript_pb.ts";
+import { relayImpl } from "./relay.ts";
 import { resumeImpl } from "./resume.ts";
 import { fleetImpl, ingestImpl } from "./services.ts";
 import { transcriptImpl } from "./transcript.ts";
@@ -40,6 +42,7 @@ export function createApp(
   router.service(IngestService, ingestImpl(db, now));
   router.service(FleetService, fleetImpl(db, now));
   router.service(ResumeService, resumeImpl(db, now, opts.agentToken));
+  router.service(MessageRelayService, relayImpl(db, now, opts.agentToken));
   router.service(TranscriptService, transcriptImpl(objects));
 
   const app = new Hono();

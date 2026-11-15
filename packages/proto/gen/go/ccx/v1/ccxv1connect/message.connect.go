@@ -23,6 +23,8 @@ const _ = connect.IsAtLeastVersion1_13_0
 const (
 	// MessageServiceName is the fully-qualified name of the MessageService service.
 	MessageServiceName = "ccx.v1.MessageService"
+	// MessageRelayServiceName is the fully-qualified name of the MessageRelayService service.
+	MessageRelayServiceName = "ccx.v1.MessageRelayService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -35,6 +37,18 @@ const (
 const (
 	// MessageServiceSendProcedure is the fully-qualified name of the MessageService's Send RPC.
 	MessageServiceSendProcedure = "/ccx.v1.MessageService/Send"
+	// MessageRelayServicePutMessageProcedure is the fully-qualified name of the MessageRelayService's
+	// PutMessage RPC.
+	MessageRelayServicePutMessageProcedure = "/ccx.v1.MessageRelayService/PutMessage"
+	// MessageRelayServiceGetMessageProcedure is the fully-qualified name of the MessageRelayService's
+	// GetMessage RPC.
+	MessageRelayServiceGetMessageProcedure = "/ccx.v1.MessageRelayService/GetMessage"
+	// MessageRelayServiceClaimMessageProcedure is the fully-qualified name of the MessageRelayService's
+	// ClaimMessage RPC.
+	MessageRelayServiceClaimMessageProcedure = "/ccx.v1.MessageRelayService/ClaimMessage"
+	// MessageRelayServiceReportMessageProcedure is the fully-qualified name of the
+	// MessageRelayService's ReportMessage RPC.
+	MessageRelayServiceReportMessageProcedure = "/ccx.v1.MessageRelayService/ReportMessage"
 )
 
 // MessageServiceClient is a client for the ccx.v1.MessageService service.
@@ -117,4 +131,164 @@ type UnimplementedMessageServiceHandler struct{}
 
 func (UnimplementedMessageServiceHandler) Send(context.Context, *connect.Request[v1.SendRequest], *connect.ServerStream[v1.SendResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageService.Send is not implemented"))
+}
+
+// MessageRelayServiceClient is a client for the ccx.v1.MessageRelayService service.
+type MessageRelayServiceClient interface {
+	// Stores a message for request.machine / request.user. Both are required.
+	PutMessage(context.Context, *connect.Request[v1.PutMessageRequest]) (*connect.Response[v1.PutMessageResponse], error)
+	// Reads one back by id, acks included. NOT_FOUND for an unknown id.
+	GetMessage(context.Context, *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error)
+	// Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
+	ClaimMessage(context.Context, *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error)
+	// Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+	// (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+	// claimed, already finished, or claimed with another claim_token.
+	ReportMessage(context.Context, *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error)
+}
+
+// NewMessageRelayServiceClient constructs a client for the ccx.v1.MessageRelayService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewMessageRelayServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) MessageRelayServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	messageRelayServiceMethods := v1.File_ccx_v1_message_proto.Services().ByName("MessageRelayService").Methods()
+	return &messageRelayServiceClient{
+		putMessage: connect.NewClient[v1.PutMessageRequest, v1.PutMessageResponse](
+			httpClient,
+			baseURL+MessageRelayServicePutMessageProcedure,
+			connect.WithSchema(messageRelayServiceMethods.ByName("PutMessage")),
+			connect.WithClientOptions(opts...),
+		),
+		getMessage: connect.NewClient[v1.GetMessageRequest, v1.GetMessageResponse](
+			httpClient,
+			baseURL+MessageRelayServiceGetMessageProcedure,
+			connect.WithSchema(messageRelayServiceMethods.ByName("GetMessage")),
+			connect.WithClientOptions(opts...),
+		),
+		claimMessage: connect.NewClient[v1.ClaimMessageRequest, v1.ClaimMessageResponse](
+			httpClient,
+			baseURL+MessageRelayServiceClaimMessageProcedure,
+			connect.WithSchema(messageRelayServiceMethods.ByName("ClaimMessage")),
+			connect.WithClientOptions(opts...),
+		),
+		reportMessage: connect.NewClient[v1.ReportMessageRequest, v1.ReportMessageResponse](
+			httpClient,
+			baseURL+MessageRelayServiceReportMessageProcedure,
+			connect.WithSchema(messageRelayServiceMethods.ByName("ReportMessage")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// messageRelayServiceClient implements MessageRelayServiceClient.
+type messageRelayServiceClient struct {
+	putMessage    *connect.Client[v1.PutMessageRequest, v1.PutMessageResponse]
+	getMessage    *connect.Client[v1.GetMessageRequest, v1.GetMessageResponse]
+	claimMessage  *connect.Client[v1.ClaimMessageRequest, v1.ClaimMessageResponse]
+	reportMessage *connect.Client[v1.ReportMessageRequest, v1.ReportMessageResponse]
+}
+
+// PutMessage calls ccx.v1.MessageRelayService.PutMessage.
+func (c *messageRelayServiceClient) PutMessage(ctx context.Context, req *connect.Request[v1.PutMessageRequest]) (*connect.Response[v1.PutMessageResponse], error) {
+	return c.putMessage.CallUnary(ctx, req)
+}
+
+// GetMessage calls ccx.v1.MessageRelayService.GetMessage.
+func (c *messageRelayServiceClient) GetMessage(ctx context.Context, req *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error) {
+	return c.getMessage.CallUnary(ctx, req)
+}
+
+// ClaimMessage calls ccx.v1.MessageRelayService.ClaimMessage.
+func (c *messageRelayServiceClient) ClaimMessage(ctx context.Context, req *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error) {
+	return c.claimMessage.CallUnary(ctx, req)
+}
+
+// ReportMessage calls ccx.v1.MessageRelayService.ReportMessage.
+func (c *messageRelayServiceClient) ReportMessage(ctx context.Context, req *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error) {
+	return c.reportMessage.CallUnary(ctx, req)
+}
+
+// MessageRelayServiceHandler is an implementation of the ccx.v1.MessageRelayService service.
+type MessageRelayServiceHandler interface {
+	// Stores a message for request.machine / request.user. Both are required.
+	PutMessage(context.Context, *connect.Request[v1.PutMessageRequest]) (*connect.Response[v1.PutMessageResponse], error)
+	// Reads one back by id, acks included. NOT_FOUND for an unknown id.
+	GetMessage(context.Context, *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error)
+	// Hands the oldest unclaimed, unexpired message for (machine, user) to the caller. None leaves message unset.
+	ClaimMessage(context.Context, *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error)
+	// Replaces the acks of a claimed message with the reported ones unless they are fewer than the stored ones
+	// (a late report), and finishes it when finished is set. FAILED_PRECONDITION for a message that is not
+	// claimed, already finished, or claimed with another claim_token.
+	ReportMessage(context.Context, *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error)
+}
+
+// NewMessageRelayServiceHandler builds an HTTP handler from the service implementation. It returns
+// the path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewMessageRelayServiceHandler(svc MessageRelayServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	messageRelayServiceMethods := v1.File_ccx_v1_message_proto.Services().ByName("MessageRelayService").Methods()
+	messageRelayServicePutMessageHandler := connect.NewUnaryHandler(
+		MessageRelayServicePutMessageProcedure,
+		svc.PutMessage,
+		connect.WithSchema(messageRelayServiceMethods.ByName("PutMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	messageRelayServiceGetMessageHandler := connect.NewUnaryHandler(
+		MessageRelayServiceGetMessageProcedure,
+		svc.GetMessage,
+		connect.WithSchema(messageRelayServiceMethods.ByName("GetMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	messageRelayServiceClaimMessageHandler := connect.NewUnaryHandler(
+		MessageRelayServiceClaimMessageProcedure,
+		svc.ClaimMessage,
+		connect.WithSchema(messageRelayServiceMethods.ByName("ClaimMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	messageRelayServiceReportMessageHandler := connect.NewUnaryHandler(
+		MessageRelayServiceReportMessageProcedure,
+		svc.ReportMessage,
+		connect.WithSchema(messageRelayServiceMethods.ByName("ReportMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/ccx.v1.MessageRelayService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case MessageRelayServicePutMessageProcedure:
+			messageRelayServicePutMessageHandler.ServeHTTP(w, r)
+		case MessageRelayServiceGetMessageProcedure:
+			messageRelayServiceGetMessageHandler.ServeHTTP(w, r)
+		case MessageRelayServiceClaimMessageProcedure:
+			messageRelayServiceClaimMessageHandler.ServeHTTP(w, r)
+		case MessageRelayServiceReportMessageProcedure:
+			messageRelayServiceReportMessageHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedMessageRelayServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedMessageRelayServiceHandler struct{}
+
+func (UnimplementedMessageRelayServiceHandler) PutMessage(context.Context, *connect.Request[v1.PutMessageRequest]) (*connect.Response[v1.PutMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageRelayService.PutMessage is not implemented"))
+}
+
+func (UnimplementedMessageRelayServiceHandler) GetMessage(context.Context, *connect.Request[v1.GetMessageRequest]) (*connect.Response[v1.GetMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageRelayService.GetMessage is not implemented"))
+}
+
+func (UnimplementedMessageRelayServiceHandler) ClaimMessage(context.Context, *connect.Request[v1.ClaimMessageRequest]) (*connect.Response[v1.ClaimMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageRelayService.ClaimMessage is not implemented"))
+}
+
+func (UnimplementedMessageRelayServiceHandler) ReportMessage(context.Context, *connect.Request[v1.ReportMessageRequest]) (*connect.Response[v1.ReportMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ccx.v1.MessageRelayService.ReportMessage is not implemented"))
 }

@@ -91,7 +91,7 @@ function toRequest(r: Row, nowMs: number): ResumeRequest {
 }
 
 /** UTF-8 で DETAIL_CAP バイトを超えたら末尾だけを残す。切り口が文字の途中なら次の文字の頭まで進める */
-function capDetail(detail: string): string {
+export function capDetail(detail: string): string {
   const bytes = new TextEncoder().encode(detail);
   if (bytes.length <= DETAIL_CAP) return detail;
   let start = bytes.length - DETAIL_CAP;
@@ -118,7 +118,7 @@ function unfinished(tx: Pick<Db, "select">, machine: string, user: string, sessi
  */
 const WAKE_TIMEOUT_MS = 3000;
 
-function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
+export function wakeAgent(db: Db, machine: string, user: string, agentToken: string, nowMs: number): void {
   const ep = db
     .select()
     .from(agentEndpoints)
