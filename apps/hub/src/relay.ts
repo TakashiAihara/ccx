@@ -4,7 +4,7 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
-import { agentRunning, relayMessages } from "./db/schema.ts";
+import { relayMessages, relayReceivers } from "./db/schema.ts";
 import { capDetail, wakeAgent } from "./resume.ts";
 import {
   MessageRelayService,
@@ -46,20 +46,21 @@ const MAX_OPTIONS = 16;
 const MAX_KNOWN = 10;
 
 /**
- * 一覧を送ってきたことの無い (machine, user) 宛ての置き方を断る理由 (#319)。置いても取る agent が居ないので、送り手は
+ * 取りに来たことの無い (machine, user) 宛ての置き方を断る理由 (#319)。置いても取る agent が居ないので、送り手は
  * 30 秒待ってから「agent が動いていないのでは」と言うことになり、名前の綴り違い (uname -n の大文字など) に辿り着けない。
- * 大文字小文字だけ違う宛先を先頭に並べる。一覧を送ったことはあるが今は止まっている agent は、従来どおり待ちで分かる
+ * 大文字小文字だけ違う宛先を先頭に並べる。取りに来たことはあるが今は止まっている agent は、従来どおり待ちで分かる
  */
 function unknownTarget(db: Db, machine: string, user: string): string | null {
-  const known = db.select({ machine: agentRunning.machine, user: agentRunning.user }).from(agentRunning).all();
-  if (known.some((k) => k.machine === machine && k.user === user)) return null;
+  const hit = db.select({ m: relayReceivers.machine }).from(relayReceivers).where(and(eq(relayReceivers.machine, machine), eq(relayReceivers.user, user))).get();
+  if (hit) return null;
+  const known = db.select({ machine: relayReceivers.machine, user: relayReceivers.user }).from(relayReceivers).all();
 
   const near = (k: { machine: string; user: string }) => k.machine.toLowerCase() === machine.toLowerCase() && k.user.toLowerCase() === user.toLowerCase();
   const names = known
     .sort((a, b) => Number(near(b)) - Number(near(a)) || `${a.machine}/${a.user}`.localeCompare(`${b.machine}/${b.user}`))
     .map((k) => `${k.machine}/${k.user}`);
   const listed = names.length === 0 ? "none has yet" : `these have: ${names.slice(0, MAX_KNOWN).join(", ")}${names.length > MAX_KNOWN ? ", …" : ""}`;
-  return `no ccx-agent has reported to this center as ${machine}/${user}; ${listed}`;
+  return capDetail(`no ccx-agent has taken messages from this center as ${machine}/${user}; ${listed}`);
 }
 
 /** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
@@ -171,6 +172,10 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
       const claimed = db.transaction(
         (tx) => {
           nowMs = now();
+          tx.insert(relayReceivers)
+            .values({ machine: req.machine, user: req.user, claimedAtMs: nowMs })
+            .onConflictDoNothing()
+            .run();
           const row = tx
             .select()
             .from(relayMessages)
