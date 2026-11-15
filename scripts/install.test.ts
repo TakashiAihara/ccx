@@ -20,7 +20,8 @@ const body = (tag: string, name: string) =>
     ? UNIT
     : name.startsWith("ccx-agent-")
       ? `#!/bin/sh\necho agent-${tag}\n`
-      : `#!/bin/sh\nif [ "$1" = hooks ]; then echo "ccx $*" >> "${work}/calls"; exit "\${HOOKS_FAIL:-0}"; fi\necho cli-${tag}\n`;
+      : // `hooks --help` is install.sh asking whether this ccx has the command (NO_HOOKS: a release from before it)
+        `#!/bin/sh\nif [ "$1" = hooks ]; then [ "$2" = --help ] && exit "\${NO_HOOKS:-0}"; echo "ccx $*" >> "${work}/calls"; exit "\${HOOKS_FAIL:-0}"; fi\necho cli-${tag}\n`;
 
 const TOOLS = ["sh", "uname", "mkdir", "curl", "rm", "chmod", "mv", "sed", "id"];
 const SH = Bun.which("sh")!;
@@ -85,7 +86,9 @@ afterEach(() => {
 async function install(args: string[], env: Record<string, string> = {}) {
   const home = join(work, "home");
   // In a session of its own, so /dev/tty is not the test runner's terminal and install.sh never stops to ask.
+  // Without setsid (macOS), an empty --hooks keeps it from asking where it otherwise would.
   const setsid = Bun.which("setsid");
+  if (!setsid && args.includes("--with-agent") && !args.some((a) => a.startsWith("--hooks"))) args = [...args, "--hooks", ""];
   const p = Bun.spawn([...(setsid ? [setsid] : []), SH, join(ROOT, "scripts", "install.sh"), ...args], {
     // 壊した実装が相対パスへ書いても、テストランナーの cwd (通常は repo) ではなく一時ディレクトリに落ちるように
     cwd: work,
@@ -356,6 +359,8 @@ test("--hooks is refused before anything is downloaded without --with-agent, wit
     [["--hooks", "devin"], "--hooks needs --with-agent"],
     [["--with-agent", "--hooks", "claude,cursor"], "--hooks takes tools from"],
     [["--with-agent", "--hooks", ",devin"], "--hooks takes tools from"],
+    [["--with-agent", "--hooks", "devin,"], "--hooks takes tools from"],
+    [["--with-agent", "--hooks", "claude,,devin"], "--hooks takes tools from"],
     [["--with-agent", "--hooks"], "--hooks needs a list of tools"],
   ] as const) {
     const r = await install([...args]);
@@ -395,4 +400,38 @@ test.skipIf(!linux || !Bun.which("script"))("from a terminal, --with-agent asks 
   expect(out.match(/wire ccx-agent hooks into which AI tools\? \(claude, devin/g)).toHaveLength(2);
   expect(out).toContain("pick from: claude devin");
   expect(readFileSync(join(work, "calls"), "utf8")).toContain("ccx hooks install claude devin\n");
+});
+
+test("--hooks takes the names with spaces around them, as the terminal answer does", async () => {
+  const r = await install(["--with-agent", "--hooks", " claude , devin "], { NO_MANAGER: "1" });
+  expect(r.code).toBe(0);
+  expect(r.calls).toContain("ccx hooks install claude devin\n");
+});
+
+test("a release whose ccx has no `hooks` is found out before anything is replaced", async () => {
+  const r = await install(["--with-agent", "--hooks", "devin"], { NO_MANAGER: "1", NO_HOOKS: "1" });
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("has no 'ccx hooks'");
+  expect(existsSync(bin("ccx"))).toBe(false);
+  expect(existsSync(bin("ccx-agent"))).toBe(false);
+});
+
+test("on a host without a user manager, how to run the agent is said before the hooks are wired, and still when wiring fails", async () => {
+  const r = await install(["--with-agent", "--hooks", "devin"], { NO_MANAGER: "1", HOOKS_FAIL: "1" });
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("keep '");
+  expect(r.out).toContain("apps/agent/README.md#install");
+});
+
+test("an older release without `ccx hooks` still installs when no hooks are asked for", async () => {
+  const r = await install(["--with-agent", "--hooks", ""], { NO_MANAGER: "1", NO_HOOKS: "1" });
+  expect(r.code).toBe(0);
+  expect(existsSync(bin("ccx-agent"))).toBe(true);
+});
+
+test.skipIf(!linux || !Bun.which("script"))("from a terminal, an answer ended by EOF instead of Enter still counts", async () => {
+  const { out, code } = await inTerminal(["--with-agent"], "devin\x04");
+  expect(code).toBe(0);
+  expect(out).toContain("installed to");
+  expect(readFileSync(join(work, "calls"), "utf8")).toContain("ccx hooks install devin\n");
 });

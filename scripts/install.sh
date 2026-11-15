@@ -25,6 +25,7 @@ BASE="${CCX_DOWNLOAD_URL:-https://github.com/${REPO}/releases}"
 WITH_AGENT=0
 HOOKS=""
 HOOKS_GIVEN=0
+# The tools `ccx hooks install` knows (TOOLS in apps/cli/src/hooks.ts); checked here before any download.
 HOOK_TOOLS="claude devin"
 
 while [ $# -gt 0 ]; do
@@ -39,8 +40,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# hooks_ok LIST: every comma-separated name is a tool ccx can wire (an empty list wires none).
+# hooks_ok LIST: every comma-separated name is a tool ccx can wire (an empty list wires none; an empty name is
+# wrong — the loop catches one before a comma, the case one after the last).
 hooks_ok() {
+  case "$1" in *,) return 1 ;; esac
   rest=$1
   while [ -n "$rest" ]; do
     t=${rest%%,*}
@@ -50,6 +53,8 @@ hooks_ok() {
   done
 }
 
+# Spaces around the names are dropped, as the terminal answer's are ("claude, devin").
+HOOKS=$(printf '%s' "$HOOKS" | sed 's/[[:space:]]//g')
 if [ "$HOOKS_GIVEN" = 1 ]; then
   # The hooks run ccx-agent, which only --with-agent installs.
   [ "$WITH_AGENT" = 1 ] || { echo "ccx: --hooks needs --with-agent (the hooks run ccx-agent)" >&2; exit 2; }
@@ -58,7 +63,8 @@ elif [ "$WITH_AGENT" = 1 ] && (: </dev/tty) 2>/dev/null; then
   # Piped into sh, stdin is the script; the terminal is still /dev/tty. Asked before any download.
   while :; do
     printf 'ccx: wire ccx-agent hooks into which AI tools? (%s, comma-separated; empty for none): ' "$(echo "$HOOK_TOOLS" | sed 's/ /, /g')" >/dev/tty
-    IFS= read -r HOOKS </dev/tty || HOOKS=""
+    # A last line ended by EOF instead of Enter still counts.
+    IFS= read -r HOOKS </dev/tty || true
     HOOKS=$(printf '%s' "$HOOKS" | sed 's/[[:space:]]//g')
     hooks_ok "$HOOKS" && break
     echo "ccx: pick from: $HOOK_TOOLS" >/dev/tty
@@ -160,6 +166,11 @@ fetch() {
 
 fetch "ccx-${os}-${arch}" ccx
 chmod +x "$stage/ccx"
+# A pinned CCX_VERSION can predate `ccx hooks`; find out before anything is replaced.
+if [ -n "$HOOKS" ] && ! "$stage/ccx" hooks --help >/dev/null 2>&1; then
+  echo "ccx: ccx ${VERSION} has no 'ccx hooks' to wire them; install a newer release, or leave out --hooks" >&2
+  exit 1
+fi
 if [ "$service" != none ]; then
   fetch "ccx-agent-${os}-${arch}" ccx-agent
   chmod +x "$stage/ccx-agent"
@@ -186,11 +197,11 @@ agent_version=$("$DEST/ccx-agent" --version)
 echo "ccx: installed to $DEST/ccx-agent ($agent_version)"
 
 if [ "$service" = manual ]; then
-  wire_hooks
   echo "ccx: 'systemctl --user' cannot reach a user manager here (or this is macOS), so no service was set up." >&2
   echo "ccx: keep '$DEST/ccx-agent serve' running as your user under your own supervisor." >&2
   echo "ccx: then point it at a center (and wire hooks with '$DEST/ccx hooks install <tool>' if you skipped that):" >&2
   echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install" >&2
+  wire_hooks
   exit 0
 fi
 

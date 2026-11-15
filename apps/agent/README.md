@@ -275,9 +275,9 @@ ccx hooks install claude devin
 ```
 
 - `claude` adds `ccx-agent hook` to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`) on the four events below; `devin` adds `ccx-agent devin-hook` to `~/.config/devin/config.json` on the three under "Devin (messages)".
-- The hooks run the `ccx-agent` next to `ccx` (where install.sh puts both), else the one on PATH, by its absolute path.
+- The hooks run the `ccx-agent` next to `ccx` (where install.sh puts both), else the one on PATH, by its absolute path; with neither, they call `ccx-agent` by name and it says so.
 - Hooks already there stay. ccx's own of that kind are replaced by one per event, so a rerun, or a ccx-agent moved elsewhere, leaves one each.
-- A config that links into a git work tree (a dotfiles checkout) is not written: it prints the hooks to add there instead.
+- A config that really lives in a git work tree (linked into a dotfiles checkout, by the file or a dir above it) is not written: it prints the hooks to add there instead.
 - Sessions already running get the hooks when started again (Devin reads them at start).
 
 To wire them by hand instead, the entries are below.

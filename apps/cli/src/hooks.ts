@@ -7,7 +7,7 @@
  * later. docs: apps/agent/README.md "Wiring the hooks".
  */
 import { InvalidArgumentError, type Command } from "commander";
-import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,8 +38,16 @@ const TOOLS: Record<Tool, Spec> = {
 
 export const TOOL_NAMES = Object.keys(TOOLS) as Tool[];
 
-// ccx-agent (any path, quoted or not), then the subcommand: "ccx-agent hook" never matches "ccx-agent devin-hook".
-const ccxHook = (sub: string) => new RegExp(`ccx-agent['"]?\\s+${sub}`);
+/**
+ * Whether a hook command runs ccx-agent's sub: its first shell word (quoted or not) is a ccx-agent, by name or
+ * path, and the next word is sub. A wrapper (my-ccx-agent) or a command that only mentions it is not ccx's.
+ */
+export function isCcxHook(command: string, sub: string): boolean {
+  const m = /^\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s+(\S+)(?:\s|$)/.exec(command);
+  if (!m) return false;
+  const first = m[1] ?? m[2] ?? m[3] ?? "";
+  return (first === "ccx-agent" || first.endsWith("/ccx-agent")) && m[4] === sub;
+}
 
 type Entry = { matcher?: string; hooks?: { type?: string; command?: string; timeout?: number }[] };
 
@@ -47,26 +55,38 @@ function quote(path: string): string {
   return /^[A-Za-z0-9/._@+,~-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
-/** The ccx-agent the hooks run: the one next to this ccx (where install.sh puts both), else the one on PATH. */
-export function agentPath(execPath = process.execPath): string {
+/** The ccx-agent the hooks run: the one next to this ccx (where install.sh puts both), else the one on PATH; null when neither is there. */
+export function agentPath(execPath = process.execPath, which: (cmd: string) => string | null = Bun.which): string | null {
   const sibling = join(dirname(execPath), "ccx-agent");
-  return existsSync(sibling) ? sibling : (Bun.which("ccx-agent") ?? "ccx-agent");
+  return existsSync(sibling) ? sibling : which("ccx-agent");
 }
 
 /** config with ccx's hooks of this tool replaced by one per event; true when that changed anything. */
 export function withHooks(config: Record<string, unknown>, tool: Tool, agent: string): boolean {
   const spec = TOOLS[tool];
   const before = JSON.stringify(config);
-  const hooks = (config.hooks ??= {}) as Record<string, Entry[]>;
-  const mine = ccxHook(spec.sub);
+  config.hooks ??= {};
+  // An array or a scalar would take the events as properties JSON drops, and look wired while wiring nothing.
+  if (typeof config.hooks !== "object" || config.hooks === null || Array.isArray(config.hooks)) throw new Error("its hooks is not a JSON object");
+  const hooks = config.hooks as Record<string, Entry[]>;
   for (const event of spec.events) {
     const entries = (hooks[event] ??= []);
-    for (const e of entries) e.hooks = (e.hooks ?? []).filter((h) => !mine.test(h.command ?? ""));
+
+    for (const e of entries) e.hooks = (e.hooks ?? []).filter((h) => !isCcxHook(h.command ?? "", spec.sub));
     const kept = entries.filter((e) => (e.hooks ?? []).length > 0);
     const hook = { type: "command", command: `${quote(agent)} ${spec.sub}`, ...(spec.timeout ? { timeout: spec.timeout } : {}) };
     hooks[event] = [...kept, { hooks: [hook] }];
   }
   return JSON.stringify(config) !== before;
+}
+
+// The directory the file is (or would be created) in, with every link on the way resolved: the nearest
+// existing ancestor, so a config not written yet under a linked dir is placed where it would really go.
+async function realDir(path: string): Promise<string> {
+  if (existsSync(path)) return dirname(await realpath(path));
+  let dir = dirname(path);
+  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+  return realpath(dir);
 }
 
 async function inGitWorkTree(dir: string): Promise<boolean> {
@@ -91,14 +111,23 @@ async function writeBack(path: string, text: string): Promise<void> {
   }
 }
 
-export type WireOptions = { home?: string; env?: Record<string, string | undefined>; agent?: string; out?: (line: string) => void };
+export type WireOptions = {
+  home?: string;
+  env?: Record<string, string | undefined>;
+  agent?: string | null;
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+};
 
-/** Wires each tool; returns how many could not be written (bad JSON, I/O). A link into a git work tree is skipped, not failed. */
+/** Wires each tool; returns how many could not be written (bad JSON, I/O). A config in a git work tree is skipped, not failed. */
 export async function wireHooks(tools: Tool[], o: WireOptions = {}): Promise<number> {
   const home = o.home ?? homedir();
   const env = o.env ?? process.env;
-  const agent = o.agent ?? agentPath();
   const out = o.out ?? ((l: string) => console.log(l));
+  const err = o.err ?? ((l: string) => console.error(l));
+  const found = o.agent === undefined ? agentPath() : o.agent;
+  if (!found) err("ccx-agent is neither next to ccx nor on PATH; the hooks run `ccx-agent` by name, so put it on the PATH the AI tools run hooks with");
+  const agent = found ?? "ccx-agent";
   let failed = 0;
 
   for (const tool of tools) {
@@ -114,24 +143,23 @@ export async function wireHooks(tools: Tool[], o: WireOptions = {}): Promise<num
         continue;
       }
 
-      // A config linked into a repo (a dotfiles checkout) is that repo's to change: writing through the link
-      // would edit its work tree behind it. Say what to add instead.
-      if (existsSync(path) && (await lstat(path)).isSymbolicLink()) {
-        const real = await realpath(path);
-        if (await inGitWorkTree(dirname(real))) {
-          const add = Object.fromEntries(spec.events.map((e) => [e, (config.hooks as Record<string, Entry[]>)[e]!.at(-1)]));
-          out(`${tool}: ${path} links into a git work tree (${real}); not writing it. Add these hooks there:`);
-          out(JSON.stringify({ hooks: Object.fromEntries(Object.entries(add).map(([e, h]) => [e, [h]])) }, null, 2));
-          continue;
-        }
+      // A config that really lives in a repo (linked into a dotfiles checkout, by the file or a dir above it, or
+      // pointed at by CLAUDE_CONFIG_DIR) is that repo's to change: writing would edit its work tree behind it.
+      // Say what to add instead.
+      const dir = await realDir(path);
+      if (await inGitWorkTree(dir)) {
+        const add = Object.fromEntries(spec.events.map((e) => [e, [(config.hooks as Record<string, Entry[]>)[e]!.at(-1)]]));
+        out(`${tool}: ${path} is in a git work tree (${dir}); not writing it. Add these hooks there:`);
+        out(JSON.stringify({ hooks: add }, null, 2));
+        continue;
       }
 
       await writeBack(path, JSON.stringify(config, null, 2) + "\n");
       // Measured on devin 3000.12.57: a running session reads its hooks when it starts, not after.
-      out(`${tool}: wired \`${quote(agent)} ${spec.sub}\` into ${path} (${spec.events.join(", ")}); sessions already running get them when started again`);
+      out(`${tool}: wired \`${quote(agent)} ${spec.sub}\` into ${path} (${spec.events.join(", ")}); restart sessions already running to pick them up`);
     } catch (e) {
       failed++;
-      out(`${tool}: cannot wire ${path}: ${e instanceof Error ? e.message : String(e)}`);
+      err(`${tool}: cannot wire ${path}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return failed;
