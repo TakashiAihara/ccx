@@ -237,12 +237,10 @@ func TestSendToolStartsTheTimeoutWhenTheSendsTurnComes(t *testing.T) {
 	sendTimeout = 300 * time.Millisecond
 	defer func() { sendTimeout = old }()
 
-	var n atomic.Int32
 	mux := http.NewServeMux()
 	mux.Handle(ccxv1connect.NewMessageServiceHandler(sendFunc(func(ctx context.Context, st *connect.ServerStream[ccxv1.SendResponse]) error {
 		// Each send takes two thirds of the timeout: one that has already spent
 		// part of its time waiting would run out in the middle of its own.
-		n.Add(1)
 		select {
 		case <-time.After(200 * time.Millisecond):
 		case <-ctx.Done():
@@ -274,4 +272,23 @@ type sendFunc func(context.Context, *connect.ServerStream[ccxv1.SendResponse]) e
 
 func (f sendFunc) Send(ctx context.Context, _ *connect.Request[ccxv1.SendRequest], st *connect.ServerStream[ccxv1.SendResponse]) error {
 	return f(ctx, st)
+}
+
+// A ccx-agent that never answers ends the call at the timeout, as "may have been sent".
+func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
+	old := sendTimeout
+	sendTimeout = 100 * time.Millisecond
+	defer func() { sendTimeout = old }()
+	mux := http.NewServeMux()
+	mux.Handle(ccxv1connect.NewMessageServiceHandler(sendFunc(func(ctx context.Context, _ *connect.ServerStream[ccxv1.SendResponse]) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	start := time.Now()
+	text, isErr := call(t, SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
+	if !isErr || !strings.HasPrefix(text, "may have been sent") || time.Since(start) > 2*time.Second {
+		t.Fatalf("text %q after %v", text, time.Since(start))
+	}
 }

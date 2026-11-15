@@ -102,7 +102,8 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 
 	for end := time.Now().Add(c.StartWait); ; {
 		if file == "" {
-			// It appeared after the push, so all of it is new.
+			// From the start: it appeared after the push, or it is under the home
+			// the push answered with. The id is fresh, so nothing older can match it.
 			file, _ = transcriptEnd(home, req.Target)
 			from = 0
 		}
@@ -143,8 +144,8 @@ func newMsgID() string {
 // one written last is taken as the one being written; something else touching
 // an old one would pick it, and the send would end at not-started.
 func transcriptEnd(home, session string) (string, int64) {
-	// Listed rather than globbed: a home with [ or * in it would be read as a
-	// pattern and match nothing.
+	// Listed rather than globbed: a home with [ * ? or \ in it would be read as a
+	// pattern, matching nothing ([) or other directories (*).
 	dirs, _ := os.ReadDir(filepath.Join(home, "projects"))
 	var file string
 	var latest os.FileInfo

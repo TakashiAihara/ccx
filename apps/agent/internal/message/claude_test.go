@@ -25,8 +25,8 @@ type fakeChannels struct {
 	pushErr    error
 	// pushHome, when set, is the home Push answers (a re-registration under another home).
 	pushHome string
-	pushed     []heartbeat.Event
-	onPush     func(heartbeat.Event)
+	pushed   []heartbeat.Event
+	onPush   func(heartbeat.Event)
 }
 
 func (f *fakeChannels) Home(session string) (string, bool) {
