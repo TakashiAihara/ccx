@@ -648,3 +648,27 @@ func TestRestorePutsMessagesAheadOfLaterOnes(t *testing.T) {
 		t.Fatalf("order %v", got)
 	}
 }
+
+// A typed send waiting on a turn that also took later messages still follows it
+// when the hook call ended: the turn happened, only the later messages did not go.
+func TestATypedSendFollowsItsTurnWhenTheHookCallEnded(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle", "working"}}
+	d := newDevin(f)
+	if _, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)); err != nil {
+		t.Fatal(err)
+	}
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	r.WaitSeconds = 30
+	run := start(d, r)
+	run.next(t)
+	run.next(t)
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.Hook(ended, userPrompt("excited-giraffe", "p1", "ccx: claude-a1b2c3d4: review 3\nline 1\nline 2")); err == nil {
+		t.Fatal("ended call with a later message: no error")
+	}
+	hook(t, d, stop("excited-giraffe", "p1", "done with it"))
+	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_DONE || a.Text != "done with it" {
+		t.Fatalf("done %v", a)
+	}
+}
