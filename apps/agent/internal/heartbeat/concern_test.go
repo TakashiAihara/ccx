@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -357,4 +358,19 @@ func TestConcernPushesAnEventToARegisteredSession(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the session stayed registered after its channel closed")
+}
+
+// A failed write closes the connection: the encoder would return the same error
+// for every later event, and part of the line may be out.
+func TestChannelClosesItsConnectionOnAFailedWrite(t *testing.T) {
+	local, remote := net.Pipe()
+	ch := &channel{conn: local, out: json.NewEncoder(local)}
+	remote.Close()
+	if err := ch.send(Beat); err == nil {
+		t.Fatal("send to a closed peer succeeded")
+	}
+	// A local Close makes Read answer io.ErrClosedPipe; with only the peer gone it would be io.EOF.
+	if _, err := local.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("read after the failed send: %v, want the connection closed here", err)
+	}
 }

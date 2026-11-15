@@ -83,12 +83,18 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 	}
 	file, from := transcriptEnd(home, req.Target)
 
-	if _, err := c.Channels.Push(req.Target, ev); errors.Is(err, heartbeat.ErrNotRegistered) {
+	pushedHome, err := c.Channels.Push(req.Target, ev)
+	if errors.Is(err, heartbeat.ErrNotRegistered) {
 		// It went away between the two looks.
 		return notConnected
 	} else if err != nil {
 		// The connection may have taken part of the line before failing.
 		return connect.NewError(connect.CodeUnknown, fmt.Errorf("pushing to the ccx channel of %s: %w", req.Target, err))
+	}
+	if pushedHome != home {
+		// The session registered again under another Claude home between the two
+		// looks; its transcript is that home's, read from the start.
+		home, file = pushedHome, ""
 	}
 	if err := emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "ccx channel of " + req.Target}); err != nil {
 		return err

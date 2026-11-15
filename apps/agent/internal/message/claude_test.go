@@ -23,6 +23,8 @@ type fakeChannels struct {
 	home       string
 	registered bool
 	pushErr    error
+	// pushHome, when set, is the home Push answers (a re-registration under another home).
+	pushHome string
 	pushed     []heartbeat.Event
 	onPush     func(heartbeat.Event)
 }
@@ -41,6 +43,9 @@ func (f *fakeChannels) Push(session string, ev heartbeat.Event) (string, error) 
 	f.pushed = append(f.pushed, ev)
 	if f.onPush != nil {
 		f.onPush(ev)
+	}
+	if f.pushHome != "" {
+		return f.pushHome, nil
 	}
 	return f.home, nil
 }
@@ -202,5 +207,16 @@ func TestServiceSendsASessionIDToClaudeAndAnythingElseToDevin(t *testing.T) {
 	err = svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b"}, func(*ccxv1.SendResponse) error { return nil })
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !notTyped(err) || !strings.Contains(err.Error(), "heartbeat concern") {
 		t.Fatalf("without Claude: %v", err)
+	}
+}
+
+func TestClaudeWatchesTheTranscriptOfTheHomeItPushedTo(t *testing.T) {
+	oldHome, _ := newTranscript(t, "")
+	newHome, newFile := newTranscript(t, "")
+	f := &fakeChannels{home: oldHome, registered: true, pushHome: newHome}
+	f.onPush = func(ev heartbeat.Event) { appendTo(newFile, ev.Meta["msg_id"]+"\n") }
+	got, err := sendClaude(testClaude(f), claudeReq(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 2 || got[1].GetState() != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("acks %v, err %v (kept watching the home from before the push)", got, err)
 	}
 }

@@ -102,7 +102,7 @@ sequenceDiagram
 ```
 
 - The connection is the heartbeat's: each session's `ccx-agent channel` registers on serve's channel socket (`docs/design/heartbeat.md`), and the message goes down the same line as a heartbeat. With the heartbeat concern off there is no connection, and a send to a Claude Code session is refused.
-- Only a session started with the ccx channel (`--dangerously-load-development-channels server:ccx`) can receive. One without it is refused as not sent.
+- Only a session started with the ccx channel (`--dangerously-load-development-channels server:ccx`) can receive. A session with no ccx server at all (or with the heartbeat concern off) has nothing registered and is refused as not sent. A session that runs the ccx MCP server without that flag registers all the same, since the server cannot see the flag, but Claude Code drops what it pushes: that send ends `sent`, then `not-started`.
 - `sent` means the event was written to the channel. Claude Code does not acknowledge a channel notification (`transport.md`); a session that had not loaded the server as a channel would drop it silently. The transcript is the proof: Claude Code writes the event there when a turn takes it in, so `working` is that record carrying this message's `msg_id`, looked for only in what was written after the push.
 - The channel's instructions tell the session that `kind="message"` is from another session through ccx, that the sender is a label, and that `send_message` replies.
 

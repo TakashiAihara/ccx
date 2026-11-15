@@ -277,7 +277,14 @@ func (ch *channel) send(ev Event) error {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 	_ = ch.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	return ch.out.Encode(ev)
+	err := ch.out.Encode(ev)
+	if err != nil {
+		// A json.Encoder keeps its first write error and returns it for every
+		// later Encode, and part of the line may be out: close, so serve drops the
+		// registration and the channel reconnects on a clean line.
+		ch.conn.Close()
+	}
+	return err
 }
 
 // ErrNotRegistered is Push's answer for a session whose ccx channel is not
