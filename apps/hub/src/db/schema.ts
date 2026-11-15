@@ -232,6 +232,14 @@ export const ddl = [
   `,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_pending_idx ON relay_messages (machine, os_user, claimed_at_ms, put_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_put_at_idx ON relay_messages (put_at_ms)`,
+  sql`
+    CREATE TABLE IF NOT EXISTS relay_receivers (
+      machine TEXT NOT NULL,
+      os_user TEXT NOT NULL,
+      claimed_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (machine, os_user)
+    )
+  `,
 ];
 
 /**
@@ -262,5 +270,21 @@ export const relayMessages = sqliteTable(
     claimToken: text("claim_token").notNull().default(""),
   },
   (t) => [index("relay_messages_pending_idx").on(t.machine, t.user, t.claimedAtMs, t.putAtMs), index("relay_messages_put_at_idx").on(t.putAtMs)],
+);
+
+/**
+ * メッセージを取りに来たことのある (machine, user) (#319)。宛先がここに無ければ、置いても取る agent が居ないので
+ * 送り手を待たせずに断る。agent_running (一覧) で見ないのは、一覧を送るのは resume で、ccx の CLI が無い・Claude home
+ * が読めない agent は一覧を送らずに受信だけするから。取りに来るのは受信する agent だけで、古い agent も取りに来る
+ */
+export const relayReceivers = sqliteTable(
+  "relay_receivers",
+  {
+    machine: text("machine").notNull(),
+    user: text("os_user").notNull(),
+    // 最初に取りに来た時刻 (center の時計)。判定には使わず、いつから居るかを後から見るため
+    claimedAtMs: integer("claimed_at_ms").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.machine, t.user] })],
 );
 

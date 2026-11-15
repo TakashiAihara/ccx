@@ -30,7 +30,13 @@ beforeEach(async () => {
   objectsDir = await mkdtemp(join(tmpdir(), "ccx-relay-objects-"));
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createApp(db, new ObjectStore(objectsDir), { now: () => now }).fetch });
   client = createClient(MessageRelayService, createConnectTransport({ baseUrl: `http://127.0.0.1:${server.port}`, httpVersion: "1.1" }));
+  await claimed("m2", "dev");
 });
+
+// The receiving ccx-agent asking for its messages: what tells the center that machine / user takes them.
+async function claimed(machine: string, user: string): Promise<void> {
+  await client.claimMessage({ machine, user });
+}
 
 afterEach(async () => {
   void server.stop(true);
@@ -56,6 +62,44 @@ async function code(p: Promise<unknown>): Promise<Code | "ok"> {
     return ConnectError.from(e).code;
   }
 }
+
+test("取りに来たことの無い宛先は待たずに断り、大文字小文字だけ違う宛先を先頭に挙げる", async () => {
+  await claimed("WIN-TAKASHI", "other");
+  await claimed("WIN-TAKASHI", "root");
+  await claimed("a-host", "root");
+  const e = await client.putMessage({ request: req("b", "win-takashi", "root") }).catch((x: unknown) => ConnectError.from(x));
+  expect(e).toBeInstanceOf(ConnectError);
+  expect((e as ConnectError).code).toBe(Code.InvalidArgument);
+  // Only the one that differs in case alone comes first: the same machine as another user is not it.
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as win-takashi/root; these have: WIN-TAKASHI/root, a-host/root, m2/dev, WIN-TAKASHI/other");
+
+  expect(await code(client.putMessage({ request: req("b", "m2", "root") }))).toBe(Code.InvalidArgument);
+  expect(await code(client.putMessage({ request: req("b", "WIN-TAKASHI", "root") }))).toBe("ok");
+  expect(db.$client.query("select count(*) as n from relay_messages").get()).toEqual({ n: 1 });
+});
+
+test("どの agent も取りに来ていなければ、そう言って断る", async () => {
+  db.$client.run("delete from relay_receivers");
+  const e = await client.putMessage({ request: req("b") }).catch((x: unknown) => ConnectError.from(x));
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as m2/dev; none has yet");
+});
+
+test("長い名前は 1 つずつ切り、大文字小文字だけ違う候補は先頭に残る", async () => {
+  await claimed("WIN-TAKASHI", "root");
+  await claimed("z".repeat(200), "root");
+  const e = await client.putMessage({ request: req("b", "win-takashi", "root") }).catch((x: unknown) => ConnectError.from(x));
+  expect((e as ConnectError).rawMessage).toBe(`no ccx-agent has asked this center for messages as win-takashi/root; these have: WIN-TAKASHI/root, m2/dev, ${"z".repeat(128)}…`);
+
+  const long = await client.putMessage({ request: req("b", "x".repeat(8000), "u") }).catch((x: unknown) => ConnectError.from(x));
+  expect((long as ConnectError).rawMessage).toStartWith(`no ccx-agent has asked this center for messages as ${"x".repeat(128)}…; these have: m2/dev, WIN-TAKASHI/root, `);
+});
+
+test("取りに来た宛先は 10 件まで挙げる", async () => {
+  db.$client.run("delete from relay_receivers");
+  for (let i = 0; i < 11; i++) await claimed(`h${String(i).padStart(2, "0")}`, "u");
+  const e = await client.putMessage({ request: req("b", "zz", "u") }).catch((x: unknown) => ConnectError.from(x));
+  expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as zz/u; these have: h00/u, h01/u, h02/u, h03/u, h04/u, h05/u, h06/u, h07/u, h08/u, h09/u, …");
+});
 
 test("宛先の machine と user が無い置き方は断る", async () => {
   expect(await code(client.putMessage({ request: req("b", "", "dev") }))).toBe(Code.InvalidArgument);
@@ -241,6 +285,7 @@ test("期限はロックを取ってから見る: ロック待ちの間に 30 �
   const dir = await mkdtemp(join(tmpdir(), "ccx-relay-lock-"));
   const file = join(dir, "center.db");
   const fileDb = openDb(file);
+  fileDb.$client.run("insert into relay_receivers (machine, os_user, claimed_at_ms) values ('m2', 'dev', 0)");
   const start = Date.now();
   // put の時刻を T0 とし、claim を出す時点で 29.7 秒経っている時計
   let offset = 0;
