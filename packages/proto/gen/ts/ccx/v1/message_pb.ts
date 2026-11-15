@@ -594,8 +594,8 @@ export const MessageService: GenService<{
     output: typeof SendResponseSchema;
   },
   /**
-   * One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
-   * PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+   * One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+   * ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
    * with the later messages to put into that turn. Nothing goes to the center.
    *
    * @generated from rpc ccx.v1.MessageService.DevinHook

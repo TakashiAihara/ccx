@@ -32,6 +32,7 @@ var states = map[ccxv1.SendResponse_State]string{
 	ccxv1.SendResponse_STATE_SENT:        "sent",
 	ccxv1.SendResponse_STATE_WORKING:     "working",
 	ccxv1.SendResponse_STATE_NOT_STARTED: "not-started",
+	ccxv1.SendResponse_STATE_QUEUED:      "queued",
 }
 
 type sendArgs struct {
@@ -56,7 +57,7 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 		Name: "send_message",
 		Description: "Send a message to another running session through ccx: a Devin session by its name, or a Claude Code session by its id, " +
 			"on this machine or (with machine) another. The receiver sees this session's id as the sender and can answer to it. " +
-			"Returns each ack (sent, then working or not-started). " +
+			"Returns each ack (sent, then working or not-started; queued for later). " +
 			"\"not sent\" means nothing reached the receiver; \"may have been sent\" means look before sending again.",
 		Schema: map[string]any{
 			"type": "object",

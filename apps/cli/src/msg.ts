@@ -38,7 +38,7 @@ export function ackLines(ev: SendResponse): string[] {
     lines.push(`  ${head}`);
     for (const o of q.options) lines.push(o.description ? `    - ${o.label} (${o.description})` : `    - ${o.label}`);
   }
-  if (ev.state === SendResponse_State.DONE) for (const l of ev.text.split("\n")) lines.push(`  ${l}`);
+  if (ev.state === SendResponse_State.DONE && ev.text) for (const l of ev.text.split("\n")) lines.push(`  ${l}`);
   return lines;
 }
 
@@ -100,8 +100,8 @@ function unreachable(e: ConnectError): boolean {
 }
 
 function parseWait(v: string): number {
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < 0 || n > 3600) throw new InvalidArgumentError("--wait takes whole seconds from 0 to 3600");
+  const n = /^\d+$/.test(v) ? Number(v) : NaN;
+  if (!Number.isInteger(n) || n > 3600) throw new InvalidArgumentError("--wait takes whole seconds from 0 to 3600");
   return n;
 }
 

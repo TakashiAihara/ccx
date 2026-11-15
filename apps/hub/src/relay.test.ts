@@ -181,6 +181,17 @@ test("question の問い・選択肢と done の文を残し、数は 8 問 / 16
   expect([d!.state, d!.text.length]).toEqual([SendResponse_State.DONE, 4096]);
 });
 
+test("文を切っても UTF-8 の文字の途中では切らず、末尾を残す", async () => {
+  const a = (await client.putMessage({ request: req("a") })).message!;
+  const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;
+  // 「あ」は 3 バイト。4096 は 3 で割り切れないので、素直に切ると文字の途中になる
+  await client.reportMessage({ id: a.id, claimToken: token, acks: [{ state: SendResponse_State.DONE, text: "x" + "あ".repeat(2000) + "end" }] });
+  const d = (await client.getMessage({ id: a.id })).message!.acks[0]!;
+  expect(d.text.endsWith("end")).toBe(true);
+  expect(new TextEncoder().encode(d.text).length).toBe(4095);
+  expect(d.text.startsWith("あ")).toBe(true);
+});
+
 test("後から届いた短い ack の一覧で、保存済みの ack を戻さない", async () => {
   const a = (await client.putMessage({ request: req("a") })).message!;
   const token = (await client.claimMessage({ machine: "m2", user: "dev" })).message!.claimToken;

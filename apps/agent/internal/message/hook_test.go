@@ -3,6 +3,7 @@ package message
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -60,6 +61,15 @@ func (r *running) next(t *testing.T) *ccxv1.SendResponse {
 	case a := <-r.acks:
 		return a
 	case err := <-r.done:
+		// The send ends right after its last ack, so both can be ready and select
+		// picks either. Every ack is sent before the end: take one if there is,
+		// and keep the end for end().
+		select {
+		case a := <-r.acks:
+			r.done <- err
+			return a
+		default:
+		}
 		t.Fatalf("send ended (%v) while an ack was expected", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("no ack")
@@ -231,11 +241,17 @@ func TestATypedSendWithAWaitFollowsItsOwnTurn(t *testing.T) {
 	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_WORKING {
 		t.Fatalf("working %v", a)
 	}
-	// A turn for another prompt, and one whose prompt only contains the header, are not ours.
+	// A turn for another prompt, one whose prompt only contains the header, and one
+	// with the same header but another body (a second send of the same summary)
+	// are not ours.
 	hook(t, d, userPrompt("excited-giraffe", "p0", "something else"))
 	hook(t, d, userPrompt("excited-giraffe", "px", "quoted: ccx: claude-a1b2c3d4: review 3\nline 1"))
+	hook(t, d, userPrompt("excited-giraffe", "py", "ccx: claude-a1b2c3d4: review 3\nanother body"))
 	hook(t, d, stop("excited-giraffe", "p0", "not ours"))
 	hook(t, d, userPrompt("excited-giraffe", "p1", "ccx: claude-a1b2c3d4: review 3\nline 1\nline 2"))
+	// After ours, another turn's question and Stop are still not ours.
+	hook(t, d, ask("excited-giraffe", "py"))
+	hook(t, d, stop("excited-giraffe", "py", "the other send's answer"))
 	// The answer to a question, and another tool, are not questions.
 	hook(t, d, []byte(`{"hook_event_name":"PostToolUse","tool_name":"ask_user_question","session_id":"excited-giraffe","prompt_id":"p1"}`))
 	hook(t, d, []byte(`{"hook_event_name":"PreToolUse","tool_name":"exec","session_id":"excited-giraffe","prompt_id":"p1"}`))
@@ -326,13 +342,27 @@ func TestBothKindsOfSendSayWhenTheirTypingIsOver(t *testing.T) {
 		d := newDevin(f)
 		r := req(mode)
 		r.WaitSeconds = 30
-		over := make(chan struct{})
+		// done is read in the send's own goroutine, at the moment it says so: the
+		// relay types the next message then, so this one must be in already.
+		over := make(chan bool, 1)
+		in := func() bool {
+			if mode == ccxv1.DeliveryMode_DELIVERY_MODE_LATER {
+				h := d.hooks()
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				return len(h.inbox["excited-giraffe"]) == 1
+			}
+			return f.prompted() != nil
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			_ = d.Send(WithAfterTyping(ctx, func() { close(over) }), r, func(*ccxv1.SendResponse) error { return nil })
+			_ = d.Send(WithAfterTyping(ctx, func() { over <- in() }), r, func(*ccxv1.SendResponse) error { return nil })
 		}()
 		select {
-		case <-over:
+		case ok := <-over:
+			if !ok {
+				t.Errorf("%v: said it was over before the message was in", mode)
+			}
 		case <-time.After(5 * time.Second):
 			t.Errorf("%v: typing never said it was over", mode)
 		}
@@ -363,7 +393,7 @@ func TestAWaitEndsWhenTheSenderLeaves(t *testing.T) {
 // A waiter that reads nothing does not hold up Devin's hooks.
 func TestASlowWaiterDoesNotBlockTheHook(t *testing.T) {
 	d := newDevin(&fakeHerdr{panes: devinPanes})
-	_, cancel := d.hub().subscribe("excited-giraffe")
+	_, cancel := d.hooks().subscribe("excited-giraffe")
 	defer cancel()
 	ended := make(chan struct{})
 	go func() {
@@ -385,5 +415,82 @@ func TestServiceDeliverPassesTheWaitOn(t *testing.T) {
 	err := s.Deliver(context.Background(), &ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: r.Mode, WaitSeconds: 3601}, func(*ccxv1.SendResponse) error { return nil })
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("a 3601-second wait reached Devin.Send: %v", err)
+	}
+}
+
+// Once queued, a later message is delivered on the next turn whatever happens to
+// the sender's stream, so a failure after that is not "not sent".
+func TestALaterMessageIsNotNotSentOnceQueued(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	err := d.Send(context.Background(), req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER), func(*ccxv1.SendResponse) error {
+		return errors.New("the sender went away")
+	})
+	if err == nil || notTyped(err) {
+		t.Fatalf("err %v, marked not typed %v", err, notTyped(err))
+	}
+	if out := hook(t, d, userPrompt("excited-giraffe", "p1", "hi")); !strings.Contains(out, "review 3") {
+		t.Fatalf("not delivered after all: %q", out)
+	}
+}
+
+// Without a wait the stream ends at queued, even when a turn takes the message
+// before the send returns.
+func TestALaterWithoutAWaitEndsAtQueued(t *testing.T) {
+	for i := range 50 {
+		d := newDevin(&fakeHerdr{panes: devinPanes})
+		var got []ccxv1.SendResponse_State
+		err := d.Send(context.Background(), req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER), func(a *ccxv1.SendResponse) error {
+			got = append(got, a.State)
+			if a.State == ccxv1.SendResponse_STATE_QUEUED {
+				hook(t, d, userPrompt("excited-giraffe", fmt.Sprint("p", i), "hi"))
+			}
+			return nil
+		})
+		if err != nil || len(got) != 1 {
+			t.Fatalf("round %d: acks %v err %v", i, got, err)
+		}
+	}
+}
+
+// The receiver's words reach the sender's terminal: escapes are dropped, newlines
+// kept, and a question ack keeps what the center keeps for a relayed one.
+func TestQuestionAndDoneAreCleanedAndBounded(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
+	r.WaitSeconds = 30
+	run := start(d, r)
+	run.next(t)
+	hook(t, d, userPrompt("excited-giraffe", "p1", "go"))
+	run.next(t)
+
+	type option struct {
+		Label       string `json:"label"`
+		Description string `json:"description"`
+	}
+	type question struct {
+		Question string   `json:"question"`
+		Header   string   `json:"header"`
+		Options  []option `json:"options"`
+	}
+	opts := make([]option, 17)
+	for i := range opts {
+		opts[i] = option{Label: fmt.Sprint("o", i), Description: "d"}
+	}
+	opts[3].Label = "\x1b[31mred\x1b[0m"
+	qs := make([]question, 9)
+	for i := range qs {
+		qs[i] = question{Question: fmt.Sprint("q", i), Header: "h", Options: opts}
+	}
+	qs[2].Question = strings.Repeat("x", 5000)
+	b, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "ask_user_question", "session_id": "excited-giraffe", "prompt_id": "p1", "tool_input": map[string]any{"questions": qs}})
+	hook(t, d, b)
+	hook(t, d, stop("excited-giraffe", "p1", "line 1\x1b]0;title\x07\nline 2"))
+
+	q := run.next(t)
+	if len(q.Questions) != 8 || len(q.Questions[0].Options) != 16 || q.Questions[1].Options[3].Label != "[31mred[0m" || len(q.Questions[2].Question) != 4096 || q.Questions[7].Question != "q7" {
+		t.Fatalf("question ack: %d questions, %d options, label %q, long question %d bytes", len(q.Questions), len(q.Questions[0].Options), q.Questions[1].Options[3].Label, len(q.Questions[2].Question))
+	}
+	if done := run.next(t); done.Text != "line 1]0;title\nline 2" {
+		t.Fatalf("done text %q", done.Text)
 	}
 }

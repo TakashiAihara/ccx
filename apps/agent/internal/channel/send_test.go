@@ -298,3 +298,11 @@ func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
 		t.Fatalf("text %q after %v", text, time.Since(start))
 	}
 }
+
+func TestSendToolNamesTheQueuedAck(t *testing.T) {
+	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED, Detail: "next turn"}}}
+	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"later"}`)
+	if isErr || text != "queued  next turn" {
+		t.Fatalf("text %q, isErr %v", text, isErr)
+	}
+}

@@ -236,6 +236,7 @@ test("a question lists its options and done carries the last answer indented", (
   expect(ackLines(q)).toEqual(["question  prompt p1", "  好きな果物: どちら？", "    - りんご (りんごを選ぶ)", "    - みかん", "  理由は？"]);
   const d = create(SendResponseSchema, { state: SendResponse_State.DONE, text: "了解\n2 行目" });
   expect(ackLines(d)).toEqual(["done", "  了解", "  2 行目"]);
+  expect(ackLines(create(SendResponseSchema, { state: SendResponse_State.DONE, detail: "prompt p2" }))).toEqual(["done  prompt p2"]);
   expect(ackLines(create(SendResponseSchema, { state: SendResponse_State.QUEUED, detail: "next turn" }))).toEqual(["queued  next turn"]);
 });
 
@@ -263,13 +264,13 @@ test("without --wait the timeout is the timeout; with it, the wait gets a minute
   const base = { mode: "urgent", summary: "s", from: "f", timeout: 50 };
   // 50 ms cuts a 150 ms answer when nothing asked to wait
   expect(await sendMessage("t", "b", { ...base, socket: slow(150) }, (l) => lines.push(l)).catch((e: unknown) => e)).toBeInstanceOf(Error);
-  // --wait 1 holds past 1 s: the typing part comes before the wait
+  // --wait 1 holds past 1 s (this fake answers late; a real agent stops watching at 1 s, but the typing comes first)
   await sendMessage("t", "b", { ...base, socket: slow(1100), wait: 1 }, (l) => lines.push(l));
   expect(lines).toEqual(["done", "  ok"]);
 });
 
 test("--wait takes whole seconds up to an hour", async () => {
-  for (const bad of ["-1", "3601", "1.5", "x"]) {
+  for (const bad of ["-1", "3601", "1.5", "x", "1e3", "0x10", " 5"]) {
     const r = await runCli(["msg", "send", "t", "--socket", "/nonexistent.sock", "--summary", "s", "--from", "me", "--wait", bad, "x"], {});
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("--wait takes whole seconds from 0 to 3600");

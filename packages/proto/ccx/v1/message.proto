@@ -22,8 +22,8 @@ service MessageService {
   // that breaks, may come after the text went in: do not resend without looking.
   rpc Send(SendRequest) returns (stream SendResponse);
 
-  // One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
-  // PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+  // One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+  // ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
   // with the later messages to put into that turn. Nothing goes to the center.
   rpc DevinHook(DevinHookRequest) returns (DevinHookResponse);
 }

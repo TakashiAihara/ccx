@@ -62,10 +62,10 @@ func Wanted(payload []byte) bool {
 	return false
 }
 
-// queued is a later message waiting for its receiver's next turn.
+// queued is a later message waiting for its receiver's next turn. Watchers find
+// theirs in hookEvent.taken by pointer.
 type queued struct {
-	text  string
-	taken chan struct{}
+	text string
 }
 
 // MaxQueued bounds the later messages one session holds, so a receiver that never
@@ -80,8 +80,8 @@ type hooks struct {
 	inbox map[string][]*queued
 }
 
-func (d *Devin) hub() *hooks {
-	d.hubOnce.Do(func() {
+func (d *Devin) hooks() *hooks {
+	d.hooksOnce.Do(func() {
 		d.h = &hooks{subs: map[string]map[chan hookEvent]struct{}{}, inbox: map[string][]*queued{}}
 	})
 	return d.h
@@ -124,7 +124,7 @@ func (h *hooks) queue(session, text string) (*queued, error) {
 	if len(h.inbox[session]) >= MaxQueued {
 		return nil, fmt.Errorf("%s already holds %d later messages that no turn has taken", session, MaxQueued)
 	}
-	q := &queued{text: text, taken: make(chan struct{})}
+	q := &queued{text: text}
 	h.inbox[session] = append(h.inbox[session], q)
 	return q, nil
 }
@@ -147,7 +147,7 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 	if e.Name == "" || e.Session == "" {
 		return "", connect.NewError(connect.CodeInvalidArgument, errors.New("devin hook payload without hook_event_name or session_id"))
 	}
-	h := d.hub()
+	h := d.hooks()
 	out := ""
 	if e.Name == "UserPromptSubmit" {
 		e.taken = h.take(e.Session)
@@ -167,9 +167,6 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 		}
 	}
 	h.publish(e)
-	for _, q := range e.taken {
-		close(q.taken)
-	}
 	return out, nil
 }
 
@@ -181,13 +178,13 @@ const MaxText = 64 << 10
 const MaxQuestionAcks = 8
 
 // watch follows the receiver's hooks after the message is in: the event mine
-// matches is the turn taking it (onMatch reports that), then a question is QUESTION
-// and the next Stop is DONE. Running out of wait, or the sender leaving, ends it
-// quietly: the message is in either way.
+// matches is the turn taking it (onMatch reports that), then a question in that
+// turn (same prompt_id) is QUESTION and its Stop is DONE. Running out of wait, or
+// the sender leaving, ends it quietly: the message is in either way.
 func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, mine func(hookEvent) bool, onMatch func(hookEvent) error, emit func(*ccxv1.SendResponse) error) error {
 	t := time.NewTimer(wait)
 	defer t.Stop()
-	matched, asked := false, 0
+	turn, asked := "", 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -195,15 +192,18 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 		case <-t.C:
 			return nil
 		case e := <-events:
-			if !matched {
+			if turn == "" {
 				if mine(e) {
-					matched = true
+					turn = e.PromptID
 					if onMatch != nil {
 						if err := onMatch(e); err != nil {
 							return err
 						}
 					}
 				}
+				continue
+			}
+			if e.PromptID != turn {
 				continue
 			}
 			switch {
@@ -213,7 +213,7 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 					return err
 				}
 			case e.Name == "Stop":
-				text := e.LastMessage
+				text := clean(e.LastMessage)
 				if len(text) > MaxText {
 					text = strings.ToValidUTF8(text[:MaxText], "")
 				}
@@ -223,36 +223,73 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 	}
 }
 
+// What one QUESTION ack keeps, the same as the center keeps for a relayed one,
+// so a local sender and a relayed one see the same.
+const (
+	MaxQuestions     = 8
+	MaxOptions       = 16
+	MaxQuestionBytes = 4096
+)
+
 func questions(e hookEvent) []*ccxv1.Question {
 	var qs []*ccxv1.Question
-	for _, q := range e.ToolInput.Questions {
-		out := &ccxv1.Question{Question: q.Question, Header: q.Header}
-		for _, o := range q.Options {
-			out.Options = append(out.Options, &ccxv1.Question_Option{Label: o.Label, Description: o.Description})
+	for _, q := range e.ToolInput.Questions[:min(len(e.ToolInput.Questions), MaxQuestions)] {
+		out := &ccxv1.Question{Question: short(q.Question), Header: short(q.Header)}
+		for _, o := range q.Options[:min(len(q.Options), MaxOptions)] {
+			out.Options = append(out.Options, &ccxv1.Question_Option{Label: short(o.Label), Description: short(o.Description)})
 		}
 		qs = append(qs, out)
 	}
 	return qs
 }
 
+// clean drops what refusedInBody refuses in a body: the receiver's words reach
+// the sender's terminal, and escapes there could rewrite what it shows.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if refusedInBody(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func short(s string) string {
+	s = clean(s)
+	if len(s) > MaxQuestionBytes {
+		s = strings.ToValidUTF8(s[:MaxQuestionBytes], "")
+	}
+	return s
+}
+
 // sendLater keeps req for the receiver's next turn. It types nothing, so it needs
 // no lock: the turn takes it through UserPromptSubmit (Hook).
-func (d *Devin) sendLater(ctx context.Context, req Request, wait time.Duration, emit func(*ccxv1.SendResponse) error) error {
+func (d *Devin) sendLater(ctx context.Context, req Request, wait time.Duration, emit func(*ccxv1.SendResponse) error, typed *bool) error {
 	if _, err := d.find(ctx, req.Target); err != nil {
 		return err
 	}
-	h := d.hub()
-	events, cancel := h.subscribe(req.Target)
-	defer cancel()
+	h := d.hooks()
+	var events <-chan hookEvent
+	if wait > 0 {
+		// Subscribe before queueing, so the turn taking it is not missed. Without a
+		// wait there is no subscription and the stream ends at queued, even when a
+		// turn takes it before this returns (watch then has nothing to read).
+		var cancel func()
+		events, cancel = h.subscribe(req.Target)
+		defer cancel()
+	}
 	q, err := h.queue(req.Target, headerLine(req.Sender, req.Summary)+"\n"+req.Body)
 	if err != nil {
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	}
+	// Queued is the point of no return, as typing is for a typed send.
+	*typed = true
 	err = emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_QUEUED, Detail: "read on " + req.Target + "'s next turn (Devin's UserPromptSubmit hook runs ccx-agent devin-hook)"})
 	afterTyping(ctx)
 	if err != nil {
 		return err
 	}
+
 	mine := func(e hookEvent) bool { return e.Name == "UserPromptSubmit" && slices.Contains(e.taken, q) }
 	sent := func(e hookEvent) error {
 		return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "taken by prompt " + e.PromptID})

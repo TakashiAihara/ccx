@@ -63,8 +63,8 @@ type MessageServiceClient interface {
 	// before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
 	// that breaks, may come after the text went in: do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest]) (*connect.ServerStreamForClient[v1.SendResponse], error)
-	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
-	// PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+	// ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
 	// with the later messages to put into that turn. Nothing goes to the center.
 	DevinHook(context.Context, *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error)
 }
@@ -120,8 +120,8 @@ type MessageServiceHandler interface {
 	// before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
 	// that breaks, may come after the text went in: do not resend without looking.
 	Send(context.Context, *connect.Request[v1.SendRequest], *connect.ServerStream[v1.SendResponse]) error
-	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit / PreToolUse /
-	// PostToolUse / Stop). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+	// One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+	// ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
 	// with the later messages to put into that turn. Nothing goes to the center.
 	DevinHook(context.Context, *connect.Request[v1.DevinHookRequest]) (*connect.Response[v1.DevinHookResponse], error)
 }

@@ -65,7 +65,7 @@ type Devin struct {
 	Poll, SentWait, StartWait time.Duration
 
 	mu      sync.Mutex
-	hubOnce sync.Once
+	hooksOnce sync.Once
 	h       *hooks
 }
 
@@ -158,7 +158,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	}
 	wait := waitOf(req)
 	if req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_LATER {
-		return d.sendLater(ctx, req, wait, emit)
+		return d.sendLater(ctx, req, wait, emit, typed)
 	}
 
 	header := headerLine(req.Sender, req.Summary)
@@ -166,7 +166,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if wait > 0 {
 		// Subscribe before typing, so the turn's UserPromptSubmit is not missed.
 		var cancel func()
-		events, cancel = d.hub().subscribe(req.Target)
+		events, cancel = d.hooks().subscribe(req.Target)
 		defer cancel()
 	}
 	err := d.typeIn(ctx, req, header, emit, typed)
@@ -177,9 +177,12 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if events == nil {
 		return nil
 	}
-	// The turn that took it is the one whose prompt starts with the header.
+	// The turn that took it is the one whose prompt is exactly what was typed
+	// (Devin hands the typed text over unchanged, devin 3000.12.57). Two sends of
+	// the same sender, summary and body still read as one; a header alone would
+	// tie together any two with the same sender and summary.
 	mine := func(e hookEvent) bool {
-		return e.Name == "UserPromptSubmit" && strings.HasPrefix(e.Prompt, header+"\n")
+		return e.Name == "UserPromptSubmit" && e.Prompt == header+"\n"+req.Body
 	}
 	return watch(ctx, events, wait, mine, nil, emit)
 }

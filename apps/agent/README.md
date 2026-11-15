@@ -33,7 +33,7 @@ A ccx-agent with every concern off is a valid state.
 Live transcript (`livetranscript`) needs collect: collect's hook events are what
 say which sessions are running. Its toggle is in the configuration table below.
 
-## The two commands
+## The commands
 
 ```text
 ccx-agent serve    the resident agent: owns the socket, spools what arrives,
@@ -303,7 +303,8 @@ fires on every tool call.
 ### Devin (messages)
 
 `ccx msg send --mode later` and `--wait` read Devin's hooks (`docs/design/messaging.md`).
-Add to `~/.config/devin/config.json`, next to any hooks already there:
+Add these entries to `~/.config/devin/config.json`, appending to each event's array if it already has hooks
+(replacing the arrays drops the hooks already there):
 
 ```json
 { "hooks": {
