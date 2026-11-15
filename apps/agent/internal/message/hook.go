@@ -175,6 +175,14 @@ func (h *hooks) owner(session, prompt string) *typedSend {
 	return o
 }
 
+// restore puts later messages back at the head of the inbox, ahead of any
+// queued since they were taken.
+func (h *hooks) restore(session string, qs []*queued) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.inbox[session] = append(slices.Clone(qs), h.inbox[session]...)
+}
+
 func (h *hooks) take(session string) []*queued {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -185,7 +193,11 @@ func (h *hooks) take(session string) []*queued {
 
 // Hook reads one hook payload and returns what the hook prints for Devin: on
 // UserPromptSubmit, the later messages for that session as additionalContext.
-func (d *Devin) Hook(payload []byte) (string, error) {
+// When ctx (the hook's call) is over before that answer goes back, the later
+// messages go back to the inbox for the next turn; the turn itself still
+// happened, so it is published without them. An answer lost after it was
+// written is not seen: Devin does not acknowledge additionalContext.
+func (d *Devin) Hook(ctx context.Context, payload []byte) (string, error) {
 	var e hookEvent
 	if err := json.Unmarshal(payload, &e); err != nil {
 		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("devin hook payload: %w", err))
@@ -213,6 +225,12 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 			}
 			out = string(b)
 		}
+	}
+	if len(e.taken) > 0 && ctx.Err() != nil {
+		h.restore(e.Session, e.taken)
+		e.taken = nil
+		h.publish(e)
+		return "", connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("the hook call ended before the later messages for %s went back; they wait for the next turn", e.Session))
 	}
 	h.publish(e)
 	return out, nil

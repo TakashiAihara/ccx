@@ -31,7 +31,7 @@ func stop(session, promptID, last string) []byte {
 
 func hook(t *testing.T, d *Devin, payload []byte) string {
 	t.Helper()
-	out, err := d.Hook(payload)
+	out, err := d.Hook(context.Background(), payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestHookRefusesWhatItCannotRead(t *testing.T) {
 	d := newDevin(&fakeHerdr{})
 	// A field of the wrong type leaves the rest filled in; it is still not read.
 	for _, p := range []string{`nope`, `{"hook_event_name":"Stop"}`, `{"session_id":"s"}`, `{"hook_event_name":"Stop","session_id":"s","prompt":5}`} {
-		if _, err := d.Hook([]byte(p)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		if _, err := d.Hook(context.Background(), []byte(p)); connect.CodeOf(err) != connect.CodeInvalidArgument {
 			t.Errorf("%s: err = %v", p, err)
 		}
 	}
@@ -325,6 +325,12 @@ func TestServiceDevinHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Service{Devin: d}
+	// The call's own context reaches Hook: ended, it keeps the message for the next turn.
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.DevinHook(ended, connect.NewRequest(&ccxv1.DevinHookRequest{Payload: userPrompt("excited-giraffe", "p0", "hi")})); connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		t.Fatalf("ended call: %v", err)
+	}
 	res, err := s.DevinHook(context.Background(), connect.NewRequest(&ccxv1.DevinHookRequest{Payload: userPrompt("excited-giraffe", "p1", "hi")}))
 	if err != nil || !strings.Contains(res.Msg.GetOutput(), "additionalContext") {
 		t.Fatalf("res %v err %v", res, err)
@@ -398,7 +404,7 @@ func TestASlowWaiterDoesNotBlockTheHook(t *testing.T) {
 	ended := make(chan struct{})
 	go func() {
 		for i := range 100 {
-			_, _ = d.Hook(stop("excited-giraffe", fmt.Sprint(i), "x"))
+			_, _ = d.Hook(context.Background(), stop("excited-giraffe", fmt.Sprint(i), "x"))
 		}
 		close(ended)
 	}()
@@ -575,5 +581,70 @@ func TestThePromptIDInADetailIsOneCleanLine(t *testing.T) {
 	hook(t, d, []byte(`{"hook_event_name":"Stop","session_id":"excited-giraffe","prompt_id":"p\u001b[2J\n\tfake: done","last_assistant_message":"ours"}`))
 	if a := run.next(t); a.Text != "ours" || a.Detail != "prompt p[2Jfake: done" {
 		t.Fatalf("done %q %q", a.Text, a.Detail)
+	}
+}
+
+// A hook call that ends before its answer goes back leaves the later messages for
+// the next turn, and does not tell the sender they were taken.
+func TestLaterMessagesSurviveAHookCallThatEnded(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	first := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
+	first.Summary, first.WaitSeconds = "first", 30
+	run := start(d, first)
+	run.next(t)
+	second := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
+	second.Summary = "second"
+	if _, err := send(d, second); err != nil {
+		t.Fatal(err)
+	}
+
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if out, err := d.Hook(ended, userPrompt("excited-giraffe", "p1", "hi")); err == nil || out != "" {
+		t.Fatalf("out %q err %v", out, err)
+	}
+	out := hook(t, d, userPrompt("excited-giraffe", "p2", "hi"))
+	if i, j := strings.Index(out, ": first"), strings.Index(out, ": second"); i < 0 || j < i {
+		t.Fatalf("next turn's context, first first: %q", out)
+	}
+	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_SENT || a.Detail != "taken by prompt p2" {
+		t.Fatalf("taken ack %v", a)
+	}
+}
+
+// With nothing to hand over, an ended call is no failure; with something, the turn
+// is still published (a typed send's turn happened) without the later messages.
+func TestAnEndedHookCallStillPublishesTheTurn(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.Hook(ended, userPrompt("excited-giraffe", "p0", "hi")); err != nil {
+		t.Fatalf("nothing queued: %v", err)
+	}
+	if _, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)); err != nil {
+		t.Fatal(err)
+	}
+	events, unsubscribe := d.hooks().subscribe("excited-giraffe")
+	defer unsubscribe()
+	if _, err := d.Hook(ended, userPrompt("excited-giraffe", "p1", "hi")); err == nil {
+		t.Fatal("ended call with a later message: no error")
+	}
+	select {
+	case e := <-events:
+		if e.PromptID != "p1" || len(e.taken) != 0 {
+			t.Fatalf("published %s with %d taken", e.PromptID, len(e.taken))
+		}
+	default:
+		t.Fatal("the turn was not published")
+	}
+}
+
+func TestRestorePutsMessagesAheadOfLaterOnes(t *testing.T) {
+	h := newDevin(&fakeHerdr{}).hooks()
+	c, _ := h.queue("s", "c")
+	a, b := &queued{text: "a"}, &queued{text: "b"}
+	h.restore("s", []*queued{a, b})
+	if got := h.take("s"); len(got) != 3 || got[0] != a || got[1] != b || got[2] != c {
+		t.Fatalf("order %v", got)
 	}
 }

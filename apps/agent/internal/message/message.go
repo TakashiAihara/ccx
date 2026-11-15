@@ -697,8 +697,8 @@ func (s *Service) sendClaude(ctx context.Context, req Request, emit func(*ccxv1.
 }
 
 // DevinHook takes one Devin hook event from `ccx-agent devin-hook`.
-func (s *Service) DevinHook(_ context.Context, req *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
-	out, err := s.Devin.Hook(req.Msg.GetPayload())
+func (s *Service) DevinHook(ctx context.Context, req *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
+	out, err := s.Devin.Hook(ctx, req.Msg.GetPayload())
 	if err != nil {
 		return nil, err
 	}
