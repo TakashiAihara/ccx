@@ -262,13 +262,13 @@ func TestATypedSendWithAWaitFollowsItsOwnTurn(t *testing.T) {
 	run.end(t)
 }
 
-func TestAWaitThatRunsOutEndsQuietly(t *testing.T) {
+func TestAWaitThatRunsOutSaysSoAndEnds(t *testing.T) {
 	d := newDevin(&fakeHerdr{panes: devinPanes})
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
 	r.WaitSeconds = 1
 	start := time.Now()
 	got, err := send(d, r)
-	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_QUEUED {
+	if err != nil || len(got) != 2 || got[0].State != ccxv1.SendResponse_STATE_QUEUED || got[1].State != ccxv1.SendResponse_STATE_WAIT_ENDED {
 		t.Fatalf("acks %v err %v", got, err)
 	}
 	if took := time.Since(start); took < 900*time.Millisecond || took > 3*time.Second {

@@ -256,7 +256,11 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
-			return nil
+			if wait <= 0 {
+				return nil
+			}
+			// Said, not left to the stream's end: a stream ends early too when the receiver has no turn to wait on.
+			return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_WAIT_ENDED})
 		case e := <-events:
 			if !matched {
 				if mine(e) {

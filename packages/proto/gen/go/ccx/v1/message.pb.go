@@ -96,6 +96,9 @@ const (
 	SendResponse_STATE_QUESTION SendResponse_State = 5
 	// The receiver's turn that took the message ended; text is its last answer. The stream ends.
 	SendResponse_STATE_DONE SendResponse_State = 6
+	// wait_seconds ran out before DONE: the receiver may still be on it. The message is in either way. The
+	// stream ends. Only a send with wait_seconds sees it, and only from a ccx-agent that knows it.
+	SendResponse_STATE_WAIT_ENDED SendResponse_State = 7
 )
 
 // Enum value maps for SendResponse_State.
@@ -108,6 +111,7 @@ var (
 		4: "STATE_QUEUED",
 		5: "STATE_QUESTION",
 		6: "STATE_DONE",
+		7: "STATE_WAIT_ENDED",
 	}
 	SendResponse_State_value = map[string]int32{
 		"STATE_UNSPECIFIED": 0,
@@ -117,6 +121,7 @@ var (
 		"STATE_QUEUED":      4,
 		"STATE_QUESTION":    5,
 		"STATE_DONE":        6,
+		"STATE_WAIT_ENDED":  7,
 	}
 )
 
@@ -1089,12 +1094,12 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\aoptions\x18\x03 \x03(\v2\x17.ccx.v1.Question.OptionR\aoptions\x1a@\n" +
 	"\x06Option\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xad\x02\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xc3\x02\n" +
 	"\fSendResponse\x120\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1a.ccx.v1.SendResponse.StateR\x05state\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x12.\n" +
 	"\tquestions\x18\x03 \x03(\v2\x10.ccx.v1.QuestionR\tquestions\x12\x12\n" +
-	"\x04text\x18\x04 \x01(\tR\x04text\"\x8e\x01\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\"\xa4\x01\n" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
@@ -1104,7 +1109,8 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\fSTATE_QUEUED\x10\x04\x12\x12\n" +
 	"\x0eSTATE_QUESTION\x10\x05\x12\x0e\n" +
 	"\n" +
-	"STATE_DONE\x10\x06\"\xc0\x03\n" +
+	"STATE_DONE\x10\x06\x12\x14\n" +
+	"\x10STATE_WAIT_ENDED\x10\a\"\xc0\x03\n" +
 	"\x0eRelayedMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
 	"\arequest\x18\x02 \x01(\v2\x13.ccx.v1.SendRequestR\arequest\x121\n" +
