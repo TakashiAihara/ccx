@@ -440,6 +440,10 @@ func typed(s string) bool {
 // Devin" has an answer.
 type Service struct {
 	Devin *Devin
+	// Claude delivers to Claude Code sessions (a target that is a session id)
+	// through their ccx channel. nil when the heartbeat concern, which holds the
+	// channel connections, is off.
+	Claude *Claude
 	// Machine and User are this agent's origin. A request naming another goes
 	// through Relay (#138); without a Relay it is refused.
 	Machine, User string
@@ -475,7 +479,12 @@ func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*cc
 // from the center for this machine.
 func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	var last ccxv1.SendResponse_State
-	err := s.Devin.Send(ctx, Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}, func(r *ccxv1.SendResponse) error {
+	req := Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}
+	send := s.Devin.Send
+	if IsClaudeSession(req.Target) {
+		send = s.sendClaude
+	}
+	err := send(ctx, req, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
 		return emit(r)
 	})
@@ -637,4 +646,11 @@ func (d *Devin) boxEmpty(ctx context.Context, id string) bool {
 // about every 40 bytes; 200 more cover what Devin prints around it.
 func historyLines(body string) int {
 	return 200 + strings.Count(body, "\n") + len(body)/40
+}
+
+func (s *Service) sendClaude(ctx context.Context, req Request, emit func(*ccxv1.SendResponse) error) error {
+	if s.Claude == nil {
+		return markNotTyped(connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is a Claude Code session, and this ccx-agent's heartbeat concern (which holds the ccx channels) is off", req.Target)))
+	}
+	return s.Claude.Send(ctx, req, emit)
 }

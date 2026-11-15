@@ -176,6 +176,8 @@ func cmdServe() int {
 		h := heartbeat.New(cfg, logger)
 		concerns = append(concerns, h)
 		srv.Heartbeat = h
+		// The channel connections it holds are how a message reaches a Claude Code session (#138).
+		msgs.Claude = message.NewClaude(h)
 	}
 	// Not a toggle: it is how a person sees the rest. Its one write (MessageService)
 	// is served on the unix socket only.
@@ -308,6 +310,7 @@ func cmdChannel() int {
 	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
 	// the process up. Default termination is what a stdio child wants.
 	srv := channel.NewServer("ccx", "0", os.Stdout)
+	srv.Tools = []channel.Tool{channel.SendTool(sid, channel.UnixMessageClient(config.APISocket()))}
 	go func() {
 		<-srv.Ready()
 		// A broken config must not take the session's MCP server down, and fixing

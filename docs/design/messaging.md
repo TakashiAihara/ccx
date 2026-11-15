@@ -1,6 +1,22 @@
 # Messages between running sessions
 
-A session sends text to another running session with `ccx msg send`, on this machine or another. The sender names the receiver and how the message should be read; ccx-agent picks how to get it there and reports what happened. Issue #301 holds the plan across products, #302 the Devin delivery built here, #138 the hop to another machine.
+A session sends text to another running session, on this machine or another, with `ccx msg send` or, from a Claude Code session, the ccx channel's `send_message` tool. The sender names the receiver and how the message should be read; ccx-agent picks how to get it there and reports what happened. Receivers today are Devin (in a herdr pane) and Claude Code (through its ccx channel). Issue #301 holds the plan across products, #302 the Devin delivery, #138 the hop to another machine and the Claude Code side.
+
+## Which way a message goes
+
+```mermaid
+flowchart LR
+    CLI["ccx msg send"] --> A
+    TOOL["send_message tool<br/>(ccx channel, Claude Code)"] --> A
+    A["ccx-agent<br/>MessageService (unix socket)"] --> M{"machine / user<br/>this agent's own?"}
+    M -- no --> CEN["center<br/>MessageRelayService"] --> B["that machine's ccx-agent<br/>(claims it)"] --> T
+    M -- yes --> T{"target"}
+    T -- "a session id" --> CL["Claude Code<br/>push into its ccx channel"]
+    T -- "anything else" --> DV["Devin<br/>herdr agent prompt"]
+```
+
+- The sender never says what product the receiver is: a target shaped like a Claude Code session id (`8-4-4-4-12` hex) goes to Claude Code, anything else is a Devin session name.
+- Each hop keeps the acks and the refusals unchanged, so the sender reads the same lines whichever way it went.
 
 ## What the sender sees
 
@@ -14,15 +30,16 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 - A refusal prints `not sent: <reason>` and exits 1. Nothing was typed into the receiver.
 - Any other failure prints `may have been sent` (or `sent, then lost the ack stream`) and exits 1: the text may be there already, so look before sending again. "not sent" needs ccx-agent's word for it (the error metadata `Ccx-Not-Typed: 1`, set on refusals before typing), a socket that could not be connected to, or a code the Connect layer answers before Send runs (Unimplemented from an older ccx-agent, ResourceExhausted for an oversized request); a dropped stream or a timeout (`--timeout`, 60 s) is not proof.
 - The body is UTF-8 text up to 64 KiB with no control characters but newline and tab; sender and summary are one line of at most 40 and 80 bytes. At the limits the header is about 130 columns and wraps in a narrower pane; a wrapped header ends as `may have been sent`, so keep the summary short. Control and format characters (bidi overrides, zero-width spaces) are refused; the body keeps newline, tab and the zero-width joiners U+200C / U+200D that emoji sequences and some scripts need. The sender name is a label anyone on the machine can choose, not a checked identity.
-- The receiver sees the first line `ccx: <sender>: <summary>`, then the body.
+- The receiver sees the first line `ccx: <sender>: <summary>`, then the body. Claude Code sees it as the channel event's `title` attribute.
+- From a Claude Code session with the ccx channel, the `send_message` tool (`target`, `body`, `summary`, optional `mode` / `machine` / `user`) sends the same request through this machine's ccx-agent, named `claude-<first 8 of the session id>`, and returns the same lines, prefixed `not sent:` / `may have been sent` the same way.
 
 ## Modes
 
-| Mode | Meaning | Devin (this build) |
-|---|---|---|
-| `later` | Not woken; read on its next turn | Refused, listing `after-turn, urgent` |
-| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn |
-| `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up |
+| Mode | Meaning | Devin (this build) | Claude Code (this build) |
+|---|---|---|---|
+| `later` | Not woken; read on its next turn | Refused, listing `after-turn, urgent` | Refused, listing `after-turn` (needs the UserPromptSubmit inbox, #25) |
+| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour) |
+| `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up | Refused, listing `after-turn`: a channel event never interrupts a turn (`transport.md`) |
 
 - A mode the receiver lacks is refused, never swapped for a nearby one (#301).
 - `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). The end of the turn is Devin's `Stop` hook, not wired to ccx-agent yet. Until then ccx-agent also reads the screen: Devin draws `… (esc twice to interrupt)` while a turn runs (devin 3000.12.57), and `after-turn` is refused while it shows. A Devin that stops drawing that line would let `after-turn` in mid-turn again.
@@ -59,6 +76,35 @@ sequenceDiagram
 - Each send is logged by ccx-agent with target, sender, summary, mode and outcome.
 - Only a Devin that herdr knows by name: `herdr agent start --kind devin` or `spawn-task --agent devin`. A Devin started another way has no session name in herdr and is not guessed.
 - Served on the unix socket only. On the TCP listener anyone holding the API token could type into any session.
+
+## Claude Code delivery
+
+```mermaid
+sequenceDiagram
+    participant A as ccx-agent (serve)
+    participant CH as ccx channel (MCP server)
+    participant S as Claude Code session
+    participant T as transcript
+
+    Note over CH,A: at session start the channel registers its session id on the channel socket
+    A->>A: is the session's channel connected? (else refused, nothing sent)
+    A->>T: note its size
+    A->>CH: event: body, kind=message, title="ccx: sender: summary", msg_id
+    CH->>S: notifications/claude/channel
+    A-->>A: ack sent (written to the channel)
+    alt idle, or the turn ends within 10 s
+        S->>T: channel record carrying msg_id
+        A->>T: read what was written after the push
+        A-->>A: ack working
+    else mid-turn past 10 s
+        A-->>A: ack not-started (taken when the turn ends)
+    end
+```
+
+- The connection is the heartbeat's: each session's `ccx-agent channel` registers on serve's channel socket (`docs/design/heartbeat.md`), and the message goes down the same line as a heartbeat. With the heartbeat concern off there is no connection, and a send to a Claude Code session is refused.
+- Only a session started with the ccx channel (`--dangerously-load-development-channels server:ccx`) can receive. One without it is refused as not sent.
+- `sent` means the event was written to the channel. Claude Code does not acknowledge a channel notification (`transport.md`); a session that had not loaded the server as a channel would drop it silently. The transcript is the proof: Claude Code writes the event there when a turn takes it in, so `working` is that record carrying this message's `msg_id`, looked for only in what was written after the push.
+- The channel's instructions tell the session that `kind="message"` is from another session through ccx, that the sender is a label, and that `send_message` replies.
 
 ## Another machine
 
@@ -103,4 +149,5 @@ sequenceDiagram
 
 - `question` and `done` acks, from Devin's `PreToolUse` (`ask_user_question`) and `Stop` hooks (#302).
 - `later` for Devin, and `after-turn` to a working Devin.
-- Receivers other than Devin (#301), among them a Claude Code session through its ccx channel (#138), and a send tool on the channel's MCP server (#301 puts the CLI first).
+- `later` and `urgent` for Claude Code, and receivers other than Devin and Claude Code (OpenCode, agy, pi; #301).
+- A way to list the reachable sessions across machines (the sender has to know the machine and the target).

@@ -79,3 +79,13 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 	default:
 	}
 }
+
+// A session told nothing about kind="message" would read a teammate's message as
+// a heartbeat or ignore the tool that answers it.
+func TestInstructionsSayWhatAMessageIsAndHowToReply(t *testing.T) {
+	for _, want := range []string{`kind="message"`, "not a checked identity", "send_message"} {
+		if !strings.Contains(Instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
+	}
+}

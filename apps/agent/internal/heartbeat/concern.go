@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -51,6 +52,7 @@ type Concern struct {
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
+	channels   map[string]*channel   // session id -> its connection, for Push
 	listening  atomic.Bool
 
 	retryAfter time.Duration // 0 is a minute; tests shorten it
@@ -223,14 +225,11 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 	defer cancel()
 	go func() { _, _ = r.ReadByte(); cancel() }()
 
-	out := json.NewEncoder(conn)
+	ch := &channel{conn: conn, out: json.NewEncoder(conn), home: home}
 	h := &Heartbeat{
 		SessionID: reg.Session, ClaudeHome: home,
 		Interval: c.cfg.Interval, MaxIdle: c.cfg.MaxIdle, Default: c.cfg.Default,
-		Push: func() error {
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			return out.Encode(Beat)
-		},
+		Push: func() error { return ch.send(Beat) },
 		Log: c.log,
 		Now: time.Now,
 		Sleep: func(ctx context.Context, d time.Duration) {
@@ -245,6 +244,10 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 		c.registered = map[string]*Heartbeat{}
 	}
 	c.registered[reg.Session] = h
+	if c.channels == nil {
+		c.channels = map[string]*channel{}
+	}
+	c.channels[reg.Session] = ch
 	c.mu.Unlock()
 	defer func() {
 		// A reconnect can register the same session before this one winds down;
@@ -253,7 +256,55 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 		if c.registered[reg.Session] == h {
 			delete(c.registered, reg.Session)
 		}
+		if c.channels[reg.Session] == ch {
+			delete(c.channels, reg.Session)
+		}
 		c.mu.Unlock()
 	}()
 	h.Run(ctx)
+}
+
+// channel is one registered session's connection. The heartbeat and Push both
+// write to it, so the writes take turns.
+type channel struct {
+	mu   sync.Mutex
+	conn net.Conn
+	out  *json.Encoder
+	home string
+}
+
+func (ch *channel) send(ev Event) error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	_ = ch.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return ch.out.Encode(ev)
+}
+
+// ErrNotRegistered is Push's answer for a session whose ccx channel is not
+// connected to this serve: nothing was sent.
+var ErrNotRegistered = errors.New("no ccx channel is registered for this session")
+
+// Push sends ev down a registered session's channel (a message, #138) and
+// returns the Claude home its transcript is under. A nil error means the event
+// was written to the channel, not that Claude Code took it: channel
+// notifications are not acknowledged (docs/design/transport.md).
+func (c *Concern) Push(session string, ev Event) (home string, err error) {
+	c.mu.Lock()
+	ch := c.channels[session]
+	c.mu.Unlock()
+	if ch == nil {
+		return "", ErrNotRegistered
+	}
+	return ch.home, ch.send(ev)
+}
+
+// Home is the Claude home of a registered session; ok is false when its channel
+// is not connected.
+func (c *Concern) Home(session string) (home string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch := c.channels[session]; ch != nil {
+		return ch.home, true
+	}
+	return "", false
 }

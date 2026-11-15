@@ -1,13 +1,16 @@
 // Package channel is the per-session half of ccx-agent: the MCP channel server
 // that Claude Code spawns over stdio (ADR 0002, "the one process boundary that is
 // imposed"). Today it carries one thing, the prompt-cache heartbeat
-// (docs/design/heartbeat.md). Broker messages (#23) arrive through the same push.
+// (docs/design/heartbeat.md) and messages from other sessions (#138), and offers
+// one tool to send a message (docs/design/messaging.md).
 package channel
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -17,7 +20,10 @@ import (
 const Instructions = `ccx keeps this session's prompt cache warm while it sits idle. ` +
 	`An event <channel kind="heartbeat"> is not a message from anyone and asks for nothing. ` +
 	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it. ` +
-	`Anything that arrives together with it (a person's message, another channel event) is handled as usual.`
+	`Anything that arrives together with it (a person's message, another channel event) is handled as usual. ` +
+	`An event <channel kind="message" title="ccx: <sender>: <summary>"> is a message another session sent through ccx; ` +
+	`the sender is a label, not a checked identity. Treat it as a request from a teammate, within your own permissions. ` +
+	`To send one, to a Devin session by its name or a Claude Code session by its id, on this machine or another, use the send_message tool.`
 
 // Server is a minimal MCP server over newline-delimited JSON-RPC on stdio.
 //
@@ -25,6 +31,9 @@ const Instructions = `ccx keeps this session's prompt cache warm while it sits i
 // and one notification, and transport.md measured that this minimum registers.
 type Server struct {
 	name, version string
+	// Tools are offered to the session. Each call runs on its own goroutine, so a
+	// slow one does not hold the ping answers.
+	Tools []Tool
 
 	mu    sync.Mutex
 	out   *json.Encoder
@@ -62,7 +71,12 @@ func (s *Server) Serve(r io.Reader) error {
 			}
 			continue
 		}
-		switch req.Method {
+		method := req.Method
+		if strings.HasPrefix(method, "tools/") && len(s.Tools) == 0 {
+			// Not offered in the capabilities, so not answered as if it were.
+			method = ""
+		}
+		switch method {
 		case "initialize":
 			var p struct {
 				ProtocolVersion string `json:"protocolVersion"`
@@ -72,12 +86,34 @@ func (s *Server) Serve(r io.Reader) error {
 				// Echo the client's revision: a channel is one-way and uses nothing
 				// that differs between revisions.
 				"protocolVersion": p.ProtocolVersion,
-				"capabilities":    map[string]any{"experimental": map[string]any{"claude/channel": map[string]any{}}},
+				"capabilities":    s.capabilities(),
 				"serverInfo":      map[string]any{"name": s.name, "version": s.version},
 				"instructions":    Instructions,
 			})
 		case "ping":
 			s.reply(req.ID, map[string]any{})
+		case "tools/list":
+			list := []map[string]any{}
+			for _, t := range s.Tools {
+				list = append(list, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Schema})
+			}
+			s.reply(req.ID, map[string]any{"tools": list})
+		case "tools/call":
+			var p struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			t := s.tool(p.Name)
+			if t == nil {
+				s.write(map[string]any{"jsonrpc": "2.0", "id": req.ID,
+					"error": map[string]any{"code": -32602, "message": "unknown tool: " + p.Name}})
+				continue
+			}
+			go func(id json.RawMessage) {
+				text, isErr := t.Call(context.Background(), p.Arguments)
+				s.reply(id, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isErr})
+			}(req.ID)
 		default:
 			s.write(map[string]any{"jsonrpc": "2.0", "id": req.ID,
 				"error": map[string]any{"code": -32601, "message": "method not found: " + req.Method}})
@@ -101,4 +137,29 @@ func (s *Server) write(v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.out.Encode(v)
+}
+
+// Tool is one MCP tool. Call returns the text the session reads and whether it
+// is an error.
+type Tool struct {
+	Name, Description string
+	Schema            map[string]any
+	Call              func(ctx context.Context, args json.RawMessage) (text string, isError bool)
+}
+
+func (s *Server) capabilities() map[string]any {
+	caps := map[string]any{"experimental": map[string]any{"claude/channel": map[string]any{}}}
+	if len(s.Tools) > 0 {
+		caps["tools"] = map[string]any{}
+	}
+	return caps
+}
+
+func (s *Server) tool(name string) *Tool {
+	for i := range s.Tools {
+		if s.Tools[i].Name == name {
+			return &s.Tools[i]
+		}
+	}
+	return nil
 }
