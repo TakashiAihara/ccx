@@ -72,7 +72,7 @@ test("a settings.json linked into a git work tree is not written; the hooks to a
   symlinkSync(join(repo, "settings.json"), claudePath());
   expect(await wire(["claude"])).toBe(0);
   expect(readFileSync(join(repo, "settings.json"), "utf8")).toBe("{}\n");
-  expect(lines[0]).toContain("is in a git work tree");
+  expect(lines[0]).toContain("links into a git work tree");
   expect(JSON.parse(lines.slice(1).join("\n")).hooks.UserPromptSubmit).toEqual([{ hooks: [{ type: "command", command: `${AGENT} hook` }] }]);
 });
 
@@ -127,16 +127,47 @@ test("only a command that runs ccx-agent's subcommand counts as ccx's", () => {
   expect(isCcxHook("ccx-agent devin-hook", "devin-hook")).toBe(true);
 });
 
-test("a config under a linked dir, or a CLAUDE_CONFIG_DIR, inside a git work tree is not written", async () => {
+test("a config under a linked dir, or behind a dangling link, into a git work tree is not written, and the link stays", async () => {
   const repo = join(home, "dotfiles");
   mkdirSync(join(repo, "claude"), { recursive: true });
   expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
   symlinkSync(join(repo, "claude"), join(home, ".claude"));
   expect(await wire(["claude"])).toBe(0);
   expect(readdirSync(join(repo, "claude"))).toEqual([]);
-  expect(await wire(["claude"], { CLAUDE_CONFIG_DIR: join(repo, "acct") })).toBe(0);
+
+  mkdirSync(join(home, ".config", "devin"), { recursive: true });
+  symlinkSync(join(repo, "devin", "config.json"), devinPath());
+  expect(await wire(["devin"])).toBe(0);
+  expect(lstatSync(devinPath()).isSymbolicLink()).toBe(true);
   expect(readdirSync(repo).sort()).toEqual([".git", "claude"]);
-  expect(lines.filter((l) => l.includes("is in a git work tree"))).toHaveLength(2);
+  expect(lines.filter((l) => l.includes("links into a git work tree"))).toHaveLength(2);
+});
+
+test("a dangling link outside a git work tree is written through to its target, and stays a link", async () => {
+  mkdirSync(join(home, ".config", "devin"), { recursive: true });
+  symlinkSync(join(home, "store", "devin.json"), devinPath());
+  expect(await wire(["devin"])).toBe(0);
+  expect(lstatSync(devinPath()).isSymbolicLink()).toBe(true);
+  expect(read(join(home, "store", "devin.json")).hooks.Stop).toHaveLength(1);
+});
+
+test("with no link on the way, a config inside a git work tree is written: a home kept in git, a CLAUDE_CONFIG_DIR pointed there", async () => {
+  expect(Bun.spawnSync(["git", "init", "-q", home]).exitCode).toBe(0);
+  expect(await wire(["devin"])).toBe(0);
+  expect(read(devinPath()).hooks.Stop).toHaveLength(1);
+  expect(await wire(["claude"], { CLAUDE_CONFIG_DIR: join(home, "acct") })).toBe(0);
+  expect(read(join(home, "acct", "settings.json")).hooks.Stop).toHaveLength(1);
+  expect(lines.join("\n")).not.toContain("links into a git work tree");
+});
+
+test("an agent path with a single quote comes back as ccx's on a rerun, so nothing piles up", async () => {
+  const agent = "/home/o'connor/bin/ccx-agent";
+  await wireHooks(["devin"], { home, env: {}, agent, out: () => {} });
+  await wireHooks(["devin"], { home, env: {}, agent, out: () => {} });
+  const stop = read(devinPath()).hooks.Stop;
+  expect(stop).toHaveLength(1);
+  expect(stop[0].hooks[0].command).toBe("'/home/o'\\''connor/bin/ccx-agent' devin-hook");
+  expect(isCcxHook(stop[0].hooks[0].command, "devin-hook")).toBe(true);
 });
 
 test("hooks that are not an object, or an event that is not a list, fail rather than look wired", async () => {
@@ -145,6 +176,7 @@ test("hooks that are not an object, or an event that is not a list, fail rather 
   expect(await wire(["claude"])).toBe(1);
   writeFileSync(claudePath(), '{"hooks": {"Stop": {}}}');
   expect(await wire(["claude"])).toBe(1);
+  expect(lines.at(-1)).toContain("its hooks.Stop is not a JSON array");
   expect(lines.filter((l) => l.startsWith("ERR claude: cannot wire"))).toHaveLength(2);
   expect(lines.join("\n")).not.toContain("already wired");
 });
@@ -172,6 +204,7 @@ test("the command wires each named tool once and refuses a tool it does not know
   const r = await cli(["hooks", "install", "devin", "devin"]);
   expect(r.code).toBe(0);
   expect(r.out.trim().split("\n")).toHaveLength(1);
+  expect(r.out).toContain("devin: wired");
   expect(read(devinPath()).hooks.Stop).toHaveLength(1);
   const bad = await cli(["hooks", "install", "cursor"]);
   expect(bad.code).not.toBe(0);
@@ -179,4 +212,20 @@ test("the command wires each named tool once and refuses a tool it does not know
   writeFileSync(devinPath(), "{ broken");
   const broken = await cli(["hooks", "install", "devin"]);
   expect([broken.code, broken.err]).toEqual([1, expect.stringContaining("devin: cannot wire")]);
+});
+
+test("with no git on PATH, a linked config is written: there is no git to ask about a work tree", async () => {
+  const target = join(home, "elsewhere", "config.json");
+  mkdirSync(join(home, "elsewhere"));
+  expect(Bun.spawnSync(["git", "init", "-q", join(home, "elsewhere")]).exitCode).toBe(0);
+  mkdirSync(join(home, ".config", "devin"), { recursive: true });
+  symlinkSync(target, devinPath());
+  const path = process.env.PATH;
+  process.env.PATH = join(home, "empty");
+  try {
+    expect(await wire(["devin"])).toBe(0);
+  } finally {
+    process.env.PATH = path;
+  }
+  expect(read(target).hooks.Stop).toHaveLength(1);
 });

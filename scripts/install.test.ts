@@ -335,7 +335,9 @@ test.skipIf(!linux)("--hooks wires the named tools through ccx once the agent is
   expect(r.code).toBe(0);
   const lines = r.calls.trim().split("\n");
   expect(lines.at(-1)).toBe("ccx hooks install claude devin");
-  expect(lines.indexOf("systemctl --user restart ccx-agent")).toBeLessThan(lines.indexOf("ccx hooks install claude devin"));
+  const restart = lines.indexOf("systemctl --user restart ccx-agent");
+  expect(restart).toBeGreaterThanOrEqual(0);
+  expect(restart).toBeLessThan(lines.indexOf("ccx hooks install claude devin"));
   expect(r.out).not.toContain("wire ccx-agent hooks into which");
 });
 

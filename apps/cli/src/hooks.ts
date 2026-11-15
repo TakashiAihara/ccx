@@ -7,10 +7,10 @@
  * later. docs: apps/agent/README.md "Wiring the hooks".
  */
 import { InvalidArgumentError, type Command } from "commander";
-import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export type Tool = "claude" | "devin";
 
@@ -43,10 +43,31 @@ export const TOOL_NAMES = Object.keys(TOOLS) as Tool[];
  * path, and the next word is sub. A wrapper (my-ccx-agent) or a command that only mentions it is not ccx's.
  */
 export function isCcxHook(command: string, sub: string): boolean {
-  const m = /^\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s+(\S+)(?:\s|$)/.exec(command);
-  if (!m) return false;
-  const first = m[1] ?? m[2] ?? m[3] ?? "";
-  return (first === "ccx-agent" || first.endsWith("/ccx-agent")) && m[4] === sub;
+  const [first, rest] = firstWord(command);
+  return (first === "ccx-agent" || first.endsWith("/ccx-agent")) && rest.trimStart().split(/\s/)[0] === sub;
+}
+
+// The first word as the shell reads it: '…' and "…" taken as they are, \x as x, so quote()'s '\'' comes back whole.
+// A quote left open runs to the end, so the word never reads as ccx-agent followed by a subcommand.
+function firstWord(s: string): [string, string] {
+  let i = s.length - s.trimStart().length;
+  let w = "";
+  while (i < s.length && !/\s/.test(s[i]!)) {
+    const c = s[i]!;
+    if (c === "'" || c === '"') {
+      const close = s.indexOf(c, i + 1);
+      const j = close < 0 ? s.length : close;
+      w += s.slice(i + 1, j);
+      i = j + 1;
+    } else if (c === "\\" && i + 1 < s.length) {
+      w += s[i + 1];
+      i += 2;
+    } else {
+      w += c;
+      i++;
+    }
+  }
+  return [w, s.slice(i)];
 }
 
 type Entry = { matcher?: string; hooks?: { type?: string; command?: string; timeout?: number }[] };
@@ -71,7 +92,7 @@ export function withHooks(config: Record<string, unknown>, tool: Tool, agent: st
   const hooks = config.hooks as Record<string, Entry[]>;
   for (const event of spec.events) {
     const entries = (hooks[event] ??= []);
-
+    if (!Array.isArray(entries)) throw new Error(`its hooks.${event} is not a JSON array`);
     for (const e of entries) e.hooks = (e.hooks ?? []).filter((h) => !isCcxHook(h.command ?? "", spec.sub));
     const kept = entries.filter((e) => (e.hooks ?? []).length > 0);
     const hook = { type: "command", command: `${quote(agent)} ${spec.sub}`, ...(spec.timeout ? { timeout: spec.timeout } : {}) };
@@ -80,24 +101,44 @@ export function withHooks(config: Record<string, unknown>, tool: Tool, agent: st
   return JSON.stringify(config) !== before;
 }
 
-// The directory the file is (or would be created) in, with every link on the way resolved: the nearest
-// existing ancestor, so a config not written yet under a linked dir is placed where it would really go.
-async function realDir(path: string): Promise<string> {
-  if (existsSync(path)) return dirname(await realpath(path));
-  let dir = dirname(path);
-  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
-  return realpath(dir);
+// The nearest directory at or above dir that exists, links resolved, with the missing part put back on.
+async function realDirOf(dir: string): Promise<string> {
+  let base = resolve(dir);
+  const missing: string[] = [];
+  while (!existsSync(base) && dirname(base) !== base) {
+    missing.unshift(basename(base));
+    base = dirname(base);
+  }
+  return join(await realpath(base), ...missing);
+}
+
+/**
+ * Where the file really is, or would be created: every link on the way followed, a dangling one too (realpath
+ * gives up on it, and renaming over the link itself would replace the link with a file).
+ */
+export async function target(path: string): Promise<string> {
+  let p = path;
+  for (let hops = 0; hops < 40; hops++) {
+    p = join(await realDirOf(dirname(p)), basename(p));
+    const st = await lstat(p).catch(() => null);
+    if (!st?.isSymbolicLink()) return p;
+    p = resolve(dirname(p), await readlink(p));
+  }
+  throw new Error(`more than 40 links from ${path}`);
 }
 
 async function inGitWorkTree(dir: string): Promise<boolean> {
-  const p = Bun.spawn(["git", "-C", dir, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "ignore" });
+  let base = dir;
+  while (!existsSync(base) && dirname(base) !== base) base = dirname(base);
+  // No git here means no work tree to keep out of; wiring does not need git.
+  if (!Bun.which("git", { PATH: process.env.PATH ?? "" })) return false;
+  const p = Bun.spawn(["git", "-C", base, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "ignore" });
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
   return code === 0 && out.trim() === "true";
 }
 
-// Through the link, next to the file, then renamed over it: a cut write is never read, the link stays a link, and the mode stays.
-async function writeBack(path: string, text: string): Promise<void> {
-  const real = existsSync(path) ? await realpath(path) : path;
+// To the file the links lead to, next to it, then renamed over it: a cut write is never read, the link stays a link, and the mode stays.
+async function writeBack(real: string, text: string): Promise<void> {
   const mode = existsSync(real) ? (await stat(real)).mode & 0o777 : 0o600;
   await mkdir(dirname(real), { recursive: true });
   const tmp = join(dirname(real), `.${process.pid}.ccx-hooks.tmp`);
@@ -143,18 +184,19 @@ export async function wireHooks(tools: Tool[], o: WireOptions = {}): Promise<num
         continue;
       }
 
-      // A config that really lives in a repo (linked into a dotfiles checkout, by the file or a dir above it, or
-      // pointed at by CLAUDE_CONFIG_DIR) is that repo's to change: writing would edit its work tree behind it.
-      // Say what to add instead.
-      const dir = await realDir(path);
-      if (await inGitWorkTree(dir)) {
+      // A config linked into a repo (a dotfiles checkout; the file or a dir above it is the link) is that repo's
+      // to change: writing would edit its work tree behind it. Say what to add instead. With no link on the way
+      // it is written even inside a repo: a home kept in git (yadm), or a CLAUDE_CONFIG_DIR pointed there, is
+      // the user's own choice of place.
+      const real = await target(path);
+      if (real !== resolve(path) && (await inGitWorkTree(dirname(real)))) {
         const add = Object.fromEntries(spec.events.map((e) => [e, [(config.hooks as Record<string, Entry[]>)[e]!.at(-1)]]));
-        out(`${tool}: ${path} is in a git work tree (${dir}); not writing it. Add these hooks there:`);
+        out(`${tool}: ${path} links into a git work tree (${real}); not writing it. Add these hooks there:`);
         out(JSON.stringify({ hooks: add }, null, 2));
         continue;
       }
 
-      await writeBack(path, JSON.stringify(config, null, 2) + "\n");
+      await writeBack(real, JSON.stringify(config, null, 2) + "\n");
       // Measured on devin 3000.12.57: a running session reads its hooks when it starts, not after.
       out(`${tool}: wired \`${quote(agent)} ${spec.sub}\` into ${path} (${spec.events.join(", ")}); restart sessions already running to pick them up`);
     } catch (e) {
