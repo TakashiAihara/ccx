@@ -268,6 +268,20 @@ Then two steps install does not do for you:
 
 ## Wiring the hooks
 
+`ccx hooks install <tool>...` does this for you (install.sh runs it with the tools you pick):
+
+```bash
+ccx hooks install claude devin
+```
+
+- `claude` adds `ccx-agent hook` to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`) on the four events below; `devin` adds `ccx-agent devin-hook` to `~/.config/devin/config.json` on the three under "Devin (messages)".
+- The hooks run the `ccx-agent` next to `ccx` (where install.sh puts both), else the one on PATH, by its absolute path; with neither, they call `ccx-agent` by name and it says so.
+- Hooks already there stay. ccx's own of that kind are replaced by one per event, so a rerun, or a ccx-agent moved elsewhere, leaves one each.
+- A config linked into a git work tree (a dotfiles checkout; the file or a dir above it is the link, dangling or not) is not written: it prints the hooks to add there instead. With no link on the way it is written even inside a repo (a home kept in git).
+- Sessions already running get the hooks when started again (Devin reads them at start).
+
+To wire them by hand instead, the entries are below.
+
 The center builds `ccx session ls` from hook events alone: a session appears with its
 first event, its age is its latest event, and it counts as ended once a `SessionEnd`
 arrives. The smallest set that keeps that list right:
@@ -310,7 +324,6 @@ Add these entries to `~/.config/devin/config.json`, appending to each event's ar
 { "hooks": {
   "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ],
   "PreToolUse":       [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ],
-
   "Stop":             [ { "hooks": [ { "type": "command", "command": "ccx-agent devin-hook", "timeout": 10 } ] } ]
 } }
 ```
