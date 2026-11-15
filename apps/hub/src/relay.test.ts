@@ -84,11 +84,14 @@ test("どの agent も取りに来ていなければ、そう言って断る", a
   expect((e as ConnectError).rawMessage).toBe("no ccx-agent has asked this center for messages as m2/dev; none has yet");
 });
 
-test("宛先の名前がどれだけ長くても、断る理由の文は detail と同じ長さまで", async () => {
-  const e = await client.putMessage({ request: req("b", "x".repeat(8000), "u") }).catch((x: unknown) => ConnectError.from(x));
-  expect((e as ConnectError).code).toBe(Code.InvalidArgument);
-  expect(Buffer.byteLength((e as ConnectError).rawMessage)).toBeLessThanOrEqual(4096);
-  expect((e as ConnectError).rawMessage).toEndWith("these have: m2/dev");
+test("長い名前は 1 つずつ切り、大文字小文字だけ違う候補は先頭に残る", async () => {
+  await claimed("WIN-TAKASHI", "root");
+  await claimed("z".repeat(200), "root");
+  const e = await client.putMessage({ request: req("b", "win-takashi", "root") }).catch((x: unknown) => ConnectError.from(x));
+  expect((e as ConnectError).rawMessage).toBe(`no ccx-agent has asked this center for messages as win-takashi/root; these have: WIN-TAKASHI/root, m2/dev, ${"z".repeat(128)}…`);
+
+  const long = await client.putMessage({ request: req("b", "x".repeat(8000), "u") }).catch((x: unknown) => ConnectError.from(x));
+  expect((long as ConnectError).rawMessage).toStartWith(`no ccx-agent has asked this center for messages as ${"x".repeat(128)}…; these have: m2/dev, WIN-TAKASHI/root, `);
 });
 
 test("取りに来た宛先は 10 件まで挙げる", async () => {

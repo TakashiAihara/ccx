@@ -45,6 +45,10 @@ const MAX_OPTIONS = 16;
 /** 宛先を知らないと断るときに添える、名乗っている宛先の数の上限 */
 const MAX_KNOWN = 10;
 
+/** その文に載せる 1 つの名前 (machine/user) の長さの上限。文全体を切ると、先頭に置いた候補が長い名前に押し出される */
+const MAX_NAME = 128;
+const shortName = (s: string): string => (s.length > MAX_NAME ? `${s.slice(0, MAX_NAME)}…` : s);
+
 /**
  * 取りに来たことの無い (machine, user) 宛ての置き方を断る理由 (#319)。置いても取る agent が居ないので、送り手は
  * 30 秒待ってから「agent が動いていないのでは」と言うことになり、名前の綴り違い (uname -n の大文字など) に辿り着けない。
@@ -58,9 +62,9 @@ function unknownTarget(db: Db, machine: string, user: string): string | null {
   const near = (k: { machine: string; user: string }) => k.machine.toLowerCase() === machine.toLowerCase() && k.user.toLowerCase() === user.toLowerCase();
   const names = known
     .sort((a, b) => Number(near(b)) - Number(near(a)) || `${a.machine}/${a.user}`.localeCompare(`${b.machine}/${b.user}`))
-    .map((k) => `${k.machine}/${k.user}`);
+    .map((k) => shortName(`${k.machine}/${k.user}`));
   const listed = names.length === 0 ? "none has yet" : `these have: ${names.slice(0, MAX_KNOWN).join(", ")}${names.length > MAX_KNOWN ? ", …" : ""}`;
-  return capDetail(`no ccx-agent has asked this center for messages as ${machine}/${user}; ${listed}`);
+  return `no ccx-agent has asked this center for messages as ${shortName(`${machine}/${user}`)}; ${listed}`;
 }
 
 /** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
