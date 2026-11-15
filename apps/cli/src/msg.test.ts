@@ -295,19 +295,25 @@ test("--wait takes whole seconds up to an hour", async () => {
 });
 
 test("a --wait that runs out before a done says so and exits 3; a done, or no --wait, exits 0", async () => {
+  // The agent holds a wait until it runs out, so the fake does too.
   const question = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };
     yield { state: SendResponse_State.QUESTION, detail: "prompt p1" };
+    await Bun.sleep(1100);
   });
-  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
-  expect([r.code, r.out.trim().split("\n").at(-1)]).toEqual([WAIT_RAN_OUT, "no done within 5 s (the receiver may still be on it)"]);
+  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
+  expect(r.code).toBe(WAIT_RAN_OUT);
   expect(WAIT_RAN_OUT).toBe(3);
+  expect(r.out.startsWith("sent\n")).toBe(true);
+  expect(r.out.trim().split("\n").at(-1)).toBe("no done within 1 s (the receiver may still be on it)");
 
+  // A done that comes at the very end of the wait is still a done.
   const done = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };
+    await Bun.sleep(1100);
     yield { state: SendResponse_State.DONE, text: "ok" };
   });
-  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
   expect([d.code, d.out]).toEqual([0, "sent\ndone\n  ok\n"]);
 
   const plain = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "x"], {});
@@ -315,7 +321,16 @@ test("a --wait that runs out before a done says so and exits 3; a done, or no --
   expect(plain.out).not.toContain("no done within");
 });
 
-// Bun's fetch cuts a response that sends nothing for 5 minutes; a --wait on an unanswered question goes past that (#318).
+// A Claude Code receiver (or an urgent send to a working Devin) has no turn to wait on: the agent ends the stream at once.
+test("a --wait whose stream ends before the wait has passed is not a wait that ran out", async () => {
+  const quick = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+  });
+  const r = await runCli(["msg", "send", "t", "--socket", quick, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([r.code, r.out]).toEqual([0, "sent\n"]);
+});
+
+// Bun's fetch cuts a response that has been silent for about 6 minutes; a --wait on an unanswered question goes past that (#318).
 test("the agent's stream is fetched with Bun's own timeout off", async () => {
   const real = globalThis.fetch;
   let seen: Record<string, unknown> | undefined;
@@ -332,4 +347,5 @@ test("the agent's stream is fetched with Bun's own timeout off", async () => {
     globalThis.fetch = real;
   }
   expect(seen).toMatchObject({ unix: "/nonexistent.sock", timeout: false });
+  expect(seen?.signal).toBeInstanceOf(AbortSignal);
 });

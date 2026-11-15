@@ -68,7 +68,8 @@ export function unixTransport(socketPath: string): Transport {
   return createConnectTransport({
     // The host is not used: Bun's fetch takes `unix` and connects to the socket. timeout: false turns off
     // Bun's own cut of a silent response (Bun 1.4.3: a 420 s silence was cut at 360 s, 330 s was not), which a
-    // --wait on an unanswered question passes (#318); sendMessage's AbortSignal is the bound.
+    // --wait on an unanswered question passes (#318). Nothing else bounds the stream, so a caller passes an
+    // AbortSignal, as sendMessage does.
     baseUrl: "http://ccx-agent",
     fetch: ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, unix: socketPath, timeout: false } as RequestInit)) as typeof fetch,
   });
@@ -159,13 +160,17 @@ export function registerMsg(program: Command): void {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
         o.from ??= defaultSender();
+        const started = Date.now();
         const done = await sendMessage(target, body.join(" "), o, (l) => {
           // A later message's first ack is queued; sent follows when a turn takes it.
           state = l.startsWith("queued") ? "queued" : "sent";
           console.log(l);
         });
-        // The agent ends a wait quietly (the message is in either way); say so here, apart from a done.
-        if ((o.wait ?? 0) > 0 && !done) {
+        // The agent ends a wait quietly (the message is in either way); say so here, apart from a done. A stream that
+        // ends sooner had no turn to wait on (a Claude Code receiver, an urgent send to a working Devin): the agent's
+        // wait starts after this one, so a wait that ran out always ends past --wait.
+        const wait = (o.wait ?? 0) * 1000;
+        if (wait > 0 && !done && Date.now() - started >= wait) {
           console.log(`no done within ${o.wait} s (the receiver may still be on it)`);
           process.exitCode = WAIT_RAN_OUT;
         }
