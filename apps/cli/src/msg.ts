@@ -115,7 +115,7 @@ function parseTimeout(v: string): number {
   return n;
 }
 
-/** Hands each ack to out as one line, and says whether a done came. Throws a ConnectError when nothing was sent. */
+/** Hands each ack to out as one line, and says whether the agent said the --wait ran out. Throws a ConnectError when nothing was sent. */
 export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void): Promise<boolean> {
   if (!Object.hasOwn(MODES, o.mode)) throw new Error(`--mode must be one of ${Object.keys(MODES).join(", ")}`);
   const mode = MODES[o.mode];
@@ -127,12 +127,14 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
   const timeout = o.timeout ?? 60_000;
   const signal = AbortSignal.timeout(wait > 0 ? Math.max(timeout, (wait + 60) * 1000) : timeout);
   const where = { machine: o.machine ?? "", user: o.user ?? "" };
-  let done = false;
   for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where }, { signal })) {
-    done ||= ev.state === SendResponse_State.DONE;
+    if (ev.state === SendResponse_State.WAIT_ENDED) {
+      out(`no done within ${wait} s (the receiver may still be on it)`);
+      return true;
+    }
     for (const l of ackLines(ev)) out(l);
   }
-  return done;
+  return false;
 }
 
 /** Exit code of a send that went through but whose --wait ran out before a done. */
@@ -160,20 +162,14 @@ export function registerMsg(program: Command): void {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
         o.from ??= defaultSender();
-        const started = Date.now();
-        const done = await sendMessage(target, body.join(" "), o, (l) => {
+        const ranOut = await sendMessage(target, body.join(" "), o, (l) => {
           // A later message's first ack is queued; sent follows when a turn takes it.
           state = l.startsWith("queued") ? "queued" : "sent";
           console.log(l);
         });
-        // The agent ends a wait quietly (the message is in either way); say so here, apart from a done. A stream that
-        // ends sooner had no turn to wait on (a Claude Code receiver, which has no question / done yet): the agent's
-        // wait starts after this one, so a wait that ran out always ends past --wait.
-        const wait = (o.wait ?? 0) * 1000;
-        if (wait > 0 && !done && Date.now() - started >= wait) {
-          console.log(`no done within ${o.wait} s (the receiver may still be on it)`);
-          process.exitCode = WAIT_RAN_OUT;
-        }
+        // The message is in either way; only the exit code tells a wait that ran out from a done. A stream that
+        // ends with neither had no turn to wait on (a Claude Code receiver), or came from an older ccx-agent.
+        if (ranOut) process.exitCode = WAIT_RAN_OUT;
       } catch (e) {
         if (!(e instanceof ConnectError)) throw e;
         throw new Error(`${failurePrefix(e, state)}: ${e.rawMessage}`);

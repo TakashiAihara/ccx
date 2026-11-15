@@ -294,40 +294,37 @@ test("--wait takes whole seconds up to an hour", async () => {
   }
 });
 
-test("a --wait that runs out before a done says so and exits 3; a done, or no --wait, exits 0", async () => {
-  // The agent holds a wait until it runs out, so the fake does too.
+test("a --wait the agent says ran out is said and exits 3; a done, or no --wait, exits 0", async () => {
   const question = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };
     yield { state: SendResponse_State.QUESTION, detail: "prompt p1" };
-    await Bun.sleep(1100);
+    yield { state: SendResponse_State.WAIT_ENDED };
   });
-  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
-  expect(r.code).toBe(WAIT_RAN_OUT);
+  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([r.code, r.out]).toEqual([WAIT_RAN_OUT, "sent\nquestion  prompt p1\nno done within 5 s (the receiver may still be on it)\n"]);
   expect(WAIT_RAN_OUT).toBe(3);
-  expect(r.out.startsWith("sent\n")).toBe(true);
-  expect(r.out.trim().split("\n").at(-1)).toBe("no done within 1 s (the receiver may still be on it)");
 
-  // A done that comes at the very end of the wait is still a done.
   const done = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };
-    await Bun.sleep(1100);
     yield { state: SendResponse_State.DONE, text: "ok" };
   });
-  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
+  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
   expect([d.code, d.out]).toEqual([0, "sent\ndone\n  ok\n"]);
 
-  const plain = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "x"], {});
-  expect(plain.code).toBe(0);
-  expect(plain.out).not.toContain("no done within");
+  const plain = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "x"], {});
+  expect([plain.code, plain.out]).toEqual([0, "sent\ndone\n  ok\n"]);
 });
 
-// A Claude Code receiver has no turn to wait on (no question / done yet): the agent ends the stream at once.
-test("a --wait whose stream ends before the wait has passed is not a wait that ran out", async () => {
-  const quick = fakeAgent(async function* () {
+// A Claude Code receiver has no turn to wait on (no question / done yet): its acks end as without --wait, and may
+// take longer than a short --wait (up to about 10 s for not-started).
+test("a --wait whose stream ends without the agent saying it ran out exits 0, however long it took", async () => {
+  const claude = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };
+    await Bun.sleep(1100);
+    yield { state: SendResponse_State.NOT_STARTED };
   });
-  const r = await runCli(["msg", "send", "t", "--socket", quick, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
-  expect([r.code, r.out]).toEqual([0, "sent\n"]);
+  const r = await runCli(["msg", "send", "t", "--socket", claude, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
+  expect([r.code, r.out]).toEqual([0, "sent\nnot-started\n"]);
 });
 
 // Bun's fetch cuts a response that has been silent for about 6 minutes; a --wait on an unanswered question goes past that (#318).

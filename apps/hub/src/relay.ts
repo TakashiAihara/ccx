@@ -33,8 +33,8 @@ export const KEEP_MS = 2 * 60 * 60 * 1000;
 export const MAX_REQUEST_BYTES = 70 * 1024;
 
 /**
- * 1 通の ack の数の上限。届け方が出す ack は queued / sent / working・not-started / done の 4 つと、question が agent
- * の上限 (MaxQuestionAcks、8) まで
+ * 1 通の ack の数の上限。届け方が出す ack は queued / sent / working・not-started / done・wait-ended の 4 つと、question が
+ * agent の上限 (MaxQuestionAcks、8) まで
  */
 export const MAX_ACKS = 16;
 
