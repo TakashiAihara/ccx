@@ -140,7 +140,7 @@ ccx msg send excited-giraffe --summary "pick one" --wait 600 "Which of the two p
 ccx msg send -m ccx1 excited-giraffe --summary "review: 3 findings" --mode urgent "src/foo.ts: ..."
 ```
 
-- `-m <machine>` / `-u <user>` name the ccx-agent that delivers it, the same flags as `ccx session resume`. Either left out is this agent's own; both left out (or naming this agent) is a local send.
+- `-m <machine>` / `-u <user>` name the ccx-agent that delivers it, the same flags as `ccx session resume`. Either left out is this agent's own; both left out (or naming this agent) is a local send. The names are matched as they are, case included: the machine is what that agent reports (its `uname -n`, as `ccx session ls` shows it), which can differ from an ssh host name. A machine / user that no ccx-agent has ever reported to this center is refused at once as `not sent`, with the ones it knows listed (those differing in case alone first), instead of waiting out the 30 s below.
 - The receiving ccx-agent delivers it exactly as a local send, so the modes, refusals and acks above hold unchanged. The sender sees the same lines; an error from the other side or the center names it as `<machine>/<user>`.
 
 ```mermaid

@@ -4,7 +4,7 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import type { Db } from "./db/open.ts";
-import { relayMessages } from "./db/schema.ts";
+import { agentRunning, relayMessages } from "./db/schema.ts";
 import { capDetail, wakeAgent } from "./resume.ts";
 import {
   MessageRelayService,
@@ -41,6 +41,26 @@ export const MAX_ACKS = 16;
 /** 1 つの question の ack に残す問いの数と、1 問の選択肢の数 */
 const MAX_QUESTIONS = 8;
 const MAX_OPTIONS = 16;
+
+/** 宛先を知らないと断るときに添える、名乗っている宛先の数の上限 */
+const MAX_KNOWN = 10;
+
+/**
+ * 一覧を送ってきたことの無い (machine, user) 宛ての置き方を断る理由 (#319)。置いても取る agent が居ないので、送り手は
+ * 30 秒待ってから「agent が動いていないのでは」と言うことになり、名前の綴り違い (uname -n の大文字など) に辿り着けない。
+ * 大文字小文字だけ違う宛先を先頭に並べる。一覧を送ったことはあるが今は止まっている agent は、従来どおり待ちで分かる
+ */
+function unknownTarget(db: Db, machine: string, user: string): string | null {
+  const known = db.select({ machine: agentRunning.machine, user: agentRunning.user }).from(agentRunning).all();
+  if (known.some((k) => k.machine === machine && k.user === user)) return null;
+
+  const near = (k: { machine: string; user: string }) => k.machine.toLowerCase() === machine.toLowerCase() && k.user.toLowerCase() === user.toLowerCase();
+  const names = known
+    .sort((a, b) => Number(near(b)) - Number(near(a)) || `${a.machine}/${a.user}`.localeCompare(`${b.machine}/${b.user}`))
+    .map((k) => `${k.machine}/${k.user}`);
+  const listed = names.length === 0 ? "none has yet" : `these have: ${names.slice(0, MAX_KNOWN).join(", ")}${names.length > MAX_KNOWN ? ", …" : ""}`;
+  return `no ccx-agent has reported to this center as ${machine}/${user}; ${listed}`;
+}
 
 /** Connect のコードの最大 (UNAUTHENTICATED = 16)。送り手はこの値をそのままエラーのコードにする */
 const MAX_CODE = 16;
@@ -97,6 +117,9 @@ export function relayImpl(db: Db, now: () => number, agentToken?: string): Servi
       if (!r?.machine || !r.user) throw invalid("request.machine and request.user are required");
       const bytes = toBinary(SendRequestSchema, r);
       if (bytes.length > MAX_REQUEST_BYTES) throw invalid(`request is ${bytes.length} bytes, over the ${MAX_REQUEST_BYTES}-byte limit`);
+      // InvalidArgument は送り手の agent が「置かれていない (打っていない)」と読むコード (relay.go の putNeverStored)
+      const unknown = unknownTarget(db, r.machine, r.user);
+      if (unknown) throw invalid(unknown);
       const nowMs = now();
 
       const row: Row = {

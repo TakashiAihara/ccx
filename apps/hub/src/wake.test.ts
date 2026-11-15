@@ -366,6 +366,8 @@ test("a message put for a machine wakes that machine's agent, and only that one 
   // Another machine with an endpoint that must not be woken
   const other = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { hits.push({ path: "other", auth: null, method: "POST" }); return Response.json({}); } });
   ingest(db, [running({ session_ids: [], api_url: `http://127.0.0.1:${other.port}` }, "m3")], now);
+  // m1's agent reports no endpoint, so a message for it is kept but wakes nothing
+  ingest(db, [running({ session_ids: [] }, "m1")], now);
   const msg = (machine: string) => ({ request: { target: "d", mode: DeliveryMode.URGENT, summary: "s", sender: "me", body: "b", machine, user: "dev" } });
 
   try {
