@@ -64,9 +64,11 @@ func Wanted(payload []byte) bool {
 	return false
 }
 
-// typedSend is a typed send waiting for its turn: the next UserPromptSubmit whose
-// prompt is its text goes to the first such send in typing order, so two sends
-// of the same text each get one turn and in order.
+// typedSend is a typed send waiting for its turn: a UserPromptSubmit whose prompt
+// is its text goes to the first such send still waiting (they register under the
+// typing lock), so two sends of the same text each get one turn. The hooks come
+// as separate processes, so two such turns starting close together can swap, and
+// a send whose text Devin lost (typed while a tool ran) takes the next one's turn.
 type typedSend struct {
 	text string
 }

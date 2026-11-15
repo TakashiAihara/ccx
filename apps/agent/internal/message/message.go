@@ -184,9 +184,9 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if events == nil {
 		return nil
 	}
-	// The turn that took it is the UserPromptSubmit Hook handed to this send: the
-	// first whose prompt is exactly what was typed (Devin hands the typed text
-	// over unchanged, devin 3000.12.57), to the sends of that text in typing order.
+	// The turn that took it is the UserPromptSubmit Hook handed to this send: one
+	// whose prompt is exactly what was typed (Devin hands the typed text over
+	// unchanged, devin 3000.12.57); see typedSend for sends of the same text.
 	mine := func(e hookEvent) bool { return e.Name == "UserPromptSubmit" && e.owner == ts }
 	return watch(ctx, events, wait, mine, nil, emit)
 }
