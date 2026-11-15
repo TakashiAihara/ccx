@@ -113,28 +113,39 @@ async function realDirOf(dir: string): Promise<string> {
 }
 
 /**
- * Where the file really is, or would be created: every link on the way followed, a dangling one too (realpath
- * gives up on it, and renaming over the link itself would replace the link with a file).
+ * Where the file really is, or would be created, and where each link on the way led (resolved): every link
+ * followed, a dangling one too (realpath gives up on it, and renaming over the link itself would replace the
+ * link with a file).
  */
-export async function target(path: string): Promise<string> {
-  let p = path;
-  for (let hops = 0; hops < 40; hops++) {
-    p = join(await realDirOf(dirname(p)), basename(p));
-    const st = await lstat(p).catch(() => null);
-    if (!st?.isSymbolicLink()) return p;
-    p = resolve(dirname(p), await readlink(p));
+export async function target(path: string): Promise<{ real: string; via: string[] }> {
+  const via: string[] = [];
+  let parts = resolve(path).split("/").filter(Boolean);
+  let cur = "/";
+  for (let hops = 0; parts.length > 0; ) {
+    const next = join(cur, parts.shift()!);
+    const st = await lstat(next).catch(() => null);
+    if (!st?.isSymbolicLink()) {
+      cur = next;
+      continue;
+    }
+    if (++hops > 40) throw new Error(`more than 40 links from ${path}`);
+    const to = resolve(cur, await readlink(next));
+    via.push(await realDirOf(to));
+    parts = [...to.split("/").filter(Boolean), ...parts];
+    cur = "/";
   }
-  throw new Error(`more than 40 links from ${path}`);
+  return { real: cur, via };
 }
 
-async function inGitWorkTree(dir: string): Promise<boolean> {
+// The work tree dir is in (git prints it with links resolved); null outside one, or with no git to ask
+// (wiring does not need git).
+async function workTree(dir: string): Promise<string | null> {
   let base = dir;
   while (!existsSync(base) && dirname(base) !== base) base = dirname(base);
-  // No git here means no work tree to keep out of; wiring does not need git.
-  if (!Bun.which("git", { PATH: process.env.PATH ?? "" })) return false;
-  const p = Bun.spawn(["git", "-C", base, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "ignore" });
+  if (!Bun.which("git", { PATH: process.env.PATH ?? "" })) return null;
+  const p = Bun.spawn(["git", "-C", base, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "ignore" });
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-  return code === 0 && out.trim() === "true";
+  return code === 0 && out.trim() ? out.trim() : null;
 }
 
 // To the file the links lead to, next to it, then renamed over it: a cut write is never read, the link stays a link, and the mode stays.
@@ -188,8 +199,11 @@ export async function wireHooks(tools: Tool[], o: WireOptions = {}): Promise<num
       // to change: writing would edit its work tree behind it. Say what to add instead. With no link on the way
       // it is written even inside a repo: a home kept in git (yadm), or a CLAUDE_CONFIG_DIR pointed there, is
       // the user's own choice of place.
-      const real = await target(path);
-      if (real !== resolve(path) && (await inGitWorkTree(dirname(real)))) {
+      // A link the OS put there (/var -> /private/var, /home -> /var/home) leads to a dir above the work tree,
+      // not into it, so it does not count.
+      const { real, via } = await target(path);
+      const tree = await workTree(dirname(real));
+      if (tree && via.some((to) => to.startsWith(tree))) {
         const add = Object.fromEntries(spec.events.map((e) => [e, [(config.hooks as Record<string, Entry[]>)[e]!.at(-1)]]));
         out(`${tool}: ${path} links into a git work tree (${real}); not writing it. Add these hooks there:`);
         out(JSON.stringify({ hooks: add }, null, 2));

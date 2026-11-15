@@ -229,3 +229,48 @@ test("with no git on PATH, a linked config is written: there is no git to ask ab
   }
   expect(read(target).hooks.Stop).toHaveLength(1);
 });
+
+// Like macOS's /var -> /private/var or ostree's /home -> /var/home: a link above the work tree, not into it.
+test("a link the OS put above a home kept in git does not stop the write", async () => {
+  const real = join(home, "real");
+  mkdirSync(join(real, "u"), { recursive: true });
+  expect(Bun.spawnSync(["git", "init", "-q", join(real, "u")]).exitCode).toBe(0);
+  symlinkSync(real, join(home, "sys"));
+  const viaLink = join(home, "sys", "u");
+  expect(await wireHooks(["devin"], { home: viaLink, env: {}, agent: AGENT, out: (l) => lines.push(l), err: (l) => lines.push(`ERR ${l}`) })).toBe(0);
+  expect(read(join(real, "u", ".config", "devin", "config.json")).hooks.Stop).toHaveLength(1);
+  expect(lines.join("\n")).not.toContain("links into a git work tree");
+});
+
+test("a link to the repo's root, or one reached through another link, counts; a sibling dir that only shares a prefix does not", async () => {
+  const repo = join(home, "dot");
+  mkdirSync(repo);
+  expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
+  mkdirSync(join(home, ".config"), { recursive: true });
+  symlinkSync(repo, join(home, ".config", "devin"));
+  expect(await wire(["devin"])).toBe(0);
+  expect(readdirSync(repo)).toEqual([".git"]);
+
+  symlinkSync(home, join(home, "alias"));
+  mkdirSync(join(repo, "claude"));
+  symlinkSync(join(home, "alias", "dot", "claude"), join(home, ".claude"));
+  expect(await wire(["claude"])).toBe(0);
+  expect(readdirSync(join(repo, "claude"))).toEqual([]);
+  expect(lines.filter((l) => l.includes("links into a git work tree"))).toHaveLength(2);
+
+  const sibling = join(home, "dotfiles");
+  mkdirSync(join(sibling, "acct"), { recursive: true });
+  rmSync(join(home, ".claude"));
+  symlinkSync(join(sibling, "acct"), join(home, ".claude"));
+  expect(await wire(["claude"])).toBe(0);
+  expect(read(join(sibling, "acct", "settings.json")).hooks.Stop).toHaveLength(1);
+});
+
+test("a loop of links fails that tool instead of spinning", async () => {
+  mkdirSync(join(home, ".config", "devin"), { recursive: true });
+  symlinkSync(join(home, "b"), join(home, "a"));
+  symlinkSync(join(home, "a"), join(home, "b"));
+  symlinkSync(join(home, "a"), devinPath());
+  expect(await wire(["devin"])).toBe(1);
+  expect(lines.at(-1)).toContain("more than 40 links");
+});
