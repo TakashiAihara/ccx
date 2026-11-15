@@ -191,6 +191,13 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 	if e.Name == "" || e.Session == "" {
 		return "", connect.NewError(connect.CodeInvalidArgument, errors.New("devin hook payload without hook_event_name or session_id"))
 	}
+	// The prompt id goes into the acks' detail line: no escapes, no line breaks.
+	e.PromptID = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || refusedInBody(r) {
+			return -1
+		}
+		return r
+	}, e.PromptID)
 	h := d.hooks()
 	out := ""
 	if e.Name == "UserPromptSubmit" {

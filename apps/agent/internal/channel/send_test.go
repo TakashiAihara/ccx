@@ -100,6 +100,7 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 		{"failed after typing", &fakeMessages{err: connect.NewError(connect.CodeUnknown, errors.New("prompt broke"))}, "may have been sent (look at the receiver before sending again): prompt broke"},
 		{"lost after an ack", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "sent\nsent, then lost the ack stream: gone"},
 		{"lost after queued", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nqueued, then lost the ack stream: gone"},
+		{"lost after queued and taken", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}, {State: ccxv1.SendResponse_STATE_SENT}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nsent\nsent, then lost the ack stream: gone"},
 	} {
 		text, isErr := call(t, SendTool(sid, messagesClient(t, tc.f)), `{"target":"t","body":"b","summary":"s"}`)
 		if !isErr || text != tc.prefix {

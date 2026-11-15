@@ -78,8 +78,8 @@ test("only a failure marked not typed, or an unreachable agent, is called not se
   expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }))).toBe("not sent");
   expect(failurePrefix(new ConnectError("x", Code.Unknown))).toStartWith("may have been sent");
   expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition))).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), "sent  pane w1:p1")).toBe("sent, then lost the ack stream");
-  expect(failurePrefix(new ConnectError("x", Code.Unknown), "queued  read on x's next turn")).toBe("queued, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), "sent")).toBe("sent, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown), "queued")).toBe("queued, then lost the ack stream");
   const dir = mkdtempSync(join(tmpdir(), "ccx-msg-"));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
@@ -97,12 +97,13 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{ co
 }
 
 test("the command says what the first ack was when the stream breaks after it", async () => {
-  for (const [state, want] of [
-    [SendResponse_State.QUEUED, "queued, then lost the ack stream"],
-    [SendResponse_State.SENT, "sent, then lost the ack stream"],
+  for (const [states, want] of [
+    [[SendResponse_State.QUEUED], "queued, then lost the ack stream"],
+    [[SendResponse_State.SENT], "sent, then lost the ack stream"],
+    [[SendResponse_State.QUEUED, SendResponse_State.SENT], "sent, then lost the ack stream"],
   ] as const) {
     const socket = fakeAgent(async function* () {
-      yield { state };
+      for (const state of states) yield { state };
       throw new ConnectError("gone", Code.Unknown);
     });
     const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -124,9 +125,9 @@ func failure(err error, lines []string) string {
 	ce := new(connect.Error)
 	switch {
 	case len(lines) > 0:
-		// A later message is queued, not sent, until a turn takes it.
+		// A later message is queued, not sent, until a turn takes it (sent).
 		state := "sent"
-		if strings.HasPrefix(lines[0], "queued") {
+		if strings.HasPrefix(lines[0], "queued") && !slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "sent") }) {
 			state = "queued"
 		}
 		prefix = strings.Join(lines, "\n") + "\n" + state + ", then lost the ack stream"

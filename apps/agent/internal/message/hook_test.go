@@ -554,3 +554,15 @@ func TestATurnWithoutAPromptIDIsFollowed(t *testing.T) {
 		t.Fatalf("done %v", a)
 	}
 }
+
+func TestThePromptIDInADetailIsOneCleanLine(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
+	r.WaitSeconds = 30
+	run := start(d, r)
+	run.next(t)
+	hook(t, d, []byte(`{"hook_event_name":"UserPromptSubmit","session_id":"excited-giraffe","prompt":"go","prompt_id":"p\u001b[2J\n\tfake: done"}`))
+	if a := run.next(t); a.Detail != "taken by prompt p[2Jfake: done" {
+		t.Fatalf("detail %q", a.Detail)
+	}
+}
