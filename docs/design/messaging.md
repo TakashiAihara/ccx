@@ -38,12 +38,12 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 
 | Mode | Meaning | Devin (this build) | Claude Code (this build) |
 |---|---|---|---|
-| `later` | Not woken; read on its next turn | Refused, listing `after-turn, urgent` | Refused, listing `after-turn` (needs the UserPromptSubmit inbox, #25) |
+| `later` | Not woken; read on its next turn | `queued`; ccx-agent holds it and puts it into Devin's next turn through the `UserPromptSubmit` hook (below). Not typed into the pane | Refused, listing `after-turn` (needs the UserPromptSubmit inbox, #25) |
 | `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour), so a turn running past 10 s ends the acks at `not-started` |
 | `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up | Refused, listing `after-turn`: a channel event never interrupts a turn (`transport.md`) |
 
 - A mode the receiver lacks is refused, never swapped for a nearby one (#301).
-- `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). The end of the turn is Devin's `Stop` hook, not wired to ccx-agent yet. Until then ccx-agent also reads the screen: Devin draws `… (esc twice to interrupt)` while a turn runs (devin 3000.12.57), and `after-turn` is refused while it shows. A Devin that stops drawing that line would let `after-turn` in mid-turn again.
+- `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). Devin's `Stop` hook reports it (below), but `after-turn` does not wait on it yet. Meanwhile ccx-agent also reads the screen: Devin draws `… (esc twice to interrupt)` while a turn runs (devin 3000.12.57), and `after-turn` is refused while it shows. A Devin that stops drawing that line would let `after-turn` in mid-turn again.
 
 ## Devin delivery
 
@@ -107,6 +107,31 @@ sequenceDiagram
 - `sent` means the event was written to the channel. Claude Code does not acknowledge a channel notification (`transport.md`); a session that had not loaded the server as a channel would drop it silently. The transcript is the proof: Claude Code writes the event there when a turn takes it in, so `working` is that record carrying this message's `msg_id`, looked for only in what was written after the push.
 - The channel's instructions tell the session that `kind="message"` is from another session through ccx, that the sender is a label, and that `send_message` replies.
 
+## Devin's hooks: later, question and done
+
+```bash
+ccx msg send excited-giraffe --summary "pick one" --wait 600 "Which of the two plans?"
+# sent  pane w164:p1
+# working  agent_status working
+# question  prompt 7f3c…
+#   plan: Which plan?
+#     - A (keep the table)
+#     - B (split it)
+# done  prompt 7f3c…
+#   Went with B: ...
+```
+
+- The screen cannot show what Devin asks or when its turn ends; its hooks can. Devin runs `ccx-agent devin-hook` for `UserPromptSubmit`, `PreToolUse` (only `ask_user_question` reaches ccx-agent) and `Stop`; the command passes the payload to ccx-agent on its unix socket (`MessageService.DevinHook`) and prints what comes back. It always exits 0 and prints nothing when ccx-agent is down, so a missing agent never fails Devin's turn.
+- `--wait <seconds>` (up to 3600) keeps the send open after `sent`: a typed message's turn is the one whose `UserPromptSubmit` prompt is exactly the header and body typed (a `later` message's is the turn that took it, below). In that turn (the same `prompt_id`; devin 3000.12.57 gives every event of a turn the same one, and a Devin that does not would end the wait without `done`) each `ask_user_question` is a `question` ack with its questions and options (up to 8 such acks; each keeps 8 questions of 16 options, 4096 bytes a field), and the `Stop` is `done` with Devin's last answer (cut to 64 KiB here; the center keeps its last 4096 bytes for a relayed send). Control and format characters in what Devin wrote are dropped, as they are refused in a body. Running out of wait ends quietly: the message is in either way.
+- Two waiting sends of the same text (sender, summary and body) to one Devin each get one turn: the first such send still waiting takes the next such turn. Two turns starting close together can swap (each hook is its own process), and a send whose text Devin lost takes the next one's turn, leaving the later send to run out its wait. A send of the same text without `--wait` is not waiting for a turn, so a waiting one can take its turn too.
+- A turn that another prompt cuts into (an `urgent` send while it runs) ends with no `Stop` of its own: Devin starts a new prompt and only that one stops (devin 3000.12.57, measured with two sends of the same text). The first send sees no `done` and runs out its wait.
+- Devin waits for an answer to each question; a ninth question in the turn is not reported, so the sender sees no more until the wait runs out.
+- `later` types nothing. ccx-agent keeps the text (up to 32 per session) and the next `UserPromptSubmit` of that session takes all of it as `additionalContext`, which Devin reads with the prompt and does not draw on screen. A hook call that ends (its 2 s budget) before the answer goes back leaves the messages for the next turn and reports no `sent`; an answer lost after that check is not seen, since Devin does not acknowledge it. Messages put back go ahead of those queued since, but behind any another hook call took meanwhile, and can briefly hold more than 32. With `--wait`, the turn taking it gives `sent  taken by prompt …`, then `question` / `done` as above.
+- A prompt typed while Devin runs a tool (a background shell) is accepted by herdr and lost: no `UserPromptSubmit` fires (devin 3000.12.57, #302). `later` does not hit this, since nothing is typed.
+- Through the center, each delivery types in claim order and the next starts once one has typed, so one long `--wait` does not hold the rest; the center keeps up to 16 acks a message.
+- The hooks go in Devin's config (`~/.config/devin/config.json`), one entry per event, command `ccx-agent devin-hook`. Without them `later` stays queued and `--wait` sees no `question` / `done`; the ack line for `queued` says which hook takes it.
+- `--wait` to a Claude Code session changes nothing: its acks end as above, with no `question` / `done` yet.
+
 ## Another machine
 
 ```bash
@@ -138,17 +163,19 @@ sequenceDiagram
 
 - The connections go ccx-agent → center, as for ingest and resume; the center reaches a ccx-agent only to wake it, and a missed wake waits for the receiver's 5 s poll.
 - A message is handed out once. One the receiver claimed and never finished (it died mid-send) is not handed out again, so it is never typed twice; the sender ends at its `--timeout` as `may have been sent`, or `sent, then lost the ack stream` when `sent` had come back.
-- One not claimed within 30 s of the put is never handed out, and the sender says `not sent`. The receiver claims each message as it comes and keeps the claimed ones in a queue it delivers in order, so a message waiting behind another one is not lost to the 30 s; only a receiver that is down, not pointed at this center, or holding about 64 claimed messages not yet delivered lets it pass. A receiver that stops with messages in its queue leaves their senders at `may have been sent`.
-- A sender still waiting an hour after the put (a `--timeout` over an hour) finds the message gone from the center and ends as `may have been sent`.
+- One not claimed within 30 s of the put is never handed out, and the sender says `not sent`. The receiver claims each message as it comes and keeps the claimed ones in a queue it delivers in order, so a message waiting behind another one is not lost to the 30 s; only a receiver that is down, not pointed at this center, or holding 64 claimed messages not yet delivered (those still waiting with `--wait` included) lets it pass. A receiver that stops with messages in its queue leaves their senders at `may have been sent`.
+- A sender still waiting two hours after the put (a `--timeout` over two hours) finds the message gone from the center and ends as `may have been sent`.
 - A put the center refused (bad token, invalid request) or whose connection was refused is `not sent`. Any other failure (a timeout, a lost answer, and also a DNS or TLS failure, which this does not tell apart) may have stored it, so it ends as `may have been sent`.
 - The relayed message names where it goes, not where it came from: the receiver logs the center's id with the delivery, and the sender is only the `--from` label. Which machine sent it is not recorded.
-- The center keeps a message, body included, for an hour after it was put, and drops it on a later put.
+- The center keeps a message, body included, for two hours after it was put (a `--wait` can last an hour), and drops it on a later put.
 - The relay runs on every ccx-agent with an http(s) center and a machine and user name. Receiving needs no other setting; the wake needs the API url that the resume concern advertises (`docs/design/resume.md`).
 - Anyone holding the center's token can put a message for any machine, and claim and read one meant for another. That is the reach the token already has through resume, which starts sessions anywhere; MessageService itself stays off the agent's TCP listener.
 
 ## Not built yet
 
-- `question` and `done` acks, from Devin's `PreToolUse` (`ask_user_question`) and `Stop` hooks (#302).
-- `later` for Devin, and `after-turn` to a working Devin.
+- `after-turn` to a working Devin (it could queue like `later` and be taken by the next turn; today it is refused).
+- `later` and `--wait` survive no restart of ccx-agent: queued messages and waiting sends live in its memory. A session that never takes another turn keeps its queued messages (up to 32) until ccx-agent restarts.
+- Through the center, a receiver holds at most 64 messages claimed and not yet delivered, those waiting (`--wait`) included; past that it claims no more, and messages put meanwhile pass the 30 s and end as `not sent`.
+- `question` / `done` for Claude Code.
 - `later` and `urgent` for Claude Code, and receivers other than Devin and Claude Code (OpenCode, agy, pi; #301).
 - A way to list the reachable sessions across machines (the sender has to know the machine and the target).

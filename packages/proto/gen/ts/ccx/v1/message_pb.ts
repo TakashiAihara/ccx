@@ -12,7 +12,45 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/message.proto.
  */
 export const file_ccx_v1_message: GenFile = /*@__PURE__*/
-  fileDesc("ChRjY3gvdjEvbWVzc2FnZS5wcm90bxIGY2N4LnYxIo8BCgtTZW5kUmVxdWVzdBIOCgZ0YXJnZXQYASABKAkSIgoEbW9kZRgCIAEoDjIULmNjeC52MS5EZWxpdmVyeU1vZGUSDwoHc3VtbWFyeRgDIAEoCRIMCgRib2R5GAQgASgJEg4KBnNlbmRlchgFIAEoCRIPCgdtYWNoaW5lGAYgASgJEgwKBHVzZXIYByABKAkiowEKDFNlbmRSZXNwb25zZRIpCgVzdGF0ZRgBIAEoDjIaLmNjeC52MS5TZW5kUmVzcG9uc2UuU3RhdGUSDgoGZGV0YWlsGAIgASgJIlgKBVN0YXRlEhUKEVNUQVRFX1VOU1BFQ0lGSUVEEAASDgoKU1RBVEVfU0VOVBABEhEKDVNUQVRFX1dPUktJTkcQAhIVChFTVEFURV9OT1RfU1RBUlRFRBADItcCCg5SZWxheWVkTWVzc2FnZRIKCgJpZBgBIAEoCRIkCgdyZXF1ZXN0GAIgASgLMhMuY2N4LnYxLlNlbmRSZXF1ZXN0EioKBnB1dF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKY2xhaW1lZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLwoLZmluaXNoZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEiIKBGFja3MYBiADKAsyFC5jY3gudjEuU2VuZFJlc3BvbnNlEhIKCmVycm9yX2NvZGUYByABKAUSFQoNZXJyb3JfbWVzc2FnZRgIIAEoCRIRCglub3RfdHlwZWQYCSABKAgSDwoHZXhwaXJlZBgKIAEoCBITCgtjbGFpbV90b2tlbhgLIAEoCSI5ChFQdXRNZXNzYWdlUmVxdWVzdBIkCgdyZXF1ZXN0GAEgASgLMhMuY2N4LnYxLlNlbmRSZXF1ZXN0Ij0KElB1dE1lc3NhZ2VSZXNwb25zZRInCgdtZXNzYWdlGAEgASgLMhYuY2N4LnYxLlJlbGF5ZWRNZXNzYWdlIh8KEUdldE1lc3NhZ2VSZXF1ZXN0EgoKAmlkGAEgASgJIj0KEkdldE1lc3NhZ2VSZXNwb25zZRInCgdtZXNzYWdlGAEgASgLMhYuY2N4LnYxLlJlbGF5ZWRNZXNzYWdlIjQKE0NsYWltTWVzc2FnZVJlcXVlc3QSDwoHbWFjaGluZRgBIAEoCRIMCgR1c2VyGAIgASgJIj8KFENsYWltTWVzc2FnZVJlc3BvbnNlEicKB21lc3NhZ2UYASABKAsyFi5jY3gudjEuUmVsYXllZE1lc3NhZ2UiqwEKFFJlcG9ydE1lc3NhZ2VSZXF1ZXN0EgoKAmlkGAEgASgJEhMKC2NsYWltX3Rva2VuGAIgASgJEiIKBGFja3MYAyADKAsyFC5jY3gudjEuU2VuZFJlc3BvbnNlEhAKCGZpbmlzaGVkGAQgASgIEhIKCmVycm9yX2NvZGUYBSABKAUSFQoNZXJyb3JfbWVzc2FnZRgGIAEoCRIRCglub3RfdHlwZWQYByABKAgiFwoVUmVwb3J0TWVzc2FnZVJlc3BvbnNlKn4KDERlbGl2ZXJ5TW9kZRIdChlERUxJVkVSWV9NT0RFX1VOU1BFQ0lGSUVEEAASFwoTREVMSVZFUllfTU9ERV9MQVRFUhABEhwKGERFTElWRVJZX01PREVfQUZURVJfVFVSThACEhgKFERFTElWRVJZX01PREVfVVJHRU5UEAMyRQoOTWVzc2FnZVNlcnZpY2USMwoEU2VuZBITLmNjeC52MS5TZW5kUmVxdWVzdBoULmNjeC52MS5TZW5kUmVzcG9uc2UwATK4AgoTTWVzc2FnZVJlbGF5U2VydmljZRJDCgpQdXRNZXNzYWdlEhkuY2N4LnYxLlB1dE1lc3NhZ2VSZXF1ZXN0GhouY2N4LnYxLlB1dE1lc3NhZ2VSZXNwb25zZRJDCgpHZXRNZXNzYWdlEhkuY2N4LnYxLkdldE1lc3NhZ2VSZXF1ZXN0GhouY2N4LnYxLkdldE1lc3NhZ2VSZXNwb25zZRJJCgxDbGFpbU1lc3NhZ2USGy5jY3gudjEuQ2xhaW1NZXNzYWdlUmVxdWVzdBocLmNjeC52MS5DbGFpbU1lc3NhZ2VSZXNwb25zZRJMCg1SZXBvcnRNZXNzYWdlEhwuY2N4LnYxLlJlcG9ydE1lc3NhZ2VSZXF1ZXN0Gh0uY2N4LnYxLlJlcG9ydE1lc3NhZ2VSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChRjY3gvdjEvbWVzc2FnZS5wcm90bxIGY2N4LnYxIiMKEERldmluSG9va1JlcXVlc3QSDwoHcGF5bG9hZBgBIAEoDCIjChFEZXZpbkhvb2tSZXNwb25zZRIOCgZvdXRwdXQYASABKAkipQEKC1NlbmRSZXF1ZXN0Eg4KBnRhcmdldBgBIAEoCRIiCgRtb2RlGAIgASgOMhQuY2N4LnYxLkRlbGl2ZXJ5TW9kZRIPCgdzdW1tYXJ5GAMgASgJEgwKBGJvZHkYBCABKAkSDgoGc2VuZGVyGAUgASgJEg8KB21hY2hpbmUYBiABKAkSDAoEdXNlchgHIAEoCRIUCgx3YWl0X3NlY29uZHMYCCABKA0ihAEKCFF1ZXN0aW9uEhAKCHF1ZXN0aW9uGAEgASgJEg4KBmhlYWRlchgCIAEoCRIoCgdvcHRpb25zGAMgAygLMhcuY2N4LnYxLlF1ZXN0aW9uLk9wdGlvbhosCgZPcHRpb24SDQoFbGFiZWwYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkijQIKDFNlbmRSZXNwb25zZRIpCgVzdGF0ZRgBIAEoDjIaLmNjeC52MS5TZW5kUmVzcG9uc2UuU3RhdGUSDgoGZGV0YWlsGAIgASgJEiMKCXF1ZXN0aW9ucxgDIAMoCzIQLmNjeC52MS5RdWVzdGlvbhIMCgR0ZXh0GAQgASgJIo4BCgVTdGF0ZRIVChFTVEFURV9VTlNQRUNJRklFRBAAEg4KClNUQVRFX1NFTlQQARIRCg1TVEFURV9XT1JLSU5HEAISFQoRU1RBVEVfTk9UX1NUQVJURUQQAxIQCgxTVEFURV9RVUVVRUQQBBISCg5TVEFURV9RVUVTVElPThAFEg4KClNUQVRFX0RPTkUQBiLXAgoOUmVsYXllZE1lc3NhZ2USCgoCaWQYASABKAkSJAoHcmVxdWVzdBgCIAEoCzITLmNjeC52MS5TZW5kUmVxdWVzdBIqCgZwdXRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi4KCmNsYWltZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi8KC2ZpbmlzaGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCgRhY2tzGAYgAygLMhQuY2N4LnYxLlNlbmRSZXNwb25zZRISCgplcnJvcl9jb2RlGAcgASgFEhUKDWVycm9yX21lc3NhZ2UYCCABKAkSEQoJbm90X3R5cGVkGAkgASgIEg8KB2V4cGlyZWQYCiABKAgSEwoLY2xhaW1fdG9rZW4YCyABKAkiOQoRUHV0TWVzc2FnZVJlcXVlc3QSJAoHcmVxdWVzdBgBIAEoCzITLmNjeC52MS5TZW5kUmVxdWVzdCI9ChJQdXRNZXNzYWdlUmVzcG9uc2USJwoHbWVzc2FnZRgBIAEoCzIWLmNjeC52MS5SZWxheWVkTWVzc2FnZSIfChFHZXRNZXNzYWdlUmVxdWVzdBIKCgJpZBgBIAEoCSI9ChJHZXRNZXNzYWdlUmVzcG9uc2USJwoHbWVzc2FnZRgBIAEoCzIWLmNjeC52MS5SZWxheWVkTWVzc2FnZSI0ChNDbGFpbU1lc3NhZ2VSZXF1ZXN0Eg8KB21hY2hpbmUYASABKAkSDAoEdXNlchgCIAEoCSI/ChRDbGFpbU1lc3NhZ2VSZXNwb25zZRInCgdtZXNzYWdlGAEgASgLMhYuY2N4LnYxLlJlbGF5ZWRNZXNzYWdlIqsBChRSZXBvcnRNZXNzYWdlUmVxdWVzdBIKCgJpZBgBIAEoCRITCgtjbGFpbV90b2tlbhgCIAEoCRIiCgRhY2tzGAMgAygLMhQuY2N4LnYxLlNlbmRSZXNwb25zZRIQCghmaW5pc2hlZBgEIAEoCBISCgplcnJvcl9jb2RlGAUgASgFEhUKDWVycm9yX21lc3NhZ2UYBiABKAkSEQoJbm90X3R5cGVkGAcgASgIIhcKFVJlcG9ydE1lc3NhZ2VSZXNwb25zZSp+CgxEZWxpdmVyeU1vZGUSHQoZREVMSVZFUllfTU9ERV9VTlNQRUNJRklFRBAAEhcKE0RFTElWRVJZX01PREVfTEFURVIQARIcChhERUxJVkVSWV9NT0RFX0FGVEVSX1RVUk4QAhIYChRERUxJVkVSWV9NT0RFX1VSR0VOVBADMocBCg5NZXNzYWdlU2VydmljZRIzCgRTZW5kEhMuY2N4LnYxLlNlbmRSZXF1ZXN0GhQuY2N4LnYxLlNlbmRSZXNwb25zZTABEkAKCURldmluSG9vaxIYLmNjeC52MS5EZXZpbkhvb2tSZXF1ZXN0GhkuY2N4LnYxLkRldmluSG9va1Jlc3BvbnNlMrgCChNNZXNzYWdlUmVsYXlTZXJ2aWNlEkMKClB1dE1lc3NhZ2USGS5jY3gudjEuUHV0TWVzc2FnZVJlcXVlc3QaGi5jY3gudjEuUHV0TWVzc2FnZVJlc3BvbnNlEkMKCkdldE1lc3NhZ2USGS5jY3gudjEuR2V0TWVzc2FnZVJlcXVlc3QaGi5jY3gudjEuR2V0TWVzc2FnZVJlc3BvbnNlEkkKDENsYWltTWVzc2FnZRIbLmNjeC52MS5DbGFpbU1lc3NhZ2VSZXF1ZXN0GhwuY2N4LnYxLkNsYWltTWVzc2FnZVJlc3BvbnNlEkwKDVJlcG9ydE1lc3NhZ2USHC5jY3gudjEuUmVwb3J0TWVzc2FnZVJlcXVlc3QaHS5jY3gudjEuUmVwb3J0TWVzc2FnZVJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
+
+/**
+ * @generated from message ccx.v1.DevinHookRequest
+ */
+export type DevinHookRequest = Message<"ccx.v1.DevinHookRequest"> & {
+  /**
+   * The hook's stdin as Devin wrote it (JSON).
+   *
+   * @generated from field: bytes payload = 1;
+   */
+  payload: Uint8Array;
+};
+
+/**
+ * Describes the message ccx.v1.DevinHookRequest.
+ * Use `create(DevinHookRequestSchema)` to create a new message.
+ */
+export const DevinHookRequestSchema: GenMessage<DevinHookRequest> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 0);
+
+/**
+ * @generated from message ccx.v1.DevinHookResponse
+ */
+export type DevinHookResponse = Message<"ccx.v1.DevinHookResponse"> & {
+  /**
+   * What the hook prints on stdout for Devin. Empty prints nothing.
+   *
+   * @generated from field: string output = 1;
+   */
+  output: string;
+};
+
+/**
+ * Describes the message ccx.v1.DevinHookResponse.
+ * Use `create(DevinHookResponseSchema)` to create a new message.
+ */
+export const DevinHookResponseSchema: GenMessage<DevinHookResponse> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 1);
 
 /**
  * @generated from message ccx.v1.SendRequest
@@ -63,6 +101,15 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
    * @generated from field: string user = 7;
    */
   user: string;
+
+  /**
+   * How long, in seconds, to keep the stream open after sent for the receiver's question / done (up to 3600).
+   * 0 ends after working / not-started, as before. For later it is how long to wait for the receiver's next
+   * turn to take it. Needs Devin's hooks wired to `ccx-agent devin-hook`.
+   *
+   * @generated from field: uint32 wait_seconds = 8;
+   */
+  waitSeconds: number;
 };
 
 /**
@@ -70,7 +117,58 @@ export type SendRequest = Message<"ccx.v1.SendRequest"> & {
  * Use `create(SendRequestSchema)` to create a new message.
  */
 export const SendRequestSchema: GenMessage<SendRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 0);
+  messageDesc(file_ccx_v1_message, 2);
+
+/**
+ * A question the receiver put to its user (Devin's ask_user_question).
+ *
+ * @generated from message ccx.v1.Question
+ */
+export type Question = Message<"ccx.v1.Question"> & {
+  /**
+   * @generated from field: string question = 1;
+   */
+  question: string;
+
+  /**
+   * @generated from field: string header = 2;
+   */
+  header: string;
+
+  /**
+   * @generated from field: repeated ccx.v1.Question.Option options = 3;
+   */
+  options: Question_Option[];
+};
+
+/**
+ * Describes the message ccx.v1.Question.
+ * Use `create(QuestionSchema)` to create a new message.
+ */
+export const QuestionSchema: GenMessage<Question> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 3);
+
+/**
+ * @generated from message ccx.v1.Question.Option
+ */
+export type Question_Option = Message<"ccx.v1.Question.Option"> & {
+  /**
+   * @generated from field: string label = 1;
+   */
+  label: string;
+
+  /**
+   * @generated from field: string description = 2;
+   */
+  description: string;
+};
+
+/**
+ * Describes the message ccx.v1.Question.Option.
+ * Use `create(Question_OptionSchema)` to create a new message.
+ */
+export const Question_OptionSchema: GenMessage<Question_Option> = /*@__PURE__*/
+  messageDesc(file_ccx_v1_message, 3, 0);
 
 /**
  * @generated from message ccx.v1.SendResponse
@@ -87,6 +185,20 @@ export type SendResponse = Message<"ccx.v1.SendResponse"> & {
    * @generated from field: string detail = 2;
    */
   detail: string;
+
+  /**
+   * Set with QUESTION.
+   *
+   * @generated from field: repeated ccx.v1.Question questions = 3;
+   */
+  questions: Question[];
+
+  /**
+   * Set with DONE: the receiver's last answer, whole.
+   *
+   * @generated from field: string text = 4;
+   */
+  text: string;
 };
 
 /**
@@ -94,7 +206,7 @@ export type SendResponse = Message<"ccx.v1.SendResponse"> & {
  * Use `create(SendResponseSchema)` to create a new message.
  */
 export const SendResponseSchema: GenMessage<SendResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 1);
+  messageDesc(file_ccx_v1_message, 4);
 
 /**
  * @generated from enum ccx.v1.SendResponse.State
@@ -125,13 +237,35 @@ export enum SendResponse_State {
    * @generated from enum value: STATE_NOT_STARTED = 3;
    */
   NOT_STARTED = 3,
+
+  /**
+   * later: kept by ccx-agent for the receiver's next turn. The stream ends here unless wait_seconds is set,
+   * and then SENT follows when a turn takes it.
+   *
+   * @generated from enum value: STATE_QUEUED = 4;
+   */
+  QUEUED = 4,
+
+  /**
+   * The receiver, working on it, asked its user a question (questions). Its turn goes on once answered.
+   *
+   * @generated from enum value: STATE_QUESTION = 5;
+   */
+  QUESTION = 5,
+
+  /**
+   * The receiver's turn that took the message ended; text is its last answer. The stream ends.
+   *
+   * @generated from enum value: STATE_DONE = 6;
+   */
+  DONE = 6,
 }
 
 /**
  * Describes the enum ccx.v1.SendResponse.State.
  */
 export const SendResponse_StateSchema: GenEnum<SendResponse_State> = /*@__PURE__*/
-  enumDesc(file_ccx_v1_message, 1, 0);
+  enumDesc(file_ccx_v1_message, 4, 0);
 
 /**
  * @generated from message ccx.v1.RelayedMessage
@@ -216,7 +350,7 @@ export type RelayedMessage = Message<"ccx.v1.RelayedMessage"> & {
  * Use `create(RelayedMessageSchema)` to create a new message.
  */
 export const RelayedMessageSchema: GenMessage<RelayedMessage> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 2);
+  messageDesc(file_ccx_v1_message, 5);
 
 /**
  * @generated from message ccx.v1.PutMessageRequest
@@ -233,7 +367,7 @@ export type PutMessageRequest = Message<"ccx.v1.PutMessageRequest"> & {
  * Use `create(PutMessageRequestSchema)` to create a new message.
  */
 export const PutMessageRequestSchema: GenMessage<PutMessageRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 3);
+  messageDesc(file_ccx_v1_message, 6);
 
 /**
  * @generated from message ccx.v1.PutMessageResponse
@@ -250,7 +384,7 @@ export type PutMessageResponse = Message<"ccx.v1.PutMessageResponse"> & {
  * Use `create(PutMessageResponseSchema)` to create a new message.
  */
 export const PutMessageResponseSchema: GenMessage<PutMessageResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 4);
+  messageDesc(file_ccx_v1_message, 7);
 
 /**
  * @generated from message ccx.v1.GetMessageRequest
@@ -267,7 +401,7 @@ export type GetMessageRequest = Message<"ccx.v1.GetMessageRequest"> & {
  * Use `create(GetMessageRequestSchema)` to create a new message.
  */
 export const GetMessageRequestSchema: GenMessage<GetMessageRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 5);
+  messageDesc(file_ccx_v1_message, 8);
 
 /**
  * @generated from message ccx.v1.GetMessageResponse
@@ -284,7 +418,7 @@ export type GetMessageResponse = Message<"ccx.v1.GetMessageResponse"> & {
  * Use `create(GetMessageResponseSchema)` to create a new message.
  */
 export const GetMessageResponseSchema: GenMessage<GetMessageResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 6);
+  messageDesc(file_ccx_v1_message, 9);
 
 /**
  * @generated from message ccx.v1.ClaimMessageRequest
@@ -308,7 +442,7 @@ export type ClaimMessageRequest = Message<"ccx.v1.ClaimMessageRequest"> & {
  * Use `create(ClaimMessageRequestSchema)` to create a new message.
  */
 export const ClaimMessageRequestSchema: GenMessage<ClaimMessageRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 7);
+  messageDesc(file_ccx_v1_message, 10);
 
 /**
  * @generated from message ccx.v1.ClaimMessageResponse
@@ -325,7 +459,7 @@ export type ClaimMessageResponse = Message<"ccx.v1.ClaimMessageResponse"> & {
  * Use `create(ClaimMessageResponseSchema)` to create a new message.
  */
 export const ClaimMessageResponseSchema: GenMessage<ClaimMessageResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 8);
+  messageDesc(file_ccx_v1_message, 11);
 
 /**
  * @generated from message ccx.v1.ReportMessageRequest
@@ -374,7 +508,7 @@ export type ReportMessageRequest = Message<"ccx.v1.ReportMessageRequest"> & {
  * Use `create(ReportMessageRequestSchema)` to create a new message.
  */
 export const ReportMessageRequestSchema: GenMessage<ReportMessageRequest> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 9);
+  messageDesc(file_ccx_v1_message, 12);
 
 /**
  * @generated from message ccx.v1.ReportMessageResponse
@@ -387,7 +521,7 @@ export type ReportMessageResponse = Message<"ccx.v1.ReportMessageResponse"> & {
  * Use `create(ReportMessageResponseSchema)` to create a new message.
  */
 export const ReportMessageResponseSchema: GenMessage<ReportMessageResponse> = /*@__PURE__*/
-  messageDesc(file_ccx_v1_message, 10);
+  messageDesc(file_ccx_v1_message, 13);
 
 /**
  * How the receiver reads it (the three decided on #301).
@@ -458,6 +592,18 @@ export const MessageService: GenService<{
     methodKind: "server_streaming";
     input: typeof SendRequestSchema;
     output: typeof SendResponseSchema;
+  },
+  /**
+   * One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+   * ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+   * with the later messages to put into that turn. Nothing goes to the center.
+   *
+   * @generated from rpc ccx.v1.MessageService.DevinHook
+   */
+  devinHook: {
+    methodKind: "unary";
+    input: typeof DevinHookRequestSchema;
+    output: typeof DevinHookResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_ccx_v1_message, 0);

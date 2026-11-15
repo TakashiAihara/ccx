@@ -271,7 +271,6 @@ func TestSendRefusesWithoutTyping(t *testing.T) {
 	}{
 		{"text in the box", &fakeHerdr{panes: devinPanes, screens: []string{typedBox}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), connect.CodeFailedPrecondition, "has text in its input box"},
 		{"a dialog is open", &fakeHerdr{panes: devinPanes, screens: []string{"\x1b[1m❭ \x1b[0mAllow"}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT), connect.CodeFailedPrecondition, "not at its input box"},
-		{"later", &fakeHerdr{panes: devinPanes}, req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER), connect.CodeInvalidArgument, "it takes after-turn, urgent"},
 		{"after-turn while working", &fakeHerdr{panes: strings.Replace(devinPanes, `"agent":"devin","agent_status":"idle","agent_session":{"value":"excited-giraffe"}`, `"agent":"devin","agent_status":"working","agent_session":{"value":"excited-giraffe"}`, 1), screens: []string{emptyBox}}, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN), connect.CodeFailedPrecondition, "after-turn is refused"},
 		{"unknown target", &fakeHerdr{panes: devinPanes}, Request{Target: "nobody", Sender: "s", Summary: "x", Body: "b"}, connect.CodeNotFound, `no herdr pane has session "nobody"`},
 		{"not a devin", &fakeHerdr{panes: devinPanes}, Request{Target: "claude-one", Sender: "s", Summary: "x", Body: "b"}, connect.CodeFailedPrecondition, "is a claude session"},
@@ -386,21 +385,21 @@ func TestSendRefusesControlCharactersInTheBody(t *testing.T) {
 
 func TestServiceLogsEachSend(t *testing.T) {
 	var lines []string
-	f := &fakeHerdr{panes: devinPanes, screens: []string{typedBox}}
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
 	s := &Service{Devin: newDevin(f), Log: func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }}
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
-	err := s.Devin.Send(context.Background(), r, func(*ccxv1.SendResponse) error { return nil })
-	if err == nil {
-		t.Fatal("want a refusal")
+	// later to a working pane is queued, not typed: only if the mode reaches
+	// Devin.Send (unspecified would be an after-turn refusal). The wait is
+	// TestServiceDeliverPassesTheWaitOn's.
+	var got []*ccxv1.SendResponse
+	err := s.Deliver(context.Background(), &ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER, WaitSeconds: 0}, func(a *ccxv1.SendResponse) error {
+		got = append(got, a)
+		return nil
+	})
+	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_QUEUED || f.prompted() != nil {
+		t.Fatalf("Deliver: acks %v err %v", got, err)
 	}
-	// after-turn to a working pane: refused only if the mode reaches Devin.Send.
-	f.panes = panesWith("working")
-	// later is refused only if the mode reaches Devin.Send (unspecified would be after-turn).
-	serr := s.Send(context.Background(), connect.NewRequest(&ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER}), nil)
-	if serr == nil || !strings.Contains(serr.Error(), "does not take mode later") {
-		t.Fatalf("Service.Send err = %v", serr)
-	}
-	if len(lines) != 1 || !strings.Contains(lines[0], `to "excited-giraffe" from "claude-a1b2c3d4"`) || !strings.Contains(lines[0], "does not take mode later") {
+	if len(lines) != 1 || !strings.Contains(lines[0], `to "excited-giraffe" from "claude-a1b2c3d4"`) || !strings.HasSuffix(lines[0], ": STATE_QUEUED") {
 		t.Fatalf("log = %q", lines)
 	}
 }

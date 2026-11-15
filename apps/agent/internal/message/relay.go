@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"syscall"
 	"time"
 
@@ -124,7 +125,7 @@ func putNeverStored(err error) bool {
 // when that side typed nothing, or when no agent there claimed it in time.
 func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	where := m.GetMachine() + "/" + m.GetUser()
-	if err := Validate(Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}); err != nil {
+	if err := Validate(Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds()}); err != nil {
 		return markNotTyped(err)
 	}
 	put, err := r.Center.PutMessage(ctx, connect.NewRequest(&ccxv1.PutMessageRequest{Request: m}))
@@ -148,7 +149,7 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 		}
 		got, err := r.Center.GetMessage(ctx, connect.NewRequest(&ccxv1.GetMessageRequest{Id: id}))
 		if connect.CodeOf(err) == connect.CodeNotFound {
-			// The center dropped the row (an hour after the put): no ack will come.
+			// The center dropped the row (two hours after the put): no ack will come.
 			return connect.NewError(connect.CodeUnknown, fmt.Errorf("the center no longer has message %s for %s; it may have been delivered", id, where))
 		}
 		if err != nil {
@@ -179,8 +180,10 @@ func (r *Relay) Send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1
 	}
 }
 
-// queueLen bounds the claimed messages waiting to be delivered. Past it the
-// receiver stops claiming until the queue drains.
+// queueLen bounds the messages claimed and not yet delivered (waiting to type,
+// or waiting for the receiver's question / done). Past it the receiver stops
+// claiming until one ends, and what is put meanwhile passes the center's 30 s
+// as not sent rather than waiting here behind hour-long waits.
 const queueLen = 64
 
 // ackReportTimeout bounds a report of one ack. It only lets the sender see the
@@ -196,21 +199,42 @@ const ackReportTimeout = 5 * time.Second
 func (r *Relay) Run(ctx context.Context) error {
 	queue := make(chan *ccxv1.RelayedMessage, queueLen)
 	defer close(queue)
+	// One slot per message claimed and not yet delivered: taken before claiming,
+	// given back when its delivery ends.
+	slots := make(chan struct{}, queueLen)
 	go func() {
+		// Deliveries type in claim order, one after another; once one has typed
+		// (or given up), the next starts while it waits for the receiver's
+		// question / done (wait_seconds), so a long wait does not hold the rest.
 		for msg := range queue {
-			r.deliver(ctx, msg)
+			typed := make(chan struct{})
+			var once sync.Once
+			next := func() { once.Do(func() { close(typed) }) }
+			go func() {
+				defer func() { <-slots }()
+				defer next()
+				r.deliver(WithAfterTyping(ctx, next), msg)
+			}()
+			<-typed
 		}
 	}()
 
 	tick := time.NewTicker(r.Claim)
 	defer tick.Stop()
 	for {
-		for msg := r.claim(ctx); msg != nil; msg = r.claim(ctx) {
+		for {
 			select {
-			case queue <- msg:
+			case slots <- struct{}{}:
 			case <-ctx.Done():
 				return nil
 			}
+			msg := r.claim(ctx)
+			if msg == nil {
+				<-slots
+				break
+			}
+			// Never blocks: a slot was free, so the queue has room.
+			queue <- msg
 		}
 		select {
 		case <-ctx.Done():

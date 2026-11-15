@@ -1,3 +1,4 @@
+import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
 import { createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
@@ -5,9 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DeliveryMode, MessageService, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
+import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -74,14 +75,15 @@ test("a Claude Code sender is named from its session id", () => {
 });
 
 test("only a failure marked not typed, or an unreachable agent, is called not sent", async () => {
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.Unknown), 0)).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 0)).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 1)).toBe("sent, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }))).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown))).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition))).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), "sent")).toBe("sent, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown), "queued")).toBe("queued, then lost the ack stream");
   const dir = mkdtempSync(join(tmpdir(), "ccx-msg-"));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
-  expect(failurePrefix(down, 0)).toBe("not sent");
+  expect(failurePrefix(down)).toBe("not sent");
 });
 
 test("a sender outside Claude Code is user@host", () => {
@@ -93,6 +95,22 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{ co
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, out, err };
 }
+
+test("the command says how far the acks got when the stream breaks after them", async () => {
+  for (const [states, want] of [
+    [[SendResponse_State.QUEUED], "queued, then lost the ack stream"],
+    [[SendResponse_State.SENT], "sent, then lost the ack stream"],
+    [[SendResponse_State.QUEUED, SendResponse_State.SENT], "sent, then lost the ack stream"],
+  ] as const) {
+    const socket = fakeAgent(async function* () {
+      for (const state of states) yield { state };
+      throw new ConnectError("gone", Code.Unknown);
+    });
+    const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${want}: gone`);
+  }
+});
 
 test("the command names a Claude Code sender from its session and prints acks", async () => {
   let got: SendRequest | undefined;
@@ -159,15 +177,15 @@ test("a uid with no passwd entry still gets a sender name", () => {
 });
 
 test("an older ccx-agent without the service, or an oversized request, is not sent", () => {
-  expect(failurePrefix(new ConnectError("x", Code.Unimplemented), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.ResourceExhausted), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unimplemented))).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.ResourceExhausted))).toBe("not sent");
 });
 
 test("a socket that refuses this user is not sent", () => {
   const byCode = new ConnectError("x", Code.Unknown, undefined, undefined, Object.assign(new Error("connect failed"), { code: "EACCES" }));
-  expect(failurePrefix(byCode, 0)).toBe("not sent");
+  expect(failurePrefix(byCode)).toBe("not sent");
   const byText = new ConnectError("x", Code.Unknown, undefined, undefined, new Error("ENOTSOCK: not a socket"));
-  expect(failurePrefix(byText, 0)).toBe("not sent");
+  expect(failurePrefix(byText)).toBe("not sent");
 });
 
 test("--timeout must be a positive number", async () => {
@@ -221,4 +239,57 @@ test("-m alone leaves the user for ccx-agent to fill, and -u alone the machine",
     ["ccx1", ""],
     ["", "dev"],
   ]);
+});
+
+test("a question lists its options and done carries the last answer indented", () => {
+  const q = create(SendResponseSchema, {
+    state: SendResponse_State.QUESTION,
+    detail: "prompt p1",
+    questions: [
+      { header: "好きな果物", question: "どちら？", options: [{ label: "りんご", description: "りんごを選ぶ" }, { label: "みかん" }] },
+      { question: "理由は？", options: [] },
+    ],
+  });
+  expect(ackLines(q)).toEqual(["question  prompt p1", "  好きな果物: どちら？", "    - りんご (りんごを選ぶ)", "    - みかん", "  理由は？"]);
+  const d = create(SendResponseSchema, { state: SendResponse_State.DONE, text: "了解\n2 行目" });
+  expect(ackLines(d)).toEqual(["done", "  了解", "  2 行目"]);
+  expect(ackLines(create(SendResponseSchema, { state: SendResponse_State.DONE, detail: "prompt p2" }))).toEqual(["done  prompt p2"]);
+  expect(ackLines(create(SendResponseSchema, { state: SendResponse_State.QUEUED, detail: "next turn" }))).toEqual(["queued  next turn"]);
+});
+
+test("--wait is passed on and outlasts the timeout", async () => {
+  let wait: number | undefined;
+  const socket = fakeAgent(async function* (req) {
+    wait = req.waitSeconds;
+    await Bun.sleep(150);
+    yield { state: SendResponse_State.DONE, text: "ok" };
+  });
+  const lines: string[] = [];
+  // A 50 ms timeout alone would cut the 150 ms answer; the wait keeps the stream for wait + 60 s.
+  await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket, timeout: 50, wait: 30 }, (l) => lines.push(l));
+  expect(wait).toBe(30);
+  expect(lines).toEqual(["done", "  ok"]);
+});
+
+test("without --wait the timeout is the timeout; with it, the wait gets a minute on top", async () => {
+  const slow = (ms: number) =>
+    fakeAgent(async function* () {
+      await Bun.sleep(ms);
+      yield { state: SendResponse_State.DONE, text: "ok" };
+    });
+  const lines: string[] = [];
+  const base = { mode: "urgent", summary: "s", from: "f", timeout: 50 };
+  // 50 ms cuts a 150 ms answer when nothing asked to wait
+  expect(await sendMessage("t", "b", { ...base, socket: slow(150) }, (l) => lines.push(l)).catch((e: unknown) => e)).toBeInstanceOf(Error);
+  // --wait 1 holds past 1 s (this fake answers late; a real agent stops watching at 1 s, but the typing comes first)
+  await sendMessage("t", "b", { ...base, socket: slow(1100), wait: 1 }, (l) => lines.push(l));
+  expect(lines).toEqual(["done", "  ok"]);
+});
+
+test("--wait takes whole seconds up to an hour", async () => {
+  for (const bad of ["-1", "3601", "1.5", "x", "1e3", "0x10", " 5"]) {
+    const r = await runCli(["msg", "send", "t", "--socket", "/nonexistent.sock", "--summary", "s", "--from", "me", "--wait", bad, "x"], {});
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("--wait takes whole seconds from 0 to 3600");
+  }
 });

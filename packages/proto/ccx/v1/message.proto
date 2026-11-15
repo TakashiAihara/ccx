@@ -21,6 +21,21 @@ service MessageService {
   // before anything was typed carries the metadata `Ccx-Not-Typed: 1`. Any other error, or a stream
   // that breaks, may come after the text went in: do not resend without looking.
   rpc Send(SendRequest) returns (stream SendResponse);
+
+  // One Devin hook event, from `ccx-agent devin-hook` that Devin runs (UserPromptSubmit, PreToolUse of
+  // ask_user_question, Stop; the command passes on no other). The agent reads it for the question / done acks and, on UserPromptSubmit, answers
+  // with the later messages to put into that turn. Nothing goes to the center.
+  rpc DevinHook(DevinHookRequest) returns (DevinHookResponse);
+}
+
+message DevinHookRequest {
+  // The hook's stdin as Devin wrote it (JSON).
+  bytes payload = 1;
+}
+
+message DevinHookResponse {
+  // What the hook prints on stdout for Devin. Empty prints nothing.
+  string output = 1;
 }
 
 // How the receiver reads it (the three decided on #301).
@@ -49,6 +64,22 @@ message SendRequest {
   // through the center (MessageRelayService, #138), and that ccx-agent delivers it as if sent to it locally.
   string machine = 6;
   string user = 7;
+  // How long, in seconds, to keep the stream open after sent for the receiver's question / done (up to 3600).
+  // 0 ends after working / not-started, as before. For later it is how long to wait for the receiver's next
+  // turn to take it. Needs Devin's hooks wired to `ccx-agent devin-hook`.
+  uint32 wait_seconds = 8;
+}
+
+// A question the receiver put to its user (Devin's ask_user_question).
+message Question {
+  string question = 1;
+  string header = 2;
+  repeated Option options = 3;
+
+  message Option {
+    string label = 1;
+    string description = 2;
+  }
 }
 
 message SendResponse {
@@ -60,10 +91,21 @@ message SendResponse {
     STATE_WORKING = 2;
     // No sign of the receiver starting within the wait. It does not mean the message was lost.
     STATE_NOT_STARTED = 3;
+    // later: kept by ccx-agent for the receiver's next turn. The stream ends here unless wait_seconds is set,
+    // and then SENT follows when a turn takes it.
+    STATE_QUEUED = 4;
+    // The receiver, working on it, asked its user a question (questions). Its turn goes on once answered.
+    STATE_QUESTION = 5;
+    // The receiver's turn that took the message ended; text is its last answer. The stream ends.
+    STATE_DONE = 6;
   }
   State state = 1;
   // One line for people about the state. May be empty.
   string detail = 2;
+  // Set with QUESTION.
+  repeated Question questions = 3;
+  // Set with DONE: the receiver's last answer, whole.
+  string text = 4;
 }
 
 // Carries a message to another machine's ccx-agent (#138). Served by the center.

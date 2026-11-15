@@ -89,6 +89,13 @@ const (
 	SendResponse_STATE_WORKING SendResponse_State = 2
 	// No sign of the receiver starting within the wait. It does not mean the message was lost.
 	SendResponse_STATE_NOT_STARTED SendResponse_State = 3
+	// later: kept by ccx-agent for the receiver's next turn. The stream ends here unless wait_seconds is set,
+	// and then SENT follows when a turn takes it.
+	SendResponse_STATE_QUEUED SendResponse_State = 4
+	// The receiver, working on it, asked its user a question (questions). Its turn goes on once answered.
+	SendResponse_STATE_QUESTION SendResponse_State = 5
+	// The receiver's turn that took the message ended; text is its last answer. The stream ends.
+	SendResponse_STATE_DONE SendResponse_State = 6
 )
 
 // Enum value maps for SendResponse_State.
@@ -98,12 +105,18 @@ var (
 		1: "STATE_SENT",
 		2: "STATE_WORKING",
 		3: "STATE_NOT_STARTED",
+		4: "STATE_QUEUED",
+		5: "STATE_QUESTION",
+		6: "STATE_DONE",
 	}
 	SendResponse_State_value = map[string]int32{
 		"STATE_UNSPECIFIED": 0,
 		"STATE_SENT":        1,
 		"STATE_WORKING":     2,
 		"STATE_NOT_STARTED": 3,
+		"STATE_QUEUED":      4,
+		"STATE_QUESTION":    5,
+		"STATE_DONE":        6,
 	}
 )
 
@@ -131,7 +144,97 @@ func (x SendResponse_State) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SendResponse_State.Descriptor instead.
 func (SendResponse_State) EnumDescriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{1, 0}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{4, 0}
+}
+
+type DevinHookRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The hook's stdin as Devin wrote it (JSON).
+	Payload       []byte `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DevinHookRequest) Reset() {
+	*x = DevinHookRequest{}
+	mi := &file_ccx_v1_message_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DevinHookRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DevinHookRequest) ProtoMessage() {}
+
+func (x *DevinHookRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DevinHookRequest.ProtoReflect.Descriptor instead.
+func (*DevinHookRequest) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *DevinHookRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+type DevinHookResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What the hook prints on stdout for Devin. Empty prints nothing.
+	Output        string `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DevinHookResponse) Reset() {
+	*x = DevinHookResponse{}
+	mi := &file_ccx_v1_message_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DevinHookResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DevinHookResponse) ProtoMessage() {}
+
+func (x *DevinHookResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DevinHookResponse.ProtoReflect.Descriptor instead.
+func (*DevinHookResponse) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DevinHookResponse) GetOutput() string {
+	if x != nil {
+		return x.Output
+	}
+	return ""
 }
 
 type SendRequest struct {
@@ -147,15 +250,19 @@ type SendRequest struct {
 	Sender string `protobuf:"bytes,5,opt,name=sender,proto3" json:"sender,omitempty"`
 	// The machine and OS user whose ccx-agent delivers it. Empty means this ccx-agent's own. Any other goes
 	// through the center (MessageRelayService, #138), and that ccx-agent delivers it as if sent to it locally.
-	Machine       string `protobuf:"bytes,6,opt,name=machine,proto3" json:"machine,omitempty"`
-	User          string `protobuf:"bytes,7,opt,name=user,proto3" json:"user,omitempty"`
+	Machine string `protobuf:"bytes,6,opt,name=machine,proto3" json:"machine,omitempty"`
+	User    string `protobuf:"bytes,7,opt,name=user,proto3" json:"user,omitempty"`
+	// How long, in seconds, to keep the stream open after sent for the receiver's question / done (up to 3600).
+	// 0 ends after working / not-started, as before. For later it is how long to wait for the receiver's next
+	// turn to take it. Needs Devin's hooks wired to `ccx-agent devin-hook`.
+	WaitSeconds   uint32 `protobuf:"varint,8,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SendRequest) Reset() {
 	*x = SendRequest{}
-	mi := &file_ccx_v1_message_proto_msgTypes[0]
+	mi := &file_ccx_v1_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +274,7 @@ func (x *SendRequest) String() string {
 func (*SendRequest) ProtoMessage() {}
 
 func (x *SendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[0]
+	mi := &file_ccx_v1_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +287,7 @@ func (x *SendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendRequest.ProtoReflect.Descriptor instead.
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{0}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SendRequest) GetTarget() string {
@@ -232,18 +339,90 @@ func (x *SendRequest) GetUser() string {
 	return ""
 }
 
+func (x *SendRequest) GetWaitSeconds() uint32 {
+	if x != nil {
+		return x.WaitSeconds
+	}
+	return 0
+}
+
+// A question the receiver put to its user (Devin's ask_user_question).
+type Question struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Question      string                 `protobuf:"bytes,1,opt,name=question,proto3" json:"question,omitempty"`
+	Header        string                 `protobuf:"bytes,2,opt,name=header,proto3" json:"header,omitempty"`
+	Options       []*Question_Option     `protobuf:"bytes,3,rep,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Question) Reset() {
+	*x = Question{}
+	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Question) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Question) ProtoMessage() {}
+
+func (x *Question) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Question.ProtoReflect.Descriptor instead.
+func (*Question) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Question) GetQuestion() string {
+	if x != nil {
+		return x.Question
+	}
+	return ""
+}
+
+func (x *Question) GetHeader() string {
+	if x != nil {
+		return x.Header
+	}
+	return ""
+}
+
+func (x *Question) GetOptions() []*Question_Option {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
 type SendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	State SendResponse_State     `protobuf:"varint,1,opt,name=state,proto3,enum=ccx.v1.SendResponse_State" json:"state,omitempty"`
 	// One line for people about the state. May be empty.
-	Detail        string `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	Detail string `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
+	// Set with QUESTION.
+	Questions []*Question `protobuf:"bytes,3,rep,name=questions,proto3" json:"questions,omitempty"`
+	// Set with DONE: the receiver's last answer, whole.
+	Text          string `protobuf:"bytes,4,opt,name=text,proto3" json:"text,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SendResponse) Reset() {
 	*x = SendResponse{}
-	mi := &file_ccx_v1_message_proto_msgTypes[1]
+	mi := &file_ccx_v1_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -255,7 +434,7 @@ func (x *SendResponse) String() string {
 func (*SendResponse) ProtoMessage() {}
 
 func (x *SendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[1]
+	mi := &file_ccx_v1_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -268,7 +447,7 @@ func (x *SendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendResponse.ProtoReflect.Descriptor instead.
 func (*SendResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{1}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SendResponse) GetState() SendResponse_State {
@@ -281,6 +460,20 @@ func (x *SendResponse) GetState() SendResponse_State {
 func (x *SendResponse) GetDetail() string {
 	if x != nil {
 		return x.Detail
+	}
+	return ""
+}
+
+func (x *SendResponse) GetQuestions() []*Question {
+	if x != nil {
+		return x.Questions
+	}
+	return nil
+}
+
+func (x *SendResponse) GetText() string {
+	if x != nil {
+		return x.Text
 	}
 	return ""
 }
@@ -313,7 +506,7 @@ type RelayedMessage struct {
 
 func (x *RelayedMessage) Reset() {
 	*x = RelayedMessage{}
-	mi := &file_ccx_v1_message_proto_msgTypes[2]
+	mi := &file_ccx_v1_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -325,7 +518,7 @@ func (x *RelayedMessage) String() string {
 func (*RelayedMessage) ProtoMessage() {}
 
 func (x *RelayedMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[2]
+	mi := &file_ccx_v1_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -338,7 +531,7 @@ func (x *RelayedMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayedMessage.ProtoReflect.Descriptor instead.
 func (*RelayedMessage) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{2}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RelayedMessage) GetId() string {
@@ -427,7 +620,7 @@ type PutMessageRequest struct {
 
 func (x *PutMessageRequest) Reset() {
 	*x = PutMessageRequest{}
-	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	mi := &file_ccx_v1_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -439,7 +632,7 @@ func (x *PutMessageRequest) String() string {
 func (*PutMessageRequest) ProtoMessage() {}
 
 func (x *PutMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[3]
+	mi := &file_ccx_v1_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -452,7 +645,7 @@ func (x *PutMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutMessageRequest.ProtoReflect.Descriptor instead.
 func (*PutMessageRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{3}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PutMessageRequest) GetRequest() *SendRequest {
@@ -471,7 +664,7 @@ type PutMessageResponse struct {
 
 func (x *PutMessageResponse) Reset() {
 	*x = PutMessageResponse{}
-	mi := &file_ccx_v1_message_proto_msgTypes[4]
+	mi := &file_ccx_v1_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -483,7 +676,7 @@ func (x *PutMessageResponse) String() string {
 func (*PutMessageResponse) ProtoMessage() {}
 
 func (x *PutMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[4]
+	mi := &file_ccx_v1_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -496,7 +689,7 @@ func (x *PutMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutMessageResponse.ProtoReflect.Descriptor instead.
 func (*PutMessageResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{4}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PutMessageResponse) GetMessage() *RelayedMessage {
@@ -515,7 +708,7 @@ type GetMessageRequest struct {
 
 func (x *GetMessageRequest) Reset() {
 	*x = GetMessageRequest{}
-	mi := &file_ccx_v1_message_proto_msgTypes[5]
+	mi := &file_ccx_v1_message_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -527,7 +720,7 @@ func (x *GetMessageRequest) String() string {
 func (*GetMessageRequest) ProtoMessage() {}
 
 func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[5]
+	mi := &file_ccx_v1_message_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -540,7 +733,7 @@ func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{5}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetMessageRequest) GetId() string {
@@ -559,7 +752,7 @@ type GetMessageResponse struct {
 
 func (x *GetMessageResponse) Reset() {
 	*x = GetMessageResponse{}
-	mi := &file_ccx_v1_message_proto_msgTypes[6]
+	mi := &file_ccx_v1_message_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -571,7 +764,7 @@ func (x *GetMessageResponse) String() string {
 func (*GetMessageResponse) ProtoMessage() {}
 
 func (x *GetMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[6]
+	mi := &file_ccx_v1_message_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -584,7 +777,7 @@ func (x *GetMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageResponse.ProtoReflect.Descriptor instead.
 func (*GetMessageResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{6}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetMessageResponse) GetMessage() *RelayedMessage {
@@ -605,7 +798,7 @@ type ClaimMessageRequest struct {
 
 func (x *ClaimMessageRequest) Reset() {
 	*x = ClaimMessageRequest{}
-	mi := &file_ccx_v1_message_proto_msgTypes[7]
+	mi := &file_ccx_v1_message_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -617,7 +810,7 @@ func (x *ClaimMessageRequest) String() string {
 func (*ClaimMessageRequest) ProtoMessage() {}
 
 func (x *ClaimMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[7]
+	mi := &file_ccx_v1_message_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -630,7 +823,7 @@ func (x *ClaimMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimMessageRequest.ProtoReflect.Descriptor instead.
 func (*ClaimMessageRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{7}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ClaimMessageRequest) GetMachine() string {
@@ -656,7 +849,7 @@ type ClaimMessageResponse struct {
 
 func (x *ClaimMessageResponse) Reset() {
 	*x = ClaimMessageResponse{}
-	mi := &file_ccx_v1_message_proto_msgTypes[8]
+	mi := &file_ccx_v1_message_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -668,7 +861,7 @@ func (x *ClaimMessageResponse) String() string {
 func (*ClaimMessageResponse) ProtoMessage() {}
 
 func (x *ClaimMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[8]
+	mi := &file_ccx_v1_message_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -681,7 +874,7 @@ func (x *ClaimMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimMessageResponse.ProtoReflect.Descriptor instead.
 func (*ClaimMessageResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{8}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ClaimMessageResponse) GetMessage() *RelayedMessage {
@@ -707,7 +900,7 @@ type ReportMessageRequest struct {
 
 func (x *ReportMessageRequest) Reset() {
 	*x = ReportMessageRequest{}
-	mi := &file_ccx_v1_message_proto_msgTypes[9]
+	mi := &file_ccx_v1_message_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -719,7 +912,7 @@ func (x *ReportMessageRequest) String() string {
 func (*ReportMessageRequest) ProtoMessage() {}
 
 func (x *ReportMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[9]
+	mi := &file_ccx_v1_message_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -732,7 +925,7 @@ func (x *ReportMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportMessageRequest.ProtoReflect.Descriptor instead.
 func (*ReportMessageRequest) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{9}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ReportMessageRequest) GetId() string {
@@ -792,7 +985,7 @@ type ReportMessageResponse struct {
 
 func (x *ReportMessageResponse) Reset() {
 	*x = ReportMessageResponse{}
-	mi := &file_ccx_v1_message_proto_msgTypes[10]
+	mi := &file_ccx_v1_message_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -804,7 +997,7 @@ func (x *ReportMessageResponse) String() string {
 func (*ReportMessageResponse) ProtoMessage() {}
 
 func (x *ReportMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[10]
+	mi := &file_ccx_v1_message_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -817,14 +1010,70 @@ func (x *ReportMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportMessageResponse.ProtoReflect.Descriptor instead.
 func (*ReportMessageResponse) Descriptor() ([]byte, []int) {
-	return file_ccx_v1_message_proto_rawDescGZIP(), []int{10}
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{13}
+}
+
+type Question_Option struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Question_Option) Reset() {
+	*x = Question_Option{}
+	mi := &file_ccx_v1_message_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Question_Option) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Question_Option) ProtoMessage() {}
+
+func (x *Question_Option) ProtoReflect() protoreflect.Message {
+	mi := &file_ccx_v1_message_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Question_Option.ProtoReflect.Descriptor instead.
+func (*Question_Option) Descriptor() ([]byte, []int) {
+	return file_ccx_v1_message_proto_rawDescGZIP(), []int{3, 0}
+}
+
+func (x *Question_Option) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *Question_Option) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 var File_ccx_v1_message_proto protoreflect.FileDescriptor
 
 const file_ccx_v1_message_proto_rawDesc = "" +
 	"\n" +
-	"\x14ccx/v1/message.proto\x12\x06ccx.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x01\n" +
+	"\x14ccx/v1/message.proto\x12\x06ccx.v1\x1a\x1fgoogle/protobuf/timestamp.proto\",\n" +
+	"\x10DevinHookRequest\x12\x18\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\"+\n" +
+	"\x11DevinHookResponse\x12\x16\n" +
+	"\x06output\x18\x01 \x01(\tR\x06output\"\xe6\x01\n" +
 	"\vSendRequest\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12(\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x14.ccx.v1.DeliveryModeR\x04mode\x12\x18\n" +
@@ -832,16 +1081,30 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\x04body\x18\x04 \x01(\tR\x04body\x12\x16\n" +
 	"\x06sender\x18\x05 \x01(\tR\x06sender\x12\x18\n" +
 	"\amachine\x18\x06 \x01(\tR\amachine\x12\x12\n" +
-	"\x04user\x18\a \x01(\tR\x04user\"\xb2\x01\n" +
+	"\x04user\x18\a \x01(\tR\x04user\x12!\n" +
+	"\fwait_seconds\x18\b \x01(\rR\vwaitSeconds\"\xb3\x01\n" +
+	"\bQuestion\x12\x1a\n" +
+	"\bquestion\x18\x01 \x01(\tR\bquestion\x12\x16\n" +
+	"\x06header\x18\x02 \x01(\tR\x06header\x121\n" +
+	"\aoptions\x18\x03 \x03(\v2\x17.ccx.v1.Question.OptionR\aoptions\x1a@\n" +
+	"\x06Option\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"\xad\x02\n" +
 	"\fSendResponse\x120\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1a.ccx.v1.SendResponse.StateR\x05state\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detail\"X\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\x12.\n" +
+	"\tquestions\x18\x03 \x03(\v2\x10.ccx.v1.QuestionR\tquestions\x12\x12\n" +
+	"\x04text\x18\x04 \x01(\tR\x04text\"\x8e\x01\n" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
 	"STATE_SENT\x10\x01\x12\x11\n" +
 	"\rSTATE_WORKING\x10\x02\x12\x15\n" +
-	"\x11STATE_NOT_STARTED\x10\x03\"\xc0\x03\n" +
+	"\x11STATE_NOT_STARTED\x10\x03\x12\x10\n" +
+	"\fSTATE_QUEUED\x10\x04\x12\x12\n" +
+	"\x0eSTATE_QUESTION\x10\x05\x12\x0e\n" +
+	"\n" +
+	"STATE_DONE\x10\x06\"\xc0\x03\n" +
 	"\x0eRelayedMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
 	"\arequest\x18\x02 \x01(\v2\x13.ccx.v1.SendRequestR\arequest\x121\n" +
@@ -887,9 +1150,10 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\x19DELIVERY_MODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13DELIVERY_MODE_LATER\x10\x01\x12\x1c\n" +
 	"\x18DELIVERY_MODE_AFTER_TURN\x10\x02\x12\x18\n" +
-	"\x14DELIVERY_MODE_URGENT\x10\x032E\n" +
+	"\x14DELIVERY_MODE_URGENT\x10\x032\x87\x01\n" +
 	"\x0eMessageService\x123\n" +
-	"\x04Send\x12\x13.ccx.v1.SendRequest\x1a\x14.ccx.v1.SendResponse0\x012\xb8\x02\n" +
+	"\x04Send\x12\x13.ccx.v1.SendRequest\x1a\x14.ccx.v1.SendResponse0\x01\x12@\n" +
+	"\tDevinHook\x12\x18.ccx.v1.DevinHookRequest\x1a\x19.ccx.v1.DevinHookResponse2\xb8\x02\n" +
 	"\x13MessageRelayService\x12C\n" +
 	"\n" +
 	"PutMessage\x12\x19.ccx.v1.PutMessageRequest\x1a\x1a.ccx.v1.PutMessageResponse\x12C\n" +
@@ -913,51 +1177,59 @@ func file_ccx_v1_message_proto_rawDescGZIP() []byte {
 }
 
 var file_ccx_v1_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_ccx_v1_message_proto_goTypes = []any{
 	(DeliveryMode)(0),             // 0: ccx.v1.DeliveryMode
 	(SendResponse_State)(0),       // 1: ccx.v1.SendResponse.State
-	(*SendRequest)(nil),           // 2: ccx.v1.SendRequest
-	(*SendResponse)(nil),          // 3: ccx.v1.SendResponse
-	(*RelayedMessage)(nil),        // 4: ccx.v1.RelayedMessage
-	(*PutMessageRequest)(nil),     // 5: ccx.v1.PutMessageRequest
-	(*PutMessageResponse)(nil),    // 6: ccx.v1.PutMessageResponse
-	(*GetMessageRequest)(nil),     // 7: ccx.v1.GetMessageRequest
-	(*GetMessageResponse)(nil),    // 8: ccx.v1.GetMessageResponse
-	(*ClaimMessageRequest)(nil),   // 9: ccx.v1.ClaimMessageRequest
-	(*ClaimMessageResponse)(nil),  // 10: ccx.v1.ClaimMessageResponse
-	(*ReportMessageRequest)(nil),  // 11: ccx.v1.ReportMessageRequest
-	(*ReportMessageResponse)(nil), // 12: ccx.v1.ReportMessageResponse
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	(*DevinHookRequest)(nil),      // 2: ccx.v1.DevinHookRequest
+	(*DevinHookResponse)(nil),     // 3: ccx.v1.DevinHookResponse
+	(*SendRequest)(nil),           // 4: ccx.v1.SendRequest
+	(*Question)(nil),              // 5: ccx.v1.Question
+	(*SendResponse)(nil),          // 6: ccx.v1.SendResponse
+	(*RelayedMessage)(nil),        // 7: ccx.v1.RelayedMessage
+	(*PutMessageRequest)(nil),     // 8: ccx.v1.PutMessageRequest
+	(*PutMessageResponse)(nil),    // 9: ccx.v1.PutMessageResponse
+	(*GetMessageRequest)(nil),     // 10: ccx.v1.GetMessageRequest
+	(*GetMessageResponse)(nil),    // 11: ccx.v1.GetMessageResponse
+	(*ClaimMessageRequest)(nil),   // 12: ccx.v1.ClaimMessageRequest
+	(*ClaimMessageResponse)(nil),  // 13: ccx.v1.ClaimMessageResponse
+	(*ReportMessageRequest)(nil),  // 14: ccx.v1.ReportMessageRequest
+	(*ReportMessageResponse)(nil), // 15: ccx.v1.ReportMessageResponse
+	(*Question_Option)(nil),       // 16: ccx.v1.Question.Option
+	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
 }
 var file_ccx_v1_message_proto_depIdxs = []int32{
 	0,  // 0: ccx.v1.SendRequest.mode:type_name -> ccx.v1.DeliveryMode
-	1,  // 1: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
-	2,  // 2: ccx.v1.RelayedMessage.request:type_name -> ccx.v1.SendRequest
-	13, // 3: ccx.v1.RelayedMessage.put_at:type_name -> google.protobuf.Timestamp
-	13, // 4: ccx.v1.RelayedMessage.claimed_at:type_name -> google.protobuf.Timestamp
-	13, // 5: ccx.v1.RelayedMessage.finished_at:type_name -> google.protobuf.Timestamp
-	3,  // 6: ccx.v1.RelayedMessage.acks:type_name -> ccx.v1.SendResponse
-	2,  // 7: ccx.v1.PutMessageRequest.request:type_name -> ccx.v1.SendRequest
-	4,  // 8: ccx.v1.PutMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	4,  // 9: ccx.v1.GetMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	4,  // 10: ccx.v1.ClaimMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	3,  // 11: ccx.v1.ReportMessageRequest.acks:type_name -> ccx.v1.SendResponse
-	2,  // 12: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
-	5,  // 13: ccx.v1.MessageRelayService.PutMessage:input_type -> ccx.v1.PutMessageRequest
-	7,  // 14: ccx.v1.MessageRelayService.GetMessage:input_type -> ccx.v1.GetMessageRequest
-	9,  // 15: ccx.v1.MessageRelayService.ClaimMessage:input_type -> ccx.v1.ClaimMessageRequest
-	11, // 16: ccx.v1.MessageRelayService.ReportMessage:input_type -> ccx.v1.ReportMessageRequest
-	3,  // 17: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
-	6,  // 18: ccx.v1.MessageRelayService.PutMessage:output_type -> ccx.v1.PutMessageResponse
-	8,  // 19: ccx.v1.MessageRelayService.GetMessage:output_type -> ccx.v1.GetMessageResponse
-	10, // 20: ccx.v1.MessageRelayService.ClaimMessage:output_type -> ccx.v1.ClaimMessageResponse
-	12, // 21: ccx.v1.MessageRelayService.ReportMessage:output_type -> ccx.v1.ReportMessageResponse
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	16, // 1: ccx.v1.Question.options:type_name -> ccx.v1.Question.Option
+	1,  // 2: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
+	5,  // 3: ccx.v1.SendResponse.questions:type_name -> ccx.v1.Question
+	4,  // 4: ccx.v1.RelayedMessage.request:type_name -> ccx.v1.SendRequest
+	17, // 5: ccx.v1.RelayedMessage.put_at:type_name -> google.protobuf.Timestamp
+	17, // 6: ccx.v1.RelayedMessage.claimed_at:type_name -> google.protobuf.Timestamp
+	17, // 7: ccx.v1.RelayedMessage.finished_at:type_name -> google.protobuf.Timestamp
+	6,  // 8: ccx.v1.RelayedMessage.acks:type_name -> ccx.v1.SendResponse
+	4,  // 9: ccx.v1.PutMessageRequest.request:type_name -> ccx.v1.SendRequest
+	7,  // 10: ccx.v1.PutMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	7,  // 11: ccx.v1.GetMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	7,  // 12: ccx.v1.ClaimMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	6,  // 13: ccx.v1.ReportMessageRequest.acks:type_name -> ccx.v1.SendResponse
+	4,  // 14: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
+	2,  // 15: ccx.v1.MessageService.DevinHook:input_type -> ccx.v1.DevinHookRequest
+	8,  // 16: ccx.v1.MessageRelayService.PutMessage:input_type -> ccx.v1.PutMessageRequest
+	10, // 17: ccx.v1.MessageRelayService.GetMessage:input_type -> ccx.v1.GetMessageRequest
+	12, // 18: ccx.v1.MessageRelayService.ClaimMessage:input_type -> ccx.v1.ClaimMessageRequest
+	14, // 19: ccx.v1.MessageRelayService.ReportMessage:input_type -> ccx.v1.ReportMessageRequest
+	6,  // 20: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
+	3,  // 21: ccx.v1.MessageService.DevinHook:output_type -> ccx.v1.DevinHookResponse
+	9,  // 22: ccx.v1.MessageRelayService.PutMessage:output_type -> ccx.v1.PutMessageResponse
+	11, // 23: ccx.v1.MessageRelayService.GetMessage:output_type -> ccx.v1.GetMessageResponse
+	13, // 24: ccx.v1.MessageRelayService.ClaimMessage:output_type -> ccx.v1.ClaimMessageResponse
+	15, // 25: ccx.v1.MessageRelayService.ReportMessage:output_type -> ccx.v1.ReportMessageResponse
+	20, // [20:26] is the sub-list for method output_type
+	14, // [14:20] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_message_proto_init() }
@@ -971,7 +1243,7 @@ func file_ccx_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_message_proto_rawDesc), len(file_ccx_v1_message_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

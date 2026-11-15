@@ -69,7 +69,9 @@ believed.
   (`DeliveryMode`). Chosen by the sender; how it is delivered (herdr prompt, channel, hook) is ccx-agent's
   choice and is not a mode.
 - **ack** — what ccx-agent tells the sender happened to a message (`SendResponse.State`): `sent`,
-  `working`, `not-started`. A refusal is not an ack; nothing was sent.
+  `working`, `not-started`, `queued` (a `later` message held for the receiver's next turn), and with
+  `--wait` `question` (the receiver asked, with its options) and `done` (its turn ended, with its last
+  answer). A refusal is not an ack; nothing was sent.
 - **relay (message)** — carrying a message to another machine's ccx-agent through the center
   (`MessageRelayService` in `message.proto`, the `relay_messages` table, `apps/agent/internal/message/relay.go`).
   The sender's ccx-agent puts it; the receiver's claims it once and reports the acks.

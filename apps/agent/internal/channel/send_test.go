@@ -24,6 +24,7 @@ import (
 
 // fakeMessages stands in for ccx-agent's MessageService.
 type fakeMessages struct {
+	ccxv1connect.UnimplementedMessageServiceHandler
 	got  *ccxv1.SendRequest
 	acks []*ccxv1.SendResponse
 	err  error
@@ -98,6 +99,8 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 		{"refused before typing", &fakeMessages{err: refused}, "not sent: has text in its input box"},
 		{"failed after typing", &fakeMessages{err: connect.NewError(connect.CodeUnknown, errors.New("prompt broke"))}, "may have been sent (look at the receiver before sending again): prompt broke"},
 		{"lost after an ack", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "sent\nsent, then lost the ack stream: gone"},
+		{"lost after queued", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nqueued, then lost the ack stream: gone"},
+		{"lost after queued and taken", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}, {State: ccxv1.SendResponse_STATE_SENT}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nsent\nsent, then lost the ack stream: gone"},
 	} {
 		text, isErr := call(t, SendTool(sid, messagesClient(t, tc.f)), `{"target":"t","body":"b","summary":"s"}`)
 		if !isErr || text != tc.prefix {
@@ -191,6 +194,7 @@ func TestSendToolRefusesThisSessionAsTheTarget(t *testing.T) {
 
 // slowMessages holds each send until released, and counts the sends running at once.
 type slowMessages struct {
+	ccxv1connect.UnimplementedMessageServiceHandler
 	release       chan struct{}
 	running, peak atomic.Int32
 }
@@ -274,6 +278,10 @@ func (f sendFunc) Send(ctx context.Context, _ *connect.Request[ccxv1.SendRequest
 	return f(ctx, st)
 }
 
+func (sendFunc) DevinHook(context.Context, *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, nil)
+}
+
 // A ccx-agent that never answers ends the call at the timeout, as "may have been sent".
 func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
 	old := sendTimeout
@@ -290,5 +298,13 @@ func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
 	text, isErr := call(t, SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
 	if !isErr || !strings.HasPrefix(text, "may have been sent") || time.Since(start) > 2*time.Second {
 		t.Fatalf("text %q after %v", text, time.Since(start))
+	}
+}
+
+func TestSendToolNamesTheQueuedAck(t *testing.T) {
+	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED, Detail: "next turn"}}}
+	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"later"}`)
+	if isErr || text != "queued  next turn" {
+		t.Fatalf("text %q, isErr %v", text, isErr)
 	}
 }

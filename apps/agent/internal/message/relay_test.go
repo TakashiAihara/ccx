@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -172,6 +173,11 @@ func TestRelaySendRefusesABadMessageWithoutPuttingIt(t *testing.T) {
 	_, err := collectSend(testRelay(f), context.Background(), m)
 	if connect.CodeOf(err) != connect.CodeInvalidArgument || !notTyped(err) || len(f.puts) != 0 {
 		t.Fatalf("err %v, marked %v, puts %d", err, notTyped(err), len(f.puts))
+	}
+	m = remoteReq()
+	m.WaitSeconds = 3601
+	if _, err := collectSend(testRelay(f), context.Background(), m); connect.CodeOf(err) != connect.CodeInvalidArgument || len(f.puts) != 0 {
+		t.Fatalf("a 3601-second wait: err %v, puts %d", err, len(f.puts))
 	}
 }
 
@@ -461,4 +467,107 @@ func (b *blockingReports) ReportMessage(ctx context.Context, r *connect.Request[
 		}
 	}
 	return b.fakeCenter.ReportMessage(ctx, r)
+}
+
+// Once one delivery has typed, the next starts while the first still waits for
+// question / done; typing stays in claim order.
+func TestRelayRunStartsTheNextOnceOneHasTyped(t *testing.T) {
+	f := &fakeCenter{}
+	for _, b := range []string{"a", "b"} {
+		m := remoteReq()
+		m.Body = b
+		f.claims = append(f.claims, &ccxv1.RelayedMessage{Id: "m-" + b, ClaimToken: "tok", Request: m})
+	}
+	r := testRelay(f)
+	release := make(chan struct{})
+	order := make(chan string, 2)
+	r.Deliver = func(ctx context.Context, m *ccxv1.SendRequest, _ func(*ccxv1.SendResponse) error) error {
+		order <- m.GetBody()
+		afterTyping(ctx)
+		<-release
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer close(release)
+	go func() { _ = r.Run(ctx) }()
+	for _, want := range []string{"a", "b"} {
+		select {
+		case got := <-order:
+			if got != want {
+				t.Fatalf("delivered %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%q was not started while the first waited", want)
+		}
+	}
+}
+
+// At most queueLen deliveries wait at once; past that the next starts when one ends.
+func TestRelayRunBoundsTheDeliveriesWaitingAtOnce(t *testing.T) {
+	f := &fakeCenter{}
+	for i := range queueLen + 1 {
+		f.claims = append(f.claims, &ccxv1.RelayedMessage{Id: fmt.Sprint("m-", i), ClaimToken: "tok", Request: remoteReq()})
+	}
+	r := testRelay(f)
+	release := make(chan struct{})
+	var started atomic.Int32
+	r.Deliver = func(ctx context.Context, _ *ccxv1.SendRequest, _ func(*ccxv1.SendResponse) error) error {
+		started.Add(1)
+		afterTyping(ctx)
+		<-release
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer close(release)
+	go func() { _ = r.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for started.Load() < queueLen && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := started.Load(); n != queueLen {
+		t.Fatalf("%d deliveries at once, want %d", n, queueLen)
+	}
+	// The last is not claimed either: claimed, it would wait here past its
+	// sender's timeout instead of expiring at the center as not sent.
+	f.mu.Lock()
+	left := len(f.claims)
+	f.mu.Unlock()
+	if left != 1 {
+		t.Fatalf("%d messages left unclaimed, want 1", left)
+	}
+	release <- struct{}{}
+	for started.Load() < queueLen+1 && time.Now().Before(deadline.Add(5*time.Second)) {
+		time.Sleep(time.Millisecond)
+	}
+	if n := started.Load(); n != queueLen+1 {
+		t.Fatalf("the last did not start once one ended: %d", n)
+	}
+}
+
+// Asking and finding nothing gives the slot back: past queueLen empty claims a
+// message still gets claimed.
+func TestRelayRunKeepsClaimingAfterManyEmptyClaims(t *testing.T) {
+	f := &fakeCenter{}
+	r := testRelay(f)
+	r.Claim = time.Millisecond
+	delivered := make(chan struct{}, 1)
+	r.Deliver = func(ctx context.Context, _ *ccxv1.SendRequest, _ func(*ccxv1.SendResponse) error) error {
+		delivered <- struct{}{}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = r.Run(ctx) }()
+	f.waitClaims(t, queueLen+10)
+	f.mu.Lock()
+	f.claims = append(f.claims, &ccxv1.RelayedMessage{Id: "late", ClaimToken: "tok", Request: remoteReq()})
+	f.mu.Unlock()
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a message after many empty claims was not claimed")
+	}
 }

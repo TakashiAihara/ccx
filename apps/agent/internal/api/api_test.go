@@ -759,6 +759,10 @@ func (e *echoMessages) Send(_ context.Context, req *connect.Request[ccxv1.SendRe
 	return stream.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
 }
 
+func (e *echoMessages) DevinHook(context.Context, *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
+	return connect.NewResponse(&ccxv1.DevinHookResponse{Output: "hooked"}), nil
+}
+
 func (e *echoMessages) got() *ccxv1.SendRequest {
 	e.mu.Lock()
 	defer e.mu.Unlock()

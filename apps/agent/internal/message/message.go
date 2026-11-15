@@ -53,6 +53,8 @@ func CommandHerdr(ctx context.Context, args ...string) ([]byte, error) {
 type Request struct {
 	Target, Sender, Summary, Body string
 	Mode                          ccxv1.DeliveryMode
+	// WaitSeconds keeps the send going after sent for the question / done acks.
+	WaitSeconds uint32
 }
 
 // Devin delivers to Devin sessions running in herdr panes.
@@ -62,7 +64,9 @@ type Devin struct {
 	// wait for the prompt to show up as sent, StartWait the wait for working.
 	Poll, SentWait, StartWait time.Duration
 
-	mu sync.Mutex
+	mu      sync.Mutex
+	hooksOnce sync.Once
+	h       *hooks
 }
 
 // NewDevin uses the herdr on PATH. On #302 working showed within 3 seconds of
@@ -142,6 +146,9 @@ func Validate(req Request) error {
 	if len(req.Body) > MaxBody {
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("body is %d bytes, over the %d-byte limit", len(req.Body), MaxBody))
 	}
+	if time.Duration(req.WaitSeconds)*time.Second > MaxWait {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("wait is %d seconds, over the %d-second limit", req.WaitSeconds, int(MaxWait.Seconds())))
+	}
 	return nil
 }
 
@@ -149,14 +156,48 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err := Validate(req); err != nil {
 		return err
 	}
+	wait := waitOf(req)
 	if req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_LATER {
-		// Getting it in without waking Devin (UserPromptSubmit's additionalContext)
-		// is not measured yet.
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("devin does not take mode later; it takes after-turn, urgent"))
+		return d.sendLater(ctx, req, wait, emit, typed)
 	}
 
+	header := headerLine(req.Sender, req.Summary)
+	var events <-chan hookEvent
+	var ts *typedSend
+	var drop func()
+	beforeTyping := func() {}
+	if wait > 0 {
+		// Subscribe before typing, so the turn's UserPromptSubmit is not missed.
+		var cancel func()
+		events, cancel = d.hooks().subscribe(req.Target)
+		defer cancel()
+		beforeTyping = func() { ts, drop = d.hooks().expect(req.Target, header+"\n"+req.Body) }
+	}
+	err := d.typeIn(ctx, req, header, emit, typed, beforeTyping)
+	if drop != nil {
+		defer drop()
+	}
+	afterTyping(ctx)
+	if err != nil {
+		return err
+	}
+	if events == nil {
+		return nil
+	}
+	// The turn that took it is the UserPromptSubmit Hook handed to this send: one
+	// whose prompt is exactly what was typed (Devin hands the typed text over
+	// unchanged, devin 3000.12.57); see typedSend for sends of the same text.
+	mine := func(e hookEvent) bool { return e.Name == "UserPromptSubmit" && e.owner == ts }
+	return watch(ctx, events, wait, mine, nil, emit)
+}
+
+// typeIn types the message into the receiver's pane and reports sent, then
+// working or not-started.
+// beforeTyping runs right before the text is typed, under the typing lock.
+func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit func(*ccxv1.SendResponse) error, typed *bool, beforeTyping func()) error {
 	// One send at a time: two that both saw an empty box would type into it
-	// together and be submitted joined.
+	// together and be submitted joined. The waits for question / done come
+	// after, outside the lock.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -164,7 +205,6 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if err != nil {
 		return err
 	}
-	header := headerLine(req.Sender, req.Summary)
 	// A header sent before is already in the history; only a new one counts. Read
 	// before the screen, so the box is looked at right before typing.
 	lines := strconv.Itoa(historyLines(req.Body))
@@ -205,6 +245,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s has text in its input box; nothing was sent", req.Target))
 	}
 
+	beforeTyping()
 	*typed = true
 	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
 		// herdr may have written part of it before failing.
@@ -479,7 +520,7 @@ func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*cc
 // from the center for this machine.
 func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	var last ccxv1.SendResponse_State
-	req := Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode()}
+	req := Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds()}
 	send := s.Devin.Send
 	if IsClaudeSession(req.Target) {
 		send = s.sendClaude
@@ -653,4 +694,13 @@ func (s *Service) sendClaude(ctx context.Context, req Request, emit func(*ccxv1.
 		return markNotTyped(connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is a Claude Code session, and this ccx-agent's heartbeat concern (which holds the ccx channels) is off", req.Target)))
 	}
 	return s.Claude.Send(ctx, req, emit)
+}
+
+// DevinHook takes one Devin hook event from `ccx-agent devin-hook`.
+func (s *Service) DevinHook(ctx context.Context, req *connect.Request[ccxv1.DevinHookRequest]) (*connect.Response[ccxv1.DevinHookResponse], error) {
+	out, err := s.Devin.Hook(ctx, req.Msg.GetPayload())
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&ccxv1.DevinHookResponse{Output: out}), nil
 }
