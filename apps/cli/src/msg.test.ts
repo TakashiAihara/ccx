@@ -311,8 +311,9 @@ test("a --wait the agent says ran out is said and exits 3; a done, or no --wait,
   const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
   expect([d.code, d.out]).toEqual([0, "sent\ndone\n  ok\n"]);
 
-  const plain = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "x"], {});
-  expect([plain.code, plain.out]).toEqual([0, "sent\ndone\n  ok\n"]);
+  // Without --wait the same acks are only acks.
+  const plain = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "x"], {});
+  expect([plain.code, plain.out]).toEqual([0, "sent\nquestion  prompt p1\nwait-ended\n"]);
 });
 
 // A Claude Code receiver has no turn to wait on (no question / done yet): its acks end as without --wait, and may

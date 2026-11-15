@@ -26,7 +26,7 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 # working  agent_status working
 ```
 
-- Each line is an ack, printed as it happens. Exit 0 means the message was sent. With `--wait` it also means the wait did not run out: a `done` came, or the receiver has no turn to wait on (a Claude Code session, below) and its acks ended as without `--wait`.
+- Each line is an ack, printed as it happens. Exit 0 means the message was sent. With `--wait` it also means the wait did not run out: a `done` came, or the receiver has no turn to wait on (a Claude Code session, below) and its acks ended as without `--wait`. From a ccx-agent older than `WAIT_ENDED` (below), a wait that ran out ends with exit 0 too.
 - A `--wait` that ccx-agent says ran out (the ack state `WAIT_ENDED`, sent when its wait for the turn ends without a `done`) ends with `no done within <seconds> s (the receiver may still be on it)` and exit 3: the message is in, the answer did not come in time.
 - A refusal prints `not sent: <reason>` and exits 1. Nothing was typed into the receiver.
 - Any other failure prints `may have been sent` (or `sent, then lost the ack stream`) and exits 1: the text may be there already, so look before sending again. "not sent" needs ccx-agent's word for it (the error metadata `Ccx-Not-Typed: 1`, set on refusals before typing), a socket that could not be connected to, or a code the Connect layer answers before Send runs (Unimplemented from an older ccx-agent, ResourceExhausted for an oversized request); a dropped stream or a timeout (`--timeout`, 60 s) is not proof.

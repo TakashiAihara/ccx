@@ -27,6 +27,7 @@ const STATES: Record<number, string> = {
   [SendResponse_State.QUEUED]: "queued",
   [SendResponse_State.QUESTION]: "question",
   [SendResponse_State.DONE]: "done",
+  [SendResponse_State.WAIT_ENDED]: "wait-ended",
 };
 
 /** One ack as lines: a question lists its options, done carries the receiver's last answer indented. */
@@ -128,7 +129,8 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
   const signal = AbortSignal.timeout(wait > 0 ? Math.max(timeout, (wait + 60) * 1000) : timeout);
   const where = { machine: o.machine ?? "", user: o.user ?? "" };
   for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where }, { signal })) {
-    if (ev.state === SendResponse_State.WAIT_ENDED) {
+    // Only a send that asked to wait can have run out of it.
+    if (wait > 0 && ev.state === SendResponse_State.WAIT_ENDED) {
       out(`no done within ${wait} s (the receiver may still be on it)`);
       return true;
     }
@@ -167,7 +169,7 @@ export function registerMsg(program: Command): void {
           state = l.startsWith("queued") ? "queued" : "sent";
           console.log(l);
         });
-        // The message is in either way; only the exit code tells a wait that ran out from a done. A stream that
+        // The message is in either way; exit 3 lets a script tell a wait that ran out from a done. A stream that
         // ends with neither had no turn to wait on (a Claude Code receiver), or came from an older ccx-agent.
         if (ranOut) process.exitCode = WAIT_RAN_OUT;
       } catch (e) {
