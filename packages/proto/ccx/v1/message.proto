@@ -98,6 +98,9 @@ message SendResponse {
     STATE_QUESTION = 5;
     // The receiver's turn that took the message ended; text is its last answer. The stream ends.
     STATE_DONE = 6;
+    // wait_seconds ran out before DONE: the receiver may still be on it. The message is in either way. The
+    // stream ends. Only a send with wait_seconds sees it, and only from a ccx-agent that knows it.
+    STATE_WAIT_ENDED = 7;
   }
   State state = 1;
   // One line for people about the state. May be empty.

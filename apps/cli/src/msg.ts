@@ -27,6 +27,7 @@ const STATES: Record<number, string> = {
   [SendResponse_State.QUEUED]: "queued",
   [SendResponse_State.QUESTION]: "question",
   [SendResponse_State.DONE]: "done",
+  [SendResponse_State.WAIT_ENDED]: "wait-ended",
 };
 
 /** One ack as lines: a question lists its options, done carries the receiver's last answer indented. */
@@ -66,9 +67,12 @@ export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => 
 
 export function unixTransport(socketPath: string): Transport {
   return createConnectTransport({
-    // The host is not used: Bun's fetch takes `unix` and connects to the socket.
+    // The host is not used: Bun's fetch takes `unix` and connects to the socket. timeout: false turns off
+    // Bun's own cut of a silent response (Bun 1.4.3: a 420 s silence was cut at 360 s, 330 s was not), which a
+    // --wait on an unanswered question passes (#318). Nothing else bounds the stream, so a caller passes an
+    // AbortSignal, as sendMessage does.
     baseUrl: "http://ccx-agent",
-    fetch: ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, unix: socketPath } as RequestInit)) as typeof fetch,
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, unix: socketPath, timeout: false } as RequestInit)) as typeof fetch,
   });
 }
 
@@ -112,8 +116,8 @@ function parseTimeout(v: string): number {
   return n;
 }
 
-/** Hands each ack to out as one line. Throws a ConnectError when nothing was sent. */
-export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void): Promise<void> {
+/** Hands each ack to out as one line, and says whether the agent said the --wait ran out. Throws a ConnectError when nothing was sent. */
+export async function sendMessage(target: string, body: string, o: SendOptions, out: (line: string) => void): Promise<boolean> {
   if (!Object.hasOwn(MODES, o.mode)) throw new Error(`--mode must be one of ${Object.keys(MODES).join(", ")}`);
   const mode = MODES[o.mode];
 
@@ -125,9 +129,18 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
   const signal = AbortSignal.timeout(wait > 0 ? Math.max(timeout, (wait + 60) * 1000) : timeout);
   const where = { machine: o.machine ?? "", user: o.user ?? "" };
   for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where }, { signal })) {
+    // Only a send that asked to wait can have run out of it.
+    if (wait > 0 && ev.state === SendResponse_State.WAIT_ENDED) {
+      out(`no done within ${wait} s (the receiver may still be on it)`);
+      return true;
+    }
     for (const l of ackLines(ev)) out(l);
   }
+  return false;
 }
+
+/** Exit code of a send that went through but whose --wait ran out before a done. */
+export const WAIT_RAN_OUT = 3;
 
 export function registerMsg(program: Command): void {
   const msg = program.command("msg").description("Send messages to running sessions through the local ccx-agent");
@@ -151,11 +164,14 @@ export function registerMsg(program: Command): void {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
         o.from ??= defaultSender();
-        await sendMessage(target, body.join(" "), o, (l) => {
+        const ranOut = await sendMessage(target, body.join(" "), o, (l) => {
           // A later message's first ack is queued; sent follows when a turn takes it.
           state = l.startsWith("queued") ? "queued" : "sent";
           console.log(l);
         });
+        // The message is in either way; exit 3 lets a script tell a wait that ran out from a done. A stream that
+        // ends with neither had no turn to wait on (a Claude Code receiver), or came from an older ccx-agent.
+        if (ranOut) process.exitCode = WAIT_RAN_OUT;
       } catch (e) {
         if (!(e instanceof ConnectError)) throw e;
         throw new Error(`${failurePrefix(e, state)}: ${e.rawMessage}`);

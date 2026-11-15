@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
-import { createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
+import { createClient, createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -292,4 +292,58 @@ test("--wait takes whole seconds up to an hour", async () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("--wait takes whole seconds from 0 to 3600");
   }
+});
+
+test("a --wait the agent says ran out is said and exits 3; a done, or no --wait, exits 0", async () => {
+  const question = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+    yield { state: SendResponse_State.QUESTION, detail: "prompt p1" };
+    yield { state: SendResponse_State.WAIT_ENDED };
+  });
+  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([r.code, r.out]).toEqual([WAIT_RAN_OUT, "sent\nquestion  prompt p1\nno done within 5 s (the receiver may still be on it)\n"]);
+  expect(WAIT_RAN_OUT).toBe(3);
+
+  const done = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+    yield { state: SendResponse_State.DONE, text: "ok" };
+  });
+  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([d.code, d.out]).toEqual([0, "sent\ndone\n  ok\n"]);
+
+  // Without --wait the same acks are only acks.
+  const plain = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "x"], {});
+  expect([plain.code, plain.out]).toEqual([0, "sent\nquestion  prompt p1\nwait-ended\n"]);
+});
+
+// A Claude Code receiver has no turn to wait on (no question / done yet): its acks end as without --wait, and may
+// take longer than a short --wait (up to about 10 s for not-started).
+test("a --wait whose stream ends without the agent saying it ran out exits 0, however long it took", async () => {
+  const claude = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+    await Bun.sleep(1100);
+    yield { state: SendResponse_State.NOT_STARTED };
+  });
+  const r = await runCli(["msg", "send", "t", "--socket", claude, "--summary", "s", "--from", "me", "--wait", "1", "x"], {});
+  expect([r.code, r.out]).toEqual([0, "sent\nnot-started\n"]);
+});
+
+// Bun's fetch cuts a response that has been silent for about 6 minutes; a --wait on an unanswered question goes past that (#318).
+test("the agent's stream is fetched with Bun's own timeout off", async () => {
+  const real = globalThis.fetch;
+  let seen: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: unknown, init?: Record<string, unknown>) => {
+    seen = init;
+    throw new Error("stop here");
+  }) as unknown as typeof fetch;
+  try {
+    const client = createClient(MessageService, unixTransport("/nonexistent.sock"));
+    await (async () => {
+      for await (const _ of client.send({ target: "t" })) break;
+    })().catch(() => {});
+  } finally {
+    globalThis.fetch = real;
+  }
+  expect(seen).toMatchObject({ unix: "/nonexistent.sock", timeout: false });
+  expect(seen?.signal).toBeInstanceOf(AbortSignal);
 });
