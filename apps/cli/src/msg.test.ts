@@ -321,7 +321,7 @@ test("a --wait that runs out before a done says so and exits 3; a done, or no --
   expect(plain.out).not.toContain("no done within");
 });
 
-// A Claude Code receiver (or an urgent send to a working Devin) has no turn to wait on: the agent ends the stream at once.
+// A Claude Code receiver has no turn to wait on (no question / done yet): the agent ends the stream at once.
 test("a --wait whose stream ends before the wait has passed is not a wait that ran out", async () => {
   const quick = fakeAgent(async function* () {
     yield { state: SendResponse_State.SENT };

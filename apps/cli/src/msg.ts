@@ -167,7 +167,7 @@ export function registerMsg(program: Command): void {
           console.log(l);
         });
         // The agent ends a wait quietly (the message is in either way); say so here, apart from a done. A stream that
-        // ends sooner had no turn to wait on (a Claude Code receiver, an urgent send to a working Devin): the agent's
+        // ends sooner had no turn to wait on (a Claude Code receiver, which has no question / done yet): the agent's
         // wait starts after this one, so a wait that ran out always ends past --wait.
         const wait = (o.wait ?? 0) * 1000;
         if (wait > 0 && !done && Date.now() - started >= wait) {
