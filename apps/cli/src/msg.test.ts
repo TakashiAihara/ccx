@@ -96,7 +96,7 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{ co
   return { code, out, err };
 }
 
-test("the command says what the first ack was when the stream breaks after it", async () => {
+test("the command says how far the acks got when the stream breaks after them", async () => {
   for (const [states, want] of [
     [[SendResponse_State.QUEUED], "queued, then lost the ack stream"],
     [[SendResponse_State.SENT], "sent, then lost the ack stream"],
