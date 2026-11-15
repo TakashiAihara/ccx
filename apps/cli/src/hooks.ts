@@ -101,11 +101,11 @@ export function withHooks(config: Record<string, unknown>, tool: Tool, agent: st
   return JSON.stringify(config) !== before;
 }
 
-
 /**
  * Where the file really is, or would be created, and where each link on the way led (resolved): every link
  * followed, a dangling one too (realpath gives up on it, and renaming over the link itself would replace the
- * link with a file).
+ * link with a file). path itself is taken as given (built with join, as the tool reading it builds it); the ..
+ * rule below is for what links say.
  */
 export async function target(path: string): Promise<{ real: string; via: string[] }> {
   const via: string[] = [];
