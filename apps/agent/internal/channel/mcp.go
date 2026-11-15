@@ -1,7 +1,7 @@
 // Package channel is the per-session half of ccx-agent: the MCP channel server
 // that Claude Code spawns over stdio (ADR 0002, "the one process boundary that is
-// imposed"). Today it carries one thing, the prompt-cache heartbeat
-// (docs/design/heartbeat.md) and messages from other sessions (#138), and offers
+// imposed"). It carries the prompt-cache heartbeat (docs/design/heartbeat.md)
+// and messages from other sessions (#138), and offers
 // one tool to send a message (docs/design/messaging.md).
 package channel
 
