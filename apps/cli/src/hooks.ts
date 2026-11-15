@@ -7,10 +7,10 @@
  * later. docs: apps/agent/README.md "Wiring the hooks".
  */
 import { InvalidArgumentError, type Command } from "commander";
-import { chmod, lstat, mkdir, readFile, readlink, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export type Tool = "claude" | "devin";
 
@@ -101,16 +101,6 @@ export function withHooks(config: Record<string, unknown>, tool: Tool, agent: st
   return JSON.stringify(config) !== before;
 }
 
-// The nearest directory at or above dir that exists, links resolved, with the missing part put back on.
-async function realDirOf(dir: string): Promise<string> {
-  let base = resolve(dir);
-  const missing: string[] = [];
-  while (!existsSync(base) && dirname(base) !== base) {
-    missing.unshift(basename(base));
-    base = dirname(base);
-  }
-  return join(await realpath(base), ...missing);
-}
 
 /**
  * Where the file really is, or would be created, and where each link on the way led (resolved): every link
@@ -119,22 +109,27 @@ async function realDirOf(dir: string): Promise<string> {
  */
 export async function target(path: string): Promise<{ real: string; via: string[] }> {
   const via: string[] = [];
-  let parts = resolve(path).split("/").filter(Boolean);
-  let cur = "/";
-  for (let hops = 0; parts.length > 0; ) {
-    const next = join(cur, parts.shift()!);
+  const real = await walk("/", resolve(path), { path, hops: 0, via });
+  return { real, via };
+}
+
+// Follows rest from cur (which has no links in it) a component at a time. A link's own text is walked the same
+// way, not normalized first (realpath and resolve would), so a .. after a link climbs from where that link led:
+// join takes .. as cur's parent.
+async function walk(cur: string, rest: string, o: { path: string; hops: number; via: string[] }): Promise<string> {
+  for (const part of rest.split("/").filter(Boolean)) {
+    const next = join(cur, part);
     const st = await lstat(next).catch(() => null);
     if (!st?.isSymbolicLink()) {
       cur = next;
       continue;
     }
-    if (++hops > 40) throw new Error(`more than 40 links from ${path}`);
-    const to = resolve(cur, await readlink(next));
-    via.push(await realDirOf(to));
-    parts = [...to.split("/").filter(Boolean), ...parts];
-    cur = "/";
+    if (++o.hops > 40) throw new Error(`more than 40 links from ${o.path}`);
+    const link = await readlink(next);
+    cur = await walk(link.startsWith("/") ? "/" : cur, link, o);
+    o.via.push(cur);
   }
-  return { real: cur, via };
+  return cur;
 }
 
 // The work tree dir is in (git prints it with links resolved); null outside one, or with no git to ask

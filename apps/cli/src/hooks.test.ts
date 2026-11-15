@@ -279,6 +279,32 @@ test("a link to the repo's root, or one reached through another link, counts", a
   expect(lines.filter((l) => l.includes("links into a git work tree"))).toHaveLength(2);
 });
 
+// The OS reads a/link/../b through the link; reading it as a/b would write a file the tool never reads.
+test("a .. after a link climbs from where the link led", async () => {
+  const store = join(home, "store");
+  mkdirSync(join(store, "nested"), { recursive: true });
+  writeFileSync(join(store, "other.json"), "{}\n");
+  mkdirSync(join(home, ".claude"));
+  writeFileSync(join(home, ".claude", "other.json"), '{"keep":1}\n');
+  symlinkSync(join(store, "nested"), join(home, ".claude", "alias"));
+  symlinkSync("alias/../other.json", claudePath());
+  expect(await wire(["claude"])).toBe(0);
+  expect(read(join(store, "other.json")).hooks.Stop).toHaveLength(1);
+  expect(readFileSync(join(home, ".claude", "other.json"), "utf8")).toBe('{"keep":1}\n');
+  expect(lstatSync(claudePath()).isSymbolicLink()).toBe(true);
+
+  // Into a repo the same way: where the link leads is read through it too, so it is still not written.
+  const repo = join(store, "dot");
+  mkdirSync(repo);
+  expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
+  symlinkSync(join(store, "nested"), join(home, "alias"));
+  mkdirSync(join(home, ".config"), { recursive: true });
+  symlinkSync("../alias/../dot", join(home, ".config", "devin"));
+  expect(await wire(["devin"])).toBe(0);
+  expect(readdirSync(repo)).toEqual([".git"]);
+  expect(lines.at(-2)).toContain("links into a git work tree");
+});
+
 test("a loop of links fails that tool instead of spinning", async () => {
   mkdirSync(join(home, ".config", "devin"), { recursive: true });
   symlinkSync(join(home, "b"), join(home, "a"));
