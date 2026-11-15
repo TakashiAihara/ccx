@@ -70,7 +70,7 @@ test("the API socket sits beside the hook socket unless CCX_API_SOCKET names one
 });
 
 test("a Claude Code sender is named from its session id", () => {
-  expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" })).toBe("claude-f61d5ded");
+  expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" })).toBe("f61d5ded-df69-4683-aaa7-7ef078395a72");
 });
 
 test("only a failure marked not typed, or an unreachable agent, is called not sent", async () => {
@@ -102,7 +102,7 @@ test("the command names a Claude Code sender from its session and prints acks", 
   });
   const r = await runCli(["msg", "send", "excited-giraffe", "--socket", socket, "--summary", "s", "fix", "it"], { CLAUDE_CODE_SESSION_ID: "f61d5ded-df69-4683-aaa7-7ef078395a72" });
   expect(r).toMatchObject({ code: 0, out: "sent  pane w2:p1\n" });
-  expect(got).toMatchObject({ sender: "claude-f61d5ded", body: "fix it", mode: DeliveryMode.AFTER_TURN });
+  expect(got).toMatchObject({ sender: "f61d5ded-df69-4683-aaa7-7ef078395a72", body: "fix it", mode: DeliveryMode.AFTER_TURN });
 });
 
 test("the command says not sent for a refusal and exits 1", async () => {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -287,5 +288,89 @@ func TestReconnectKeepsTheSessionRegistered(t *testing.T) {
 	}
 	if c.Status(id, "").Registered {
 		t.Error("still registered after the last connection closed")
+	}
+}
+
+// Push sends an event down the session's own connection and says its home;
+// a session with no channel connected gets ErrNotRegistered (#138).
+func TestConcernPushesAnEventToARegisteredSession(t *testing.T) {
+	home := t.TempDir()
+	sock := testsock.Path(t, "ch.sock")
+	// A session with no transcript: the heartbeat never pushes, so the only line is the message.
+	c := &Concern{socketPath: sock, claudeHome: home, log: t.Logf,
+		cfg: config.Heartbeat{Default: true, Interval: 50 * time.Minute, MaxIdle: 12 * time.Hour}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	const id, other = "00000000-0000-4000-8000-000000000011", "00000000-0000-4000-8000-000000000012"
+	if _, err := c.Push(id, Event{Content: "x"}); !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("before registering: %v", err)
+	}
+	var conn net.Conn
+	var err error
+	for i := 0; i < 50; i++ {
+		if conn, err = net.Dial("unix", sock); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ownHome := t.TempDir()
+	_ = json.NewEncoder(conn).Encode(Register{Session: id, ClaudeHome: ownHome})
+
+	for i := 0; i < 100; i++ {
+		if _, ok := c.Home(id); ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h, ok := c.Home(id); !ok || h != ownHome {
+		t.Fatalf("Home = %q, %v; want the registered %q", h, ok, ownHome)
+	}
+	if _, ok := c.Home(other); ok {
+		t.Fatal("Home found a session that never registered")
+	}
+	if _, err := c.Push(other, Event{Content: "x"}); !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("other session: %v", err)
+	}
+
+	got, err := c.Push(id, Event{Content: "hello", Meta: map[string]string{"kind": "message"}})
+	if err != nil || got != ownHome {
+		t.Fatalf("Push = %q, %v", got, err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	var ev Event
+	if err != nil || json.Unmarshal(line, &ev) != nil || ev.Content != "hello" || ev.Meta["kind"] != "message" {
+		t.Fatalf("channel read %q, %v", line, err)
+	}
+
+	// Gone once the channel disconnects.
+	conn.Close()
+	for i := 0; i < 100; i++ {
+		if _, ok := c.Home(id); !ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the session stayed registered after its channel closed")
+}
+
+// A failed write closes the connection: the encoder would return the same error
+// for every later event, and part of the line may be out.
+func TestChannelClosesItsConnectionOnAFailedWrite(t *testing.T) {
+	local, remote := net.Pipe()
+	ch := &channel{conn: local, out: json.NewEncoder(local)}
+	remote.Close()
+	if err := ch.send(Beat); err == nil {
+		t.Fatal("send to a closed peer succeeded")
+	}
+	// A local Close makes Read answer io.ErrClosedPipe; with only the peer gone it would be io.EOF.
+	if _, err := local.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("read after the failed send: %v, want the connection closed here", err)
 	}
 }

@@ -67,6 +67,9 @@ func relayOnce(ctx context.Context, socketPath, sessionID, claudeHome string, s 
 		return true, err
 	}
 	sc := bufio.NewScanner(conn)
+	// A message body is up to 64 KiB, and JSON escaping can grow it six times
+	// (< is <). The default 64 KiB line limit would drop it and the connection.
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		var ev struct {
 			Content string            `json:"content"`

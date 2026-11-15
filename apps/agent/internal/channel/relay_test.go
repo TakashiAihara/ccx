@@ -159,3 +159,44 @@ func TestRelayRegistersAgainAfterServeRestarts(t *testing.T) {
 	defer stopRestarted()
 	waitRegistered(restarted, "restarted serve")
 }
+
+// A message at the 64 KiB body limit made of characters JSON escapes is pushed
+// whole: the line serve sends is about six times the body.
+func TestRelayPushesALargeEscapedMessage(t *testing.T) {
+	sock := testsock.Path(t, "ch.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	body := strings.Repeat("<", 64*1024)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		_ = json.NewEncoder(conn).Encode(heartbeat.Event{Content: body, Meta: map[string]string{"kind": "message"}})
+		time.Sleep(time.Second)
+	}()
+
+	out := &syncBuf{}
+	s := NewServer("ccx", "0", out)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { Relay(ctx, sock, "sid-1", "", s, t.Logf); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		var n struct {
+			Params struct {
+				Content string `json:"content"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(out.String())), &n) == nil && n.Params.Content == body {
+			return
+		}
+	}
+	t.Fatalf("the large message was not pushed (got %d bytes out)", len(out.String()))
+}
