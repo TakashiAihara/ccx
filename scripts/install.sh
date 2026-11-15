@@ -7,6 +7,11 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
 #
+# Wire ccx-agent's hooks into AI tools with --hooks (claude, devin; comma-separated). Without it, a run
+# with --with-agent from a terminal asks:
+#
+#   curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent --hooks claude,devin
+#
 # Override the destination with CCX_INSTALL_DIR (default: ~/.local/bin).
 # Pin a version with CCX_VERSION (default: latest).
 
@@ -18,13 +23,55 @@ VERSION="${CCX_VERSION:-latest}"
 # Where releases are downloaded from. Only the tests point it elsewhere.
 BASE="${CCX_DOWNLOAD_URL:-https://github.com/${REPO}/releases}"
 WITH_AGENT=0
+HOOKS=""
+HOOKS_GIVEN=0
+HOOK_TOOLS="claude devin"
 
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --with-agent) WITH_AGENT=1 ;;
-    *) echo "ccx: unknown option: $a" >&2; exit 2 ;;
+    --hooks)
+      [ $# -ge 2 ] || { echo "ccx: --hooks needs a list of tools (claude, devin)" >&2; exit 2; }
+      HOOKS=$2; HOOKS_GIVEN=1; shift ;;
+    --hooks=*) HOOKS=${1#--hooks=}; HOOKS_GIVEN=1 ;;
+    *) echo "ccx: unknown option: $1" >&2; exit 2 ;;
   esac
+  shift
 done
+
+# hooks_ok LIST: every comma-separated name is a tool ccx can wire (an empty list wires none).
+hooks_ok() {
+  rest=$1
+  while [ -n "$rest" ]; do
+    t=${rest%%,*}
+    case " $HOOK_TOOLS " in *" $t "*) ;; *) return 1 ;; esac
+    [ "$rest" != "${rest#*,}" ] || break
+    rest=${rest#*,}
+  done
+}
+
+if [ "$HOOKS_GIVEN" = 1 ]; then
+  # The hooks run ccx-agent, which only --with-agent installs.
+  [ "$WITH_AGENT" = 1 ] || { echo "ccx: --hooks needs --with-agent (the hooks run ccx-agent)" >&2; exit 2; }
+  hooks_ok "$HOOKS" || { echo "ccx: --hooks takes tools from: $HOOK_TOOLS (comma-separated), got: $HOOKS" >&2; exit 2; }
+elif [ "$WITH_AGENT" = 1 ] && (: </dev/tty) 2>/dev/null; then
+  # Piped into sh, stdin is the script; the terminal is still /dev/tty. Asked before any download.
+  while :; do
+    printf 'ccx: wire ccx-agent hooks into which AI tools? (%s, comma-separated; empty for none): ' "$(echo "$HOOK_TOOLS" | sed 's/ /, /g')" >/dev/tty
+    IFS= read -r HOOKS </dev/tty || HOOKS=""
+    HOOKS=$(printf '%s' "$HOOKS" | sed 's/[[:space:]]//g')
+    hooks_ok "$HOOKS" && break
+    echo "ccx: pick from: $HOOK_TOOLS" >/dev/tty
+  done
+fi
+
+# wire_hooks: run once ccx-agent is in place; a failure to write one tool's config fails the install.
+wire_hooks() {
+  [ -n "$HOOKS" ] || return 0
+  # Split on purpose: hooks_ok let through only names from HOOK_TOOLS.
+  # shellcheck disable=SC2046
+  "$DEST/ccx" hooks install $(printf '%s' "$HOOKS" | sed 's/,/ /g')
+}
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -139,9 +186,10 @@ agent_version=$("$DEST/ccx-agent" --version)
 echo "ccx: installed to $DEST/ccx-agent ($agent_version)"
 
 if [ "$service" = manual ]; then
+  wire_hooks
   echo "ccx: 'systemctl --user' cannot reach a user manager here (or this is macOS), so no service was set up." >&2
   echo "ccx: keep '$DEST/ccx-agent serve' running as your user under your own supervisor." >&2
-  echo "ccx: then point it at a center and wire the hooks with the command '$DEST/ccx-agent hook':" >&2
+  echo "ccx: then point it at a center (and wire hooks with '$DEST/ccx hooks install <tool>' if you skipped that):" >&2
   echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install" >&2
   exit 0
 fi
@@ -219,5 +267,6 @@ if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" !
   echo "ccx: to keep ccx-agent up across logout, run: loginctl enable-linger $(id -un)"
 fi
 
-echo "ccx: next, point it at a center and wire the hooks with the command '$DEST/ccx-agent hook':"
+wire_hooks
+echo "ccx: next, point it at a center (and wire hooks with '$DEST/ccx hooks install <tool>' if you skipped that):"
 echo "ccx:   https://github.com/${REPO}/blob/main/apps/agent/README.md#install"

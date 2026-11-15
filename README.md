@@ -84,12 +84,18 @@ curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/inst
 
 To see sessions across machines, add the resident agent too. `--with-agent` installs `ccx-agent` from
 the same release and, where `systemctl --user` works, runs it as a systemd **user** service (never a
-system unit; elsewhere it says how to supervise it yourself). The hooks and the center URL
-are separate steps, in [apps/agent/README.md](apps/agent/README.md#install):
+system unit; elsewhere it says how to supervise it yourself). Run from a terminal, it also asks which
+AI tools to wire ccx-agent's hooks into (`claude` for Claude Code, `devin` for Devin); `--hooks` names
+them up front instead, for scripts. The center URL is a separate step, in
+[apps/agent/README.md](apps/agent/README.md#install):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/ccx/main/scripts/install.sh | sh -s -- --with-agent --hooks claude,devin
 ```
+
+The hooks can also be wired (or rewired) later with `ccx hooks install claude devin`. Sessions that
+are already running get them when started again.
 
 ## Usage
 

@@ -14,8 +14,13 @@ const RELEASES: Record<string, string[]> = {
   "v1.2.3": ["ccx-", "ccx-agent-", "ccx-agent.service"],
   "v0.0.1": ["ccx-"],
 };
+// The fake ccx writes down a `hooks` call (and fails it under HOOKS_FAIL) instead of touching any config.
 const body = (tag: string, name: string) =>
-  name === "ccx-agent.service" ? UNIT : `#!/bin/sh\necho ${name.startsWith("ccx-agent-") ? "agent" : "cli"}-${tag}\n`;
+  name === "ccx-agent.service"
+    ? UNIT
+    : name.startsWith("ccx-agent-")
+      ? `#!/bin/sh\necho agent-${tag}\n`
+      : `#!/bin/sh\nif [ "$1" = hooks ]; then echo "ccx $*" >> "${work}/calls"; exit "\${HOOKS_FAIL:-0}"; fi\necho cli-${tag}\n`;
 
 const TOOLS = ["sh", "uname", "mkdir", "curl", "rm", "chmod", "mv", "sed", "id"];
 const SH = Bun.which("sh")!;
@@ -79,7 +84,9 @@ afterEach(() => {
 // spawnSync だと event loop が止まり、同じプロセスの偽 release が応答できない
 async function install(args: string[], env: Record<string, string> = {}) {
   const home = join(work, "home");
-  const p = Bun.spawn([SH, join(ROOT, "scripts", "install.sh"), ...args], {
+  // In a session of its own, so /dev/tty is not the test runner's terminal and install.sh never stops to ask.
+  const setsid = Bun.which("setsid");
+  const p = Bun.spawn([...(setsid ? [setsid] : []), SH, join(ROOT, "scripts", "install.sh"), ...args], {
     // 壊した実装が相対パスへ書いても、テストランナーの cwd (通常は repo) ではなく一時ディレクトリに落ちるように
     cwd: work,
     stdout: "pipe",
@@ -318,4 +325,74 @@ test.skipIf(!linux)("entries a unit cannot carry are left out one by one, and a 
   expect(unitOf(r.home)).toContain(`\nEnvironment=PATH=${given}\n`);
   expect(r.out).toContain(`left out of the unit's PATH (not absolute, or a character outside [A-Za-z0-9/._@+,~-]): '${odd}' 'rel/bin' '' '${glob}' ''`);
   expect(r.out).toContain(`herdr is not on the PATH the unit was given (${given})`);
+});
+
+test.skipIf(!linux)("--hooks wires the named tools through ccx once the agent is running", async () => {
+  const r = await install(["--with-agent", "--hooks", "claude,devin"]);
+  expect(r.code).toBe(0);
+  const lines = r.calls.trim().split("\n");
+  expect(lines.at(-1)).toBe("ccx hooks install claude devin");
+  expect(lines.indexOf("systemctl --user restart ccx-agent")).toBeLessThan(lines.indexOf("ccx hooks install claude devin"));
+  expect(r.out).not.toContain("wire ccx-agent hooks into which");
+});
+
+test("--hooks=devin also works, and on a host without a user manager the hooks are still wired", async () => {
+  const r = await install(["--with-agent", "--hooks=devin"], { NO_MANAGER: "1" });
+  expect(r.code).toBe(0);
+  expect(r.calls).toContain("ccx hooks install devin\n");
+});
+
+test("an empty --hooks wires nothing, and without --hooks and no terminal nothing is asked or wired", async () => {
+  for (const args of [["--with-agent", "--hooks", ""], ["--with-agent"]]) {
+    const r = await install(args, { NO_MANAGER: "1" });
+    expect(r.code).toBe(0);
+    expect(r.calls).not.toContain("ccx hooks");
+    expect(r.out).not.toContain("wire ccx-agent hooks into which");
+  }
+});
+
+test("--hooks is refused before anything is downloaded without --with-agent, with an unknown tool, or with no list", async () => {
+  for (const [args, why] of [
+    [["--hooks", "devin"], "--hooks needs --with-agent"],
+    [["--with-agent", "--hooks", "claude,cursor"], "--hooks takes tools from"],
+    [["--with-agent", "--hooks", ",devin"], "--hooks takes tools from"],
+    [["--with-agent", "--hooks"], "--hooks needs a list of tools"],
+  ] as const) {
+    const r = await install([...args]);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain(why);
+    expect(requests).toBe(0);
+  }
+});
+
+test("a tool whose config cannot be wired fails the install", async () => {
+  const r = await install(["--with-agent", "--hooks", "devin"], { NO_MANAGER: "1", HOOKS_FAIL: "1" });
+  expect(r.code).toBe(1);
+  expect(r.calls).toContain("ccx hooks install devin\n");
+});
+
+// script(1) gives install.sh a terminal, so /dev/tty is there to ask on; what is typed comes from its stdin.
+async function inTerminal(args: string[], typed: string) {
+  const env = { HOME: join(work, "home"), PATH: toolsPath(), CCX_INSTALL_DIR: join(work, "bin"), CCX_DOWNLOAD_URL: `http://127.0.0.1:${server.port}`, NO_MANAGER: "1" };
+  const cmd = [SH, join(ROOT, "scripts", "install.sh"), ...args].join(" ");
+  const p = Bun.spawn([Bun.which("script")!, "-qec", cmd, "/dev/null"], { cwd: work, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  p.stdin.write(typed);
+  p.stdin.end();
+  const [out, , code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { out, code };
+}
+
+test.skipIf(!linux || !Bun.which("script"))("from a terminal without --with-agent, nothing is asked", async () => {
+  const { out, code } = await inTerminal([], "devin\n");
+  expect(code).toBe(0);
+  expect(out).toContain("installed to");
+  expect(out).not.toContain("wire ccx-agent hooks into which");
+});
+
+test.skipIf(!linux || !Bun.which("script"))("from a terminal, --with-agent asks which tools to wire, and asks again after a wrong name", async () => {
+  const { out, code } = await inTerminal(["--with-agent"], "cursor\n claude , devin \n");
+  expect(code).toBe(0);
+  expect(out.match(/wire ccx-agent hooks into which AI tools\? \(claude, devin/g)).toHaveLength(2);
+  expect(out).toContain("pick from: claude devin");
+  expect(readFileSync(join(work, "calls"), "utf8")).toContain("ccx hooks install claude devin\n");
 });

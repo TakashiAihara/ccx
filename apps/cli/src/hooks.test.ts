@@ -1,0 +1,144 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { agentPath, wireHooks } from "./hooks.ts";
+
+let home: string;
+let lines: string[];
+const AGENT = "/opt/ccx/bin/ccx-agent";
+const wire = (tools: ("claude" | "devin")[], env: Record<string, string> = {}) => wireHooks(tools, { home, env, agent: AGENT, out: (l) => lines.push(l) });
+const read = (p: string) => JSON.parse(readFileSync(p, "utf8"));
+const claudePath = () => join(home, ".claude", "settings.json");
+const devinPath = () => join(home, ".config", "devin", "config.json");
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "ccx-hooks-"));
+  lines = [];
+});
+afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+test("a missing Claude Code settings.json gets the four collect hooks", async () => {
+  expect(await wire(["claude"])).toBe(0);
+  const s = read(claudePath());
+  expect(Object.keys(s.hooks)).toEqual(["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]);
+  expect(s.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: `${AGENT} hook` }] }]);
+  expect(statSync(claudePath()).mode & 0o777).toBe(0o600);
+  expect(lines[0]).toContain(`claude: wired \`${AGENT} hook\``);
+});
+
+test("Devin gets devin-hook on the three events it reads, with a timeout, and keeps the rest of its config", async () => {
+  mkdirSync(join(home, ".config", "devin"), { recursive: true });
+  const other = { hooks: [{ type: "command", command: "bash herdr-agent-state.sh session", timeout: 10 }] };
+  writeFileSync(devinPath(), JSON.stringify({ agent: { model: "m" }, hooks: { PreToolUse: [other], SessionStart: [other] } }));
+  chmodSync(devinPath(), 0o640);
+  expect(await wire(["devin"])).toBe(0);
+  const c = read(devinPath());
+  expect(c.agent).toEqual({ model: "m" });
+  expect(c.hooks.SessionStart).toEqual([other]);
+  expect(c.hooks.PreToolUse).toEqual([other, { hooks: [{ type: "command", command: `${AGENT} devin-hook`, timeout: 10 }] }]);
+  expect(Object.keys(c.hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop", "UserPromptSubmit"]);
+  expect(statSync(devinPath()).mode & 0o777).toBe(0o640);
+});
+
+test("a rerun changes nothing, and an older ccx hook (another path, quoted) is replaced by one", async () => {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const old = { hooks: [{ type: "command", command: "'/old place/ccx-agent' hook" }, { type: "command", command: "echo keep" }] };
+  const devinish = { hooks: [{ type: "command", command: "ccx-agent devin-hook" }] };
+  writeFileSync(claudePath(), JSON.stringify({ hooks: { Stop: [old, devinish] } }));
+  await wire(["claude"]);
+  expect(read(claudePath()).hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "echo keep" }] }, devinish, { hooks: [{ type: "command", command: `${AGENT} hook` }] }]);
+  const after = readFileSync(claudePath(), "utf8");
+  lines = [];
+  expect(await wire(["claude"])).toBe(0);
+  expect(readFileSync(claudePath(), "utf8")).toBe(after);
+  expect(lines).toEqual([`claude: already wired in ${claudePath()}`]);
+});
+
+test("CLAUDE_CONFIG_DIR picks where Claude Code's settings are", async () => {
+  const dir = join(home, "acct");
+  await wire(["claude"], { CLAUDE_CONFIG_DIR: dir });
+  expect(read(join(dir, "settings.json")).hooks.SessionEnd).toHaveLength(1);
+});
+
+test("a settings.json linked into a git work tree is not written; the hooks to add are printed", async () => {
+  const repo = join(home, "dotfiles");
+  mkdirSync(repo);
+  expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
+  writeFileSync(join(repo, "settings.json"), "{}\n");
+  mkdirSync(join(home, ".claude"));
+  symlinkSync(join(repo, "settings.json"), claudePath());
+  expect(await wire(["claude"])).toBe(0);
+  expect(readFileSync(join(repo, "settings.json"), "utf8")).toBe("{}\n");
+  expect(lines[0]).toContain("links into a git work tree");
+  expect(JSON.parse(lines.slice(1).join("\n")).hooks.UserPromptSubmit).toEqual([{ hooks: [{ type: "command", command: `${AGENT} hook` }] }]);
+});
+
+test("a link outside a git work tree is written through, and stays a link", async () => {
+  const target = join(home, "elsewhere", "settings.json");
+  mkdirSync(join(home, "elsewhere"));
+  writeFileSync(target, "{}");
+  mkdirSync(join(home, ".claude"));
+  symlinkSync(target, claudePath());
+  expect(await wire(["claude"])).toBe(0);
+  expect(lstatSync(claudePath()).isSymbolicLink()).toBe(true);
+  expect(read(target).hooks.Stop).toHaveLength(1);
+  expect(readdirSync(join(home, "elsewhere"))).toEqual(["settings.json"]);
+});
+
+test("a config that is not a JSON object is left alone and counted as failed; the next tool still goes", async () => {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(claudePath(), "{ not json");
+  expect(await wire(["claude", "devin"])).toBe(1);
+  expect(readFileSync(claudePath(), "utf8")).toBe("{ not json");
+  expect(read(devinPath()).hooks.Stop).toHaveLength(1);
+  writeFileSync(claudePath(), "[]");
+  expect(await wire(["claude"])).toBe(1);
+  expect(lines.at(-1)).toContain("top level is not a JSON object");
+});
+
+test("an agent path with a space is quoted for the hook's shell", async () => {
+  await wireHooks(["devin"], { home, env: {}, agent: "/my tools/ccx-agent", out: () => {} });
+  expect(read(devinPath()).hooks.Stop[0].hooks[0].command).toBe("'/my tools/ccx-agent' devin-hook");
+});
+
+test("the agent is the one next to ccx when there is one", () => {
+  const dir = join(home, "bin");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "ccx-agent"), "");
+  expect(agentPath(join(dir, "ccx"))).toBe(join(dir, "ccx-agent"));
+  expect(agentPath(join(home, "nowhere", "ccx"))).not.toBe(join(home, "nowhere", "ccx-agent"));
+});
+
+test("the config keeps its mode even where the umask would cut it", async () => {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(claudePath(), "{}");
+  chmodSync(claudePath(), 0o664);
+  const old = process.umask(0o022);
+  try {
+    await wire(["claude"]);
+  } finally {
+    process.umask(old);
+  }
+  expect(statSync(claudePath()).mode & 0o777).toBe(0o664);
+});
+
+async function cli(args: string[]) {
+  const p = Bun.spawn(["bun", join(import.meta.dir, "index.ts"), ...args], { env: { PATH: process.env.PATH ?? "", HOME: home }, stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { out, err, code };
+}
+
+test("the command wires each named tool once and refuses a tool it does not know", async () => {
+  const r = await cli(["hooks", "install", "devin", "devin"]);
+  expect(r.code).toBe(0);
+  expect(r.out.trim().split("\n")).toHaveLength(1);
+  expect(read(devinPath()).hooks.Stop).toHaveLength(1);
+  const bad = await cli(["hooks", "install", "cursor"]);
+  expect(bad.code).not.toBe(0);
+  expect(bad.err).toContain("one of claude, devin");
+  writeFileSync(devinPath(), "{ broken");
+  const broken = await cli(["hooks", "install", "devin"]);
+  expect([broken.code, broken.out]).toEqual([1, expect.stringContaining("devin: cannot wire")]);
+});
