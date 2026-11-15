@@ -220,3 +220,22 @@ func TestClaudeWatchesTheTranscriptOfTheHomeItPushedTo(t *testing.T) {
 		t.Fatalf("acks %v, err %v (kept watching the home from before the push)", got, err)
 	}
 }
+
+func TestClaudeWatchesTheTranscriptWrittenLast(t *testing.T) {
+	home := t.TempDir()
+	old := filepath.Join(home, "projects", "-a", claudeID+".jsonl")
+	live := filepath.Join(home, "projects", "-b", claudeID+".jsonl")
+	for _, p := range []string{old, live} {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte("x\n"), 0o644)
+	}
+	// -a sorts first; -b was written last.
+	past := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(old, past, past)
+	f := &fakeChannels{home: home, registered: true}
+	f.onPush = func(ev heartbeat.Event) { appendTo(live, ev.Meta["msg_id"]+"\n") }
+	got, err := sendClaude(testClaude(f), claudeReq(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 2 || got[1].GetState() != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("acks %v, err %v (watched the older transcript)", got, err)
+	}
+}

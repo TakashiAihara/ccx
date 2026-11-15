@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -43,12 +44,17 @@ type sendArgs struct {
 
 // SendTool is the send_message tool: the same send as `ccx msg send`, through
 // this machine's ccx-agent (MessageService on its API socket). The sender name is
-// claude-<the first 8 of the session id>, as the CLI names a Claude Code sender.
+// the whole session id, as the CLI names a Claude Code sender, so the receiver can
+// answer to it. Sends go one at a time and the 60 s starts when a send's turn
+// comes: Claude Code calls tools in parallel, and a send waiting behind another
+// must not run out its time unsent and be reported as "may have been sent".
 func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
+	var mu sync.Mutex
 	return Tool{
 		Name: "send_message",
 		Description: "Send a message to another running session through ccx: a Devin session by its name, or a Claude Code session by its id, " +
-			"on this machine or (with machine) another. Returns each ack (sent, then working or not-started). " +
+			"on this machine or (with machine) another. The receiver sees this session's id as the sender and can answer to it. " +
+			"Returns each ack (sent, then working or not-started). " +
 			"\"not sent\" means nothing reached the receiver; \"may have been sent\" means look before sending again.",
 		Schema: map[string]any{
 			"type": "object",
@@ -74,11 +80,16 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 			if !ok {
 				return "not sent: mode must be one of later, after-turn, urgent", true
 			}
+			if a.Target == sessionID {
+				return "not sent: that is this session", true
+			}
+			mu.Lock()
+			defer mu.Unlock()
 			ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 			defer cancel()
 			stream, err := client.Send(ctx, connect.NewRequest(&ccxv1.SendRequest{
 				Target: a.Target, Body: a.Body, Summary: a.Summary, Mode: mode, Machine: a.Machine, User: a.User,
-				Sender: "claude-" + sessionID[:min(8, len(sessionID))],
+				Sender: sessionID,
 			}))
 			if err != nil {
 				return failure(err, nil), true

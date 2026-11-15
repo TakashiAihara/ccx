@@ -9,13 +9,13 @@ flowchart LR
     CLI["ccx msg send"] --> A
     TOOL["send_message tool<br/>(ccx channel, Claude Code)"] --> A
     A["ccx-agent<br/>MessageService (unix socket)"] --> M{"machine / user<br/>this agent's own?"}
-    M -- no --> CEN["center<br/>MessageRelayService"] --> B["that machine's ccx-agent<br/>(claims it)"] --> T
+    M -- no --> CEN["center<br/>MessageRelayService"] --> B["that machine's ccx-agent<br/>(claims it, then makes the same target choice)"] --> T
     M -- yes --> T{"target"}
     T -- "a session id" --> CL["Claude Code<br/>push into its ccx channel"]
     T -- "anything else" --> DV["Devin<br/>herdr agent prompt"]
 ```
 
-- The sender never says what product the receiver is: a target shaped like a Claude Code session id (`8-4-4-4-12` hex) goes to Claude Code, anything else is a Devin session name.
+- The sender never says what product the receiver is: a target shaped like a Claude Code session id (`8-4-4-4-12` hex) goes to Claude Code, anything else is a Devin session name. A Devin named in that shape would be taken for a Claude Code session; herdr names Devin sessions as words (`bird-baseball`).
 - Each hop keeps the acks and the refusals unchanged, so the sender reads the same lines whichever way it went.
 
 ## What the sender sees
@@ -31,14 +31,15 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 - Any other failure prints `may have been sent` (or `sent, then lost the ack stream`) and exits 1: the text may be there already, so look before sending again. "not sent" needs ccx-agent's word for it (the error metadata `Ccx-Not-Typed: 1`, set on refusals before typing), a socket that could not be connected to, or a code the Connect layer answers before Send runs (Unimplemented from an older ccx-agent, ResourceExhausted for an oversized request); a dropped stream or a timeout (`--timeout`, 60 s) is not proof.
 - The body is UTF-8 text up to 64 KiB with no control characters but newline and tab; sender and summary are one line of at most 40 and 80 bytes. At the limits the header is about 130 columns and wraps in a narrower pane; a wrapped header ends as `may have been sent`, so keep the summary short. Control and format characters (bidi overrides, zero-width spaces) are refused; the body keeps newline, tab and the zero-width joiners U+200C / U+200D that emoji sequences and some scripts need. The sender name is a label anyone on the machine can choose, not a checked identity.
 - The receiver sees the first line `ccx: <sender>: <summary>`, then the body. Claude Code sees it as the channel event's `title` attribute.
-- From a Claude Code session with the ccx channel, the `send_message` tool (`target`, `body`, `summary`, optional `mode` / `machine` / `user`) sends the same request through this machine's ccx-agent, named `claude-<first 8 of the session id>`, and returns the same lines, prefixed `not sent:` / `may have been sent` the same way.
+- From a Claude Code session with the ccx channel, the `send_message` tool (`target`, `body`, `summary`, optional `mode` / `machine` / `user`) sends the same request through this machine's ccx-agent and returns the same lines, prefixed `not sent:` / `may have been sent` the same way. It refuses this session as the target, and sends one at a time (Claude Code calls tools in parallel; the 60 s starts when a send's turn comes).
+- A Claude Code sender (the tool, or `ccx msg send` run inside a session) is named by its whole session id, so the receiver answers by sending to that id. An answer to another machine also needs that machine's name, which the message does not carry.
 
 ## Modes
 
 | Mode | Meaning | Devin (this build) | Claude Code (this build) |
 |---|---|---|---|
 | `later` | Not woken; read on its next turn | Refused, listing `after-turn, urgent` | Refused, listing `after-turn` (needs the UserPromptSubmit inbox, #25) |
-| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour) |
+| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour), so a turn running past 10 s ends the acks at `not-started` |
 | `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up | Refused, listing `after-turn`: a channel event never interrupts a turn (`transport.md`) |
 
 - A mode the receiver lacks is refused, never swapped for a nearby one (#301).

@@ -134,17 +134,21 @@ func newMsgID() string {
 }
 
 // transcriptEnd finds the session's transcript and its size now, or "" when it
-// has none yet.
+// has none yet. With several (the session ran from more than one directory), the
+// one written last is the one being written.
 func transcriptEnd(home, session string) (string, int64) {
 	m, _ := filepath.Glob(filepath.Join(home, "projects", "*", session+".jsonl"))
-	if len(m) == 0 {
+	var file string
+	var latest os.FileInfo
+	for _, p := range m {
+		if st, err := os.Stat(p); err == nil && (latest == nil || st.ModTime().After(latest.ModTime())) {
+			file, latest = p, st
+		}
+	}
+	if latest == nil {
 		return "", 0
 	}
-	st, err := os.Stat(m[0])
-	if err != nil {
-		return "", 0
-	}
-	return m[0], st.Size()
+	return file, latest.Size()
 }
 
 // transcriptHas says whether the transcript, from byte from on, holds id. The id

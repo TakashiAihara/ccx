@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestSendToolSendsAsThisSessionAndListsTheAcks(t *testing.T) {
 		t.Fatalf("text %q, isErr %v", text, isErr)
 	}
 	g := f.got
-	if g.GetSender() != "claude-abcdef12" || g.GetTarget() != "bird-baseball" || g.GetBody() != "hi" || g.GetSummary() != "s" ||
+	if g.GetSender() != sid || g.GetTarget() != "bird-baseball" || g.GetBody() != "hi" || g.GetSummary() != "s" ||
 		g.GetMode() != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT || g.GetMachine() != "ccx1" || g.GetUser() != "dev" {
 		t.Fatalf("request %v", g)
 	}
@@ -177,4 +178,53 @@ func TestServerOffersAndRunsItsTools(t *testing.T) {
 		t.Fatalf("unknown tool answered: %v", m)
 	}
 	_ = pw.Close()
+}
+
+func TestSendToolRefusesThisSessionAsTheTarget(t *testing.T) {
+	f := &fakeMessages{}
+	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"`+sid+`","body":"b","summary":"s"}`)
+	if !isErr || text != "not sent: that is this session" || f.got != nil {
+		t.Fatalf("text %q, sent %v", text, f.got)
+	}
+}
+
+// slowMessages holds each send until released, and counts the sends running at once.
+type slowMessages struct {
+	release       chan struct{}
+	running, peak atomic.Int32
+}
+
+func (s *slowMessages) Send(_ context.Context, _ *connect.Request[ccxv1.SendRequest], st *connect.ServerStream[ccxv1.SendResponse]) error {
+	n := s.running.Add(1)
+	defer s.running.Add(-1)
+	for p := s.peak.Load(); n > p && !s.peak.CompareAndSwap(p, n); p = s.peak.Load() {
+	}
+	<-s.release
+	return st.Send(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT})
+}
+
+func TestSendToolSendsOneAtATime(t *testing.T) {
+	s := &slowMessages{release: make(chan struct{})}
+	mux := http.NewServeMux()
+	mux.Handle(ccxv1connect.NewMessageServiceHandler(s))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	tool := SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
+	done := make(chan string, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			text, _ := tool.Call(context.Background(), json.RawMessage(`{"target":"t","body":"b","summary":"s"}`))
+			done <- text
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(s.release)
+	for i := 0; i < 2; i++ {
+		if got := <-done; got != "sent" {
+			t.Fatalf("send %d: %q", i, got)
+		}
+	}
+	if p := s.peak.Load(); p != 1 {
+		t.Fatalf("%d sends ran at once", p)
+	}
 }

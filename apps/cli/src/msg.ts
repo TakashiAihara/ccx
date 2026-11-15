@@ -31,9 +31,12 @@ export function defaultApiSocketPath(env: NodeJS.ProcessEnv = process.env): stri
   return env.CCX_API_SOCKET || join(dirname(defaultSocketPath(env)), "ccx-api.sock");
 }
 
-/** The name in the receiver's line `ccx: <sender>: <summary>`. A label, not an identity check. */
+/**
+ * The name in the receiver's line `ccx: <sender>: <summary>`. A label, not an identity check. A Claude Code
+ * sender is its whole session id, so the receiver can send its answer back to it as the target.
+ */
 export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => { username: string } = userInfo): string {
-  if (env.CLAUDE_CODE_SESSION_ID) return `claude-${env.CLAUDE_CODE_SESSION_ID.slice(0, 8)}`;
+  if (env.CLAUDE_CODE_SESSION_ID) return env.CLAUDE_CODE_SESSION_ID;
   let user: string;
   try {
     user = info().username;
