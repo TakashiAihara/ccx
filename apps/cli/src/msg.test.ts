@@ -1,6 +1,6 @@
 import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
-import { createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
+import { createClient, createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -292,4 +292,44 @@ test("--wait takes whole seconds up to an hour", async () => {
     expect(r.code).not.toBe(0);
     expect(r.err).toContain("--wait takes whole seconds from 0 to 3600");
   }
+});
+
+test("a --wait that runs out before a done says so and exits 3; a done, or no --wait, exits 0", async () => {
+  const question = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+    yield { state: SendResponse_State.QUESTION, detail: "prompt p1" };
+  });
+  const r = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([r.code, r.out.trim().split("\n").at(-1)]).toEqual([WAIT_RAN_OUT, "no done within 5 s (the receiver may still be on it)"]);
+  expect(WAIT_RAN_OUT).toBe(3);
+
+  const done = fakeAgent(async function* () {
+    yield { state: SendResponse_State.SENT };
+    yield { state: SendResponse_State.DONE, text: "ok" };
+  });
+  const d = await runCli(["msg", "send", "t", "--socket", done, "--summary", "s", "--from", "me", "--wait", "5", "x"], {});
+  expect([d.code, d.out]).toEqual([0, "sent\ndone\n  ok\n"]);
+
+  const plain = await runCli(["msg", "send", "t", "--socket", question, "--summary", "s", "--from", "me", "x"], {});
+  expect(plain.code).toBe(0);
+  expect(plain.out).not.toContain("no done within");
+});
+
+// Bun's fetch cuts a response that sends nothing for 5 minutes; a --wait on an unanswered question goes past that (#318).
+test("the agent's stream is fetched with Bun's own timeout off", async () => {
+  const real = globalThis.fetch;
+  let seen: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: unknown, init?: Record<string, unknown>) => {
+    seen = init;
+    throw new Error("stop here");
+  }) as unknown as typeof fetch;
+  try {
+    const client = createClient(MessageService, unixTransport("/nonexistent.sock"));
+    await (async () => {
+      for await (const _ of client.send({ target: "t" })) break;
+    })().catch(() => {});
+  } finally {
+    globalThis.fetch = real;
+  }
+  expect(seen).toMatchObject({ unix: "/nonexistent.sock", timeout: false });
 });
