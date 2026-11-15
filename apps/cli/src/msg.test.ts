@@ -75,14 +75,15 @@ test("a Claude Code sender is named from its session id", () => {
 });
 
 test("only a failure marked not typed, or an unreachable agent, is called not sent", async () => {
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.Unknown), 0)).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition), 0)).toStartWith("may have been sent");
-  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), 1)).toBe("sent, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }))).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown))).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition))).toStartWith("may have been sent");
+  expect(failurePrefix(new ConnectError("x", Code.FailedPrecondition, { "Ccx-Not-Typed": "1" }), "sent  pane w1:p1")).toBe("sent, then lost the ack stream");
+  expect(failurePrefix(new ConnectError("x", Code.Unknown), "queued  read on x's next turn")).toBe("queued, then lost the ack stream");
   const dir = mkdtempSync(join(tmpdir(), "ccx-msg-"));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
-  expect(failurePrefix(down, 0)).toBe("not sent");
+  expect(failurePrefix(down)).toBe("not sent");
 });
 
 test("a sender outside Claude Code is user@host", () => {
@@ -94,6 +95,21 @@ async function runCli(args: string[], env: Record<string, string>): Promise<{ co
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, out, err };
 }
+
+test("the command says what the first ack was when the stream breaks after it", async () => {
+  for (const [state, want] of [
+    [SendResponse_State.QUEUED, "queued, then lost the ack stream"],
+    [SendResponse_State.SENT, "sent, then lost the ack stream"],
+  ] as const) {
+    const socket = fakeAgent(async function* () {
+      yield { state };
+      throw new ConnectError("gone", Code.Unknown);
+    });
+    const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], {});
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${want}: gone`);
+  }
+});
 
 test("the command names a Claude Code sender from its session and prints acks", async () => {
   let got: SendRequest | undefined;
@@ -160,15 +176,15 @@ test("a uid with no passwd entry still gets a sender name", () => {
 });
 
 test("an older ccx-agent without the service, or an oversized request, is not sent", () => {
-  expect(failurePrefix(new ConnectError("x", Code.Unimplemented), 0)).toBe("not sent");
-  expect(failurePrefix(new ConnectError("x", Code.ResourceExhausted), 0)).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.Unimplemented))).toBe("not sent");
+  expect(failurePrefix(new ConnectError("x", Code.ResourceExhausted))).toBe("not sent");
 });
 
 test("a socket that refuses this user is not sent", () => {
   const byCode = new ConnectError("x", Code.Unknown, undefined, undefined, Object.assign(new Error("connect failed"), { code: "EACCES" }));
-  expect(failurePrefix(byCode, 0)).toBe("not sent");
+  expect(failurePrefix(byCode)).toBe("not sent");
   const byText = new ConnectError("x", Code.Unknown, undefined, undefined, new Error("ENOTSOCK: not a socket"));
-  expect(failurePrefix(byText, 0)).toBe("not sent");
+  expect(failurePrefix(byText)).toBe("not sent");
 });
 
 test("--timeout must be a positive number", async () => {

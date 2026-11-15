@@ -124,7 +124,12 @@ func failure(err error, lines []string) string {
 	ce := new(connect.Error)
 	switch {
 	case len(lines) > 0:
-		prefix = strings.Join(lines, "\n") + "\nsent, then lost the ack stream"
+		// A later message is queued, not sent, until a turn takes it.
+		state := "sent"
+		if strings.HasPrefix(lines[0], "queued") {
+			state = "queued"
+		}
+		prefix = strings.Join(lines, "\n") + "\n" + state + ", then lost the ack stream"
 	case errors.As(err, &ce) && ce.Meta().Get(message.NotTypedKey) != "":
 		prefix = "not sent"
 	case connect.CodeOf(err) == connect.CodeUnimplemented, connect.CodeOf(err) == connect.CodeResourceExhausted, unreachable(err):

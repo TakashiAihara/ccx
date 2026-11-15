@@ -163,13 +163,20 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 
 	header := headerLine(req.Sender, req.Summary)
 	var events <-chan hookEvent
+	var ts *typedSend
+	var drop func()
+	beforeTyping := func() {}
 	if wait > 0 {
 		// Subscribe before typing, so the turn's UserPromptSubmit is not missed.
 		var cancel func()
 		events, cancel = d.hooks().subscribe(req.Target)
 		defer cancel()
+		beforeTyping = func() { ts, drop = d.hooks().expect(req.Target, header+"\n"+req.Body) }
 	}
-	err := d.typeIn(ctx, req, header, emit, typed)
+	err := d.typeIn(ctx, req, header, emit, typed, beforeTyping)
+	if drop != nil {
+		defer drop()
+	}
 	afterTyping(ctx)
 	if err != nil {
 		return err
@@ -177,19 +184,17 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 	if events == nil {
 		return nil
 	}
-	// The turn that took it is the one whose prompt is exactly what was typed
-	// (Devin hands the typed text over unchanged, devin 3000.12.57). Two sends of
-	// the same sender, summary and body still read as one; a header alone would
-	// tie together any two with the same sender and summary.
-	mine := func(e hookEvent) bool {
-		return e.Name == "UserPromptSubmit" && e.Prompt == header+"\n"+req.Body
-	}
+	// The turn that took it is the UserPromptSubmit Hook handed to this send: the
+	// first whose prompt is exactly what was typed (Devin hands the typed text
+	// over unchanged, devin 3000.12.57), to the sends of that text in typing order.
+	mine := func(e hookEvent) bool { return e.Name == "UserPromptSubmit" && e.owner == ts }
 	return watch(ctx, events, wait, mine, nil, emit)
 }
 
 // typeIn types the message into the receiver's pane and reports sent, then
 // working or not-started.
-func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit func(*ccxv1.SendResponse) error, typed *bool) error {
+// beforeTyping runs right before the text is typed, under the typing lock.
+func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit func(*ccxv1.SendResponse) error, typed *bool, beforeTyping func()) error {
 	// One send at a time: two that both saw an empty box would type into it
 	// together and be submitted joined. The waits for question / done come
 	// after, outside the lock.
@@ -240,6 +245,7 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s has text in its input box; nothing was sent", req.Target))
 	}
 
+	beforeTyping()
 	*typed = true
 	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
 		// herdr may have written part of it before failing.

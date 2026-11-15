@@ -388,8 +388,9 @@ func TestServiceLogsEachSend(t *testing.T) {
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
 	s := &Service{Devin: newDevin(f), Log: func(format string, a ...any) { lines = append(lines, fmt.Sprintf(format, a...)) }}
 	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
-	// later to a working pane is queued, not typed: only if the mode and the wait
-	// reach Devin.Send (unspecified would be an after-turn refusal).
+	// later to a working pane is queued, not typed: only if the mode reaches
+	// Devin.Send (unspecified would be an after-turn refusal). The wait is
+	// TestServiceDeliverPassesTheWaitOn's.
 	var got []*ccxv1.SendResponse
 	err := s.Deliver(context.Background(), &ccxv1.SendRequest{Target: r.Target, Sender: r.Sender, Summary: r.Summary, Body: r.Body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER, WaitSeconds: 0}, func(a *ccxv1.SendResponse) error {
 		got = append(got, a)

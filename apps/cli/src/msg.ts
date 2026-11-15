@@ -81,8 +81,9 @@ const NOT_TYPED_KEY = "Ccx-Not-Typed";
  * "not sent" only when ccx-agent says nothing was typed, or it was never reached. Any other failure,
  * a dropped stream included, may come after the text went in, and a resend could type it twice.
  */
-export function failurePrefix(e: ConnectError, acks: number): string {
-  if (acks > 0) return "sent, then lost the ack stream";
+/** first is the first ack line printed, if any: a later message is queued, not sent, until a turn takes it. */
+export function failurePrefix(e: ConnectError, first?: string): string {
+  if (first !== undefined) return `${first.startsWith("queued") ? "queued" : "sent"}, then lost the ack stream`;
   if (e.metadata.get(NOT_TYPED_KEY) || unreachable(e) || NEVER_REACHED_SEND.has(e.code)) return "not sent";
   return "may have been sent (look at the receiver before sending again)";
 }
@@ -145,18 +146,18 @@ export function registerMsg(program: Command): void {
     .option("--timeout <ms>", "give up waiting for acks after this long", parseTimeout, 60_000)
     .option("--wait <seconds>", "after sent, wait this long for the receiver's question / done (needs Devin's hooks wired to `ccx-agent devin-hook`)", parseWait, 0)
     .action(async (target: string, body: string[], o: SendOptions) => {
-      let acks = 0;
+      let first: string | undefined;
       try {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
         o.from ??= defaultSender();
         await sendMessage(target, body.join(" "), o, (l) => {
-          acks++;
+          first ??= l;
           console.log(l);
         });
       } catch (e) {
         if (!(e instanceof ConnectError)) throw e;
-        throw new Error(`${failurePrefix(e, acks)}: ${e.rawMessage}`);
+        throw new Error(`${failurePrefix(e, first)}: ${e.rawMessage}`);
       }
     });
 }

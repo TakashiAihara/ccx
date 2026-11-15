@@ -530,11 +530,44 @@ func TestRelayRunBoundsTheDeliveriesWaitingAtOnce(t *testing.T) {
 	if n := started.Load(); n != queueLen {
 		t.Fatalf("%d deliveries at once, want %d", n, queueLen)
 	}
+	// The last is not claimed either: claimed, it would wait here past its
+	// sender's timeout instead of expiring at the center as not sent.
+	f.mu.Lock()
+	left := len(f.claims)
+	f.mu.Unlock()
+	if left != 1 {
+		t.Fatalf("%d messages left unclaimed, want 1", left)
+	}
 	release <- struct{}{}
 	for started.Load() < queueLen+1 && time.Now().Before(deadline.Add(5*time.Second)) {
 		time.Sleep(time.Millisecond)
 	}
 	if n := started.Load(); n != queueLen+1 {
 		t.Fatalf("the last did not start once one ended: %d", n)
+	}
+}
+
+// Asking and finding nothing gives the slot back: past queueLen empty claims a
+// message still gets claimed.
+func TestRelayRunKeepsClaimingAfterManyEmptyClaims(t *testing.T) {
+	f := &fakeCenter{}
+	r := testRelay(f)
+	r.Claim = time.Millisecond
+	delivered := make(chan struct{}, 1)
+	r.Deliver = func(ctx context.Context, _ *ccxv1.SendRequest, _ func(*ccxv1.SendResponse) error) error {
+		delivered <- struct{}{}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = r.Run(ctx) }()
+	f.waitClaims(t, queueLen+10)
+	f.mu.Lock()
+	f.claims = append(f.claims, &ccxv1.RelayedMessage{Id: "late", ClaimToken: "tok", Request: remoteReq()})
+	f.mu.Unlock()
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a message after many empty claims was not claimed")
 	}
 }

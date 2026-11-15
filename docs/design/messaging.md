@@ -123,7 +123,8 @@ ccx msg send excited-giraffe --summary "pick one" --wait 600 "Which of the two p
 
 - The screen cannot show what Devin asks or when its turn ends; its hooks can. Devin runs `ccx-agent devin-hook` for `UserPromptSubmit`, `PreToolUse` (only `ask_user_question` reaches ccx-agent) and `Stop`; the command passes the payload to ccx-agent on its unix socket (`MessageService.DevinHook`) and prints what comes back. It always exits 0 and prints nothing when ccx-agent is down, so a missing agent never fails Devin's turn.
 - `--wait <seconds>` (up to 3600) keeps the send open after `sent`: the turn the message started is the one whose `UserPromptSubmit` prompt is exactly the header and body typed. In that turn (the same `prompt_id`) each `ask_user_question` is a `question` ack with its questions and options (up to 8 such acks; each keeps 8 questions of 16 options, 4096 bytes a field), and the `Stop` is `done` with Devin's last answer (cut to 64 KiB here; the center keeps its last 4096 bytes for a relayed send). Control and format characters in what Devin wrote are dropped, as they are refused in a body. Running out of wait ends quietly: the message is in either way.
-- Two sends with the same sender, summary and body to one Devin, both waiting, read the first such turn as theirs.
+- Two sends of the same text (sender, summary and body) to one Devin each get one turn, in the order they typed.
+- Devin waits for an answer to each question; a ninth question in the turn is not reported, so the sender sees no more until the wait runs out.
 - `later` types nothing. ccx-agent keeps the text (up to 32 per session) and the next `UserPromptSubmit` of that session takes all of it as `additionalContext`, which Devin reads with the prompt and does not draw on screen. With `--wait`, the turn taking it gives `sent  taken by prompt …`, then `question` / `done` as above.
 - A prompt typed while Devin runs a tool (a background shell) is accepted by herdr and lost: no `UserPromptSubmit` fires (devin 3000.12.57, #302). `later` does not hit this, since nothing is typed.
 - Through the center, each delivery types in claim order and the next starts once one has typed, so one long `--wait` does not hold the rest; the center keeps up to 16 acks a message.
@@ -161,7 +162,7 @@ sequenceDiagram
 
 - The connections go ccx-agent → center, as for ingest and resume; the center reaches a ccx-agent only to wake it, and a missed wake waits for the receiver's 5 s poll.
 - A message is handed out once. One the receiver claimed and never finished (it died mid-send) is not handed out again, so it is never typed twice; the sender ends at its `--timeout` as `may have been sent`, or `sent, then lost the ack stream` when `sent` had come back.
-- One not claimed within 30 s of the put is never handed out, and the sender says `not sent`. The receiver claims each message as it comes and keeps the claimed ones in a queue it delivers in order, so a message waiting behind another one is not lost to the 30 s; only a receiver that is down, not pointed at this center, or holding about 64 claimed messages not yet delivered lets it pass. A receiver that stops with messages in its queue leaves their senders at `may have been sent`.
+- One not claimed within 30 s of the put is never handed out, and the sender says `not sent`. The receiver claims each message as it comes and keeps the claimed ones in a queue it delivers in order, so a message waiting behind another one is not lost to the 30 s; only a receiver that is down, not pointed at this center, or holding 64 claimed messages not yet delivered (those still waiting with `--wait` included) lets it pass. A receiver that stops with messages in its queue leaves their senders at `may have been sent`.
 - A sender still waiting two hours after the put (a `--timeout` over two hours) finds the message gone from the center and ends as `may have been sent`.
 - A put the center refused (bad token, invalid request) or whose connection was refused is `not sent`. Any other failure (a timeout, a lost answer, and also a DNS or TLS failure, which this does not tell apart) may have stored it, so it ends as `may have been sent`.
 - The relayed message names where it goes, not where it came from: the receiver logs the center's id with the delivery, and the sender is only the `--from` label. Which machine sent it is not recorded.
@@ -173,7 +174,7 @@ sequenceDiagram
 
 - `after-turn` to a working Devin (it could queue like `later` and be taken by the next turn; today it is refused).
 - `later` and `--wait` survive no restart of ccx-agent: queued messages and waiting sends live in its memory. A session that never takes another turn keeps its queued messages (up to 32) until ccx-agent restarts.
-- Through the center, about 64 deliveries still waiting (`--wait`) at once stop the receiver claiming more, and messages put meanwhile pass the 30 s and end as `not sent`.
+- Through the center, a receiver holds at most 64 messages claimed and not yet delivered, those waiting (`--wait`) included; past that it claims no more, and messages put meanwhile pass the 30 s and end as `not sent`.
 - `question` / `done` for Claude Code.
 - `later` and `urgent` for Claude Code, and receivers other than Devin and Claude Code (OpenCode, agy, pi; #301).
 - A way to list the reachable sessions across machines (the sender has to know the machine and the target).

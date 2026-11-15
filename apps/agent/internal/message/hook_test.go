@@ -481,16 +481,76 @@ func TestQuestionAndDoneAreCleanedAndBounded(t *testing.T) {
 	for i := range qs {
 		qs[i] = question{Question: fmt.Sprint("q", i), Header: "h", Options: opts}
 	}
-	qs[2].Question = strings.Repeat("x", 5000)
+	qs[2].Question = "head" + strings.Repeat("x", 5000) + "tail"
 	b, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "ask_user_question", "session_id": "excited-giraffe", "prompt_id": "p1", "tool_input": map[string]any{"questions": qs}})
 	hook(t, d, b)
 	hook(t, d, stop("excited-giraffe", "p1", "line 1\x1b]0;title\x07\nline 2"))
 
 	q := run.next(t)
-	if len(q.Questions) != 8 || len(q.Questions[0].Options) != 16 || q.Questions[1].Options[3].Label != "[31mred[0m" || len(q.Questions[2].Question) != 4096 || q.Questions[7].Question != "q7" {
+	if len(q.Questions) != 8 || len(q.Questions[0].Options) != 16 || q.Questions[1].Options[3].Label != "[31mred[0m" || len(q.Questions[2].Question) != 4096 || !strings.HasSuffix(q.Questions[2].Question, "xtail") || q.Questions[7].Question != "q7" {
 		t.Fatalf("question ack: %d questions, %d options, label %q, long question %d bytes", len(q.Questions), len(q.Questions[0].Options), q.Questions[1].Options[3].Label, len(q.Questions[2].Question))
 	}
 	if done := run.next(t); done.Text != "line 1]0;title\nline 2" {
 		t.Fatalf("done text %q", done.Text)
+	}
+}
+
+// Two sends of the same text each get one turn, in the order they typed.
+func TestSameTextTurnsGoToTheSendsInTypingOrder(t *testing.T) {
+	d := newDevin(&fakeHerdr{})
+	h := d.hooks()
+	a, dropA := h.expect("s", "ccx: x: y\nbody")
+	b, dropB := h.expect("s", "ccx: x: y\nbody")
+	defer dropA()
+	defer dropB()
+	owners := map[string]*typedSend{}
+	h.subscribe("s")
+	for _, id := range []string{"p0", "p1", "p2", "p3"} {
+		prompt := "ccx: x: y\nbody"
+		if id == "p0" {
+			prompt = "something else"
+		}
+		var e hookEvent
+		_ = json.Unmarshal(userPrompt("s", id, prompt), &e)
+		e.owner = h.owner(e.Session, e.Prompt)
+		owners[id] = e.owner
+	}
+	if owners["p0"] != nil || owners["p1"] != a || owners["p2"] != b || owners["p3"] != nil {
+		t.Fatalf("owners p0 %p p1 %p p2 %p p3 %p, want nil %p %p nil", owners["p0"], owners["p1"], owners["p2"], owners["p3"], a, b)
+	}
+}
+
+// A typed send whose turn never came leaves nothing for a later turn to give it.
+func TestATypedSendThatEndsLeavesNoTurnWaiting(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3", status: []string{"idle", "working"}}
+	d := newDevin(f)
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT)
+	r.WaitSeconds = 1
+	if _, err := send(d, r); err != nil {
+		t.Fatal(err)
+	}
+	h := d.hooks()
+	h.mu.Lock()
+	n := len(h.typed["excited-giraffe"])
+	h.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d typed sends still waiting", n)
+	}
+}
+
+// A turn reported without a prompt_id is still followed to its Stop.
+func TestATurnWithoutAPromptIDIsFollowed(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: devinPanes})
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_LATER)
+	r.WaitSeconds = 30
+	run := start(d, r)
+	run.next(t)
+	hook(t, d, []byte(`{"hook_event_name":"UserPromptSubmit","session_id":"excited-giraffe","prompt":"go"}`))
+	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_SENT {
+		t.Fatalf("sent %v", a)
+	}
+	hook(t, d, []byte(`{"hook_event_name":"Stop","session_id":"excited-giraffe","last_assistant_message":"ok"}`))
+	if a := run.next(t); a.State != ccxv1.SendResponse_STATE_DONE || a.Text != "ok" {
+		t.Fatalf("done %v", a)
 	}
 }

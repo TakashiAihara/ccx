@@ -42,6 +42,8 @@ type hookEvent struct {
 
 	// taken are the later messages this UserPromptSubmit put into the turn.
 	taken []*queued
+	// owner is the typed send this UserPromptSubmit is the turn of, if any.
+	owner *typedSend
 }
 
 const askTool = "ask_user_question"
@@ -62,6 +64,13 @@ func Wanted(payload []byte) bool {
 	return false
 }
 
+// typedSend is a typed send waiting for its turn: the next UserPromptSubmit whose
+// prompt is its text goes to the first such send in typing order, so two sends
+// of the same text each get one turn and in order.
+type typedSend struct {
+	text string
+}
+
 // queued is a later message waiting for its receiver's next turn. Watchers find
 // theirs in hookEvent.taken by pointer.
 type queued struct {
@@ -78,11 +87,12 @@ type hooks struct {
 	mu    sync.Mutex
 	subs  map[string]map[chan hookEvent]struct{}
 	inbox map[string][]*queued
+	typed map[string][]*typedSend
 }
 
 func (d *Devin) hooks() *hooks {
 	d.hooksOnce.Do(func() {
-		d.h = &hooks{subs: map[string]map[chan hookEvent]struct{}{}, inbox: map[string][]*queued{}}
+		d.h = &hooks{subs: map[string]map[chan hookEvent]struct{}{}, inbox: map[string][]*queued{}, typed: map[string][]*typedSend{}}
 	})
 	return d.h
 }
@@ -129,6 +139,40 @@ func (h *hooks) queue(session, text string) (*queued, error) {
 	return q, nil
 }
 
+// expect registers a typed send about to type text; call it under the typing
+// lock, so the order is the typing order. The returned func drops it if no turn
+// took it.
+func (h *hooks) expect(session, text string) (*typedSend, func()) {
+	ts := &typedSend{text: text}
+	h.mu.Lock()
+	h.typed[session] = append(h.typed[session], ts)
+	h.mu.Unlock()
+	return ts, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if i := slices.Index(h.typed[session], ts); i >= 0 {
+			h.typed[session] = slices.Delete(h.typed[session], i, i+1)
+		}
+		if len(h.typed[session]) == 0 {
+			delete(h.typed, session)
+		}
+	}
+}
+
+// owner hands a UserPromptSubmit to the first typed send waiting for its prompt.
+func (h *hooks) owner(session, prompt string) *typedSend {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ts := h.typed[session]
+	i := slices.IndexFunc(ts, func(t *typedSend) bool { return t.text == prompt })
+	if i < 0 {
+		return nil
+	}
+	o := ts[i]
+	h.typed[session] = slices.Delete(ts, i, i+1)
+	return o
+}
+
 func (h *hooks) take(session string) []*queued {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -150,6 +194,7 @@ func (d *Devin) Hook(payload []byte) (string, error) {
 	h := d.hooks()
 	out := ""
 	if e.Name == "UserPromptSubmit" {
+		e.owner = h.owner(e.Session, e.Prompt)
 		e.taken = h.take(e.Session)
 		if len(e.taken) > 0 {
 			texts := make([]string, len(e.taken))
@@ -184,7 +229,7 @@ const MaxQuestionAcks = 8
 func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, mine func(hookEvent) bool, onMatch func(hookEvent) error, emit func(*ccxv1.SendResponse) error) error {
 	t := time.NewTimer(wait)
 	defer t.Stop()
-	turn, asked := "", 0
+	matched, turn, asked := false, "", 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,9 +237,9 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 		case <-t.C:
 			return nil
 		case e := <-events:
-			if turn == "" {
+			if !matched {
 				if mine(e) {
-					turn = e.PromptID
+					matched, turn = true, e.PromptID
 					if onMatch != nil {
 						if err := onMatch(e); err != nil {
 							return err
@@ -223,8 +268,9 @@ func watch(ctx context.Context, events <-chan hookEvent, wait time.Duration, min
 	}
 }
 
-// What one QUESTION ack keeps, the same as the center keeps for a relayed one,
-// so a local sender and a relayed one see the same.
+// What one QUESTION ack keeps, the same as the center keeps for a relayed one
+// (counts and the last 4096 bytes of a field), so a local sender and a relayed
+// one see the same question.
 const (
 	MaxQuestions     = 8
 	MaxOptions       = 16
@@ -254,10 +300,11 @@ func clean(s string) string {
 	}, s)
 }
 
+// short keeps the last MaxQuestionBytes, as the center does (capDetail).
 func short(s string) string {
 	s = clean(s)
 	if len(s) > MaxQuestionBytes {
-		s = strings.ToValidUTF8(s[:MaxQuestionBytes], "")
+		s = strings.ToValidUTF8(s[len(s)-MaxQuestionBytes:], "")
 	}
 	return s
 }
