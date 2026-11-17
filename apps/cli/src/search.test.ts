@@ -169,10 +169,25 @@ describe("search: embedded DuckDB over the store", () => {
     ]);
   });
 
-  test("only a query that names `transcripts` builds it: building it reads every transcript's types (#300)", async () => {
+  test("only a query that names `transcripts` builds it: building it reads files to infer their types (#300)", async () => {
     const c = await openDuckDB(store);
     await expect(c.runAndReadAll("SELECT 1 FROM transcripts")).rejects.toThrow("Table with name transcripts does not exist");
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
+  });
+
+  test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
+    // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample
+    // stands in for "a file the inference read": describing the view must not touch it.
+    // Each bulk record also carries a key of its own, as rare keys do in real transcripts: on average a key then appears
+    // in under 10% of records, and DuckDB's default inference turns the whole record into one MAP column
+    const at = (m: string, sid: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 40 }, (_, i) => Bun.write(at("m-bulk", `s${String(i).padStart(2, "0")}`), line({ type: "user", [`only${i}`]: i, message: { content: `bulk ${i}` } }))));
+    await Bun.write(at("zz-late", "broken"), "{not json\n");
+    const c = await openDuckDB(store, { withTranscripts: true });
+    const names = (await c.runAndReadAll("SELECT column_name FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => r.column_name);
+    expect(names).toContain("message");
+    expect(names).toContain("type");
+    expect(names).toContain("session_id");
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {

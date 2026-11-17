@@ -102,14 +102,15 @@ and reads its own history for what it was doing.
 ```sql
 SELECT session_id, machine, message.model, message.usage.output_tokens
 FROM read_json('s3://<bucket>/<prefix>transcripts/**/transcript.jsonl',
-               format='newline_delimited', union_by_name=true, hive_partitioning=true)
+               format='newline_delimited', map_inference_threshold=-1, hive_partitioning=true)
 WHERE type = 'assistant';
 ```
 
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
-does exactly this and exposes four views for `--sql`: `transcripts` (structured, `union_by_name`
-across record types), `lines` (`json` = the raw record — what the text search reads, because the
+does exactly this and exposes four views for `--sql`: `transcripts` (structured; its columns are
+inferred from the first 32 files, so a key none of them carries is absent — `union_by_name` would
+infer from every file and passed 3 GB on 1304 files before the query ran), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
 and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
 / `pushed_by_user` from the path — the two differ for a pull), and `sessions` (one row per

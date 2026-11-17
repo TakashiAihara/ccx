@@ -27,14 +27,13 @@ export type OpenOptions = {
   /** `history` view も作る (`--sql` 用。作ると history/ を全部読む) */
   withHistory?: boolean;
   /**
-   * `transcripts` view も作る。作るだけで全 transcript の型を推定する: union_by_name は保存先 705 本 (2.7 GB) で
-   * 6 GB を越えて OOM になった (memory_limit=2GB でも、threads=1 でも。#300)。使う問い合わせのときだけ作る
+   * `transcripts` view も作る。作るときに標本のファイルを読んで型を推定するので、使う問い合わせのときだけ作る
    */
   withTranscripts?: boolean;
 };
 
 /**
- * DuckDB の memory_limit は上の型推定の分を数えない (2GB を入れても 6 GB で OOM) ので、プロセスの RSS を見て
+ * DuckDB の memory_limit は read_json の型推定の分を数えない (union_by_name で 2GB を入れても 6 GB で OOM) ので、プロセスの RSS を見て
  * 越えたら失敗で抜ける。共有ホストを道連れにするより問い合わせが落ちるほうがよい (#300)。
  * 既定 6 GiB: d1 の保存先 (705 本 / 2.7 GB) でキーワード検索の cgroup のピークは 4.3 GB (2026-11-15)。
  * cgroup の MemoryMax がこれより小さいホストでは OOM が先に来るので、CCX_SEARCH_MAX_RSS_MB をその下に置く
@@ -106,7 +105,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
     // `lines`: 1 行 = 1 レコードの生 JSON。文字列検索はこちらで行う。`transcripts` (構造化) は
-    // union_by_name で全レコード種別のキーを持つ struct になり、to_json すると無いキーが
+    // 全レコード種別のキーを持つ struct になり、to_json すると無いキーが
     // `"x":null` として全行に現れて、"null" や "model" がすべての行に当たる
     await c.run(
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
@@ -115,10 +114,15 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
       // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
       // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
-      // The path columns stay in hive_partitioning's (alphabetical) order
+      // The path columns stay in hive_partitioning's (alphabetical) order.
+      // The schema comes from the first maximum_sample_files (32) files, not from every file: on 1304 files, union_by_name
+      // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
+      // maximum_sample_files over all files and json_group_structure over `lines`. A key that none of the sampled files
+      // carries is left out; `lines` still has every record whole. map_inference_threshold=-1 keeps records a struct:
+      // with the default, the records' many keys turn the whole row into one MAP(VARCHAR, JSON) column
       `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
          ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
-       FROM read_json(${q(files)}, format='newline_delimited', union_by_name=true, ${reader})`,
+       FROM read_json(${q(files)}, format='newline_delimited', map_inference_threshold=-1, ${reader})`,
     );
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
