@@ -126,9 +126,10 @@ func parseKeymap(b []byte) (Keymap, error) {
 	// Devin writes ctrl-enter, herdr takes ctrl+enter (both measured, devin
 	// 3000.12.57 / herdr 0.9.5). shortcut: only ctrl+enter was tried; other chords
 	// are passed the same way and fail at herdr if it names them otherwise.
+	norm := func(k string) string { return strings.ToLower(strings.TrimSpace(k)) }
 	return Keymap{
-		Queues: c.Keymap.ReadboxInput.QueueMessage == "enter",
-		Send:   strings.ReplaceAll(cmp.Or(c.Keymap.Editor.AcceptLine, "enter"), "-", "+"),
+		Queues: norm(c.Keymap.ReadboxInput.QueueMessage) == "enter",
+		Send:   strings.ReplaceAll(cmp.Or(norm(c.Keymap.Editor.AcceptLine), "enter"), "-", "+"),
 	}, nil
 }
 
@@ -295,15 +296,24 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	// screen ("Typing · 3s (esc twice to interrupt)", devin 3000.12.57) until its
 	// Stop hook is wired to ccx-agent to tell the end of the turn properly.
 	working := p.Status == "working" || midTurn(string(screen))
-	km, err := d.keymap()
-	if err != nil {
-		return connect.NewError(connect.CodeFailedPrecondition, err)
+	// An idle Devin submits on Enter whatever accept_line is bound to (measured with
+	// accept_line on ctrl-enter), so only a working one needs the keymap.
+	var km Keymap
+	if working {
+		if km, err = d.keymap(); err != nil {
+			return connect.NewError(connect.CodeFailedPrecondition, err)
+		}
 	}
 	// With Enter bound to queue_message, Devin itself holds the message until the
 	// turn ends: that is after-turn, and urgent sends the queue on with accept_line.
 	queues := working && km.Queues
 	if queues && req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && km.Send == "enter" {
-		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working and its keymap binds Enter to both queue_message and accept_line, so urgent cannot be sent; nothing was sent", req.Target))
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working and its keymap binds Enter to queue_message and leaves accept_line on Enter (or unset), so ccx has no key to send the queue on; nothing was sent", req.Target))
+	}
+	// A queued message with the same header would leave the queue as this one
+	// joins it, and the count could not tell the two apart.
+	if queues && queuedLines(string(screen), header) > 0 {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s already has a message with this header queued; nothing was sent", req.Target))
 	}
 	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working && !queues {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
@@ -326,7 +336,7 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	// A long body takes longer to paste and render.
 	wait := d.SentWait + time.Duration(len(req.Body)/(16<<10))*time.Second
 	if queues {
-		inQueue, err := d.waitQueued(ctx, p.ID, header, queuedLines(string(screen), header), seen, lines, wait)
+		inQueue, err := d.waitQueued(ctx, p.ID, header, seen, lines, wait)
 		if err != nil {
 			return err
 		}
@@ -344,6 +354,8 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 			if err := d.waitSent(ctx, p.ID, header, seen, lines, wait); err != nil {
 				return err
 			}
+			// Sent on at once, cutting into a running tool (devin 3000.12.57).
+			return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID + "; was working, its queue was sent on now"})
 		}
 	} else if err := d.waitSent(ctx, p.ID, header, seen, lines, wait); err != nil {
 		return err
@@ -465,14 +477,14 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, lines
 
 // waitQueued waits for the message to show in Devin's queue with the box empty.
 // inQueue is false when it showed in the history instead.
-func (d *Devin) waitQueued(ctx context.Context, id, header string, queued, seen int, lines string, wait time.Duration) (inQueue bool, err error) {
+func (d *Devin) waitQueued(ctx context.Context, id, header string, seen int, lines string, wait time.Duration) (inQueue bool, err error) {
 	deadline := time.Now().Add(wait)
 	wctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
 	defer cancel()
 	for {
 		screen, err := d.Herdr(wctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
 		if err == nil && inputBox(string(screen)) == inputEmpty {
-			if queuedLines(string(screen), header) > queued {
+			if queuedLines(string(screen), header) > 0 {
 				return true, nil
 			}
 			hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
@@ -766,13 +778,14 @@ func (st *sgrState) apply(params string) {
 // midTurn says whether Devin's screen shows a turn in progress: the status line
 // right above the box ends with "to interrupt)". Only that line is read, so the
 // same words in the history above do not count. Queued messages sit between the
-// two under a "── N queued ──" rule; they are skipped, and herdr reported done
-// with them there (#86).
+// two under a "── N queued ──" rule. Devin holds a queue only while a turn runs,
+// so the queue alone counts, whatever is above it; herdr reported done with it
+// there (#86).
 func midTurn(screen string) bool {
 	lines := strings.Split(screen, "\n")
 	top, _ := boxRules(lines)
-	if q := queueRule(lines, top); q >= 0 {
-		top = q
+	if queueRule(lines, top) >= 0 {
+		return true
 	}
 	return top > 0 && strings.HasSuffix(plainLine(lines[top-1]), "to interrupt)")
 }
@@ -780,14 +793,15 @@ func midTurn(screen string) bool {
 var queuedRule = regexp.MustCompile(`^── \d+ queued ─`)
 
 // queueRule finds the "── N queued ──" rule over the queue right above the box's
-// top rule: the queue lines start with "○ " or are indented. -1 when none.
+// top rule: the queue lines start with "○ ", are indented, or are blank (a blank
+// line in a body). -1 when none, or when the queue is taller than the screen.
 func queueRule(lines []string, top int) int {
 	for i := top - 1; i >= 0; i-- {
 		l := strings.TrimRight(sgr.ReplaceAllString(lines[i], ""), " \r")
 		if queuedRule.MatchString(l) {
 			return i
 		}
-		if !strings.HasPrefix(l, "○ ") && !strings.HasPrefix(l, "  ") {
+		if l != "" && !strings.HasPrefix(l, "○ ") && !strings.HasPrefix(l, "  ") {
 			return -1
 		}
 	}
