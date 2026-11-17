@@ -125,6 +125,8 @@ type fakeHerdr struct {
 	// keysIgnored: the pane takes the key and nothing leaves the queue.
 	keysIgnored bool
 	keysErr     error
+	// befores, if set, replaces before: each history read before typing takes the next.
+	befores []string
 }
 
 func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
@@ -160,6 +162,9 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 			f.lines = append(f.lines, args[8])
 			if f.typed {
 				return []byte(f.history), nil
+			}
+			if f.befores != nil {
+				return []byte(next(&f.befores)), nil
 			}
 			return []byte(f.before), nil
 		}
@@ -941,5 +946,19 @@ func TestAfterTurnToAQueueingDevinWhoseTurnEndedTakesItAsIdle(t *testing.T) {
 	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
 	if err != nil || len(got) != 2 || got[0].Detail != "pane w2:p1" || got[1].State != ccxv1.SendResponse_STATE_WORKING {
 		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+// The person sends on a same-header message from the queue after the first history
+// read: the screen no longer shows it queued, and its history line must not pass
+// for this one before this one shows in the queue.
+func TestASameHeaderSentOnBeforeTypingIsNotTakenForThisOne(t *testing.T) {
+	line := "❭ " + queuedHeader + "\n"
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, queuedScreen(t)}, befores: []string{"", line}, history: line + line, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
 	}
 }

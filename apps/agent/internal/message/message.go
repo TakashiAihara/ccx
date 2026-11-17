@@ -316,6 +316,15 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	if queues && queuedLines(string(screen), header) > 0 {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s already has a message with this header queued; nothing was sent", req.Target))
 	}
+	if queues {
+		// A same-header message the person sent on from the queue between the
+		// history read above and this screen is in the history now: count again.
+		hist, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
+		if err != nil {
+			return connect.NewError(connect.CodeUnavailable, err)
+		}
+		seen = headerLines(string(hist), header)
+	}
 	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working && !queues {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
 	}
