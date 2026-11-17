@@ -119,6 +119,15 @@ type fakeHerdr struct {
 	// panesAfter, if set, is what pane list returns from its second call on.
 	panesAfter string
 	listed     int
+	// hold keeps the prompt out of the history until a key is sent (a queue).
+	hold bool
+	keys []string
+	// keysIgnored: the pane takes the key and nothing leaves the queue.
+	keysIgnored bool
+	keysErr     error
+	// befores, if set, replaces before: each history read before typing takes the
+	// next, staying on the last; "ERR" fails that read.
+	befores []string
 }
 
 func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
@@ -155,15 +164,31 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 			if f.typed {
 				return []byte(f.history), nil
 			}
+			if f.befores != nil {
+				if b := next(&f.befores); b != "ERR" {
+					return []byte(b), nil
+				}
+				return nil, errors.New("herdr agent read: gone")
+			}
 			return []byte(f.before), nil
 		}
 		if strings.Join(args[3:], " ") != "--source visible --format ansi" {
 			return nil, errors.New("unexpected read " + strings.Join(args, " "))
 		}
-		return []byte(next(&f.screens)), nil
+		if s := next(&f.screens); s != "ERR" {
+			return []byte(s), nil
+		}
+		return nil, errors.New("herdr agent read: gone")
 	case "agent prompt":
-		f.typed = f.prompt == nil
+		f.typed = f.prompt == nil && !f.hold
 		return nil, f.prompt
+	case "pane send-keys":
+		f.keys = append(f.keys, args[3:]...)
+		if f.keysErr != nil {
+			return nil, f.keysErr
+		}
+		f.typed = !f.keysIgnored
+		return nil, nil
 	}
 	return nil, errors.New("unexpected herdr " + strings.Join(args, " "))
 }
@@ -747,6 +772,245 @@ func TestTheStatusFromTheSecondLookupIsUsed(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, panesAfter: panesWith("working"), screens: []string{emptyBox}}
 	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "after-turn is refused") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseKeymap(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		want         Keymap
+	}{
+		{"default", `{"theme_mode":"dark"}`, Keymap{Send: "enter"}},
+		{"enter queues, ctrl+enter sends", `{"keymap":{"editor":{"accept_line":"ctrl-enter"},"readbox_input":{"queue_message":"enter"}}}`, Keymap{Queues: true, Send: "ctrl+enter"}},
+		{"queue on another key", `{"keymap":{"readbox_input":{"queue_message":"tab"}}}`, Keymap{Send: "enter"}},
+		{"case and spaces", `{"keymap":{"editor":{"accept_line":" Ctrl-Enter "},"readbox_input":{"queue_message":"Enter"}}}`, Keymap{Queues: true, Send: "ctrl+enter"}},
+		{"blank accept_line", `{"keymap":{"editor":{"accept_line":" "}}}`, Keymap{Send: "enter"}},
+	} {
+		got, err := parseKeymap([]byte(tc.config))
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %+v, %v", tc.name, got, err)
+		}
+	}
+	if _, err := parseKeymap([]byte(`{"keymap":`)); err == nil {
+		t.Error("broken config: no error")
+	}
+}
+
+const queuedHeader = "ccx: claude-a1b2c3d4: review 3"
+
+func queuedScreen(t *testing.T) string {
+	return strings.Replace(fixture(t, "queued.ansi"), "ccx: tester: queued sample", queuedHeader, 1)
+}
+
+func TestQueuedScreenReadsAsMidTurnWithAnEmptyBox(t *testing.T) {
+	s := fixture(t, "queued.ansi")
+	if !midTurn(s) || inputBox(s) != inputEmpty || queuedLines(s, "ccx: tester: queued sample") != 1 || queuedLines(s, "ccx: tester: queued") != 0 {
+		t.Fatalf("midTurn %v, inputBox %v, queued %d", midTurn(s), inputBox(s), queuedLines(s, "ccx: tester: queued sample"))
+	}
+	// Indented lines alone, with no queued rule above them, are not a queue.
+	if midTurn(strings.Replace(s, "1 queued", "1 thing", 1)) {
+		t.Fatal("midTurn without the queued rule")
+	}
+	// The queue alone says mid-turn, with no status line above it.
+	if !midTurn("history\n── 1 queued ──\n○ ccx: a: b\n─────\n❭ box\n─────\n") {
+		t.Fatal("midTurn from the queue alone")
+	}
+	// A blank line in a queued body is still the queue.
+	if !midTurn("Running tools · 3s (esc twice to interrupt)\n── 1 queued ──\n○ ccx: a: b\n  one\n\n  three\n─────\n❭ box\n─────\n") {
+		t.Fatal("midTurn with a blank line in the queue")
+	}
+	// A queued rule in the history, above lines that are not queued, is not the queue.
+	if midTurn("old (esc twice to interrupt)\n── 1 queued ──\nhistory line\n─────\n❭ box\n─────\n") {
+		t.Fatal("midTurn from a queued rule in the history")
+	}
+}
+
+var enterQueues = func() (Keymap, error) { return Keymap{Queues: true, Send: "ctrl+enter"}, nil }
+
+func TestUrgentToAQueueingDevinSendsTheQueueOn(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, history: "❭ " + queuedHeader, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_SENT || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+func TestAfterTurnToAQueueingDevinLeavesItQueued(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 1 || got[0].State != ccxv1.SendResponse_STATE_SENT || !strings.Contains(got[0].Detail, "queued until its turn ends") || len(f.keys) != 0 {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+func TestAQueueingDevinWhoseTurnEndedTakesItAsIdle(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING || len(f.keys) != 0 {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+func TestQueuedButNeverShownIsMayHaveBeenSent(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "not seen as queued or sent") || len(f.keys) != 0 || notTyped(err) {
+		t.Fatalf("err = %v, keys = %v", err, f.keys)
+	}
+}
+
+func TestUrgentRefusedWhenEnterBothQueuesAndSends(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
+	d := newDevin(f)
+	d.Keymap = func() (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestABrokenKeymapSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
+	d := newDevin(f)
+	d.Keymap = func() (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "devin config: broken") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+	// An idle Devin does not need it.
+	idle := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
+	d = newDevin(idle)
+	d.Keymap = func() (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
+	if got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN)); err != nil || len(got) != 2 {
+		t.Fatalf("idle: events = %v, err = %v", got, err)
+	}
+}
+
+// herdr reported done while messages sat queued (#86): the queue on screen still
+// says mid-turn, so after-turn is refused under the default keymap.
+func TestAQueueOnScreenIsMidTurnWhateverHerdrSays(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("done"), screens: []string{queuedScreen(t)}}
+	_, err := send(newDevin(f), req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "after-turn is refused") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// The keymap only matters mid-turn: an idle Devin takes Enter as a send.
+func TestUrgentToAnIdleDevinIgnoresTheQueueKeymap(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
+	d := newDevin(f)
+	d.Keymap = func() (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+func TestASameHeaderAlreadyQueuedSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{queuedScreen(t)}}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "already has a message with this header queued") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUrgentWhoseQueueDoesNotLeaveIsMayHaveBeenSent(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, history: "❭ " + queuedHeader, status: []string{"working"}, hold: true, keysIgnored: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "not seen as sent") || notTyped(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUrgentWhoseSendKeyFailsSaysItIsQueued(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, status: []string{"working"}, hold: true, keysErr: errors.New("herdr: invalid_key")}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "queued in pane w2:p1 but sending it on failed") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAfterTurnToAQueueingDevinWhoseTurnEndedTakesItAsIdle(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 2 || got[0].Detail != "pane w2:p1" || got[1].State != ccxv1.SendResponse_STATE_WORKING {
+		t.Fatalf("events = %v, err = %v", got, err)
+	}
+}
+
+// The person sends on a same-header message from the queue after the first history
+// read: the screen no longer shows it queued, and its history line must not pass
+// for this one before this one shows in the queue.
+func TestASameHeaderSentOnBeforeTypingIsNotTakenForThisOne(t *testing.T) {
+	line := "❭ " + queuedHeader + "\n"
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, queuedScreen(t)}, befores: []string{"", line}, history: line + line, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+// Text typed into the box while the history was read again is seen before typing.
+func TestABoxTypedIntoDuringTheRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, typedBox}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "has text in its input box") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAFailedRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, befores: []string{"", "ERR"}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnavailable || f.prompted() != nil || !notTyped(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+
+// A same-header line that left the read window before the recount is not counted,
+// and this message alone in the history after sending is seen as sent.
+func TestALineThatLeftTheWindowBeforeTheRecountDoesNotHideThisOne(t *testing.T) {
+	line := "❭ " + queuedHeader + "\n"
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, queuedScreen(t)}, befores: []string{line, ""}, history: line, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+func TestAFailedScreenReadAfterTheRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, "ERR"}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnavailable || f.prompted() != nil || !notTyped(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
