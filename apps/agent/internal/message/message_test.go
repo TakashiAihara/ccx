@@ -125,7 +125,8 @@ type fakeHerdr struct {
 	// keysIgnored: the pane takes the key and nothing leaves the queue.
 	keysIgnored bool
 	keysErr     error
-	// befores, if set, replaces before: each history read before typing takes the next.
+	// befores, if set, replaces before: each history read before typing takes the
+	// next, staying on the last; "ERR" fails that read.
 	befores []string
 }
 
@@ -164,7 +165,10 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 				return []byte(f.history), nil
 			}
 			if f.befores != nil {
-				return []byte(next(&f.befores)), nil
+				if b := next(&f.befores); b != "ERR" {
+					return []byte(b), nil
+				}
+				return nil, errors.New("herdr agent read: gone")
 			}
 			return []byte(f.before), nil
 		}
@@ -955,6 +959,40 @@ func TestAfterTurnToAQueueingDevinWhoseTurnEndedTakesItAsIdle(t *testing.T) {
 func TestASameHeaderSentOnBeforeTypingIsNotTakenForThisOne(t *testing.T) {
 	line := "❭ " + queuedHeader + "\n"
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, queuedScreen(t)}, befores: []string{"", line}, history: line + line, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
+		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+// Text typed into the box while the history was read again is seen before typing.
+func TestABoxTypedIntoDuringTheRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, typedBox}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "has text in its input box") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAFailedRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, befores: []string{"", "ERR"}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnavailable || f.prompted() != nil || !notTyped(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A same-header line pushed out of the read window by the recount does not lower
+// the count, which would let that line pass for this one.
+func TestARecountThatSeesFewerLinesKeepsTheEarlierCount(t *testing.T) {
+	line := "❭ " + queuedHeader + "\n"
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, emptyBox, queuedScreen(t)}, befores: []string{line, "", line}, history: line + line, status: []string{"working"}, hold: true}
 	d := newDevin(f)
 	d.Keymap = enterQueues
 	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
