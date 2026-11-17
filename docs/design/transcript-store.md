@@ -113,7 +113,8 @@ With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:879
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
 does exactly this and exposes four views for `--sql`: `transcripts` (structured; its columns are
 inferred from the first 32 files in path order (up to DuckDB's `sample_size` records) and then stated, so a key that only later files carry
-is absent, and a later value that does not fit the sampled type fails the query. Path order puts the
+is absent, and a later value that does not fit the sampled type fails the query. Dates and times
+(`timestamp` too) stay strings; cast them in the query. Path order puts the
 earliest machines' sessions in the sample and a new session rarely sorts into it, so a field only
 newer sessions carry can stay absent for good — read such keys from `lines` with `json->>'key'`. If
 the sampled files hold no records, building the view fails and points at `lines`. `union_by_name` would

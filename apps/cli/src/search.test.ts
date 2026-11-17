@@ -209,6 +209,26 @@ describe("search: embedded DuckDB over the store", () => {
     await expect(c.runAndReadAll("SELECT * FROM transcripts")).rejects.toThrow("JSON transform error");
   });
 
+  test("a date in a non-ISO format reads back as the same string, and the timestamp stays text to cast (#300)", async () => {
+    const dir = join(root, "ccx", "pre", "transcripts", "machine=aa-dates", "user=u");
+    await Bun.write(join(dir, "session_id=d1", "transcript.jsonl"), line({ type: "user", timestamp: "2026-09-19T00:00:04Z", input: { due: "17-11-2026" } }));
+    const c = await openDuckDB(store, { withTranscripts: true });
+    const types = Object.fromEntries((await c.runAndReadAll("SELECT column_name, column_type FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => [r.column_name, r.column_type]));
+    expect(types.timestamp).toBe("VARCHAR");
+    expect(types.input).toBe("STRUCT(due VARCHAR)");
+    const r = await c.runAndReadAll("SELECT input.due AS due, timestamp::TIMESTAMP::VARCHAR AS at FROM transcripts WHERE session_id = 'd1'");
+    expect(r.getRowObjectsJson()).toEqual([{ due: "17-11-2026", at: "2026-09-19 00:00:04" }]);
+    expect((await c.runAndReadAll("SELECT * FROM transcripts")).getRowObjects()).toHaveLength(4);
+  });
+
+  test("a records-less sample is refused even when the prefix carries its own key=value segment (#300)", async () => {
+    const team: TranscriptStore = { ...store, prefix: "team=demo/" };
+    const at = (sid: string) => join(root, "ccx", "team=demo", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
+    await Bun.write(at("z-real"), line({ type: "user", message: { content: "hello" } }));
+    await expect(openDuckDB(team, { withTranscripts: true })).rejects.toThrow("hold no records");
+  });
+
   test("a sample of transcripts with no records refuses to build `transcripts` instead of reading every record as NULL (#300)", async () => {
     const at = (sid: string) => join(root, "ccx", "pre", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
     await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));

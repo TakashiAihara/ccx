@@ -119,7 +119,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
       // turn the whole row into one MAP(VARCHAR, JSON) column
       const sampled = await c.runAndReadAll(
-        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, ${maxObject})`,
+        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, hive_partitioning=false, ${maxObject})`,
       );
       // The view reads with that schema stated. Inferred, read_json rejects a key the sample lacks once a query reads
       // the whole record (SELECT *); stated, a key only later files carry is left out, while a later value that does not
@@ -128,16 +128,19 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
       // absent for good
       const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
-      // The sample also lists the hive columns DuckDB adds from the path. Stating them is harmless (the hive value wins
-      // over a record key of the same name, whatever its type; measured 2026-11-17), so they only need leaving out here
-      // for the check below
+      // hive_partitioning=false: a prefix may carry its own key=value segments, and their columns would make an empty
+      // sample look like it has some. The view's read still adds the hive columns; they win over a record key of the
+      // same name whatever its type (measured 2026-11-17), and COLUMNS drops machine / user / session_id
       const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
       // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
       // it would read every later record as NULL
       if (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON") {
         throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no records, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
       }
-      const schema = pairs.map(([name, type]) => `${q(name)}: ${q(type)}`);
+      // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
+      // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)
+      const asText = (type: string) => type.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[ ])/g, "VARCHAR");
+      const schema = pairs.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
       await c.run(
         // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
         // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
