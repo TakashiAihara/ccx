@@ -175,6 +175,12 @@ describe("search: embedded DuckDB over the store", () => {
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
   });
 
+  test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {
+    const c = await openDuckDB(store);
+    expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines WHERE contains(json::VARCHAR, 'NEEDLE-ALPHA')")).getRowObjectsJson()).toEqual([{ n: "1" }]);
+    expect((await c.runAndReadAll("SELECT count(*) AS n FROM duckdb_external_file_cache()")).getRowObjectsJson()).toEqual([{ n: "0" }]);
+  });
+
   test("a search that grows past CCX_SEARCH_MAX_RSS_MB stops with an error instead of running on (#300)", async () => {
     const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "tr", "search", "--sql", "SELECT count(*) FROM range(1000000000000)"], {
       env: { ...process.env, CCX_HUB_URL: store.endpoint, CCX_TRANSCRIPT_PREFIX: "pre", XDG_CONFIG_HOME: root, XDG_CACHE_HOME: cacheHome, CCX_SEARCH_MAX_RSS_MB: "1" },
