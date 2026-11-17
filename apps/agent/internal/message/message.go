@@ -65,8 +65,9 @@ type Devin struct {
 	// Poll is the interval of the checks after the prompt; SentWait bounds the
 	// wait for the prompt to show up as sent, StartWait the wait for working.
 	Poll, SentWait, StartWait time.Duration
-	// Keymap reads what Enter does mid-turn; nil is Devin's default keymap.
-	Keymap func() (Keymap, error)
+	// Keymap reads what Enter does mid-turn from a Devin config file ("" is the
+	// default file); nil is Devin's default keymap without reading anything.
+	Keymap func(path string) (Keymap, error)
 
 	mu        sync.Mutex
 	hooksOnce sync.Once
@@ -91,16 +92,19 @@ type Keymap struct {
 	Send string
 }
 
-// ReadKeymap reads ~/.config/devin/config.json. A missing file is Devin's default.
-// shortcut: a Devin started with --config <other> is read as this file says; take
-// the path from the pane's command line if that is ever used.
-func ReadKeymap() (Keymap, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return Keymap{}, err
+// ReadKeymap reads path, the --config a Devin was started with, or with "" the
+// default ~/.config/devin/config.json, whose absence is Devin's default keymap.
+func ReadKeymap(path string) (Keymap, error) {
+	named := path != ""
+	if !named {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Keymap{}, err
+		}
+		path = filepath.Join(home, ".config", "devin", "config.json")
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".config", "devin", "config.json"))
-	if errors.Is(err, os.ErrNotExist) {
+	b, err := os.ReadFile(path)
+	if !named && errors.Is(err, os.ErrNotExist) {
 		return Keymap{Send: "enter"}, nil
 	}
 	if err != nil {
@@ -133,11 +137,65 @@ func parseKeymap(b []byte) (Keymap, error) {
 	}, nil
 }
 
-func (d *Devin) keymap() (Keymap, error) {
+// keymap reads the keymap of the Devin in pane, from the --config it was started
+// with if any.
+func (d *Devin) keymap(ctx context.Context, pane string) (Keymap, error) {
 	if d.Keymap == nil {
 		return Keymap{Send: "enter"}, nil
 	}
-	return d.Keymap()
+	path, err := d.configPath(ctx, pane)
+	if err != nil {
+		return Keymap{}, err
+	}
+	return d.Keymap(path)
+}
+
+// configPath is the --config of the Devin running in pane, made absolute against
+// its cwd; "" when it was started without one. herdr lists the pane's foreground
+// processes with argv and cwd (herdr 0.9.5); the devin launcher and the binary it
+// starts both carry the flag.
+func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
+	out, err := d.Herdr(ctx, "pane", "process-info", "--pane", pane)
+	if err != nil {
+		return "", err
+	}
+	var got struct {
+		Result struct {
+			ProcessInfo struct {
+				Foreground []struct {
+					Argv []string `json:"argv"`
+					Cwd  string   `json:"cwd"`
+				} `json:"foreground_processes"`
+			} `json:"process_info"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		return "", fmt.Errorf("herdr pane process-info: %w", err)
+	}
+	for _, p := range got.Result.ProcessInfo.Foreground {
+		if len(p.Argv) == 0 || filepath.Base(p.Argv[0]) != "devin" {
+			continue
+		}
+		args := p.Argv[1:]
+		for i, a := range args {
+			// What follows -- is the first prompt, not flags.
+			if a == "--" {
+				break
+			}
+			v, ok := strings.CutPrefix(a, "--config=")
+			if a == "--config" && i+1 < len(args) {
+				v, ok = args[i+1], true
+			}
+			if !ok {
+				continue
+			}
+			if !filepath.IsAbs(v) {
+				v = filepath.Join(p.Cwd, v)
+			}
+			return v, nil
+		}
+	}
+	return "", nil
 }
 
 // MaxBody keeps the text herdr gets as one argument well under Linux's 128 KiB
@@ -300,7 +358,7 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	// accept_line on ctrl-enter), so only a working one needs the keymap.
 	var km Keymap
 	if working {
-		if km, err = d.keymap(); err != nil {
+		if km, err = d.keymap(ctx, p.ID); err != nil {
 			return connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 	}

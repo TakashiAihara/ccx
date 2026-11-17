@@ -1,6 +1,7 @@
 package message
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -125,6 +126,10 @@ type fakeHerdr struct {
 	// keysIgnored: the pane takes the key and nothing leaves the queue.
 	keysIgnored bool
 	keysErr     error
+	// proc is what pane process-info returns (a devin without --config when
+	// empty); procErr fails it.
+	proc    string
+	procErr error
 	// befores, if set, replaces before: each history read before typing takes the
 	// next, staying on the last; "ERR" fails that read.
 	befores []string
@@ -140,6 +145,15 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 		return v
 	}
 	cmd := strings.Join(args[:2], " ")
+	if cmd == "pane process-info" {
+		if strings.Join(args[2:], " ") != "--pane w2:p1" {
+			return nil, errors.New("unexpected " + strings.Join(args, " "))
+		}
+		if f.procErr != nil {
+			return nil, f.procErr
+		}
+		return []byte(cmp.Or(f.proc, `{"result":{"process_info":{"foreground_processes":[{"argv":["devin"],"cwd":"/w"}]}}}`)), nil
+	}
 	if cmd != "pane list" && args[2] != "w2:p1" {
 		return nil, errors.New("herdr " + cmd + " on the wrong pane " + args[2])
 	}
@@ -826,7 +840,7 @@ func TestQueuedScreenReadsAsMidTurnWithAnEmptyBox(t *testing.T) {
 	}
 }
 
-var enterQueues = func() (Keymap, error) { return Keymap{Queues: true, Send: "ctrl+enter"}, nil }
+var enterQueues = func(string) (Keymap, error) { return Keymap{Queues: true, Send: "ctrl+enter"}, nil }
 
 func TestUrgentToAQueueingDevinSendsTheQueueOn(t *testing.T) {
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, history: "❭ " + queuedHeader, status: []string{"working"}, hold: true}
@@ -871,7 +885,7 @@ func TestQueuedButNeverShownIsMayHaveBeenSent(t *testing.T) {
 func TestUrgentRefusedWhenEnterBothQueuesAndSends(t *testing.T) {
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
 	d := newDevin(f)
-	d.Keymap = func() (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
+	d.Keymap = func(string) (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
 	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition || f.prompted() != nil {
 		t.Fatalf("err = %v", err)
@@ -881,7 +895,7 @@ func TestUrgentRefusedWhenEnterBothQueuesAndSends(t *testing.T) {
 func TestABrokenKeymapSendsNothing(t *testing.T) {
 	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}}
 	d := newDevin(f)
-	d.Keymap = func() (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
+	d.Keymap = func(string) (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
 	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "devin config: broken") || f.prompted() != nil {
 		t.Fatalf("err = %v", err)
@@ -889,7 +903,7 @@ func TestABrokenKeymapSendsNothing(t *testing.T) {
 	// An idle Devin does not need it.
 	idle := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
 	d = newDevin(idle)
-	d.Keymap = func() (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
+	d.Keymap = func(string) (Keymap, error) { return Keymap{}, errors.New("devin config: broken") }
 	if got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN)); err != nil || len(got) != 2 {
 		t.Fatalf("idle: events = %v, err = %v", got, err)
 	}
@@ -909,7 +923,7 @@ func TestAQueueOnScreenIsMidTurnWhateverHerdrSays(t *testing.T) {
 func TestUrgentToAnIdleDevinIgnoresTheQueueKeymap(t *testing.T) {
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ " + queuedHeader, status: []string{"idle", "working"}}
 	d := newDevin(f)
-	d.Keymap = func() (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
+	d.Keymap = func(string) (Keymap, error) { return Keymap{Queues: true, Send: "enter"}, nil }
 	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if err != nil || len(got) != 2 || got[1].State != ccxv1.SendResponse_STATE_WORKING {
 		t.Fatalf("events = %v, err = %v", got, err)
@@ -1012,5 +1026,91 @@ func TestAFailedScreenReadAfterTheRecountSendsNothing(t *testing.T) {
 	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if connect.CodeOf(err) != connect.CodeUnavailable || f.prompted() != nil || !notTyped(err) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func procWith(argvs ...string) string {
+	var ps []string
+	for _, a := range argvs {
+		ps = append(ps, `{"argv":`+a+`,"cwd":"/work"}`)
+	}
+	return `{"result":{"process_info":{"foreground_processes":[` + strings.Join(ps, ",") + `]}}}`
+}
+
+func TestConfigPathComesFromThePanesDevin(t *testing.T) {
+	for _, tc := range []struct {
+		name, proc, want string
+	}{
+		{"none", procWith(`["devin","--permission-mode","dangerous"]`), ""},
+		{"absolute", procWith(`["devin","--config","/etc/d.json"]`), "/etc/d.json"},
+		{"relative to its cwd", procWith(`["devin","--config","cfg/d.json"]`), "/work/cfg/d.json"},
+		{"with =", procWith(`["devin","--config=/etc/e.json"]`), "/etc/e.json"},
+		{"the binary the launcher started", procWith(`["zsh"]`, `["/opt/devin/bin/devin","--config","/etc/f.json","acp"]`), "/etc/f.json"},
+		{"another program's flag", procWith(`["vim","--config","/etc/x.json"]`), ""},
+		{"in the prompt after --", procWith(`["devin","--","--config","/etc/x.json"]`), ""},
+		{"flag without a value", procWith(`["devin","--config"]`), ""},
+		{"a process with no argv", procWith(`[]`, `["devin","--config","/etc/g.json"]`), "/etc/g.json"},
+	} {
+		f := &fakeHerdr{proc: tc.proc}
+		got, err := newDevin(f).configPath(context.Background(), "w2:p1")
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+	if _, err := newDevin(&fakeHerdr{proc: "not json"}).configPath(context.Background(), "w2:p1"); err == nil || !strings.Contains(err.Error(), "process-info") {
+		t.Errorf("broken process-info: err = %v", err)
+	}
+}
+
+func TestSendReadsTheKeymapOfThePanesConfig(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, queuedScreen(t)}, status: []string{"working"}, hold: true, proc: procWith(`["devin","--config","d.json"]`)}
+	d := newDevin(f)
+	var read []string
+	d.Keymap = func(path string) (Keymap, error) {
+		read = append(read, path)
+		return Keymap{Queues: true, Send: "ctrl+enter"}, nil
+	}
+	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN))
+	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "queued until its turn ends") || strings.Join(read, " ") != "/work/d.json" {
+		t.Fatalf("events = %v, err = %v, read = %q", got, err, read)
+	}
+}
+
+func TestAFailedProcessInfoSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox}, procErr: errors.New("herdr pane process-info: gone")}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "process-info") || f.prompted() != nil || !notTyped(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReadKeymapFromANamedOrTheDefaultFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	// No default file: Devin's default keymap.
+	if km, err := ReadKeymap(""); err != nil || km != (Keymap{Send: "enter"}) {
+		t.Fatalf("default without a file: %+v, %v", km, err)
+	}
+	// A named file that is not there is an error, not the default.
+	if _, err := ReadKeymap(dir + "/missing.json"); err == nil {
+		t.Fatal("missing named file: no error")
+	}
+	named := dir + "/d.json"
+	if err := os.WriteFile(named, []byte(`{"keymap":{"editor":{"accept_line":"alt-s"},"readbox_input":{"queue_message":"enter"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if km, err := ReadKeymap(named); err != nil || km != (Keymap{Queues: true, Send: "alt+s"}) {
+		t.Fatalf("named file: %+v, %v", km, err)
+	}
+	if err := os.MkdirAll(dir+"/.config/devin", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/.config/devin/config.json", []byte(`{"keymap":{"readbox_input":{"queue_message":"enter"},"editor":{"accept_line":"ctrl-enter"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if km, err := ReadKeymap(""); err != nil || km != (Keymap{Queues: true, Send: "ctrl+enter"}) {
+		t.Fatalf("default file: %+v, %v", km, err)
 	}
 }
