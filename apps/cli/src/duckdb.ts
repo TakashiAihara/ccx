@@ -115,14 +115,15 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
       // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
       // The path columns stay in hive_partitioning's (alphabetical) order.
-      // The schema comes from the first maximum_sample_files (32) files, not from every file: on 1304 files, union_by_name
+      // The schema comes from the first 32 files in listing (path) order, not from every file: on 1304 files, union_by_name
       // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
-      // maximum_sample_files over all files and json_group_structure over `lines`. A key that none of the sampled files
-      // carries is left out; `lines` still has every record whole. map_inference_threshold=-1 keeps records a struct:
-      // with the default, the records' many keys turn the whole row into one MAP(VARCHAR, JSON) column
+      // maximum_sample_files over all files and json_group_structure over `lines`. A key or type that only later files
+      // carry is left out or mistyped, and the sample shifts as the store grows; read such keys from `lines` with ->>.
+      // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
+      // turn the whole row into one MAP(VARCHAR, JSON) column
       `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
          ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
-       FROM read_json(${q(files)}, format='newline_delimited', map_inference_threshold=-1, ${reader})`,
+       FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, ${reader})`,
     );
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);

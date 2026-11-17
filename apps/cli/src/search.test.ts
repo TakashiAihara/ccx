@@ -188,6 +188,13 @@ describe("search: embedded DuckDB over the store", () => {
     expect(names).toContain("message");
     expect(names).toContain("type");
     expect(names).toContain("session_id");
+    // The two host-a transcripts and s00..s29 make the 32 sampled files; s30..s39 come after them
+    expect(names).toContain("only29");
+    expect(names).not.toContain("only30");
+
+    await rm(at("zz-late", "broken"));
+    const r = await c.runAndReadAll("SELECT count(*)::INT AS n, count(only5)::INT AS five FROM transcripts WHERE machine = 'm-bulk'");
+    expect(r.getRowObjects()[0]).toEqual({ n: 40, five: 1 });
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {
