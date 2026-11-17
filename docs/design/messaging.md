@@ -40,10 +40,11 @@ ccx msg send excited-giraffe --summary "review: 3 findings" --mode urgent "src/f
 | Mode | Meaning | Devin (this build) | Claude Code (this build) |
 |---|---|---|---|
 | `later` | Not woken; read on its next turn | `queued`; ccx-agent holds it and puts it into Devin's next turn through the `UserPromptSubmit` hook (below). Not typed into the pane | Refused, listing `after-turn` (needs the UserPromptSubmit inbox, #25) |
-| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle; refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour), so a turn running past 10 s ends the acks at `not-started` |
-| `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up | Refused, listing `after-turn`: a channel event never interrupts a turn (`transport.md`) |
+| `after-turn` (default) | Read once its current work is done; now if idle | Sent if idle. To a working Devin whose keymap binds Enter to `queue_message` (below), `sent` once it shows in Devin's queue, which Devin reads when the turn ends; with the default keymap, refused while herdr says working or the screen shows a turn | Sent; a session mid-turn takes it when the turn ends (the channel's own behaviour), so a turn running past 10 s ends the acks at `not-started` |
+| `urgent` | Read at the next break, even while working | Sent; to a working Devin (herdr says working, or the screen shows a turn) `sent` is the last ack, since its status cannot show this message being picked up. With Enter bound to `queue_message`, ccx-agent sees it queued and presses `accept_line`'s key, which sends the whole queue on, the person's own queued messages too | Refused, listing `after-turn`: a channel event never interrupts a turn (`transport.md`) |
 
 - A mode the receiver lacks is refused, never swapped for a nearby one (#301).
+- What Enter does in a running Devin turn depends on its keymap, which ccx-agent reads from `~/.config/devin/config.json` on each send (#86). By default it guides Devin (`Guide Devin while it works`, read at the next break). With `"keymap": {"readbox_input": {"queue_message": "enter"}, "editor": {"accept_line": "ctrl-enter"}}`, Enter queues the message (`── N queued ──` above the box) and `ctrl-enter` sends the queue at once, interrupting a running tool (devin 3000.12.57). herdr also reports `done` while a queue shows, so the screen's queue counts as a turn running. A Devin started with `--config <other>` is still read through the default file.
 - `after-turn` to a working Devin needs the end of its turn, which herdr does not report: `agent_status` also reads `idle` while Devin is still writing (#302). Devin's `Stop` hook reports it (below), but `after-turn` does not wait on it yet. Meanwhile ccx-agent also reads the screen: Devin draws `… (esc twice to interrupt)` while a turn runs (devin 3000.12.57), and `after-turn` is refused while it shows. A Devin that stops drawing that line would let `after-turn` in mid-turn again.
 
 ## Devin delivery
@@ -175,7 +176,7 @@ sequenceDiagram
 
 ## Not built yet
 
-- `after-turn` to a working Devin (it could queue like `later` and be taken by the next turn; today it is refused).
+- `after-turn` to a working Devin with the default keymap (it could queue like `later` and be taken by the next turn; today it is refused).
 - `later` and `--wait` survive no restart of ccx-agent: queued messages and waiting sends live in its memory. A session that never takes another turn keeps its queued messages (up to 32) until ccx-agent restarts.
 - Through the center, a receiver holds at most 64 messages claimed and not yet delivered, those waiting (`--wait`) included; past that it claims no more, and messages put meanwhile pass the 30 s and end as `not sent`.
 - `question` / `done` for Claude Code.

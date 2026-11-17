@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,17 +65,78 @@ type Devin struct {
 	// Poll is the interval of the checks after the prompt; SentWait bounds the
 	// wait for the prompt to show up as sent, StartWait the wait for working.
 	Poll, SentWait, StartWait time.Duration
+	// Keymap reads what Enter does mid-turn; nil is Devin's default keymap.
+	Keymap func() (Keymap, error)
 
-	mu      sync.Mutex
+	mu        sync.Mutex
 	hooksOnce sync.Once
-	h       *hooks
+	h         *hooks
 }
 
 // NewDevin uses the herdr on PATH. On #302 working showed within 3 seconds of
 // the prompt; StartWait leaves room above that, SentWait is the time to see it in
 // the history.
 func NewDevin() *Devin {
-	return &Devin{Herdr: CommandHerdr, Poll: 250 * time.Millisecond, SentWait: 3 * time.Second, StartWait: 5 * time.Second}
+	return &Devin{Herdr: CommandHerdr, Poll: 250 * time.Millisecond, SentWait: 3 * time.Second, StartWait: 5 * time.Second, Keymap: ReadKeymap}
+}
+
+// Keymap is the part of Devin's keymap a send depends on (#86). By default Enter
+// in a running turn guides Devin ("Guide Devin while it works": read at its next
+// break). A config can bind Enter to queue_message instead (held until the turn
+// ends), and accept_line to another key, which then sends the queue at once.
+type Keymap struct {
+	// Queues: readbox_input.queue_message is "enter".
+	Queues bool
+	// Send is editor.accept_line as a herdr key name ("enter" when unset).
+	Send string
+}
+
+// ReadKeymap reads ~/.config/devin/config.json. A missing file is Devin's default.
+// shortcut: a Devin started with --config <other> is read as this file says; take
+// the path from the pane's command line if that is ever used.
+func ReadKeymap() (Keymap, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Keymap{}, err
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".config", "devin", "config.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return Keymap{Send: "enter"}, nil
+	}
+	if err != nil {
+		return Keymap{}, err
+	}
+	return parseKeymap(b)
+}
+
+func parseKeymap(b []byte) (Keymap, error) {
+	var c struct {
+		Keymap struct {
+			Editor struct {
+				AcceptLine string `json:"accept_line"`
+			} `json:"editor"`
+			ReadboxInput struct {
+				QueueMessage string `json:"queue_message"`
+			} `json:"readbox_input"`
+		} `json:"keymap"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return Keymap{}, fmt.Errorf("devin config: %w", err)
+	}
+	// Devin writes ctrl-enter, herdr takes ctrl+enter (both measured, devin
+	// 3000.12.57 / herdr 0.9.5). shortcut: only ctrl+enter was tried; other chords
+	// are passed the same way and fail at herdr if it names them otherwise.
+	return Keymap{
+		Queues: c.Keymap.ReadboxInput.QueueMessage == "enter",
+		Send:   strings.ReplaceAll(cmp.Or(c.Keymap.Editor.AcceptLine, "enter"), "-", "+"),
+	}, nil
+}
+
+func (d *Devin) keymap() (Keymap, error) {
+	if d.Keymap == nil {
+		return Keymap{Send: "enter"}, nil
+	}
+	return d.Keymap()
 }
 
 // MaxBody keeps the text herdr gets as one argument well under Linux's 128 KiB
@@ -94,9 +157,7 @@ func headerLine(sender, summary string) string { return "ccx: " + sender + ": " 
 var (
 	// Format characters (bidi overrides, zero-width) are refused too: they can
 	// make the header show a different sender or summary than was sent.
-	oneLine     = regexp.MustCompile(`^[^\r\n\p{Cc}\p{Cf}\x{2028}\x{2029}]+$`)
-
-
+	oneLine = regexp.MustCompile(`^[^\r\n\p{Cc}\p{Cf}\x{2028}\x{2029}]+$`)
 )
 
 // NotTypedKey is the error metadata key set on a failure that came before
@@ -234,7 +295,17 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	// screen ("Typing · 3s (esc twice to interrupt)", devin 3000.12.57) until its
 	// Stop hook is wired to ccx-agent to tell the end of the turn properly.
 	working := p.Status == "working" || midTurn(string(screen))
-	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working {
+	km, err := d.keymap()
+	if err != nil {
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	// With Enter bound to queue_message, Devin itself holds the message until the
+	// turn ends: that is after-turn, and urgent sends the queue on with accept_line.
+	queues := working && km.Queues
+	if queues && req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && km.Send == "enter" {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working and its keymap binds Enter to both queue_message and accept_line, so urgent cannot be sent; nothing was sent", req.Target))
+	}
+	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working && !queues {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
 	}
 	switch inputBox(string(screen)) {
@@ -253,7 +324,28 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	}
 
 	// A long body takes longer to paste and render.
-	if err := d.waitSent(ctx, p.ID, header, seen, lines, d.SentWait+time.Duration(len(req.Body)/(16<<10))*time.Second); err != nil {
+	wait := d.SentWait + time.Duration(len(req.Body)/(16<<10))*time.Second
+	if queues {
+		inQueue, err := d.waitQueued(ctx, p.ID, header, queuedLines(string(screen), header), seen, lines, wait)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !inQueue:
+			// The turn ended before Enter: it went in as to an idle Devin.
+			working = false
+		case req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT:
+			return emit(&ccxv1.SendResponse{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane " + p.ID + "; was working, queued until its turn ends"})
+		default:
+			// accept_line sends everything queued, the person's own messages too.
+			if _, err := d.Herdr(ctx, "pane", "send-keys", p.ID, km.Send); err != nil {
+				return connect.NewError(connect.CodeUnknown, fmt.Errorf("the message is queued in pane %s but sending it on failed: %w", p.ID, err))
+			}
+			if err := d.waitSent(ctx, p.ID, header, seen, lines, wait); err != nil {
+				return err
+			}
+		}
+	} else if err := d.waitSent(ctx, p.ID, header, seen, lines, wait); err != nil {
 		return err
 	}
 	if working {
@@ -371,6 +463,45 @@ func (d *Devin) waitSent(ctx context.Context, id, header string, seen int, lines
 	}
 }
 
+// waitQueued waits for the message to show in Devin's queue with the box empty.
+// inQueue is false when it showed in the history instead.
+func (d *Devin) waitQueued(ctx context.Context, id, header string, queued, seen int, lines string, wait time.Duration) (inQueue bool, err error) {
+	deadline := time.Now().Add(wait)
+	wctx, cancel := context.WithDeadline(ctx, deadline.Add(time.Second))
+	defer cancel()
+	for {
+		screen, err := d.Herdr(wctx, "agent", "read", id, "--source", "visible", "--format", "ansi")
+		if err == nil && inputBox(string(screen)) == inputEmpty {
+			if queuedLines(string(screen), header) > queued {
+				return true, nil
+			}
+			hist, err := d.Herdr(wctx, "agent", "read", id, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
+			if err == nil && headerLines(string(hist), header) > seen && d.boxEmpty(wctx, id) {
+				return false, nil
+			}
+		}
+		if time.Now().Before(deadline) && sleep(ctx, d.Poll) == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return false, connect.NewError(connect.CodeCanceled, fmt.Errorf("stopped while waiting to see the message as queued in pane %s", id))
+		}
+		return false, connect.NewError(connect.CodeUnknown, fmt.Errorf("herdr took the prompt but it was not seen as queued or sent in pane %s; look at the pane before sending again", id))
+	}
+}
+
+// queuedLines counts the queued messages whose first line is the header. Devin
+// lists them above the box as "○ <first line>" (devin 3000.12.57, testdata).
+func queuedLines(screen, header string) int {
+	n := 0
+	for _, l := range strings.Split(screen, "\n") {
+		if strings.TrimRight(sgr.ReplaceAllString(l, ""), " \r") == "○ "+header {
+			n++
+		}
+	}
+	return n
+}
+
 // waitStarted watches herdr's agent_status. done also means the turn started
 // (a short answer can finish between two looks, and a permission prompt shows as
 // done, measured on devin 3000.12.57), but only when it was not done before the
@@ -474,7 +605,6 @@ func typed(s string) bool {
 	}
 	return !st.styled() && strings.Trim(s[at:], "\r") != ""
 }
-
 
 // Service answers MessageService. The api concern mounts it on the unix socket
 // only (message.proto says why). Each send is logged, so "who typed this into my
@@ -635,11 +765,33 @@ func (st *sgrState) apply(params string) {
 
 // midTurn says whether Devin's screen shows a turn in progress: the status line
 // right above the box ends with "to interrupt)". Only that line is read, so the
-// same words in the history above do not count.
+// same words in the history above do not count. Queued messages sit between the
+// two under a "── N queued ──" rule; they are skipped, and herdr reported done
+// with them there (#86).
 func midTurn(screen string) bool {
 	lines := strings.Split(screen, "\n")
 	top, _ := boxRules(lines)
+	if q := queueRule(lines, top); q >= 0 {
+		top = q
+	}
 	return top > 0 && strings.HasSuffix(plainLine(lines[top-1]), "to interrupt)")
+}
+
+var queuedRule = regexp.MustCompile(`^── \d+ queued ─`)
+
+// queueRule finds the "── N queued ──" rule over the queue right above the box's
+// top rule: the queue lines start with "○ " or are indented. -1 when none.
+func queueRule(lines []string, top int) int {
+	for i := top - 1; i >= 0; i-- {
+		l := strings.TrimRight(sgr.ReplaceAllString(lines[i], ""), " \r")
+		if queuedRule.MatchString(l) {
+			return i
+		}
+		if !strings.HasPrefix(l, "○ ") && !strings.HasPrefix(l, "  ") {
+			return -1
+		}
+	}
+	return -1
 }
 
 func plainLine(l string) string { return strings.TrimSpace(sgr.ReplaceAllString(l, "")) }
