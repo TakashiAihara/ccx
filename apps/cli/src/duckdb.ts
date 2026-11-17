@@ -128,11 +128,14 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
       // absent for good
       const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
-      // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON` beside
-      // the hive columns DuckDB adds; stated, it would read every later record as NULL
+      // The sample also lists the hive columns DuckDB adds from the path. Stating them is harmless (the hive value wins
+      // over a record key of the same name, whatever its type; measured 2026-11-17), so they only need leaving out here
+      // for the check below
       const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
+      // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
+      // it would read every later record as NULL
       if (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON") {
-        throw new Error("the first 32 transcripts in the store hold no records, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
+        throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no records, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
       }
       const schema = pairs.map(([name, type]) => `${q(name)}: ${q(type)}`);
       await c.run(

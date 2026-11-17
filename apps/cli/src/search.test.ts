@@ -213,7 +213,7 @@ describe("search: embedded DuckDB over the store", () => {
     const at = (sid: string) => join(root, "ccx", "pre", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
     await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
 
-    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the first 32 transcripts in the store hold no records");
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the transcripts DuckDB samples first (up to 32, in path order) hold no records");
     const c = await openDuckDB(store);
     expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM lines")).getRowObjects()[0]).toEqual({ n: 3 });
   });
