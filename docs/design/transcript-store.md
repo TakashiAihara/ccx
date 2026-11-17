@@ -109,8 +109,9 @@ WHERE type = 'assistant';
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
 does exactly this and exposes four views for `--sql`: `transcripts` (structured; its columns are
-inferred from the first 32 files in path order, so a key or type that only later files carry is
-absent or mistyped, and the sample shifts as the store grows — read such keys from `lines` with
+inferred from the first 32 files in path order, so a key that only later files carry is absent, a
+later value that does not fit the sampled type fails the query, and the sample shifts as the store
+grows — read such keys from `lines` with
 `json->>'key'`; `union_by_name` would infer from every file and passed 3 GB on 1304 files before the
 query ran), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)

@@ -117,8 +117,10 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // The path columns stay in hive_partitioning's (alphabetical) order.
       // The schema comes from the first 32 files in listing (path) order, not from every file: on 1304 files, union_by_name
       // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
-      // maximum_sample_files over all files and json_group_structure over `lines`. A key or type that only later files
-      // carry is left out or mistyped, and the sample shifts as the store grows; read such keys from `lines` with ->>.
+      // maximum_sample_files over all files and json_group_structure over `lines`. A key that only later files carry is
+      // left out, and a later value that does not fit the sampled type fails the query (JSON transform error); the sample
+      // shifts as the store grows. Such keys are read from `lines` with ->>. No ignore_errors: it would drop those
+      // records from the result silently
       // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
       // turn the whole row into one MAP(VARCHAR, JSON) column
       `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
