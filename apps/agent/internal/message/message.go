@@ -310,8 +310,9 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	if queues && req.Mode == ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && km.Send == "enter" {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working and its keymap binds Enter to queue_message and leaves accept_line on Enter (or unset), so ccx has no key to send the queue on; nothing was sent", req.Target))
 	}
-	// A queued message with the same header would leave the queue as this one
-	// joins it, and the count could not tell the two apart.
+	// With a same-header message already queued, its "○" line could stand for this
+	// one, and the person sending the queue on meanwhile would move it to the
+	// history as if this one went there.
 	if queues && queuedLines(string(screen), header) > 0 {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s already has a message with this header queued; nothing was sent", req.Target))
 	}
@@ -778,9 +779,9 @@ func (st *sgrState) apply(params string) {
 // midTurn says whether Devin's screen shows a turn in progress: the status line
 // right above the box ends with "to interrupt)". Only that line is read, so the
 // same words in the history above do not count. Queued messages sit between the
-// two under a "── N queued ──" rule. Devin holds a queue only while a turn runs,
-// so the queue alone counts, whatever is above it; herdr reported done with it
-// there (#86).
+// two under a "── N queued ──" rule. Devin holds a queue only while a turn runs
+// (it went at each turn's end, devin 3000.12.57), so the queue alone counts,
+// whatever is above it; herdr reported done with it there (#86).
 func midTurn(screen string) bool {
 	lines := strings.Split(screen, "\n")
 	top, _ := boxRules(lines)

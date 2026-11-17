@@ -919,7 +919,7 @@ func TestUrgentWhoseQueueDoesNotLeaveIsMayHaveBeenSent(t *testing.T) {
 	d := newDevin(f)
 	d.Keymap = enterQueues
 	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
-	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "not seen as sent") {
+	if connect.CodeOf(err) != connect.CodeUnknown || !strings.Contains(err.Error(), "not seen as sent") || notTyped(err) {
 		t.Fatalf("err = %v", err)
 	}
 }
