@@ -150,11 +150,12 @@ func (d *Devin) keymap(ctx context.Context, pane string) (Keymap, error) {
 	return d.Keymap(path)
 }
 
-// configPath is the --config of the Devin running in pane, made absolute against
-// its cwd; "" when it was started without one. herdr lists the pane's foreground
+// configPath is the --config of the Devin running in pane as an absolute path; ""
+// when it was started without one. herdr lists the pane's foreground
 // processes with argv and cwd (herdr 0.9.5); the devin launcher and the binary it
-// starts both carry the flag, the binary with it made absolute, which is taken
-// first so a cwd that moved does not matter. The client's flag is taken as the
+// starts both carry the flag, the binary with it made absolute (measured, devin
+// 3000.13.4). An absolute one is taken first, so a cwd that moved does not matter;
+// otherwise the first relative one with a cwd, against that cwd. The client's flag is taken as the
 // keymap's (the keymap is the client's input box); Devin refuses a client whose
 // --config differs from its shared daemon's while that daemon has a busy session
 // (devin 3000.13.4). No devin among them is an error, not "no --config": reading
@@ -179,7 +180,8 @@ func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 		return "", fmt.Errorf("herdr pane process-info: %w", err)
 	}
 	found := false
-	relative, relErr := "", error(nil)
+	var relative string
+	var relErr error
 	for _, p := range got.Result.ProcessInfo.Foreground {
 		if len(p.Argv) == 0 || filepath.Base(p.Argv[0]) != "devin" {
 			continue
@@ -201,19 +203,23 @@ func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 			if filepath.IsAbs(v) {
 				return v, nil
 			}
-			if relative == "" && relErr == nil {
-				if p.Cwd == "" {
-					relErr = fmt.Errorf("devin in pane %s has a relative --config %q and herdr gave no cwd to resolve it", pane, v)
-				} else {
-					relative = filepath.Join(p.Cwd, v)
-				}
+			if relative != "" {
+				continue
+			}
+			if p.Cwd == "" {
+				relErr = fmt.Errorf("devin in pane %s has a relative --config %q and herdr gave no cwd to resolve it", pane, v)
+			} else {
+				relative = filepath.Join(p.Cwd, v)
 			}
 		}
 	}
 	if !found {
 		return "", fmt.Errorf("herdr pane process-info lists no devin process in pane %s", pane)
 	}
-	return relative, relErr
+	if relative != "" {
+		return relative, nil
+	}
+	return "", relErr
 }
 
 // MaxBody keeps the text herdr gets as one argument well under Linux's 128 KiB
