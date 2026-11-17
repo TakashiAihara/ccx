@@ -66,6 +66,11 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const db = await DuckDBInstance.create(":memory:");
   const c = await db.connect();
   await c.run(`LOAD '${ext.replaceAll("'", "''")}'`);
+  // The external file cache keeps every byte read from the store in memory for a later read that a one-shot search
+  // never makes. memory_limit (80% of RAM outside a cgroup) does not bound it before RSS passes guardRss: on d1 a keyword
+  // search grew to 6.2 GB with it and 1.3-1.5 GB without (2026-11-17, #300). A --sql that scans the same files twice
+  // (a self-join, `lines` with `transcripts`) now fetches them twice instead
+  await c.run("SET enable_external_file_cache = false");
 
   const u = new URL(store.endpoint);
   // S3 の endpoint は host[:port] で、path は持てない (DuckDB は捨て、Bun.S3Client は bucket を path に置く)
