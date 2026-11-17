@@ -177,7 +177,7 @@ describe("search: embedded DuckDB over the store", () => {
 
   test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
     // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample
-    // stands in for "a file the inference read": describing the view must not touch it.
+    // stands in for "a file the inference read": building the view (which samples) must not touch it.
     // Each bulk record also carries a key of its own, as rare keys do in real transcripts: on average a key then appears
     // in under 10% of records, and DuckDB's default inference turns the whole record into one MAP column
     const at = (m: string, sid: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${sid}`, "transcript.jsonl");
@@ -196,8 +196,26 @@ describe("search: embedded DuckDB over the store", () => {
     const r = await c.runAndReadAll("SELECT count(*)::INT AS n, count(only5)::INT AS five FROM transcripts WHERE machine = 'm-bulk'");
     expect(r.getRowObjects()[0]).toEqual({ n: 40, five: 1 });
     // SELECT * reads whole records, where an inferred schema rejects the keys the sample lacks (only30.., message.late)
-    const all = await c.runAndReadAll("SELECT * FROM transcripts WHERE machine = 'm-bulk'");
-    expect(all.getRowObjects().length).toBe(40);
+    const all = await c.runAndReadAll("SELECT * FROM transcripts WHERE machine = 'm-bulk' AND session_id = 's31'");
+    expect(all.getRowObjectsJson()).toHaveLength(1);
+    const late = all.getRowObjectsJson()[0]!;
+    expect(late.message).toEqual({ role: null, content: "bulk 31", model: null, usage: null });
+    expect(late.only29).toBeNull();
+    expect(Object.keys(late)).not.toContain("only31");
+    expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM (SELECT * FROM transcripts WHERE machine = 'm-bulk')")).getRowObjects()[0]).toEqual({ n: 40 });
+
+    // A later value that does not fit the sampled type fails the query, not drops or nulls the record
+    await Bun.write(at("zz-late", "typed"), line({ type: "user", only5: { not: "a number" } }));
+    await expect(c.runAndReadAll("SELECT * FROM transcripts")).rejects.toThrow("JSON transform error");
+  });
+
+  test("a sample of transcripts with no records refuses to build `transcripts` instead of reading every record as NULL (#300)", async () => {
+    const at = (sid: string) => join(root, "ccx", "pre", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
+
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the first 32 transcripts in the store hold no records");
+    const c = await openDuckDB(store);
+    expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM lines")).getRowObjects()[0]).toEqual({ n: 3 });
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {

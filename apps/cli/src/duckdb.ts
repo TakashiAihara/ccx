@@ -100,7 +100,8 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   const tPart = tail("transcript\\.jsonl");
   const cols = (part: (k: "machine" | "user" | "session_id") => string) =>
     `${part("session_id")} AS session_id, ${part("machine")} AS machine, ${part("user")} AS "user"`;
-  const reader = `filename=${q(PATH)}, maximum_object_size=268435456`;
+  const maxObject = "maximum_object_size=268435456";
+  const reader = `filename=${q(PATH)}, ${maxObject}`;
   // maximum_object_size: tool の出力を抱えた行が 16 MB の既定を超える (手元の 26 本で最大 3.8 MB。上限は 256 MB)。
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
@@ -111,19 +112,29 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
     if (opts.withTranscripts) {
-      // The schema comes from the first 32 files in listing (path) order, not from every file: on 1304 files, union_by_name
+      // The schema comes from the first 32 files in listing (path) order (up to sample_size records), not from every file:
+      // on 1304 files, union_by_name
       // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
       // maximum_sample_files over all files and json_group_structure over `lines`.
       // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
       // turn the whole row into one MAP(VARCHAR, JSON) column
       const sampled = await c.runAndReadAll(
-        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, maximum_object_size=268435456)`,
+        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, ${maxObject})`,
       );
       // The view reads with that schema stated. Inferred, read_json rejects a key the sample lacks once a query reads
       // the whole record (SELECT *); stated, a key only later files carry is left out, while a later value that does not
       // fit the sampled type still fails the query (JSON transform error). Such keys are read from `lines` with ->>.
-      // No ignore_errors: it would drop those records from the result silently. The sample shifts as the store grows
-      const schema = sampled.getRowObjects().map((r) => `${q(String(r.column_name))}: ${q(String(r.column_type))}`);
+      // No ignore_errors: it would drop those records from the result silently. Path order puts the earliest machines'
+      // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
+      // absent for good
+      const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
+      // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON` beside
+      // the hive columns DuckDB adds; stated, it would read every later record as NULL
+      const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
+      if (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON") {
+        throw new Error("the first 32 transcripts in the store hold no records, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
+      }
+      const schema = pairs.map(([name, type]) => `${q(name)}: ${q(type)}`);
       await c.run(
         // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
         // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a

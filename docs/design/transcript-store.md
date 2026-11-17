@@ -106,14 +106,18 @@ FROM read_json('s3://<bucket>/<prefix>transcripts/**/transcript.jsonl',
 WHERE type = 'assistant';
 ```
 
+(This picks columns. A `SELECT *` over a schema DuckDB inferred rejects any key its sample lacks —
+the `transcripts` view below states the sampled schema to avoid that.)
+
 With `ccx-center` as the store: `CREATE SECRET (TYPE s3, ENDPOINT '127.0.0.1:8791', URL_STYLE 'path',
 USE_SSL false, KEY_ID 'x', SECRET 'x')` — the center accepts any signature. `ccx transcript search`
 does exactly this and exposes four views for `--sql`: `transcripts` (structured; its columns are
-inferred from the first 32 files in path order, so a key that only later files carry is absent, a
-later value that does not fit the sampled type fails the query, and the sample shifts as the store
-grows — read such keys from `lines` with
-`json->>'key'`; `union_by_name` would infer from every file and passed 3 GB on 1304 files before the
-query ran), `lines` (`json` = the raw record — what the text search reads, because the
+inferred from the first 32 files in path order and then stated, so a key that only later files carry
+is absent, and a later value that does not fit the sampled type fails the query. Path order puts the
+earliest machines' sessions in the sample and a new session rarely sorts into it, so a field only
+newer sessions carry can stay absent for good — read such keys from `lines` with `json->>'key'`. If
+those 32 files hold no records, building the view fails and points at `lines`. `union_by_name` would
+infer from every file and passed 3 GB on 1304 files before the query ran), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
 and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
 / `pushed_by_user` from the path — the two differ for a pull), and `sessions` (one row per
