@@ -179,6 +179,10 @@ describe("search: embedded DuckDB over the store", () => {
     const c = await openDuckDB(store);
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines WHERE contains(json::VARCHAR, 'NEEDLE-ALPHA')")).getRowObjectsJson()).toEqual([{ n: "1" }]);
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM duckdb_external_file_cache()")).getRowObjectsJson()).toEqual([{ n: "0" }]);
+    // The 0 above means something only if this DuckDB caches reads of objects this small at all
+    await c.run("SET enable_external_file_cache = true");
+    await c.runAndReadAll("SELECT count(*) FROM lines");
+    expect(Number((await c.runAndReadAll("SELECT count(*) AS n FROM duckdb_external_file_cache()")).getRowObjectsJson()[0]!.n)).toBeGreaterThan(0);
   });
 
   test("a search that grows past CCX_SEARCH_MAX_RSS_MB stops with an error instead of running on (#300)", async () => {
