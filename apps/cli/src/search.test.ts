@@ -227,7 +227,7 @@ describe("search: embedded DuckDB over the store", () => {
     const at = (sid: string) => join(root, "ccx", "team=demo", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
     await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
     await Bun.write(at("z-real"), line({ type: "user", message: { content: "hello" } }));
-    await expect(openDuckDB(team, { withTranscripts: true })).rejects.toThrow("hold no records");
+    await expect(openDuckDB(team, { withTranscripts: true })).rejects.toThrow("hold no record keys");
 
     // With records in the sample, the prefix's `team` is no column of the view, and a record's own `user` does not
     // replace the path's user
@@ -247,9 +247,13 @@ describe("search: embedded DuckDB over the store", () => {
     const at = (sid: string) => join(root, "ccx", "pre", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
     await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
 
-    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the transcripts DuckDB samples first (up to 32, in path order) hold no records");
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the transcripts DuckDB samples first (up to 32, in path order) hold no record keys");
     const c = await openDuckDB(store);
     expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM lines")).getRowObjects()[0]).toEqual({ n: 3 });
+
+    // Records with only the keys the view takes from the path leave no column either
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), line({ session_id: "x", user: "y" }))));
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("hold no record keys besides session_id / machine / user");
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {

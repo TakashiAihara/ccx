@@ -133,9 +133,10 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // A record's own session_id / machine / user is not stated: the view drops them for the path's values anyway
       const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
       // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
-      // it would read every later record as NULL
-      if (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON") {
-        throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no records, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
+      // it would read every later record as NULL. Records holding only session_id / machine / user leave no column at
+      // all, and an empty columns={} is a parser error
+      if (own.length === 0 || (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON")) {
+        throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no record keys besides session_id / machine / user, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
       }
       // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
       // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)

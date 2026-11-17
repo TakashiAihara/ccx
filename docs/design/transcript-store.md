@@ -117,7 +117,8 @@ is absent, and a later value that does not fit the sampled type fails the query.
 (`timestamp` too) stay strings; cast them in the query. Path order puts the
 earliest machines' sessions in the sample and a new session rarely sorts into it, so a field only
 newer sessions carry can stay absent for good — read such keys from `lines` with `json->>'key'`. If
-the sampled files hold no records, building the view fails and points at `lines`. `union_by_name` would
+the sampled files hold no record keys (besides session_id / machine / user), building the view fails
+and points at `lines`. `union_by_name` would
 infer from every file and passed 3 GB on 1304 files before the query ran), `lines` (`json` = the raw record — what the text search reads, because the
 structured form renders every absent key as `"x":null` and a search for "null" would hit every row)
 and `history` (`op` / `machine` / `user` / `occurred_at` from the record itself; `pushed_by_machine`
