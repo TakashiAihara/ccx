@@ -1065,6 +1065,7 @@ func TestConfigPathComesFromThePanesDevin(t *testing.T) {
 		{"broken process-info", "not json", "process-info"},
 		{"no devin process", procWith(`["vim","--config","/etc/x.json"]`), "lists no devin process"},
 		{"relative --config with no cwd", `{"result":{"process_info":{"foreground_processes":[{"argv":["devin","--config","d.json"]}]}}}`, "no cwd"},
+		{"the first of several with no cwd", `{"result":{"process_info":{"foreground_processes":[{"argv":["devin","--config","first.json"]},{"argv":["devin","--config","second.json"]}]}}}`, `"first.json"`},
 	} {
 		if _, err := newDevin(&fakeHerdr{proc: tc.proc}).configPath(context.Background(), "w2:p1"); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v", tc.name, err)

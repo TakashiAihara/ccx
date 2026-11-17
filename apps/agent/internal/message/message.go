@@ -207,7 +207,7 @@ func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 				continue
 			}
 			if p.Cwd == "" {
-				relErr = fmt.Errorf("devin in pane %s has a relative --config %q and herdr gave no cwd to resolve it", pane, v)
+				relErr = cmp.Or(relErr, fmt.Errorf("devin in pane %s has a relative --config %q and herdr gave no cwd to resolve it", pane, v))
 			} else {
 				relative = filepath.Join(p.Cwd, v)
 			}
