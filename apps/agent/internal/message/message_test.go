@@ -175,7 +175,10 @@ func (f *fakeHerdr) run(_ context.Context, args ...string) ([]byte, error) {
 		if strings.Join(args[3:], " ") != "--source visible --format ansi" {
 			return nil, errors.New("unexpected read " + strings.Join(args, " "))
 		}
-		return []byte(next(&f.screens)), nil
+		if s := next(&f.screens); s != "ERR" {
+			return []byte(s), nil
+		}
+		return nil, errors.New("herdr agent read: gone")
 	case "agent prompt":
 		f.typed = f.prompt == nil && !f.hold
 		return nil, f.prompt
@@ -988,15 +991,26 @@ func TestAFailedRecountSendsNothing(t *testing.T) {
 	}
 }
 
-// A same-header line pushed out of the read window by the recount does not lower
-// the count, which would let that line pass for this one.
-func TestARecountThatSeesFewerLinesKeepsTheEarlierCount(t *testing.T) {
+
+// A same-header line that left the read window before the recount is not counted,
+// and this message alone in the history after sending is seen as sent.
+func TestALineThatLeftTheWindowBeforeTheRecountDoesNotHideThisOne(t *testing.T) {
 	line := "❭ " + queuedHeader + "\n"
-	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, emptyBox, queuedScreen(t)}, befores: []string{line, "", line}, history: line + line, status: []string{"working"}, hold: true}
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, emptyBox, queuedScreen(t)}, befores: []string{line, ""}, history: line, status: []string{"working"}, hold: true}
 	d := newDevin(f)
 	d.Keymap = enterQueues
 	got, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
 	if err != nil || len(got) != 1 || !strings.Contains(got[0].Detail, "its queue was sent on now") || strings.Join(f.keys, " ") != "ctrl+enter" {
 		t.Fatalf("events = %v, err = %v, keys = %v", got, err, f.keys)
+	}
+}
+
+func TestAFailedScreenReadAfterTheRecountSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, "ERR"}, status: []string{"working"}, hold: true}
+	d := newDevin(f)
+	d.Keymap = enterQueues
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeUnavailable || f.prompted() != nil || !notTyped(err) {
+		t.Fatalf("err = %v", err)
 	}
 }

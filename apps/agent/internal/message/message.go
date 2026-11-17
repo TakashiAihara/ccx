@@ -323,9 +323,10 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 		if err != nil {
 			return connect.NewError(connect.CodeUnavailable, err)
 		}
-		// Lines pushed out of the read since only make it smaller; keep the larger.
-		seen = max(seen, headerLines(string(hist), header))
-		// The box is checked on a screen read after this, close to typing.
+		// The read keeps the last lines only and moves forward, so a line that left
+		// it does not come back to pass for this one: the recount stands as it is.
+		seen = headerLines(string(hist), header)
+		// Read the screen again, so the box check below is close to typing.
 		if screen, err = d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi"); err != nil {
 			return connect.NewError(connect.CodeUnavailable, err)
 		}
