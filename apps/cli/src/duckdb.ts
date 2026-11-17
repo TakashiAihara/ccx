@@ -128,9 +128,9 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
       // absent for good
       const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
-      // hive_partitioning=false: a prefix may carry its own key=value segments, and their columns would make an empty
-      // sample look like it has some. The view's read still adds the hive columns; they win over a record key of the
-      // same name whatever its type (measured 2026-11-17), and COLUMNS drops machine / user / session_id
+      // hive_partitioning=false here and in the view: a prefix may carry its own key=value segments, and their columns
+      // would make an empty sample look like it has some and show up in the view (#171: no view reads hive columns).
+      // A record's own session_id / machine / user is not stated: the view drops them for the path's values anyway
       const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
       // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
       // it would read every later record as NULL
@@ -139,16 +139,21 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       }
       // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
       // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)
-      const asText = (type: string) => type.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[ ])/g, "VARCHAR");
-      const schema = pairs.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
+      // Only outside double-quoted field names: a key may contain the word itself ("delivery DATE format")
+      const asText = (type: string) =>
+        type
+          .split(/("(?:[^"]|"")*")/)
+          .map((part, i) => (i % 2 ? part : part.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[ ])/g, "VARCHAR")))
+          .join("");
+      const schema = own.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
       await c.run(
         // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
-        // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
-        // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
+        // hive_partitioning did. COLUMNS rather than EXCLUDE: EXCLUDE fails on a missing column, and neither the stated
+        // schema nor the read (hive off) carries these three.
         // The path columns stay in hive_partitioning's (alphabetical) order
         `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
            ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
-         FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, ${reader})`,
+         FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, hive_partitioning=false, ${reader})`,
       );
     }
   } catch (e) {
