@@ -1050,6 +1050,9 @@ func TestConfigPathComesFromThePanesDevin(t *testing.T) {
 		{"in the prompt after --", procWith(`["devin","--","--config","/etc/x.json"]`), ""},
 		{"flag without a value", procWith(`["devin","--config"]`), ""},
 		{"a process with no argv", procWith(`[]`, `["devin","--config","/etc/g.json"]`), "/etc/g.json"},
+		{"the binary's absolute path over the launcher's relative one", procWith(`["devin","--config","q.json"]`, `["/opt/devin/bin/devin","--config","/elsewhere/q.json","acp"]`), "/elsewhere/q.json"},
+		{"a relative path with no cwd beside an absolute one", `{"result":{"process_info":{"foreground_processes":[{"argv":["devin","--config","q.json"]},{"argv":["devin","--config","/abs/q.json"]}]}}}`, "/abs/q.json"},
+		{"the first relative path when none is absolute", procWith(`["devin","--config","a.json"]`, `["devin","--config","b.json"]`), "/work/a.json"},
 	} {
 		f := &fakeHerdr{proc: tc.proc}
 		got, err := newDevin(f).configPath(context.Background(), "w2:p1")
