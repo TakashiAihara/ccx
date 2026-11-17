@@ -105,7 +105,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
   // CREATE VIEW は作る時点で glob を解決するので、空の保存先ではここで止まる — 「壊れた」ではなく「まだ無い」と言う
   try {
     // `lines`: 1 行 = 1 レコードの生 JSON。文字列検索はこちらで行う。`transcripts` (構造化) は
-    // 全レコード種別のキーを持つ struct になり、to_json すると無いキーが
+    // 標本に出た全レコード種別のキーを持つ struct になり、to_json すると無いキーが
     // `"x":null` として全行に現れて、"null" や "model" がすべての行に当たる
     await c.run(
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
