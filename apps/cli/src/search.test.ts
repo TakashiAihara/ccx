@@ -211,11 +211,12 @@ describe("search: embedded DuckDB over the store", () => {
 
   test("a date in a non-ISO format reads back as the same string, and the timestamp stays text to cast (#300)", async () => {
     const dir = join(root, "ccx", "pre", "transcripts", "machine=aa-dates", "user=u");
-    await Bun.write(join(dir, "session_id=d1", "transcript.jsonl"), line({ type: "user", timestamp: "2026-09-19T00:00:04Z", input: { due: "17-11-2026", "delivery DATE format": "keep" } }));
+    await Bun.write(join(dir, "session_id=d1", "transcript.jsonl"), line({ type: "user", timestamp: "2026-09-19T00:00:04Z", input: { due: "17-11-2026", "delivery DATE format": "keep", DATE: "named" } }));
     const c = await openDuckDB(store, { withTranscripts: true });
     const types = Object.fromEntries((await c.runAndReadAll("SELECT column_name, column_type FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => [r.column_name, r.column_type]));
     expect(types.timestamp).toBe("VARCHAR");
-    expect(types.input).toBe('STRUCT(due VARCHAR, "delivery DATE format" VARCHAR)');
+    expect(types.input).toBe('STRUCT(due VARCHAR, "delivery DATE format" VARCHAR, DATE VARCHAR)');
+    expect((await c.runAndReadAll(`SELECT input."DATE" AS d FROM transcripts WHERE session_id = 'd1'`)).getRowObjectsJson()).toEqual([{ d: "named" }]);
     const r = await c.runAndReadAll(`SELECT input.due AS due, input."delivery DATE format" AS kept, timestamp::TIMESTAMP::VARCHAR AS at FROM transcripts WHERE session_id = 'd1'`);
     expect(r.getRowObjectsJson()).toEqual([{ due: "17-11-2026", kept: "keep", at: "2026-09-19 00:00:04" }]);
     expect((await c.runAndReadAll("SELECT * FROM transcripts")).getRowObjects()).toHaveLength(4);

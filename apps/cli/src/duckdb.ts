@@ -139,11 +139,12 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
       }
       // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
       // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)
-      // Only outside double-quoted field names: a key may contain the word itself ("delivery DATE format")
+      // Only outside double-quoted field names (a key may contain the word: "delivery DATE format"), and only in type
+      // position: DuckDB leaves a key named DATE unquoted, and a name is followed by a space where a type is not
       const asText = (type: string) =>
         type
           .split(/("(?:[^"]|"")*")/)
-          .map((part, i) => (i % 2 ? part : part.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[ ])/g, "VARCHAR")))
+          .map((part, i) => (i % 2 ? part : part.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[])/g, "VARCHAR")))
           .join("");
       const schema = own.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
       await c.run(
