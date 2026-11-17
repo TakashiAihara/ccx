@@ -169,10 +169,91 @@ describe("search: embedded DuckDB over the store", () => {
     ]);
   });
 
-  test("only a query that names `transcripts` builds it: building it reads every transcript's types (#300)", async () => {
+  test("only a query that names `transcripts` builds it: building it reads files to infer their types (#300)", async () => {
     const c = await openDuckDB(store);
     await expect(c.runAndReadAll("SELECT 1 FROM transcripts")).rejects.toThrow("Table with name transcripts does not exist");
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
+  });
+
+  test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
+    // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample
+    // stands in for "a file the inference read": building the view (which samples) must not touch it.
+    // Each bulk record also carries a key of its own, as rare keys do in real transcripts: on average a key then appears
+    // in under 10% of records, and DuckDB's default inference turns the whole record into one MAP column
+    const at = (m: string, sid: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 40 }, (_, i) => Bun.write(at("m-bulk", `s${String(i).padStart(2, "0")}`), line({ type: "user", [`only${i}`]: i, message: { content: `bulk ${i}`, ...(i >= 30 ? { late: i } : {}) } }))));
+    await Bun.write(at("zz-late", "broken"), "{not json\n");
+    const c = await openDuckDB(store, { withTranscripts: true });
+    const names = (await c.runAndReadAll("SELECT column_name FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => r.column_name);
+    expect(names).toContain("message");
+    expect(names).toContain("type");
+    expect(names).toContain("session_id");
+    // The two host-a transcripts and s00..s29 make the 32 sampled files; s30..s39 come after them
+    expect(names).toContain("only29");
+    expect(names).not.toContain("only30");
+
+    await rm(at("zz-late", "broken"));
+    const r = await c.runAndReadAll("SELECT count(*)::INT AS n, count(only5)::INT AS five FROM transcripts WHERE machine = 'm-bulk'");
+    expect(r.getRowObjects()[0]).toEqual({ n: 40, five: 1 });
+    // SELECT * reads whole records, where an inferred schema rejects the keys the sample lacks (only30.., message.late)
+    const all = await c.runAndReadAll("SELECT * FROM transcripts WHERE machine = 'm-bulk' AND session_id = 's31'");
+    expect(all.getRowObjectsJson()).toHaveLength(1);
+    const late = all.getRowObjectsJson()[0]!;
+    expect(late.message).toEqual({ role: null, content: "bulk 31", model: null, usage: null });
+    expect(late.only29).toBeNull();
+    expect(Object.keys(late)).not.toContain("only31");
+    expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM (SELECT * FROM transcripts WHERE machine = 'm-bulk')")).getRowObjects()[0]).toEqual({ n: 40 });
+
+    // A later value that does not fit the sampled type fails the query, not drops or nulls the record
+    await Bun.write(at("zz-late", "typed"), line({ type: "user", only5: { not: "a number" } }));
+    await expect(c.runAndReadAll("SELECT * FROM transcripts")).rejects.toThrow("JSON transform error");
+  });
+
+  test("a date in a non-ISO format reads back as the same string, and the timestamp stays text to cast (#300)", async () => {
+    const dir = join(root, "ccx", "pre", "transcripts", "machine=aa-dates", "user=u");
+    await Bun.write(join(dir, "session_id=d1", "transcript.jsonl"), line({ type: "user", timestamp: "2026-09-19T00:00:04Z", input: { due: "17-11-2026", "delivery DATE format": "keep", DATE: "named" } }));
+    const c = await openDuckDB(store, { withTranscripts: true });
+    const types = Object.fromEntries((await c.runAndReadAll("SELECT column_name, column_type FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => [r.column_name, r.column_type]));
+    expect(types.timestamp).toBe("VARCHAR");
+    expect(types.input).toBe('STRUCT(due VARCHAR, "delivery DATE format" VARCHAR, DATE VARCHAR)');
+    expect((await c.runAndReadAll(`SELECT input."DATE" AS d FROM transcripts WHERE session_id = 'd1'`)).getRowObjectsJson()).toEqual([{ d: "named" }]);
+    const r = await c.runAndReadAll(`SELECT input.due AS due, input."delivery DATE format" AS kept, timestamp::TIMESTAMP::VARCHAR AS at FROM transcripts WHERE session_id = 'd1'`);
+    expect(r.getRowObjectsJson()).toEqual([{ due: "17-11-2026", kept: "keep", at: "2026-09-19 00:00:04" }]);
+    expect((await c.runAndReadAll("SELECT * FROM transcripts")).getRowObjects()).toHaveLength(4);
+  });
+
+  test("a records-less sample is refused even when the prefix carries its own key=value segment (#300)", async () => {
+    const team: TranscriptStore = { ...store, prefix: "team=demo/" };
+    const at = (sid: string) => join(root, "ccx", "team=demo", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
+    await Bun.write(at("z-real"), line({ type: "user", message: { content: "hello" } }));
+    await expect(openDuckDB(team, { withTranscripts: true })).rejects.toThrow("hold no record keys");
+
+    // With records in the sample, the prefix's `team` is no column of the view, and a record's own `user` does not
+    // replace the path's user
+    await Promise.all(Array.from({ length: 32 }, (_, i) => rm(at(`e${String(i).padStart(2, "0")}`))));
+    await Bun.write(at("a-real"), line({ type: "user", user: { id: 1 }, message: { content: "first" } }));
+    await Bun.write(at("z-real"), line({ type: "user", user: "someone", message: { content: "hello" } }));
+    const c = await openDuckDB(team, { withTranscripts: true });
+    const names = (await c.runAndReadAll("SELECT column_name FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => r.column_name);
+    expect(names).not.toContain("team");
+    expect((await c.runAndReadAll(`SELECT * FROM transcripts ORDER BY session_id`)).getRowObjectsJson().map((r) => [r.session_id, r.user])).toEqual([
+      ["a-real", "u"],
+      ["z-real", "u"],
+    ]);
+  });
+
+  test("a sample of transcripts with no records refuses to build `transcripts` instead of reading every record as NULL (#300)", async () => {
+    const at = (sid: string) => join(root, "ccx", "pre", "transcripts", "machine=aa-empty", "user=u", `session_id=${sid}`, "transcript.jsonl");
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), "")));
+
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("the transcripts DuckDB samples first (up to 32, in path order) hold no record keys");
+    const c = await openDuckDB(store);
+    expect((await c.runAndReadAll("SELECT count(*)::INT AS n FROM lines")).getRowObjects()[0]).toEqual({ n: 3 });
+
+    // Records with only the keys the view takes from the path leave no column either
+    await Promise.all(Array.from({ length: 32 }, (_, i) => Bun.write(at(`e${String(i).padStart(2, "0")}`), line({ session_id: "x", user: "y" }))));
+    await expect(openDuckDB(store, { withTranscripts: true })).rejects.toThrow("hold no record keys besides session_id / machine / user");
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {
