@@ -1046,7 +1046,7 @@ func TestConfigPathComesFromThePanesDevin(t *testing.T) {
 		{"relative to its cwd", procWith(`["devin","--config","cfg/d.json"]`), "/work/cfg/d.json"},
 		{"with =", procWith(`["devin","--config=/etc/e.json"]`), "/etc/e.json"},
 		{"the binary the launcher started", procWith(`["zsh"]`, `["/opt/devin/bin/devin","--config","/etc/f.json","acp"]`), "/etc/f.json"},
-		{"another program's flag", procWith(`["vim","--config","/etc/x.json"]`), ""},
+		{"another program's flag beside devin", procWith(`["vim","--config","/etc/x.json"]`, `["devin"]`), ""},
 		{"in the prompt after --", procWith(`["devin","--","--config","/etc/x.json"]`), ""},
 		{"flag without a value", procWith(`["devin","--config"]`), ""},
 		{"a process with no argv", procWith(`[]`, `["devin","--config","/etc/g.json"]`), "/etc/g.json"},
@@ -1057,8 +1057,18 @@ func TestConfigPathComesFromThePanesDevin(t *testing.T) {
 			t.Errorf("%s: got %q, %v; want %q", tc.name, got, err, tc.want)
 		}
 	}
-	if _, err := newDevin(&fakeHerdr{proc: "not json"}).configPath(context.Background(), "w2:p1"); err == nil || !strings.Contains(err.Error(), "process-info") {
-		t.Errorf("broken process-info: err = %v", err)
+	for _, tc := range []struct{ name, proc, want string }{
+		{"broken process-info", "not json", "process-info"},
+		{"no devin process", procWith(`["vim","--config","/etc/x.json"]`), "lists no devin process"},
+		{"relative --config with no cwd", `{"result":{"process_info":{"foreground_processes":[{"argv":["devin","--config","d.json"]}]}}}`, "no cwd"},
+	} {
+		if _, err := newDevin(&fakeHerdr{proc: tc.proc}).configPath(context.Background(), "w2:p1"); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
+	}
+	// A failed herdr call says which call failed.
+	if _, err := newDevin(&fakeHerdr{procErr: errors.New("herdr pane: exit status 1")}).configPath(context.Background(), "w2:p1"); err == nil || !strings.Contains(err.Error(), "herdr pane process-info: herdr pane") {
+		t.Errorf("failed herdr: err = %v", err)
 	}
 }
 
@@ -1112,5 +1122,17 @@ func TestReadKeymapFromANamedOrTheDefaultFile(t *testing.T) {
 	}
 	if km, err := ReadKeymap(""); err != nil || km != (Keymap{Queues: true, Send: "ctrl+enter"}) {
 		t.Fatalf("default file: %+v, %v", km, err)
+	}
+}
+
+// The keymap is asked of herdr after the screen read; text typed meanwhile into a
+// working Devin's box is seen on a screen read again before typing.
+func TestABoxTypedIntoWhileTheKeymapIsReadSendsNothing(t *testing.T) {
+	f := &fakeHerdr{panes: panesWith("working"), screens: []string{emptyBox, typedBox}, status: []string{"working"}}
+	d := newDevin(f)
+	d.Keymap = func(string) (Keymap, error) { return Keymap{Send: "enter"}, nil }
+	_, err := send(d, req(ccxv1.DeliveryMode_DELIVERY_MODE_URGENT))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "has text in its input box") || f.prompted() != nil {
+		t.Fatalf("err = %v", err)
 	}
 }

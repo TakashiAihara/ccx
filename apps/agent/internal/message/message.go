@@ -153,11 +153,14 @@ func (d *Devin) keymap(ctx context.Context, pane string) (Keymap, error) {
 // configPath is the --config of the Devin running in pane, made absolute against
 // its cwd; "" when it was started without one. herdr lists the pane's foreground
 // processes with argv and cwd (herdr 0.9.5); the devin launcher and the binary it
-// starts both carry the flag.
+// starts both carry the flag. The client's flag is taken as the keymap's: Devin
+// refuses a client whose --config differs from its shared daemon's while that
+// daemon has a busy session (devin 3000.13.4). No devin among them is an error,
+// not "no --config": reading the default file then would be a guess.
 func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 	out, err := d.Herdr(ctx, "pane", "process-info", "--pane", pane)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("herdr pane process-info: %w", err)
 	}
 	var got struct {
 		Result struct {
@@ -172,10 +175,12 @@ func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		return "", fmt.Errorf("herdr pane process-info: %w", err)
 	}
+	found := false
 	for _, p := range got.Result.ProcessInfo.Foreground {
 		if len(p.Argv) == 0 || filepath.Base(p.Argv[0]) != "devin" {
 			continue
 		}
+		found = true
 		args := p.Argv[1:]
 		for i, a := range args {
 			// What follows -- is the first prompt, not flags.
@@ -190,10 +195,16 @@ func (d *Devin) configPath(ctx context.Context, pane string) (string, error) {
 				continue
 			}
 			if !filepath.IsAbs(v) {
+				if p.Cwd == "" {
+					return "", fmt.Errorf("devin in pane %s has a relative --config %q and herdr gave no cwd to resolve it", pane, v)
+				}
 				v = filepath.Join(p.Cwd, v)
 			}
 			return v, nil
 		}
+	}
+	if !found {
+		return "", fmt.Errorf("herdr pane process-info lists no devin process in pane %s", pane)
 	}
 	return "", nil
 }
@@ -384,13 +395,16 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 		// The read keeps the last lines only and moves forward, so a line that left
 		// it does not come back to pass for this one: the recount stands as it is.
 		seen = headerLines(string(hist), header)
-		// Read the screen again, so the box check below is close to typing.
-		if screen, err = d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi"); err != nil {
-			return connect.NewError(connect.CodeUnavailable, err)
-		}
 	}
 	if req.Mode != ccxv1.DeliveryMode_DELIVERY_MODE_URGENT && working && !queues {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s is working; waiting for its turn to end is not built yet, so after-turn is refused (send --mode urgent to have it read at its next break)", req.Target))
+	}
+	if working {
+		// The keymap (and the recount) asked herdr since the screen was read: read
+		// it again, so the box check below is close to typing.
+		if screen, err = d.Herdr(ctx, "agent", "read", p.ID, "--source", "visible", "--format", "ansi"); err != nil {
+			return connect.NewError(connect.CodeUnavailable, err)
+		}
 	}
 	switch inputBox(string(screen)) {
 	case inputMissing:
