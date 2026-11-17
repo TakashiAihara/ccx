@@ -110,23 +110,30 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     await c.run(
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
-    if (opts.withTranscripts) await c.run(
-      // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
-      // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
-      // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
-      // The path columns stay in hive_partitioning's (alphabetical) order.
+    if (opts.withTranscripts) {
       // The schema comes from the first 32 files in listing (path) order, not from every file: on 1304 files, union_by_name
       // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
-      // maximum_sample_files over all files and json_group_structure over `lines`. A key that only later files carry is
-      // left out, and a later value that does not fit the sampled type fails the query (JSON transform error); the sample
-      // shifts as the store grows. Such keys are read from `lines` with ->>. No ignore_errors: it would drop those
-      // records from the result silently
+      // maximum_sample_files over all files and json_group_structure over `lines`.
       // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
       // turn the whole row into one MAP(VARCHAR, JSON) column
-      `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
-         ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
-       FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, ${reader})`,
-    );
+      const sampled = await c.runAndReadAll(
+        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, maximum_object_size=268435456)`,
+      );
+      // The view reads with that schema stated. Inferred, read_json rejects a key the sample lacks once a query reads
+      // the whole record (SELECT *); stated, a key only later files carry is left out, while a later value that does not
+      // fit the sampled type still fails the query (JSON transform error). Such keys are read from `lines` with ->>.
+      // No ignore_errors: it would drop those records from the result silently. The sample shifts as the store grows
+      const schema = sampled.getRowObjects().map((r) => `${q(String(r.column_name))}: ${q(String(r.column_type))}`);
+      await c.run(
+        // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
+        // hive_partitioning did. The auto-added hive columns go too. COLUMNS rather than EXCLUDE: EXCLUDE fails on a
+        // missing column, and whether DuckDB auto-adds the hive ones is its detection, not this code.
+        // The path columns stay in hive_partitioning's (alphabetical) order
+        `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
+           ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
+         FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, ${reader})`,
+      );
+    }
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;

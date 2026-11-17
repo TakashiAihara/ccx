@@ -181,7 +181,7 @@ describe("search: embedded DuckDB over the store", () => {
     // Each bulk record also carries a key of its own, as rare keys do in real transcripts: on average a key then appears
     // in under 10% of records, and DuckDB's default inference turns the whole record into one MAP column
     const at = (m: string, sid: string) => join(root, "ccx", "pre", "transcripts", `machine=${m}`, "user=u", `session_id=${sid}`, "transcript.jsonl");
-    await Promise.all(Array.from({ length: 40 }, (_, i) => Bun.write(at("m-bulk", `s${String(i).padStart(2, "0")}`), line({ type: "user", [`only${i}`]: i, message: { content: `bulk ${i}` } }))));
+    await Promise.all(Array.from({ length: 40 }, (_, i) => Bun.write(at("m-bulk", `s${String(i).padStart(2, "0")}`), line({ type: "user", [`only${i}`]: i, message: { content: `bulk ${i}`, ...(i >= 30 ? { late: i } : {}) } }))));
     await Bun.write(at("zz-late", "broken"), "{not json\n");
     const c = await openDuckDB(store, { withTranscripts: true });
     const names = (await c.runAndReadAll("SELECT column_name FROM (DESCRIBE transcripts)")).getRowObjectsJson().map((r) => r.column_name);
@@ -195,6 +195,9 @@ describe("search: embedded DuckDB over the store", () => {
     await rm(at("zz-late", "broken"));
     const r = await c.runAndReadAll("SELECT count(*)::INT AS n, count(only5)::INT AS five FROM transcripts WHERE machine = 'm-bulk'");
     expect(r.getRowObjects()[0]).toEqual({ n: 40, five: 1 });
+    // SELECT * reads whole records, where an inferred schema rejects the keys the sample lacks (only30.., message.late)
+    const all = await c.runAndReadAll("SELECT * FROM transcripts WHERE machine = 'm-bulk'");
+    expect(all.getRowObjects().length).toBe(40);
   });
 
   test("reading the store keeps none of its bytes in DuckDB's external file cache (#300)", async () => {
