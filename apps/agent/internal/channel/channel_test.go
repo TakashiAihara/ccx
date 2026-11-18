@@ -85,10 +85,13 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 // too, so the rule cannot be keyed to "after your last reply".
 func TestInstructionsPutAnUnansweredTaskNotificationBeforeTheHeartbeat(t *testing.T) {
 	for _, want := range []string{
-		"task notification",
-		"not acted on yet",
+		"failed or stopped",
+		`no reply other than "."`,
+		"even if it arrived in an earlier turn",
 		`heartbeats were answered with "." since`,
-		"instead of the heartbeat, using tools",
+		"answer it instead of the heartbeat",
+		"re-running what it says was lost",
+		"unless the exception below applies",
 	} {
 		if !strings.Contains(Instructions, want) {
 			t.Errorf("instructions lack %q", want)

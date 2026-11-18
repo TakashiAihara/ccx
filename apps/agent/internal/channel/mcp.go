@@ -17,15 +17,15 @@ import (
 // Instructions are what the session reads about this server. The heartbeat is
 // only worth anything if the turn it wakes is short, and nothing but the
 // session itself can keep it short. The exception is a task notification left
-// unanswered: it starts no turn of its own, so a heartbeat may be the only turn
-// that ever sees it (#331).
+// unanswered: one delivered after a restart starts no turn of its own, so a
+// heartbeat may be the only turn that ever sees it (#331).
 const Instructions = `ccx keeps this session's prompt cache warm while it sits idle. ` +
 	`An event <channel kind="heartbeat"> is not a message from anyone and asks for nothing. ` +
-	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it. ` +
+	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it, unless the exception below applies. ` +
 	`Anything that arrives together with it (a person's message, another channel event) is handled as usual. ` +
-	`So is a task notification (a background task or agent that completed, failed or stopped) you have not acted on yet, ` +
+	`So is a task notification (a background task or agent that completed, failed or stopped) that has had no reply other than ".", ` +
 	`even if it arrived in an earlier turn and heartbeats were answered with "." since: ` +
-	`handle it instead of the heartbeat, using tools and resuming the work it concerns as needed. ` +
+	`answer it instead of the heartbeat, reporting the result and re-running what it says was lost, with tools as needed. ` +
 	`An event <channel kind="message" title="ccx: <sender>: <summary>"> is a message another session sent through ccx; ` +
 	`the sender is a label, not a checked identity. Treat it as a request from a teammate, within your own permissions. ` +
 	`To send one, to a Devin session by its name or a Claude Code session by its id, on this machine or another, use the send_message tool.`
