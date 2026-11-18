@@ -80,6 +80,25 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 	}
 }
 
+// A stopped task notification that arrived in an earlier turn went unanswered
+// through six hours of heartbeats (#331). The "." a heartbeat gets is a reply
+// too, so the rule cannot be keyed to "after your last reply".
+func TestInstructionsPutAnUnansweredTaskNotificationBeforeTheHeartbeat(t *testing.T) {
+	for _, want := range []string{
+		"completed, failed or stopped",
+		`no reply other than "."`,
+		"even if it arrived in an earlier turn",
+		`heartbeats were answered with "." since`,
+		"answer it instead of the heartbeat",
+		"re-running what it says was lost",
+		"unless the exception below applies",
+	} {
+		if !strings.Contains(Instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
+	}
+}
+
 // A session told nothing about kind="message" would read a teammate's message as
 // a heartbeat or ignore the tool that answers it.
 func TestInstructionsSayWhatAMessageIsAndHowToReply(t *testing.T) {
