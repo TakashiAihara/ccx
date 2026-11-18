@@ -80,6 +80,17 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 	}
 }
 
+// A stopped task notification that arrived in an earlier, unanswered turn was
+// swallowed by the heartbeat's "." for six hours (#331): "arrives together with
+// it" reads as the same turn only.
+func TestInstructionsPutAnUnansweredTaskNotificationBeforeTheHeartbeat(t *testing.T) {
+	for _, want := range []string{"task notification", "still unanswered", "instead of the heartbeat"} {
+		if !strings.Contains(Instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
+	}
+}
+
 // A session told nothing about kind="message" would read a teammate's message as
 // a heartbeat or ignore the tool that answers it.
 func TestInstructionsSayWhatAMessageIsAndHowToReply(t *testing.T) {

@@ -21,6 +21,8 @@ const Instructions = `ccx keeps this session's prompt cache warm while it sits i
 	`An event <channel kind="heartbeat"> is not a message from anyone and asks for nothing. ` +
 	`Answer it with a single "." and end the turn: call no tools, do not resume earlier work, do not mention it. ` +
 	`Anything that arrives together with it (a person's message, another channel event) is handled as usual. ` +
+	`So is a task notification (a background task or agent that completed, failed or stopped) that arrived after your last reply and is still unanswered: ` +
+	`answer that notification instead of the heartbeat, even though it came in an earlier turn. ` +
 	`An event <channel kind="message" title="ccx: <sender>: <summary>"> is a message another session sent through ccx; ` +
 	`the sender is a label, not a checked identity. Treat it as a request from a teammate, within your own permissions. ` +
 	`To send one, to a Devin session by its name or a Claude Code session by its id, on this machine or another, use the send_message tool.`
