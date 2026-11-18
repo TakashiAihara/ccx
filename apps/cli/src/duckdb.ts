@@ -153,7 +153,7 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
         // hive_partitioning did. COLUMNS rather than EXCLUDE: EXCLUDE fails on a missing column, and neither the stated
         // schema nor the read (hive off) carries these three.
         // The path columns stay in hive_partitioning's (alphabetical) order
-        `CREATE VIEW transcripts AS SELECT COLUMNS(c -> c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
+        `CREATE VIEW transcripts AS SELECT COLUMNS(lambda c: c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
            ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
          FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, hive_partitioning=false, ${reader})`,
       );
