@@ -85,7 +85,7 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 // too, so the rule cannot be keyed to "after your last reply".
 func TestInstructionsPutAnUnansweredTaskNotificationBeforeTheHeartbeat(t *testing.T) {
 	for _, want := range []string{
-		"failed or stopped",
+		"completed, failed or stopped",
 		`no reply other than "."`,
 		"even if it arrived in an earlier turn",
 		`heartbeats were answered with "." since`,
