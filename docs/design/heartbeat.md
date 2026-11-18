@@ -54,7 +54,9 @@ sequenceDiagram
 - serve decides. The clock is the session's own transcript; the settings are ccx's config, so changing
   them needs no session restart. ccx holds the session's state (`scope.md`), and whether a session is
   kept warm is part of it (user decision 2026-09-24).
-- The server's instructions tell the session to answer a heartbeat with `.` and nothing else.
+- The server's instructions tell the session to answer a heartbeat with `.` and nothing else, unless a
+  task notification it has not acted on is in the context: that one is handled instead, even when it
+  arrived in an earlier turn (#331).
 
 ## Settings
 

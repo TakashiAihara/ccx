@@ -80,11 +80,16 @@ func TestNotReadyBeforeInitialized(t *testing.T) {
 	}
 }
 
-// A stopped task notification that arrived in an earlier, unanswered turn was
-// swallowed by the heartbeat's "." for six hours (#331): "arrives together with
-// it" reads as the same turn only.
+// A stopped task notification that arrived in an earlier turn went unanswered
+// through six hours of heartbeats (#331). The "." a heartbeat gets is a reply
+// too, so the rule cannot be keyed to "after your last reply".
 func TestInstructionsPutAnUnansweredTaskNotificationBeforeTheHeartbeat(t *testing.T) {
-	for _, want := range []string{"task notification", "still unanswered", "instead of the heartbeat"} {
+	for _, want := range []string{
+		"task notification",
+		"not acted on yet",
+		`heartbeats were answered with "." since`,
+		"instead of the heartbeat, using tools",
+	} {
 		if !strings.Contains(Instructions, want) {
 			t.Errorf("instructions lack %q", want)
 		}
