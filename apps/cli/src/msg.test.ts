@@ -101,10 +101,10 @@ test("a Devin sender is named from its herdr pane's session, which is what a rep
   expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "claude", value: "x" } }), warn)).toStartWith("dev@");
   expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "devin", value: "" } }), warn)).toStartWith("dev@");
   expect(defaultSender({}, me, () => devin, warn)).toStartWith("dev@");
-  // Only herdr failing to answer is said: a plain shell pane is not a failure.
+  // Only herdr giving no pane (missing, failed, hung, no pane in its answer) is said: a plain shell pane is not that.
   expect(warned).toEqual([]);
   expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => null, warn)).toStartWith("dev@");
-  expect(warned).toEqual(["ccx: could not ask herdr for pane w1:p2's session; sending as user@host, which cannot be replied to (pass --from)"]);
+  expect(warned).toEqual(["ccx: herdr did not say whose session pane w1:p2 is; sending as user@host, which cannot be replied to (pass --from)"]);
 });
 
 test("the Devin session name comes from `herdr pane get` on the env's PATH; a failing, hung or missing herdr falls back", () => {
@@ -134,7 +134,7 @@ test("the Devin session name comes from `herdr pane get` on the env's PATH; a fa
   fake(`exec sleep 20`);
   const t0 = Date.now();
   expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
-  expect(Date.now() - t0).toBeLessThan(8000);
+  expect(Date.now() - t0).toBeLessThan(6000);
 }, 15000);
 
 test("a sender outside Claude Code is user@host", () => {
