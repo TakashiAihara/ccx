@@ -22,7 +22,8 @@ async function listeningPort(stderr: ReadableStream<Uint8Array>): Promise<number
   let text = "";
   for await (const chunk of stderr) {
     text += decoder.decode(chunk, { stream: true });
-    const m = text.match(/listening on http:\/\/\S+:(\d+)/);
+    // 数字の後ろの 1 文字まで待つ。チャンクが数字の途中で切れると桁が欠けるため
+    const m = text.match(/listening on http:\/\/\S+:(\d+)\D/);
     if (m) return Number(m[1]);
   }
   throw new Error(`ccx-center exited before listening: ${text}`);
