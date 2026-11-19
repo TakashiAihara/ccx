@@ -18,13 +18,21 @@ afterEach(() => {
 
 // 起動ログの `listening on http://<host>:<port>` から実際に bind したポートを読む。
 async function listeningPort(stderr: ReadableStream<Uint8Array>): Promise<number> {
+  // for await から return すると stream が cancel され、子の後の stderr 書き込みが EPIPE になりうる。
+  // reader の lock を外すだけにして pipe は開けておく
+  const reader = stderr.getReader();
   const decoder = new TextDecoder();
   let text = "";
-  for await (const chunk of stderr) {
-    text += decoder.decode(chunk, { stream: true });
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
     // 数字の後ろの 1 文字まで待つ。チャンクが数字の途中で切れると桁が欠けるため
     const m = text.match(/listening on http:\/\/\S+:(\d+)\D/);
-    if (m) return Number(m[1]);
+    if (m) {
+      reader.releaseLock();
+      return Number(m[1]);
+    }
   }
   throw new Error(`ccx-center exited before listening: ${text}`);
 }
@@ -40,11 +48,13 @@ test("ccx-center serve は起動したまま応答し続ける", async () => {
       CCX_CENTER_PORT: "0",
       CCX_CENTER_DB: join(dir, "center.db"),
     },
-    stdout: "pipe",
+    stdout: "ignore",
     stderr: "pipe",
   });
 
   const port = await listeningPort(proc.stderr as ReadableStream<Uint8Array>);
+  // 設定値の 0 をそのまま出す壊れ方では、0 に fetch して timeout まで待つことになる
+  expect(port).toBeGreaterThan(0);
   const url = `http://127.0.0.1:${port}/healthz`;
   let ok = false;
   for (let i = 0; i < 60 && !ok; i += 1) {
