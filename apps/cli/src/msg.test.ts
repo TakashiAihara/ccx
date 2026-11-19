@@ -130,12 +130,12 @@ test("the Devin session name comes from `herdr pane get` on the env's PATH; a fa
   fake(`echo 'not json'`);
   expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
 
-  // A herdr that does not answer holds the send for 3 s, not for good.
-  fake(`exec sleep 20`);
+  // A herdr that does not answer holds the send for 3 s, not for good, even one that ignores SIGTERM.
+  fake(`trap '' TERM\nexec sleep 20`);
   const t0 = Date.now();
   expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
   expect(Date.now() - t0).toBeLessThan(6000);
-}, 15000);
+}, 30000);
 
 test("a sender outside Claude Code is user@host", () => {
   expect(defaultSender({})).toMatch(/^[^@\s]+@[^@\s]+$/);

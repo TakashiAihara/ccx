@@ -56,7 +56,7 @@ function herdrPane(id: string, path: string): unknown {
   const herdr = Bun.which("herdr", { PATH: path });
   if (!herdr) return null;
   try {
-    const p = Bun.spawnSync([herdr, "pane", "get", id], { stdout: "pipe", stderr: "ignore", timeout: 3000 });
+    const p = Bun.spawnSync([herdr, "pane", "get", id], { stdout: "pipe", stderr: "ignore", timeout: 3000, killSignal: "SIGKILL" });
     return p.exitCode === 0 ? (JSON.parse(p.stdout.toString()) as { result?: { pane?: unknown } }).result?.pane ?? null : null;
   } catch {
     return null;
