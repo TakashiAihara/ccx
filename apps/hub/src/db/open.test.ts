@@ -73,3 +73,13 @@ test("他プロセスがロックを握っていても、待って開ける", as
     await holder.exited;
   }
 });
+
+test("session ごとの宣言状態は producer つきの index で引く (#307)", () => {
+  const db = openDb(":memory:");
+  // store.ts の latestStates と同じ形。index が無いと session の event を全部たどって行本体を読む
+  const plan = db.$client
+    .query("EXPLAIN QUERY PLAN SELECT rowid, payload FROM events WHERE producer = ? AND (machine, os_user, session_id) IN ((?, ?, ?), (?, ?, ?))")
+    .all(2, "m", "u", "s", "m", "u", "t") as { detail: string }[];
+  expect(plan.map((p) => p.detail).join("\n")).toContain("USING INDEX events_producer_session_idx (producer=? AND machine=? AND os_user=? AND session_id=?)");
+  db.$client.close();
+});

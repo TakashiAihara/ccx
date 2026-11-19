@@ -176,6 +176,9 @@ export const ddl = [
   sql`CREATE INDEX IF NOT EXISTS events_machine_time_idx ON events (machine, os_user, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_hook_idx ON events (hook_event_name, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_time_idx ON events (received_at_ms)`,
+  // ListSessions が session ごとに宣言状態の event だけを引く (store.ts の latestStates)。producer が先頭に無いと
+  // events_session_idx で session の hook event を全部たどって行本体を読み、2,000 session で 1 回 2 GB 読んだ (#307)
+  sql`CREATE INDEX IF NOT EXISTS events_producer_session_idx ON events (producer, machine, os_user, session_id)`,
   sql`
     CREATE TABLE IF NOT EXISTS agent_running (
       machine TEXT NOT NULL,
