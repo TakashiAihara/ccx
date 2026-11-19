@@ -134,6 +134,13 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         .returning({ id: events.eventId })
         .all();
       accepted += inserted.length;
+      // RETURNING の順は保証されないので、保存した順 (バッチの並び) で集計する。同じ event_id が 2 つあれば
+      // 保存されるのは先の行なので、集計も先の行で取る
+      const fresh = new Set(inserted.map((x) => x.id));
+      for (const r of rows.slice(i, i + CHUNK)) {
+        if (!fresh.delete(r.eventId)) continue;
+        if (r.producer === Producer.CLAUDE_CODE_HOOK && r.sessionId !== "") summarize(tx, r);
+      }
     }
     // 同じ (machine, user) が同じバッチに 2 つあれば、後のものが残る
     for (const l of lists) {
@@ -238,13 +245,32 @@ export type ListSessionsFilter = {
 };
 
 /**
- * session を event から導く。session テーブルを持たないので、パーサを直せば
- * 一覧もその場で直る。
- *
- * 各 session の「最後に観測した値」(cwd / transcript_path / last_hook) は
- * ROW_NUMBER で最後の 1 行を選んで取る。SQLite には「MIN/MAX と同じ行の裸の列が
- * 取れる」という方言があるが、MIN と MAX を同時に使うと、どちらの行が選ばれるかは
- * 決まらない。方言に寄りかからずに書く。
+ * 新しく入った hook の event 1 件を session_summary に足す (#307)。届く順は時刻順と限らない (spool の再送) ので、
+ * cwd / transcript_path / last_hook は (received_at_ms, seq) が今までより新しいときだけ置き換える。
+ * ON CONFLICT の SET の右辺は全部更新前の行の値で評価される。
+ */
+function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sessionId: string; receivedAtMs: number; seq: number; hookEventName: string; cwd: string; transcriptPath: string }): void {
+  const ended = r.hookEventName === "SessionEnd" ? r.receivedAtMs : null;
+  const newer = sql`(excluded.last_seen_ms, excluded.last_seq) > (last_seen_ms, last_seq)`;
+  tx.run(sql`
+    INSERT INTO session_summary (machine, os_user, session_id, first_seen_ms, last_seen_ms, last_seq, ended_at_ms, event_count, cwd, transcript_path, last_hook)
+    VALUES (${r.machine}, ${r.user}, ${r.sessionId}, ${r.receivedAtMs}, ${r.receivedAtMs}, ${r.seq}, ${ended}, 1, ${r.cwd}, ${r.transcriptPath}, ${r.hookEventName})
+    ON CONFLICT (machine, os_user, session_id) DO UPDATE SET
+      first_seen_ms = min(first_seen_ms, excluded.first_seen_ms),
+      event_count = event_count + 1,
+      ended_at_ms = max(coalesce(ended_at_ms, excluded.ended_at_ms), coalesce(excluded.ended_at_ms, ended_at_ms)),
+      cwd = CASE WHEN ${newer} THEN excluded.cwd ELSE cwd END,
+      transcript_path = CASE WHEN ${newer} THEN excluded.transcript_path ELSE transcript_path END,
+      last_hook = CASE WHEN ${newer} THEN excluded.last_hook ELSE last_hook END,
+      last_seq = CASE WHEN ${newer} THEN excluded.last_seq ELSE last_seq END,
+      last_seen_ms = max(last_seen_ms, excluded.last_seen_ms)
+  `);
+}
+
+/**
+ * session を session_summary (ingest が events と同じトランザクションで更新する写し) から読む (#307)。
+ * events を集計しないので件数に依らず軽い。session_summary を DROP して起動し直すと events の派生列から
+ * 作り直る (db/open.ts)。payload は読み直さないので、パーサを直したときは先に events の派生列を埋め直す。
  *
  * session の統計 (first / last seen、件数、last hook) は hook の event (CLAUDE_CODE_HOOK)
  * だけから作る。宣言状態 (CCX_SESSION_STATE) は混ぜず、一覧に載った session ごとに最新の
@@ -257,12 +283,10 @@ export type ListSessionsFilter = {
  * ではない。件数も last_seen も動かさない。
  */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
-  const where: SQL[] = [sql`session_id != ''`, sql`producer = ${Producer.CLAUDE_CODE_HOOK}`];
+  const where: SQL[] = [sql`1`];
   if (f.machine) where.push(sql`machine = ${f.machine}`);
   if (f.user) where.push(sql`os_user = ${f.user}`);
-
-  // 外側の rn = 1 に続けるので AND。ここを WHERE にすると SQL が二重になる。
-  const activeOnly = f.activeOnly ? sql`AND ended_at_ms IS NULL` : sql``;
+  if (f.activeOnly) where.push(sql`ended_at_ms IS NULL`);
 
   // stoppedOnly を絞るには宣言状態 (下のクエリ) が要る。SQL 側で limit を効かせると、
   // 開かない session が枠を占めたまま「候補が無い」ことになるので、このときだけ limit
@@ -283,23 +307,8 @@ export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
   }>(sql`
     SELECT machine, os_user, session_id, first_seen_ms, last_seen_ms, ended_at_ms,
            cwd, transcript_path, last_hook, event_count
-    FROM (
-      SELECT
-        machine, os_user, session_id, cwd, transcript_path,
-        hook_event_name AS last_hook,
-        MIN(received_at_ms) OVER w AS first_seen_ms,
-        MAX(received_at_ms) OVER w AS last_seen_ms,
-        COUNT(*) OVER w AS event_count,
-        MAX(CASE WHEN hook_event_name = 'SessionEnd' THEN received_at_ms END) OVER w AS ended_at_ms,
-        ROW_NUMBER() OVER (
-          PARTITION BY machine, os_user, session_id
-          ORDER BY received_at_ms DESC, seq DESC
-        ) AS rn
-      FROM events
-      WHERE ${sql.join(where, sql` AND `)}
-      WINDOW w AS (PARTITION BY machine, os_user, session_id)
-    )
-    WHERE rn = 1 ${activeOnly}
+    FROM session_summary
+    WHERE ${sql.join(where, sql` AND `)}
     ORDER BY last_seen_ms DESC
     ${limit}
   `);

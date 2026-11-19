@@ -9,9 +9,8 @@ import { blob, check, index, integer, primaryKey, sqliteTable, text } from "driz
  * 「導出をやり直せる」ことがこの設計の核だから (ingest.proto)。行が 1 つなら、
  * パーサを直したあとに全行を読み直して埋め直せる。
  *
- * session は行として持たない。event から GROUP BY で導く。session テーブルを
- * 別に持つと、それは 2 つ目の真実源になり、raw と食い違ったときにどちらが正か
- * 言えなくなる。件数が効いてくるまではこの形でよい。
+ * session の真実源も events。一覧用の session_summary は events から作り直せる写しで、
+ * 食い違ったら events が正 (#307 で件数が効いてきたので写しを持った)。
  */
 export const events = sqliteTable(
   "events",
@@ -51,7 +50,7 @@ export const events = sqliteTable(
     transcriptPath: text("transcript_path").notNull().default(""),
   },
   (t) => [
-    // session の一覧と 1 session の履歴。ListSessions の GROUP BY もこれに乗る。
+    // 1 session の履歴と、宣言状態の最新 1 件 (latestStates)。
     index("events_session_idx").on(t.machine, t.user, t.sessionId, t.receivedAtMs),
     // 「machine Y で T 以降に何が起きたか」。
     index("events_machine_time_idx").on(t.machine, t.user, t.receivedAtMs),
@@ -230,6 +229,27 @@ export const ddl = [
       claim_token TEXT NOT NULL DEFAULT ''
     )
   `,
+  // hook の event (Producer.CLAUDE_CODE_HOOK) から導いた session ごとの集計で、ListSessions はこれだけを読む (#307)。events を毎回
+  // window 集計すると 80 万行 (3 GB) で 1 回 20〜40 秒かかり、bun:sqlite は同期なので center の全リクエストが止まった。
+  // ingest が同じトランザクションで更新し (store.ts の summarize)、表が無ければ起動時に events から作る (open.ts)。
+  // last_seq は last_seen_ms が同じ event どうしで、cwd / transcript_path / last_hook をどれから取るかを決める
+  sql`
+    CREATE TABLE IF NOT EXISTS session_summary (
+      machine TEXT NOT NULL,
+      os_user TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      first_seen_ms INTEGER NOT NULL,
+      last_seen_ms INTEGER NOT NULL,
+      last_seq INTEGER NOT NULL,
+      ended_at_ms INTEGER,
+      event_count INTEGER NOT NULL,
+      cwd TEXT NOT NULL,
+      transcript_path TEXT NOT NULL,
+      last_hook TEXT NOT NULL,
+      PRIMARY KEY (machine, os_user, session_id)
+    )
+  `,
+  sql`CREATE INDEX IF NOT EXISTS session_summary_last_seen_idx ON session_summary (last_seen_ms)`,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_pending_idx ON relay_messages (machine, os_user, claimed_at_ms, put_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_put_at_idx ON relay_messages (put_at_ms)`,
   sql`
@@ -287,4 +307,3 @@ export const relayReceivers = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.machine, t.user] })],
 );
-
