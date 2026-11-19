@@ -49,11 +49,38 @@ export function defaultApiSocketPath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 /**
- * The name in the receiver's line `ccx: <sender>: <summary>`. A label, not an identity check. A Claude Code
- * sender is its whole session id, so the receiver can send its answer back to it as the target.
+ * The pane herdr runs the caller in, as `herdr pane get` prints it (`result.pane`); null outside herdr or when
+ * herdr does not answer within 3 s.
  */
-export function defaultSender(env: NodeJS.ProcessEnv = process.env, info: () => { username: string } = userInfo): string {
+function herdrPane(id: string): unknown {
+  // Looked up on the PATH of now: spawning by name uses the PATH Bun started with.
+  const herdr = Bun.which("herdr", { PATH: process.env.PATH ?? "" });
+  if (!herdr) return null;
+  try {
+    const p = Bun.spawnSync([herdr, "pane", "get", id], { stdout: "pipe", stderr: "ignore", timeout: 3000 });
+    return p.exitCode === 0 ? (JSON.parse(p.stdout.toString()) as { result?: { pane?: unknown } }).result?.pane ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The name in the receiver's line `ccx: <sender>: <summary>`. A label, not an identity check. A Claude Code
+ * sender is its whole session id, and a Devin sender its session name (#334): both are what the receiver
+ * sends its answer back to as the target. Devin puts no session id in the environment, so its name is the
+ * herdr pane's agent_session, the same value ccx-agent delivers to.
+ */
+export function defaultSender(
+  env: NodeJS.ProcessEnv = process.env,
+  info: () => { username: string } = userInfo,
+  pane: (id: string) => unknown = herdrPane,
+): string {
   if (env.CLAUDE_CODE_SESSION_ID) return env.CLAUDE_CODE_SESSION_ID;
+  if (env.HERDR_PANE_ID) {
+    const p = pane(env.HERDR_PANE_ID) as { agent?: unknown; agent_session?: { agent?: unknown; value?: unknown } } | null;
+    const name = p?.agent === "devin" && p.agent_session?.agent === "devin" ? p.agent_session.value : undefined;
+    if (typeof name === "string" && name) return name;
+  }
   let user: string;
   try {
     user = info().username;
@@ -152,7 +179,7 @@ export function registerMsg(program: Command): void {
     .argument("<body...>", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
-    .option("--from <name>", "the sender name shown to the receiver (default: claude-<session id prefix>, else user@host)")
+    .option("--from <name>", "the sender name shown to the receiver, and what it replies to (default: the Claude Code session id, or Devin's session name in a herdr pane, else user@host)")
     .option("-m, --machine <name>", "have that machine's ccx-agent deliver it, through the center (default: here)")
     .option("-u, --user <name>", "have that user's ccx-agent deliver it, through the center (default: this agent's user)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())

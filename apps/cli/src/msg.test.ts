@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
 import { createClient, createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,51 @@ test("only a failure marked not typed, or an unreachable agent, is called not se
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
   expect(failurePrefix(down)).toBe("not sent");
+});
+
+test("a Devin sender is named from its herdr pane's session, which is what a reply is sent to (#334)", () => {
+  const me = () => ({ username: "dev" });
+  const devin = { agent: "devin", agent_session: { agent: "devin", kind: "id", source: "herdr:devin", value: "copper-python" } };
+  const asked: string[] = [];
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, (id) => (asked.push(id), devin))).toBe("copper-python");
+  expect(asked).toEqual(["w1:p2"]);
+
+  // Claude Code goes first; another agent's pane, a pane with no session, or no answer from herdr falls back to user@host.
+  expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "c1", HERDR_PANE_ID: "w1:p2" }, me, () => devin)).toBe("c1");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "claude", agent_session: { agent: "claude", value: "x" } }))).toStartWith("dev@");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "claude", value: "x" } }))).toStartWith("dev@");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "devin", value: "" } }))).toStartWith("dev@");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => null)).toStartWith("dev@");
+  expect(defaultSender({}, me, () => devin)).toStartWith("dev@");
+});
+
+test("the Devin session name comes from `herdr pane get` on the PATH of now; a failing or missing herdr falls back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccx-herdr-"));
+  const path = process.env.PATH;
+  cleanups.push(() => {
+    process.env.PATH = path;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const me = () => ({ username: "dev" });
+  const fake = (script: string) => {
+    writeFileSync(join(dir, "herdr"), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(dir, "herdr"), 0o755);
+  };
+  process.env.PATH = dir;
+
+  fake(`[ "$1 $2 $3" = "pane get w1:p2" ] || exit 9\necho '{"id":"x","result":{"type":"pane","pane":{"agent":"devin","agent_session":{"agent":"devin","value":"copper-python"}}}}'`);
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me)).toBe("copper-python");
+  expect(defaultSender({ HERDR_PANE_ID: "w9:p9" }, me)).toStartWith("dev@");
+
+  // An answer from a herdr that failed is not taken, even if it reads as a pane.
+  fake(`echo '{"result":{"pane":{"agent":"devin","agent_session":{"agent":"devin","value":"copper-python"}}}}'; exit 1`);
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me)).toStartWith("dev@");
+
+  fake(`echo 'not json'`);
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me)).toStartWith("dev@");
+
+  rmSync(join(dir, "herdr"));
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me)).toStartWith("dev@");
 });
 
 test("a sender outside Claude Code is user@host", () => {
