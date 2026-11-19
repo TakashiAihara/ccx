@@ -233,6 +233,19 @@ describe("listSessions", () => {
     });
   });
 
+  test("seq は最後の event のもので比べる。前の event の seq が大きくても引きずらない", () => {
+    ingest(db, [ev({ receivedAtMs: 100, seq: 9, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/t100" } })]);
+    ingest(db, [ev({ receivedAtMs: 300, seq: 7, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq7" } })]);
+    ingest(db, [ev({ receivedAtMs: 300, seq: 8, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq8" } })]);
+    expect(listSessions(db, { limit: 1 })[0]!.cwd).toBe("/seq8");
+  });
+
+  test("SessionEnd が古い順に届いても ended_at は最も遅いもの", () => {
+    ingest(db, [ev({ receivedAtMs: 150, payload: { session_id: "s", hook_event_name: "SessionEnd" } })]);
+    ingest(db, [ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "SessionEnd" } })]);
+    expect(listSessions(db, { limit: 1 })[0]!.endedAtMs).toBe(200);
+  });
+
   test("received_at が同じなら seq の大きい event の値が載る", () => {
     ingest(db, [ev({ receivedAtMs: 100, seq: 7, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq7" } })]);
     ingest(db, [ev({ receivedAtMs: 100, seq: 9, payload: { session_id: "s", hook_event_name: "Notification", cwd: "/seq9" } })]);
@@ -258,6 +271,10 @@ describe("listSessions", () => {
         ev({ receivedAtMs: 200, seq: 5, payload: { session_id: "s", hook_event_name: "SessionEnd", cwd: "/end0" } }),
         ev({ machine: "m2", receivedAtMs: 220, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/m2" } }),
         ev({ receivedAtMs: 210, payload: { session_id: "t", hook_event_name: "Stop" } }),
+        // received_at が同じで seq だけ違う組。seq の大きい方
+        ev({ user: "other", receivedAtMs: 215, seq: 3, payload: { session_id: "t", hook_event_name: "Stop", cwd: "/seq3" } }),
+        ev({ user: "other", receivedAtMs: 215, seq: 6, payload: { session_id: "t", hook_event_name: "Stop", cwd: "/seq6" } }),
+        ev({ user: "other", receivedAtMs: 215, seq: 4, payload: { session_id: "t", hook_event_name: "Stop", cwd: "/seq4" } }),
         // 完全に同じ (received_at, seq) は先に入った方
         ev({ receivedAtMs: 205, seq: 4, payload: { session_id: "tie", hook_event_name: "Stop", cwd: "/first" } }),
         ev({ receivedAtMs: 205, seq: 4, payload: { session_id: "tie", hook_event_name: "Notification", cwd: "/second" } }),
@@ -265,9 +282,10 @@ describe("listSessions", () => {
         ev({ producer: 2, receivedAtMs: 998, payload: { session_id: "u", hook_event_name: "Stop" } }),
       ]);
       const before = listSessions(a, { limit: 10, nowMs: 0 });
-      expect(before.map((s) => `${s.machine}/${s.sessionId}`)).toEqual(["m1/s", "m2/s", "m1/t", "m1/tie"]);
+      expect(before.map((s) => `${s.machine}/${s.user}/${s.sessionId}`)).toEqual(["m1/dev/s", "m2/dev/s", "m1/other/t", "m1/dev/t", "m1/dev/tie"]);
+      expect(before[2]).toMatchObject({ cwd: "/seq6", eventCount: 3 });
       expect(before[0]).toMatchObject({ firstSeenMs: 100, lastSeenMs: 300, endedAtMs: 250, eventCount: 4, cwd: "/c", transcriptPath: "/t/c", lastHook: "Stop" });
-      expect(before[3]).toMatchObject({ cwd: "/first", lastHook: "Stop" });
+      expect(before[4]).toMatchObject({ cwd: "/first", lastHook: "Stop", eventCount: 2 });
       a.$client.exec("DROP TABLE session_summary");
       a.$client.close();
 
@@ -276,11 +294,14 @@ describe("listSessions", () => {
       // 作り直した行の last_seq も効く。同じ received_at で seq の小さい event は値を動かさない
       ingest(b, [ev({ receivedAtMs: 300, seq: 3, payload: { session_id: "s", hook_event_name: "Notification", cwd: "/older" } })]);
       expect(listSessions(b, { limit: 1, nowMs: 0 })[0]).toMatchObject({ cwd: "/c", eventCount: 5 });
+      // 作り直した last_seq は最後の event の 7 (最大の 9 ではない)。8 なら置き換わる
+      ingest(b, [ev({ receivedAtMs: 300, seq: 8, payload: { session_id: "s", hook_event_name: "Notification", cwd: "/seq8" } })]);
+      expect(listSessions(b, { limit: 1, nowMs: 0 })[0]).toMatchObject({ cwd: "/seq8", eventCount: 6 });
       b.$client.close();
 
-      // 在る表は空でも作り直さない (作り直すと PK が重なって起動が落ちる / hook の無い DB で毎回全件を読む)
+      // 在る表は空でも作り直さない。空かどうかで決めると、hook の event が無い DB で起動のたびに全件を読む
       const c = openDb(path);
-      expect(listSessions(c, { limit: 1, nowMs: 0 })[0]).toMatchObject({ cwd: "/c", eventCount: 5 });
+      expect(listSessions(c, { limit: 1, nowMs: 0 })[0]).toMatchObject({ cwd: "/seq8", eventCount: 6 });
       c.$client.exec("DELETE FROM session_summary");
       c.$client.close();
       const d = openDb(path);
