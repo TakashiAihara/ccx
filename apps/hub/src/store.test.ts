@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openDb, type Db } from "./db/open.ts";
@@ -213,6 +215,63 @@ describe("listSessions", () => {
     ]);
     expect(listSessions(db, { limit: 10 }).map((s) => s.sessionId)).toEqual(["new", "mid", "old"]);
     expect(listSessions(db, { limit: 1 }).map((s) => s.sessionId)).toEqual(["new"]);
+  });
+
+  test("別のバッチで古い event が後から届いても、最後に観測した値と集計は変わらない (#307)", () => {
+    ingest(db, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/new", transcript_path: "/t/new" } })]);
+    ingest(db, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "SessionStart", cwd: "/old", transcript_path: "/t/old" } })]);
+    ingest(db, [ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "SessionEnd", cwd: "/mid" } })]);
+    ingest(db, [ev({ receivedAtMs: 150, payload: { session_id: "s", hook_event_name: "SessionEnd", cwd: "/early" } })]);
+    expect(listSessions(db, { limit: 10 })[0]).toMatchObject({
+      firstSeenMs: 100,
+      lastSeenMs: 300,
+      eventCount: 4,
+      endedAtMs: 200,
+      cwd: "/new",
+      transcriptPath: "/t/new",
+      lastHook: "Stop",
+    });
+  });
+
+  test("received_at が同じなら seq の大きい event の値が載る", () => {
+    ingest(db, [ev({ receivedAtMs: 100, seq: 7, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq7" } })]);
+    ingest(db, [ev({ receivedAtMs: 100, seq: 9, payload: { session_id: "s", hook_event_name: "Notification", cwd: "/seq9" } })]);
+    ingest(db, [ev({ receivedAtMs: 100, seq: 8, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq8" } })]);
+    expect(listSessions(db, { limit: 10 })[0]).toMatchObject({ cwd: "/seq9", lastHook: "Notification", eventCount: 3 });
+  });
+
+  test("hook 以外の producer の event は集計に入らない", () => {
+    ingest(db, [ev({ producer: 2, payload: { session_id: "s", hook_event_name: "Stop" } })]);
+    expect(listSessions(db, { limit: 10 })).toHaveLength(0);
+  });
+
+  test("集計表が空なら、開くときに events から作り直す (#307)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-summary-"));
+    try {
+      const path = join(dir, "center.db");
+      const a = openDb(path);
+      ingest(a, [
+        ev({ receivedAtMs: 100, seq: 1, payload: { session_id: "s", hook_event_name: "SessionStart", cwd: "/a" } }),
+        ev({ receivedAtMs: 300, seq: 2, payload: { session_id: "s", hook_event_name: "SessionEnd", cwd: "/b" } }),
+        ev({ receivedAtMs: 300, seq: 3, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } }),
+        ev({ receivedAtMs: 200, payload: { session_id: "t", hook_event_name: "Stop" } }),
+        ev({ producer: 2, payload: { session_id: "u", hook_event_name: "Stop" } }),
+      ]);
+      const before = listSessions(a, { limit: 10, nowMs: 0 });
+      a.$client.exec("DELETE FROM session_summary");
+      expect(listSessions(a, { limit: 10, nowMs: 0 })).toHaveLength(0);
+      a.$client.close();
+
+      const b = openDb(path);
+      try {
+        expect(before.map((s) => s.sessionId)).toEqual(["s", "t"]);
+        expect(listSessions(b, { limit: 10, nowMs: 0 })).toEqual(before);
+      } finally {
+        b.$client.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("machine と user で絞れる", () => {

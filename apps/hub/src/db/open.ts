@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
+import { sql } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
 import * as schema from "./schema.ts";
 
@@ -32,5 +35,31 @@ export function openDb(path: string): Db {
 
   const db = drizzle(sqlite, { schema }) as Db;
   for (const stmt of schema.ddl) db.run(stmt);
+  if (!db.$client.query("SELECT 1 FROM session_summary LIMIT 1").get()) buildSessionSummary(db);
   return db;
+}
+
+/**
+ * session_summary が空なら events から一度だけ作る (#307)。表を足す前からある DB と、表を DROP して作り直すときの経路。
+ * events を全部読むので大きい DB では数十秒かかり、その間 center は起動しない。以後は ingest が足していく。
+ */
+function buildSessionSummary(db: Db): void {
+  db.transaction((tx) =>
+    tx.run(sql`
+      INSERT INTO session_summary (machine, os_user, session_id, first_seen_ms, last_seen_ms, last_seq, ended_at_ms, event_count, cwd, transcript_path, last_hook)
+      SELECT machine, os_user, session_id, first_seen_ms, last_seen_ms, seq, ended_at_ms, event_count, cwd, transcript_path, hook_event_name
+      FROM (
+        SELECT machine, os_user, session_id, seq, cwd, transcript_path, hook_event_name,
+          MIN(received_at_ms) OVER w AS first_seen_ms,
+          MAX(received_at_ms) OVER w AS last_seen_ms,
+          COUNT(*) OVER w AS event_count,
+          MAX(CASE WHEN hook_event_name = 'SessionEnd' THEN received_at_ms END) OVER w AS ended_at_ms,
+          ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC) AS rn
+        FROM events
+        WHERE session_id != '' AND producer = ${Producer.CLAUDE_CODE_HOOK}
+        WINDOW w AS (PARTITION BY machine, os_user, session_id)
+      )
+      WHERE rn = 1
+    `),
+  );
 }
