@@ -50,8 +50,10 @@ export const events = sqliteTable(
     transcriptPath: text("transcript_path").notNull().default(""),
   },
   (t) => [
-    // 1 session の履歴と、宣言状態の最新 1 件 (latestStates)。
+    // 1 session の履歴。
     index("events_session_idx").on(t.machine, t.user, t.sessionId, t.receivedAtMs),
+    // session ごとの宣言状態 (latestStates)。理由は ddl の同じ行
+    index("events_producer_session_idx").on(t.producer, t.machine, t.user, t.sessionId),
     // 「machine Y で T 以降に何が起きたか」。
     index("events_machine_time_idx").on(t.machine, t.user, t.receivedAtMs),
     // hook 種別での絞り込み。SessionEnd の有無を引くのもここ。
@@ -176,8 +178,9 @@ export const ddl = [
   sql`CREATE INDEX IF NOT EXISTS events_machine_time_idx ON events (machine, os_user, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_hook_idx ON events (hook_event_name, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_time_idx ON events (received_at_ms)`,
-  // ListSessions が session ごとに宣言状態の event だけを引く (store.ts の latestStates)。producer が先頭に無いと
-  // events_session_idx で session の hook event を全部たどって行本体を読み、2,000 session で 1 回 2 GB 読んだ (#307)
+  // ListSessions が session ごとに宣言状態の event だけを引く (store.ts の latestStates)。producer を含む index が無いと
+  // events_session_idx で session の hook event を全部たどり、producer を見るために行本体を読む。stoppedOnly (全 session、
+  // 約 2,000) で 1 回 2.2 GB 読んでいた (#307)
   sql`CREATE INDEX IF NOT EXISTS events_producer_session_idx ON events (producer, machine, os_user, session_id)`,
   sql`
     CREATE TABLE IF NOT EXISTS agent_running (
