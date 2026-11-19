@@ -34,18 +34,22 @@ export function openDb(path: string): Db {
   sqlite.exec("PRAGMA foreign_keys = ON");
 
   const db = drizzle(sqlite, { schema }) as Db;
-  for (const stmt of schema.ddl) db.run(stmt);
-  if (!db.$client.query("SELECT 1 FROM session_summary LIMIT 1").get()) buildSessionSummary(db);
+  // 空かどうかではなく表が在ったかで決める。hook の event が 1 件も無い DB で起動のたびに全件を読み直さないため
+  const hadSummary = sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summary'").get() !== null;
+  db.transaction((tx) => {
+    for (const stmt of schema.ddl) tx.run(stmt);
+    if (!hadSummary) buildSessionSummary(tx);
+  });
   return db;
 }
 
 /**
- * session_summary が空なら events から一度だけ作る (#307)。表を足す前からある DB と、表を DROP して作り直すときの経路。
+ * session_summary を events から作る (#307)。表を足す前からある DB と、表を DROP して作り直すときの経路。
  * events を全部読むので大きい DB では数十秒かかり、その間 center は起動しない。以後は ingest が足していく。
+ * 完全に同じ (received_at_ms, seq) の event どうしは先に入った方 (rowid の小さい方) を取り、ingest の summarize と揃える。
  */
-function buildSessionSummary(db: Db): void {
-  db.transaction((tx) =>
-    tx.run(sql`
+function buildSessionSummary(tx: Pick<Db, "run">): void {
+  tx.run(sql`
       INSERT INTO session_summary (machine, os_user, session_id, first_seen_ms, last_seen_ms, last_seq, ended_at_ms, event_count, cwd, transcript_path, last_hook)
       SELECT machine, os_user, session_id, first_seen_ms, last_seen_ms, seq, ended_at_ms, event_count, cwd, transcript_path, hook_event_name
       FROM (
@@ -54,12 +58,11 @@ function buildSessionSummary(db: Db): void {
           MAX(received_at_ms) OVER w AS last_seen_ms,
           COUNT(*) OVER w AS event_count,
           MAX(CASE WHEN hook_event_name = 'SessionEnd' THEN received_at_ms END) OVER w AS ended_at_ms,
-          ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC) AS rn
+          ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC, rowid ASC) AS rn
         FROM events
         WHERE session_id != '' AND producer = ${Producer.CLAUDE_CODE_HOOK}
         WINDOW w AS (PARTITION BY machine, os_user, session_id)
       )
       WHERE rn = 1
-    `),
-  );
+  `);
 }

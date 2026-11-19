@@ -124,7 +124,9 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
       };
     });
 
-  const byId = new Map(rows.map((r) => [r.eventId, r]));
+  // 同じ event_id が同じバッチに 2 つあれば SQLite が保存するのは先の行なので、集計も先の行で取る
+  const byId = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (!byId.has(r.eventId)) byId.set(r.eventId, r);
 
   return db.transaction((tx) => {
     let accepted = 0;
@@ -244,21 +246,6 @@ export type ListSessionsFilter = {
 };
 
 /**
- * session を session_summary (ingest が events と同じトランザクションで更新する写し) から読む (#307)。
- * events を集計しないので件数に依らず軽い。パーサを直したら session_summary を DROP して起動し直すと
- * events から作り直る (db/open.ts)。
- *
- * session の統計 (first / last seen、件数、last hook) は hook の event (CLAUDE_CODE_HOOK)
- * だけから作る。宣言状態 (CCX_SESSION_STATE) は混ぜず、一覧に載った session ごとに最新の
- * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
- * center が一覧するのは hook が観測した session で、印はその属性 (ccx-agent が配線されて
- * いないマシンの印は届いても見えない)。印が後から立っても last_seen は動かない。
- *
- * 「動いているか」(#261) も同じ考え方で別に引く。宣言状態と同じく hook の集計には
- * 混ぜない — 動いている一覧は session の状態であって、その session が何をした記録
- * ではない。件数も last_seen も動かさない。
- */
-/**
  * 新しく入った hook の event 1 件を session_summary に足す (#307)。届く順は時刻順と限らない (spool の再送) ので、
  * cwd / transcript_path / last_hook は (received_at_ms, seq) が今までより新しいときだけ置き換える。
  * ON CONFLICT の SET の右辺は全部更新前の行の値で評価される。
@@ -281,6 +268,21 @@ function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sess
   `);
 }
 
+/**
+ * session を session_summary (ingest が events と同じトランザクションで更新する写し) から読む (#307)。
+ * events を集計しないので件数に依らず軽い。session_summary を DROP して起動し直すと events の派生列から
+ * 作り直る (db/open.ts)。payload は読み直さないので、パーサを直したときは先に events の派生列を埋め直す。
+ *
+ * session の統計 (first / last seen、件数、last hook) は hook の event (CLAUDE_CODE_HOOK)
+ * だけから作る。宣言状態 (CCX_SESSION_STATE) は混ぜず、一覧に載った session ごとに最新の
+ * 1 件を別に引く (#127)。印だけ届いて hook が 1 件も無い session は一覧に出ない —
+ * center が一覧するのは hook が観測した session で、印はその属性 (ccx-agent が配線されて
+ * いないマシンの印は届いても見えない)。印が後から立っても last_seen は動かない。
+ *
+ * 「動いているか」(#261) も同じ考え方で別に引く。宣言状態と同じく hook の集計には
+ * 混ぜない — 動いている一覧は session の状態であって、その session が何をした記録
+ * ではない。件数も last_seen も動かさない。
+ */
 export function listSessions(db: Db, f: ListSessionsFilter): SessionRow[] {
   const where: SQL[] = [sql`1`];
   if (f.machine) where.push(sql`machine = ${f.machine}`);

@@ -229,9 +229,9 @@ export const ddl = [
       claim_token TEXT NOT NULL DEFAULT ''
     )
   `,
-  // hook の event (producer 1) から導いた session ごとの集計で、ListSessions はこれだけを読む (#307)。events を毎回
+  // hook の event (Producer.CLAUDE_CODE_HOOK) から導いた session ごとの集計で、ListSessions はこれだけを読む (#307)。events を毎回
   // window 集計すると 80 万行 (3 GB) で 1 回 20〜40 秒かかり、bun:sqlite は同期なので center の全リクエストが止まった。
-  // ingest が同じトランザクションで更新し (store.ts の summarize)、空なら起動時に events から作る (open.ts)。
+  // ingest が同じトランザクションで更新し (store.ts の summarize)、表が無ければ起動時に events から作る (open.ts)。
   // last_seq は last_seen_ms が同じ event どうしで、cwd / transcript_path / last_hook をどれから取るかを決める
   sql`
     CREATE TABLE IF NOT EXISTS session_summary (
@@ -307,5 +307,3 @@ export const relayReceivers = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.machine, t.user] })],
 );
-
-
