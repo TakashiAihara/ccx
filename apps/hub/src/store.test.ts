@@ -460,3 +460,33 @@ describe("session state events (producer 2, #127)", () => {
     expect(listSessions(db, { limit: 10 }).map((r) => r.sessionId)).not.toContain("s5");
   });
 });
+
+describe("listSessions の宣言状態の引き方 (#307)", () => {
+  test("session ごとの宣言状態は producer を含む index で引き、hook の event をたどらない", () => {
+    ingest(db, [
+      ev({ payload: { session_id: "s", hook_event_name: "Stop" } }),
+      ev({ producer: 2, payload: { session_id: "s", state: { archived: true } } }),
+    ]);
+
+    // listSessions が実際に出す SQL を捕まえて、その計画を見る
+    const seen: string[] = [];
+    const prepare = db.$client.prepare.bind(db.$client);
+    db.$client.prepare = ((q: string) => {
+      seen.push(q);
+      return prepare(q);
+    }) as typeof db.$client.prepare;
+    try {
+      expect(listSessions(db, { limit: 10 })[0]!.state?.archived).toBe(true);
+    } finally {
+      db.$client.prepare = prepare;
+    }
+
+    const stateSql = seen.filter((q) => q.includes("json_extract(doc, '$.rev')"));
+    expect(stateSql).toHaveLength(1);
+    const params = [2, "m1", "dev", "s"];
+    const plan = (db.$client.query(`EXPLAIN QUERY PLAN ${stateSql[0]}`).all(...params) as { detail: string }[]).map((p) => p.detail).join("\n");
+    const seek = plan.match(/events USING INDEX events_producer_session_idx \(([^)]*)\)/)?.[1] ?? "";
+    expect(seek.split(" AND ").sort()).toEqual(["machine=?", "os_user=?", "producer=?", "session_id=?"]);
+    expect(plan).not.toContain("events USING INDEX events_session_idx");
+  });
+});
