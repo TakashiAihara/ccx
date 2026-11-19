@@ -2,7 +2,7 @@ import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
 import { createClient, createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -85,6 +85,57 @@ test("only a failure marked not typed, or an unreachable agent, is called not se
   const down = await sendMessage("t", "b", { mode: "urgent", summary: "s", from: "f", socket: join(dir, "none.sock") }, () => {}).catch((e) => e);
   expect(failurePrefix(down)).toBe("not sent");
 });
+
+test("a Devin sender is named from its herdr pane's session, which is what a reply is sent to (#334)", () => {
+  const me = () => ({ username: "dev" });
+  const devin = { agent: "devin", agent_session: { agent: "devin", kind: "id", source: "herdr:devin", value: "copper-python" } };
+  const asked: string[] = [];
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, (id) => (asked.push(id), devin))).toBe("copper-python");
+  expect(asked).toEqual(["w1:p2"]);
+
+  // Claude Code goes first; another agent's pane, a pane with no session, or no answer from herdr falls back to user@host.
+  const warned: string[] = [];
+  const warn = (l: string) => warned.push(l);
+  expect(defaultSender({ CLAUDE_CODE_SESSION_ID: "c1", HERDR_PANE_ID: "w1:p2" }, me, () => devin, warn)).toBe("c1");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "claude", agent_session: { agent: "devin", value: "x" } }), warn)).toStartWith("dev@");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "claude", value: "x" } }), warn)).toStartWith("dev@");
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => ({ agent: "devin", agent_session: { agent: "devin", value: "" } }), warn)).toStartWith("dev@");
+  expect(defaultSender({}, me, () => devin, warn)).toStartWith("dev@");
+  // Only herdr giving no pane (missing, failed, hung, no pane in its answer) is said: a plain shell pane is not that.
+  expect(warned).toEqual([]);
+  expect(defaultSender({ HERDR_PANE_ID: "w1:p2" }, me, () => null, warn)).toStartWith("dev@");
+  expect(warned).toEqual(["ccx: herdr did not say whose session pane w1:p2 is; sending as user@host, which cannot be replied to (pass --from)"]);
+});
+
+test("the Devin session name comes from `herdr pane get` on the env's PATH; a failing, hung or missing herdr falls back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccx-herdr-"));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const me = () => ({ username: "dev" });
+  const quiet = () => {};
+  const env = { HERDR_PANE_ID: "w1:p2", PATH: dir };
+  const fake = (script: string) => {
+    writeFileSync(join(dir, "herdr"), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(dir, "herdr"), 0o755);
+  };
+
+  fake(`[ "$1 $2 $3" = "pane get w1:p2" ] || exit 9\necho '{"id":"x","result":{"type":"pane","pane":{"agent":"devin","agent_session":{"agent":"devin","value":"copper-python"}}}}'`);
+  expect(defaultSender(env, me, undefined, quiet)).toBe("copper-python");
+  expect(defaultSender({ ...env, HERDR_PANE_ID: "w9:p9" }, me, undefined, quiet)).toStartWith("dev@");
+  expect(defaultSender({ ...env, PATH: join(dir, "none") }, me, undefined, quiet)).toStartWith("dev@");
+
+  // An answer from a herdr that failed is not taken, even if it reads as a pane.
+  fake(`echo '{"result":{"pane":{"agent":"devin","agent_session":{"agent":"devin","value":"copper-python"}}}}'; exit 1`);
+  expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
+
+  fake(`echo 'not json'`);
+  expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
+
+  // A herdr that does not answer holds the send for 3 s, not for good, even one that ignores SIGTERM.
+  fake(`trap '' TERM\nexec sleep 20`);
+  const t0 = Date.now();
+  expect(defaultSender(env, me, undefined, quiet)).toStartWith("dev@");
+  expect(Date.now() - t0).toBeLessThan(6000);
+}, 30000);
 
 test("a sender outside Claude Code is user@host", () => {
   expect(defaultSender({})).toMatch(/^[^@\s]+@[^@\s]+$/);
