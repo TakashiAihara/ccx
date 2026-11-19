@@ -34,12 +34,16 @@ export function openDb(path: string): Db {
   sqlite.exec("PRAGMA foreign_keys = ON");
 
   const db = drizzle(sqlite, { schema }) as Db;
-  // 空かどうかではなく表が在ったかで決める。hook の event が 1 件も無い DB で起動のたびに全件を読み直さないため
-  const hadSummary = sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summary'").get() !== null;
-  db.transaction((tx) => {
-    for (const stmt of schema.ddl) tx.run(stmt);
-    if (!hadSummary) buildSessionSummary(tx);
-  });
+  // 空かどうかではなく表が在ったかで決める。hook の event が 1 件も無い DB で起動のたびに全件を読み直さないため。
+  // 書き込みロックを取ってから見るので、同時に開いた 2 つ目は 1 つ目が作った表を見て作り直さない
+  db.transaction(
+    (tx) => {
+      const hadSummary = sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summary'").get() !== null;
+      for (const stmt of schema.ddl) tx.run(stmt);
+      if (!hadSummary) buildSessionSummary(tx);
+    },
+    { behavior: "immediate" },
+  );
   return db;
 }
 

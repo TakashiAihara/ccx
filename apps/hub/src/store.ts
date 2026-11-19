@@ -124,10 +124,6 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
       };
     });
 
-  // 同じ event_id が同じバッチに 2 つあれば SQLite が保存するのは先の行なので、集計も先の行で取る
-  const byId = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) if (!byId.has(r.eventId)) byId.set(r.eventId, r);
-
   return db.transaction((tx) => {
     let accepted = 0;
     for (let i = 0; i < rows.length; i += CHUNK) {
@@ -138,8 +134,11 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         .returning({ id: events.eventId })
         .all();
       accepted += inserted.length;
-      for (const { id } of inserted) {
-        const r = byId.get(id)!;
+      // RETURNING の順は保証されないので、保存した順 (バッチの並び) で集計する。同じ event_id が 2 つあれば
+      // 保存されるのは先の行なので、集計も先の行で取る
+      const fresh = new Set(inserted.map((x) => x.id));
+      for (const r of rows.slice(i, i + CHUNK)) {
+        if (!fresh.delete(r.eventId)) continue;
         if (r.producer === Producer.CLAUDE_CODE_HOOK && r.sessionId !== "") summarize(tx, r);
       }
     }
