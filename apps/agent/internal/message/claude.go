@@ -68,12 +68,19 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 		return markNotTyped(connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("claude code does not take mode %s; it takes after-turn", modeName(req.Mode))))
 	}
 
-	id := newMsgID()
+	id := req.MsgID
+	if id == "" {
+		id = newMsgID()
+	}
 	ev := heartbeat.Event{Content: req.Body, Meta: map[string]string{
 		"kind":   "message",
 		"title":  headerLine(req.Sender, req.Summary),
 		"msg_id": id,
 	}}
+	// Where it came from, so the receiver can send back with -m / -u, or with --reply <msg_id> (#334).
+	if req.SenderMachine != "" {
+		ev.Meta[MetaFromMachine], ev.Meta[MetaFromUser] = req.SenderMachine, req.SenderUser
+	}
 	// The transcript's size before the push: the event is looked for only in what
 	// is written after it.
 	notConnected := markNotTyped(connect.NewError(connect.CodeNotFound, fmt.Errorf("session %s has no ccx channel connected to this ccx-agent (started without --dangerously-load-development-channels server:ccx, or the heartbeat concern is off)", req.Target)))

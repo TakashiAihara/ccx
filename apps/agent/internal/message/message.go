@@ -57,7 +57,16 @@ type Request struct {
 	Mode                          ccxv1.DeliveryMode
 	// WaitSeconds keeps the send going after sent for the question / done acks.
 	WaitSeconds uint32
+	// SenderMachine / SenderUser are where it came from (the sending ccx-agent's own), and MsgID the id a reply
+	// to it names (#334). Empty from a sending agent too old to fill them.
+	SenderMachine, SenderUser, MsgID string
 }
+
+// MetaFromMachine / MetaFromUser are the channel event's attributes naming the sender's machine and user.
+const (
+	MetaFromMachine = "from_machine"
+	MetaFromUser    = "from_user"
+)
 
 // Devin delivers to Devin sessions running in herdr panes.
 type Devin struct {
@@ -733,10 +742,40 @@ type Service struct {
 	Machine, User string
 	Relay         *Relay
 	Log           func(string, ...any)
+
+	booked  sync.Once
+	replies *replyBook
+}
+
+func (s *Service) book() *replyBook {
+	s.booked.Do(func() {
+		if s.replies == nil {
+			s.replies = newReplyBook(time.Now)
+		}
+	})
+	return s.replies
 }
 
 func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
-	return s.route(ctx, req.Msg, stream.Send, s.Deliver)
+	return s.send(ctx, req.Msg, stream.Send)
+}
+
+// send takes a send from this agent's socket: it names this agent as where it came from and turns a reply_to
+// into its target, then routes it.
+func (s *Service) send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
+	// This agent's own, whatever the caller said: the receiver sends replies here (#334).
+	m.SenderMachine, m.SenderUser = s.Machine, s.User
+	if id := m.GetReplyTo(); id != "" {
+		if m.GetTarget() != "" || m.GetMachine() != "" || m.GetUser() != "" {
+			return markNotTyped(connect.NewError(connect.CodeInvalidArgument, errors.New("reply_to takes the place of target, machine and user; give one or the other")))
+		}
+		to, ok := s.book().get(id)
+		if !ok {
+			return markNotTyped(connect.NewError(connect.CodeNotFound, fmt.Errorf("this ccx-agent delivered no message with msg_id %s in the last %d days (it forgets them when it restarts)", id, int(replyKeep.Hours()/24))))
+		}
+		m.Target, m.Machine, m.User = to.Sender, to.Machine, to.User
+	}
+	return s.route(ctx, m, emit, s.Deliver)
 }
 
 // route hands m to local when it is for this agent, and to the relay otherwise.
@@ -763,10 +802,20 @@ func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*cc
 // from the center for this machine.
 func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	var last ccxv1.SendResponse_State
-	req := Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds()}
+	req := Request{
+		Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds(),
+		SenderMachine: m.GetSenderMachine(), SenderUser: m.GetSenderUser(), MsgID: newMsgID(),
+	}
 	send := s.Devin.Send
 	if IsClaudeSession(req.Target) {
 		send = s.sendClaude
+	}
+	if req.SenderMachine != "" {
+		s.book().add(req.MsgID, replyTo{Sender: req.Sender, Machine: req.SenderMachine, User: req.SenderUser})
+		// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
+		if !IsClaudeSession(req.Target) {
+			req.Body += "\n" + devinReplyLine(req)
+		}
 	}
 	err := send(ctx, req, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
@@ -774,6 +823,11 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	})
 	s.logSend(m, "", last, err)
 	return err
+}
+
+// devinReplyLine is the line typed under the body for Devin: where it came from and how to answer it.
+func devinReplyLine(req Request) string {
+	return fmt.Sprintf("(ccx: from %s/%s, reply: ccx msg send --reply %s \"...\")", req.SenderMachine, req.SenderUser, req.MsgID)
 }
 
 func (s *Service) logSend(m *ccxv1.SendRequest, via string, last ccxv1.SendResponse_State, err error) {

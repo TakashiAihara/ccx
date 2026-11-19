@@ -105,7 +105,7 @@ export function unixTransport(socketPath: string): Transport {
   });
 }
 
-export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number; machine?: string; user?: string; wait?: number };
+export type SendOptions = { mode: string; summary: string; from: string; socket: string; timeout?: number; machine?: string; user?: string; wait?: number; reply?: string };
 
 /** ccx-agent's NotTypedKey (apps/agent/internal/message): the failure came before anything was typed. */
 const NOT_TYPED_KEY = "Ccx-Not-Typed";
@@ -157,7 +157,7 @@ export async function sendMessage(target: string, body: string, o: SendOptions, 
   const timeout = o.timeout ?? 60_000;
   const signal = AbortSignal.timeout(wait > 0 ? Math.max(timeout, (wait + 60) * 1000) : timeout);
   const where = { machine: o.machine ?? "", user: o.user ?? "" };
-  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where }, { signal })) {
+  for await (const ev of client.send({ target, body, mode, summary: o.summary, sender: o.from, waitSeconds: wait, ...where, replyTo: o.reply ?? "" }, { signal })) {
     // Only a send that asked to wait can have run out of it.
     if (wait > 0 && ev.state === SendResponse_State.WAIT_ENDED) {
       out(`no done within ${wait} s (the receiver may still be on it)`);
@@ -177,8 +177,8 @@ export function registerMsg(program: Command): void {
   msg
     .command("send")
     .description("Type a message into a running session (Devin in a herdr pane, for now), here or on another machine through the center, and print each ack: sent, then working or not-started; with --wait also the receiver's question and done (its last answer). later is queued for the receiver's next turn")
-    .argument("<target>", "the session name (Devin's session name as herdr shows it on that machine)")
-    .argument("<body...>", "the message")
+    .argument("[target]", "the session name (Devin's session name as herdr shows it on that machine); left out with --reply")
+    .argument("[body...]", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
     .option("--from <name>", "the sender name shown to the receiver (default: the Claude Code session id, or in a herdr pane Devin's session name, both names the receiver can reply to; else user@host, a label only)")
@@ -187,8 +187,15 @@ export function registerMsg(program: Command): void {
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
     .option("--timeout <ms>", "give up waiting for acks after this long", parseTimeout, 60_000)
     .option("--wait <seconds>", "after sent, wait this long for the receiver's question / done (needs Devin's hooks wired to `ccx-agent devin-hook`)", parseWait, 0)
-    .action(async (target: string, body: string[], o: SendOptions) => {
+    .option("--reply <msg_id>", "send back to whoever sent the message with this msg_id (shown with each message ccx delivered here), in place of <target> / -m / -u")
+    .action(async (first: string | undefined, rest: string[], o: SendOptions) => {
       let state: "queued" | "sent" | undefined;
+      // With --reply every word is the body; the agent turns the id into the target.
+      const target = o.reply ? "" : (first ?? "");
+      const body = o.reply ? [first ?? "", ...rest].filter((w, i) => i > 0 || w !== "") : rest;
+      if (o.reply && (o.machine || o.user)) throw new InvalidArgumentError("--reply takes the place of <target>, -m and -u");
+      if (!o.reply && !target) throw new InvalidArgumentError("give <target>, or --reply <msg_id>");
+      if (body.length === 0) throw new InvalidArgumentError("give the message");
       try {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.

@@ -43,6 +43,7 @@ type sendArgs struct {
 	Mode    string `json:"mode"`
 	Machine string `json:"machine"`
 	User    string `json:"user"`
+	ReplyTo string `json:"reply_to"`
 }
 
 // SendTool is the send_message tool: the same send as `ccx msg send`, through
@@ -58,19 +59,21 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 		Name: "send_message",
 		Description: "Send a message to another running session through ccx: a Devin session by its name, or a Claude Code session by its id, " +
 			"on this machine or (with machine) another. The receiver sees this session's id as the sender and can answer to it. " +
+			"To answer a message ccx delivered here, give its msg_id as reply_to instead of target / machine / user: ccx sends it back to whoever sent it. " +
 			"Returns each ack (sent, then working or not-started; queued for later). " +
 			"\"not sent\" means nothing reached the receiver; \"may have been sent\" means look before sending again.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  map[string]any{"type": "string", "description": "the receiver: a Devin session name as herdr shows it, or a Claude Code session id"},
-				"body":    map[string]any{"type": "string", "description": "the message"},
-				"summary": map[string]any{"type": "string", "description": "one line the receiver sees as `ccx: <sender>: <summary>` (at most 80 bytes)"},
-				"mode":    map[string]any{"type": "string", "enum": []string{"later", "after-turn", "urgent"}, "description": "how it is read (default after-turn)"},
-				"machine": map[string]any{"type": "string", "description": "the machine whose ccx-agent delivers it, through the center (default: this one)"},
-				"user":    map[string]any{"type": "string", "description": "the OS user whose ccx-agent delivers it (default: this agent's)"},
+				"target":   map[string]any{"type": "string", "description": "the receiver: a Devin session name as herdr shows it, or a Claude Code session id"},
+				"body":     map[string]any{"type": "string", "description": "the message"},
+				"summary":  map[string]any{"type": "string", "description": "one line the receiver sees as `ccx: <sender>: <summary>` (at most 80 bytes)"},
+				"mode":     map[string]any{"type": "string", "enum": []string{"later", "after-turn", "urgent"}, "description": "how it is read (default after-turn)"},
+				"machine":  map[string]any{"type": "string", "description": "the machine whose ccx-agent delivers it, through the center (default: this one)"},
+				"user":     map[string]any{"type": "string", "description": "the OS user whose ccx-agent delivers it (default: this agent's)"},
+				"reply_to": map[string]any{"type": "string", "description": "the msg_id of a message ccx delivered here: sends this back to its sender (its from_machine / from_user), in place of target, machine and user"},
 			},
-			"required": []string{"target", "body", "summary"},
+			"required": []string{"body", "summary"},
 		},
 		Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 			var a sendArgs
@@ -84,6 +87,9 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 			if !ok {
 				return "not sent: mode must be one of later, after-turn, urgent", true
 			}
+			if a.Target == "" && a.ReplyTo == "" {
+				return "not sent: give target, or reply_to", true
+			}
 			if a.Target == sessionID {
 				return "not sent: that is this session", true
 			}
@@ -93,7 +99,7 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 			defer cancel()
 			stream, err := client.Send(ctx, connect.NewRequest(&ccxv1.SendRequest{
 				Target: a.Target, Body: a.Body, Summary: a.Summary, Mode: mode, Machine: a.Machine, User: a.User,
-				Sender: sessionID,
+				Sender: sessionID, ReplyTo: a.ReplyTo,
 			}))
 			if err != nil {
 				return failure(err, nil), true
