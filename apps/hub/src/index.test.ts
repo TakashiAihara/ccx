@@ -16,21 +16,45 @@ afterEach(() => {
   dir = undefined;
 });
 
+// 起動ログの `listening on http://<host>:<port>` から実際に bind したポートを読む。
+async function listeningPort(stderr: ReadableStream<Uint8Array>): Promise<number> {
+  // for await から return すると stream が cancel され、子の後の stderr 書き込みが EPIPE になりうる。
+  // reader の lock を外すだけにして pipe は開けておく
+  const reader = stderr.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+    // 数字の後ろの 1 文字まで待つ。チャンクが数字の途中で切れると桁が欠けるため
+    const m = text.match(/listening on http:\/\/\S+:(\d+)\D/);
+    if (m) {
+      reader.releaseLock();
+      return Number(m[1]);
+    }
+  }
+  throw new Error(`ccx-center exited before listening: ${text}`);
+}
+
 test("ccx-center serve は起動したまま応答し続ける", async () => {
   dir = mkdtempSync(join(tmpdir(), "ccx-center-"));
-  const port = 20000 + Math.floor(Math.random() * 20000);
 
   proc = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "serve"], {
     env: {
       ...process.env,
       CCX_CENTER_HOST: "127.0.0.1",
-      CCX_CENTER_PORT: String(port),
+      // port 0 で OS に空きを選ばせる。乱数で選ぶと ephemeral port と重なり EADDRINUSE で落ちる (#338)
+      CCX_CENTER_PORT: "0",
       CCX_CENTER_DB: join(dir, "center.db"),
     },
-    stdout: "pipe",
+    stdout: "ignore",
     stderr: "pipe",
   });
 
+  const port = await listeningPort(proc.stderr as ReadableStream<Uint8Array>);
+  // 設定値の 0 をそのまま出す壊れ方では、0 に fetch して timeout まで待つことになる
+  expect(port).toBeGreaterThan(0);
   const url = `http://127.0.0.1:${port}/healthz`;
   let ok = false;
   for (let i = 0; i < 60 && !ok; i += 1) {
