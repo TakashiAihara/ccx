@@ -485,7 +485,8 @@ describe("listSessions の宣言状態の引き方 (#307)", () => {
     expect(stateSql).toHaveLength(1);
     const params = [2, "m1", "dev", "s"];
     const plan = (db.$client.query(`EXPLAIN QUERY PLAN ${stateSql[0]}`).all(...params) as { detail: string }[]).map((p) => p.detail).join("\n");
-    expect(plan).toMatch(/events USING INDEX events_producer_session_idx \([^)]*producer=\?/);
+    const seek = plan.match(/events USING INDEX events_producer_session_idx \(([^)]*)\)/)?.[1] ?? "";
+    expect(seek.split(" AND ").sort()).toEqual(["machine=?", "os_user=?", "producer=?", "session_id=?"]);
     expect(plan).not.toContain("events USING INDEX events_session_idx");
   });
 });
