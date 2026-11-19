@@ -49,12 +49,11 @@ export function defaultApiSocketPath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 /**
- * The pane herdr runs the caller in, as `herdr pane get` prints it (`result.pane`); null outside herdr or when
- * herdr does not answer within 3 s.
+ * Pane id's pane as `herdr pane get` prints it (`result.pane`), with herdr looked up on path; null when herdr is
+ * not there, fails, does not answer within 3 s, or prints no pane.
  */
-function herdrPane(id: string): unknown {
-  // Looked up on the PATH of now: spawning by name uses the PATH Bun started with.
-  const herdr = Bun.which("herdr", { PATH: process.env.PATH ?? "" });
+function herdrPane(id: string, path: string): unknown {
+  const herdr = Bun.which("herdr", { PATH: path });
   if (!herdr) return null;
   try {
     const p = Bun.spawnSync([herdr, "pane", "get", id], { stdout: "pipe", stderr: "ignore", timeout: 3000 });
@@ -73,11 +72,14 @@ function herdrPane(id: string): unknown {
 export function defaultSender(
   env: NodeJS.ProcessEnv = process.env,
   info: () => { username: string } = userInfo,
-  pane: (id: string) => unknown = herdrPane,
+  pane: (id: string, path: string) => unknown = herdrPane,
+  warn: (line: string) => void = (l) => console.error(l),
 ): string {
   if (env.CLAUDE_CODE_SESSION_ID) return env.CLAUDE_CODE_SESSION_ID;
   if (env.HERDR_PANE_ID) {
-    const p = pane(env.HERDR_PANE_ID) as { agent?: unknown; agent_session?: { agent?: unknown; value?: unknown } } | null;
+    const p = pane(env.HERDR_PANE_ID, env.PATH ?? "") as { agent?: unknown; agent_session?: { agent?: unknown; value?: unknown } } | null;
+    // A sender named user@host cannot be answered, so a herdr that could not say whose pane this is is said.
+    if (p === null) warn(`ccx: could not ask herdr for pane ${env.HERDR_PANE_ID}'s session; sending as user@host, which cannot be replied to (pass --from)`);
     const name = p?.agent === "devin" && p.agent_session?.agent === "devin" ? p.agent_session.value : undefined;
     if (typeof name === "string" && name) return name;
   }
@@ -179,7 +181,7 @@ export function registerMsg(program: Command): void {
     .argument("<body...>", "the message")
     .requiredOption("--summary <line>", "one line the receiver sees as `ccx: <from>: <summary>`")
     .option("--mode <mode>", "how it is read: later | after-turn | urgent", "after-turn")
-    .option("--from <name>", "the sender name shown to the receiver, and what it replies to (default: the Claude Code session id, or Devin's session name in a herdr pane, else user@host)")
+    .option("--from <name>", "the sender name shown to the receiver (default: the Claude Code session id, or Devin's session name in a herdr pane, which the receiver can reply to; else user@host, a label only)")
     .option("-m, --machine <name>", "have that machine's ccx-agent deliver it, through the center (default: here)")
     .option("-u, --user <name>", "have that user's ccx-agent deliver it, through the center (default: this agent's user)")
     .option("--socket <path>", "ccx-agent's API socket", defaultApiSocketPath())
