@@ -106,7 +106,8 @@ func TestAssembleWithOriginBuildsCollect(t *testing.T) {
 }
 
 // What rides on collect goes with it: with an http hub and the live transcript
-// on, a missing user name builds neither the live transcript nor resume, while
+// on, a missing user name builds neither the live transcript, resume nor the
+// message relay (which the center keys by machine and user too), while
 // the same Config with both names builds both. Nothing is run, so the
 // unreachable hub is never dialled and the stub ccx never executed.
 func TestAssembleWithoutOriginDropsWhatRidesOnCollect(t *testing.T) {
@@ -124,7 +125,7 @@ func TestAssembleWithoutOriginDropsWhatRidesOnCollect(t *testing.T) {
 	}
 
 	names, _ := runAssemble(t, withHub(assembleConfig(t, "box", "")))
-	for _, gone := range []string{"collect", "livetranscript", "resume"} {
+	for _, gone := range []string{"collect", "livetranscript", "resume", "message-relay"} {
 		if has(names, gone) {
 			t.Errorf("no user: concerns %v: %s is built without an origin", names, gone)
 		}
@@ -134,7 +135,7 @@ func TestAssembleWithoutOriginDropsWhatRidesOnCollect(t *testing.T) {
 	}
 
 	names, _ = runAssemble(t, withHub(assembleConfig(t, "box", "alice")))
-	for _, want := range []string{"livetranscript", "resume"} {
+	for _, want := range []string{"livetranscript", "resume", "message-relay"} {
 		if !has(names, want) {
 			t.Errorf("both names: concerns %v: want %s, or the check above sees nothing", names, want)
 		}
