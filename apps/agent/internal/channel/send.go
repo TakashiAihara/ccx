@@ -150,10 +150,12 @@ func unreachable(err error) bool {
 }
 
 // UnixMessageClient is a MessageService client over ccx-agent's API socket.
-func UnixMessageClient(socketPath string) ccxv1connect.MessageServiceClient {
+// socketPath is called on every dial, as Relay does, so a session that started
+// while a systemd agent was restarting reaches it under /run/user once it is up.
+func UnixMessageClient(socketPath func() string) ccxv1connect.MessageServiceClient {
 	h := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath())
 		},
 	}}
 	// The host is not used; the dialer ignores it.

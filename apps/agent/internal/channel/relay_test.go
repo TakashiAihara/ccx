@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 	s := NewServer("ccx", "0", out)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { Relay(ctx, sock, "sid-1", "/custom/claude", s, t.Logf); close(done) }()
+	go func() { Relay(ctx, func() string { return sock }, "sid-1", "/custom/claude", s, t.Logf); close(done) }()
 	// Wait for the relay to stop before the test ends: it logs through t.
 	defer func() { cancel(); <-done }()
 
@@ -91,7 +92,10 @@ func TestRelayWaitsForServe(t *testing.T) {
 	s := NewServer("ccx", "0", &syncBuf{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { relay(ctx, sock, "sid-2", "", s, t.Logf, 50*time.Millisecond); close(done) }()
+	go func() {
+		relay(ctx, func() string { return sock }, "sid-2", "", s, t.Logf, 50*time.Millisecond)
+		close(done)
+	}()
 	defer func() { cancel(); <-done }()
 	time.Sleep(200 * time.Millisecond)
 
@@ -145,7 +149,7 @@ func TestRelayRegistersAgainAfterServeRestarts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		relay(ctx, sock, sid, "", NewServer("ccx", "0", &syncBuf{}), t.Logf, 50*time.Millisecond)
+		relay(ctx, func() string { return sock }, sid, "", NewServer("ccx", "0", &syncBuf{}), t.Logf, 50*time.Millisecond)
 		close(done)
 	}()
 	defer func() { cancel(); <-done }()
@@ -185,7 +189,7 @@ func TestRelayPushesALargeEscapedMessage(t *testing.T) {
 	s := NewServer("ccx", "0", out)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { Relay(ctx, sock, "sid-1", "", s, t.Logf); close(done) }()
+	go func() { Relay(ctx, func() string { return sock }, "sid-1", "", s, t.Logf); close(done) }()
 	defer func() { cancel(); <-done }()
 
 	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
@@ -199,4 +203,39 @@ func TestRelayPushesALargeEscapedMessage(t *testing.T) {
 		}
 	}
 	t.Fatalf("the large message was not pushed (got %d bytes out)", len(out.String()))
+}
+
+// The path is resolved again on every attempt: a session that started while
+// serve listened elsewhere (a systemd agent restarting) finds it once it is up.
+func TestRelayResolvesThePathOnEveryAttempt(t *testing.T) {
+	sock := testsock.Path(t, "ch.sock")
+	var calls atomic.Int32
+	path := func() string {
+		if calls.Add(1) == 1 {
+			return sock + ".elsewhere"
+		}
+		return sock
+	}
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	s := NewServer("ccx", "0", &syncBuf{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { relay(ctx, path, "sid-3", "", s, t.Logf, 50*time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	_ = ln.(*net.UnixListener).SetDeadline(time.Now().Add(2 * time.Second))
+	conn, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("relay never moved to the new path: %v", err)
+	}
+	defer conn.Close()
+	line, _ := bufio.NewReader(conn).ReadString('\n')
+	if !strings.Contains(line, `"sid-3"`) {
+		t.Errorf("registration = %q", line)
+	}
 }

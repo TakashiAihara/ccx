@@ -351,15 +351,15 @@ func cmdChannel() int {
 	// No signal handling: Serve blocks on stdin, so a caught SIGTERM would leave
 	// the process up. Default termination is what a stdio child wants.
 	srv := channel.NewServer("ccx", "0", os.Stdout)
-	srv.Tools = []channel.Tool{channel.SendTool(sid, channel.UnixMessageClient(config.APISocket()))}
+	srv.Tools = []channel.Tool{channel.SendTool(sid, channel.UnixMessageClient(config.APISocket))}
 	go func() {
 		<-srv.Ready()
 		// A broken config must not take the session's MCP server down, and fixing
 		// it must not need a session restart: read it again until it loads.
 		for said := false; ; time.Sleep(time.Minute) {
-			cfg, err := config.Load()
+			_, err := config.Load()
 			if err == nil {
-				channel.Relay(context.Background(), cfg.ChannelSocketPath, sid, os.Getenv("CLAUDE_CONFIG_DIR"), srv, logf)
+				channel.Relay(context.Background(), config.ChannelSocket, sid, os.Getenv("CLAUDE_CONFIG_DIR"), srv, logf)
 				return
 			}
 			if !said {

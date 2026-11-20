@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/message"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 	"github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1/ccxv1connect"
 )
@@ -109,7 +111,8 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 	}
 
 	// No ccx-agent on the socket: never reached, so not sent.
-	text, isErr := call(t, SendTool(sid, UnixMessageClient(filepath.Join(t.TempDir(), "none.sock"))), `{"target":"t","body":"b","summary":"s"}`)
+	none := filepath.Join(t.TempDir(), "none.sock")
+	text, isErr := call(t, SendTool(sid, UnixMessageClient(func() string { return none })), `{"target":"t","body":"b","summary":"s"}`)
 	if !isErr || !strings.HasPrefix(text, "not sent: ") {
 		t.Fatalf("unreachable: %q", text)
 	}
@@ -306,5 +309,33 @@ func TestSendToolNamesTheQueuedAck(t *testing.T) {
 	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"later"}`)
 	if isErr || text != "queued  next turn" {
 		t.Fatalf("text %q, isErr %v", text, isErr)
+	}
+}
+
+// The API socket is resolved on every dial: a send that found no agent at the
+// first path reaches it once the path moves (a systemd agent coming back under
+// /run/user), without a session restart.
+func TestUnixMessageClientResolvesThePathOnEveryDial(t *testing.T) {
+	sock := testsock.Path(t, "api.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(ccxv1connect.NewMessageServiceHandler(&fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}}))
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Listener = ln
+	srv.Start()
+	defer srv.Close()
+
+	var path atomic.Value
+	path.Store(sock + ".elsewhere")
+	tool := SendTool(sid, UnixMessageClient(func() string { return path.Load().(string) }))
+	if text, isErr := call(t, tool, `{"target":"t","body":"b","summary":"s"}`); !isErr || !strings.HasPrefix(text, "not sent: ") {
+		t.Fatalf("before the move: %q", text)
+	}
+	path.Store(sock)
+	if text, isErr := call(t, tool, `{"target":"t","body":"b","summary":"s"}`); isErr || text != "sent" {
+		t.Fatalf("after the move: %q (error %v)", text, isErr)
 	}
 }
