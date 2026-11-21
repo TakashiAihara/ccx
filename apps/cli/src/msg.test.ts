@@ -560,3 +560,15 @@ test("--reply says in_reply_to, and herdr is not asked when --from is given and 
   expect((await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], inPane, repo)).code).toBe(0);
   expect(await Bun.file(join(bin, "asked")).exists()).toBe(true);
 });
+
+test("--no-meta drops in_reply_to too", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  expect((await runCli(["msg", "send", "--reply", "m9", "--no-meta", "--socket", socket, "--summary", "s", "--from", "me", "ok"], env, repo)).code).toBe(0);
+  expect([got?.replyTo, got?.senderMeta]).toEqual(["m9", {}]);
+});

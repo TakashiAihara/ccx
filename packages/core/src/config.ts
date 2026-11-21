@@ -245,11 +245,20 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
 export async function messageMetaOn(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   const fromEnv = parseBool(env.CCX_MESSAGE_META);
   if (fromEnv !== undefined) return fromEnv;
-  const f = Bun.file(configPath(env));
+  let text: string;
   try {
-    if (!(await f.exists())) return true;
-    const meta = ((Bun.TOML.parse(await f.text()) as Record<string, unknown>).message as Record<string, unknown> | undefined)?.meta;
-    return typeof meta === "boolean" ? meta : true;
+    text = await Bun.file(configPath(env)).text();
+  } catch (e) {
+    // Only a file that is not there is on; one there but unreadable (a directory, an unsearchable parent) is off.
+    return (e as { code?: string }).code === "ENOENT";
+  }
+  try {
+    const message = (Bun.TOML.parse(text) as Record<string, unknown>).message;
+    if (message === undefined) return true;
+    // As Go decodes it into a *bool: [message] that is not a table, or a meta that is not a boolean, is off.
+    if (typeof message !== "object" || message === null || Array.isArray(message)) return false;
+    const meta = (message as Record<string, unknown>).meta;
+    return meta === undefined ? true : meta === true;
   } catch {
     return false;
   }

@@ -264,6 +264,11 @@ test("messageMetaOn: CCX_MESSAGE_META, then [message] meta in the file only, the
       [{ CCX_CONFIG: join(dir, "none.toml"), CCX_MESSAGE_META: "off" }, false],
       [{ CCX_CONFIG: write("broken.toml", "[message\nmeta = true\n") }, false],
       [{ CCX_CONFIG: off, CCX_MESSAGE_META: "of" }, false],
+      [{ CCX_CONFIG: write("str.toml", '[message]\nmeta = "off"\n') }, false],
+      [{ CCX_CONFIG: write("num.toml", "[message]\nmeta = 1\n") }, false],
+      [{ CCX_CONFIG: write("notable.toml", 'message = "x"\n') }, false],
+      [{ CCX_CONFIG: write("nometa.toml", "[message]\n") }, true],
+      [{ CCX_CONFIG: dir }, false],
     ];
     const got = await Promise.all(cases.map(([env]) => messageMetaOn(env)));
     expect(got).toEqual(cases.map(([, want]) => want));

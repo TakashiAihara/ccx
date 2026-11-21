@@ -601,6 +601,11 @@ func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) 
 		{"env off, no file", map[string]string{"CCX_CONFIG": filepath.Join(dir, "none.toml"), "CCX_MESSAGE_META": "off"}, false},
 		{"broken file", map[string]string{"CCX_CONFIG": write("broken.toml", "[message\nmeta = true\n")}, false},
 		{"typo env falls to the file", map[string]string{"CCX_CONFIG": off, "CCX_MESSAGE_META": "of"}, false},
+		{"a string meta", map[string]string{"CCX_CONFIG": write("str.toml", "[message]\nmeta = \"off\"\n")}, false},
+		{"a number meta", map[string]string{"CCX_CONFIG": write("num.toml", "[message]\nmeta = 1\n")}, false},
+		{"message not a table", map[string]string{"CCX_CONFIG": write("notable.toml", "message = \"x\"\n")}, false},
+		{"[message] without meta", map[string]string{"CCX_CONFIG": write("nometa.toml", "[message]\n")}, true},
+		{"a directory", map[string]string{"CCX_CONFIG": dir}, false},
 	} {
 		if got := messageMeta(env(tc.env)); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
