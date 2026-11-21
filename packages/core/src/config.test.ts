@@ -268,6 +268,8 @@ test("messageMetaOn: CCX_MESSAGE_META, then [message] meta in the file only, the
       [{ CCX_CONFIG: write("num.toml", "[message]\nmeta = 1\n") }, false],
       [{ CCX_CONFIG: write("notable.toml", 'message = "x"\n') }, false],
       [{ CCX_CONFIG: write("nometa.toml", "[message]\n") }, true],
+      [{ CCX_CONFIG: write("date.toml", "message = 2026-11-21T00:00:00Z\n") }, false],
+      [{ CCX_CONFIG: write("array.toml", "message = [1]\n") }, false],
       [{ CCX_CONFIG: dir }, false],
     ];
     const got = await Promise.all(cases.map(([env]) => messageMetaOn(env)));

@@ -256,7 +256,8 @@ export async function messageMetaOn(env: NodeJS.ProcessEnv = process.env): Promi
     const message = (Bun.TOML.parse(text) as Record<string, unknown>).message;
     if (message === undefined) return true;
     // As Go decodes it into a *bool: [message] that is not a table, or a meta that is not a boolean, is off.
-    if (typeof message !== "object" || message === null || Array.isArray(message)) return false;
+    // Bun reads a datetime as a Date: only a plain object is a table.
+    if (typeof message !== "object" || message === null || Object.getPrototypeOf(message) !== Object.prototype) return false;
     const meta = (message as Record<string, unknown>).meta;
     return meta === undefined ? true : meta === true;
   } catch {

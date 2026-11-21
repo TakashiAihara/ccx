@@ -605,6 +605,8 @@ func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) 
 		{"a number meta", map[string]string{"CCX_CONFIG": write("num.toml", "[message]\nmeta = 1\n")}, false},
 		{"message not a table", map[string]string{"CCX_CONFIG": write("notable.toml", "message = \"x\"\n")}, false},
 		{"[message] without meta", map[string]string{"CCX_CONFIG": write("nometa.toml", "[message]\n")}, true},
+		{"message a datetime", map[string]string{"CCX_CONFIG": write("date.toml", "message = 2026-11-21T00:00:00Z\n")}, false},
+		{"message an array", map[string]string{"CCX_CONFIG": write("array.toml", "message = [1]\n")}, false},
 		{"a directory", map[string]string{"CCX_CONFIG": dir}, false},
 	} {
 		if got := messageMeta(env(tc.env)); got != tc.want {
