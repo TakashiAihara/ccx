@@ -261,3 +261,26 @@ func TestBookingAnIDAgainMovesItToTheBack(t *testing.T) {
 		t.Fatalf("order %v ids %d", b.order, len(b.ids))
 	}
 }
+
+func TestAnOriginWithControlCharactersIsShownAsNone(t *testing.T) {
+	home, _ := newTranscript(t, "")
+	ch := &fakeChannels{home: home, registered: true}
+	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes}), Claude: testClaude(ch)}
+	for _, mu := range [][2]string{{"d1\x1b[2K", "root"}, {"d1", "ro\not"}, {strings.Repeat("m", MaxOrigin+1), "root"}} {
+		ch.pushed = nil
+		in := &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: mu[0], SenderUser: mu[1]}
+		if err := svc.Deliver(context.Background(), in, discard); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ch.pushed[0].Meta[MetaFromMachine]; ok || len(svc.book().ids) != 0 {
+			t.Fatalf("%q: meta %v, booked %d", mu, ch.pushed[0].Meta, len(svc.book().ids))
+		}
+	}
+	// At the limit it is shown.
+	if err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: strings.Repeat("m", MaxOrigin), SenderUser: "root"}, discard); err != nil {
+		t.Fatal(err)
+	}
+	if ch.pushed[len(ch.pushed)-1].Meta[MetaFromUser] != "root" {
+		t.Fatalf("meta %v", ch.pushed[len(ch.pushed)-1].Meta)
+	}
+}

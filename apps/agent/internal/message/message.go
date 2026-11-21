@@ -823,7 +823,12 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	if IsClaudeSession(req.Target) {
 		send = s.sendClaude
 	}
-	// Both halves, or a reply would be routed with the replier's own user filling the gap.
+	// Both halves, or a reply would be routed with the replier's own user filling the gap. Each one line without
+	// control characters, as the sender line is: a put through the center names them as it likes, and they are
+	// typed into Devin and set as channel attributes.
+	if !originOK(req.SenderMachine) || !originOK(req.SenderUser) {
+		req.SenderMachine, req.SenderUser = "", ""
+	}
 	booked := req.SenderMachine != "" && req.SenderUser != ""
 	if booked {
 		// Booked before it is typed: the receiver can answer while a --wait still holds this send.
@@ -851,6 +856,14 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	}
 	s.logSend(m, "", last, err)
 	return err
+}
+
+// MaxOrigin bounds a sender_machine / sender_user (a host or user name).
+const MaxOrigin = 255
+
+// originOK is whether a sender_machine / sender_user can be shown: one line, no control characters, not too long.
+func originOK(s string) bool {
+	return utf8.ValidString(s) && len(s) <= MaxOrigin && oneLine.MatchString(s)
 }
 
 // notTyped reports whether err carries NotTypedKey: nothing reached the receiver.
