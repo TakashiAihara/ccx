@@ -600,7 +600,7 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
     });
   });
 
-  test("目印より前の行は数え直さない (目印を読まずに全件を足すと件数が倍になる)", () => {
+  test("ingest は目印を events の末尾まで進め、次に開いたときに作り直す行を残さない", () => {
     withFile((path) => {
       const a = openDb(path);
       ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } }), ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/b" } })]);
