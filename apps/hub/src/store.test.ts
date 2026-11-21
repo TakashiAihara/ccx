@@ -545,7 +545,7 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
       expect(listed(b)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       b.$client.close();
 
-      // もう一度開いても同じ (作り直しは何度走っても同じ結果)
+      // もう一度開いても同じ (目印が末尾まで進んでいるので作り直しは走らない)
       const c = openDb(path);
       expect(listed(c)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       c.$client.close();
@@ -612,5 +612,42 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
       expect(listed(b)).toEqual(["s:2:/b"]);
       b.$client.close();
     });
+  });
+});
+
+describe("ingest と他プロセスの書き込みが重なったとき (#340)", () => {
+  test("他プロセスが書き込みロックを持っていれば ingest は待ち、その行の後に入って目印を進めない", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-immediate-"));
+    try {
+      const path = join(dir, "center.db");
+      const db = openDb(path);
+      ingest(db, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+
+      const ready = join(dir, "ready");
+      const foreign =
+        "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('foreign', 'm1', 'dev', 50, 150, 1, x'7b7d', 1, 'f', 'Stop', '/foreign', '')";
+      const holder = Bun.spawn(["bun", "run", join(import.meta.dir, "db", "lock-holder.ts"), path, ready, "1500", foreign], { stdout: "ignore", stderr: "ignore" });
+      try {
+        for (let i = 0; i < 100 && !(await Bun.file(ready).exists()); i += 1) await Bun.sleep(20);
+        expect(await Bun.file(ready).exists()).toBe(true);
+
+        // ロックの中に入ったことを、離した印がまだ無いことで確かめる。無ければ deferred でも immediate でも同じ結果になり、
+        // この検査に判別能力が無い (そのときはテストを落として知らせる)
+        expect(await Bun.file(`${ready}.done`).exists()).toBe(false);
+        // 目印を読む SELECT を書き込みロックより先にすると、ロックの解放後に SQLITE_BUSY_SNAPSHOT で落ちる
+        expect(ingest(db, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } })])).toBe(1);
+        for (let i = 0; i < 100 && !(await Bun.file(`${ready}.done`).exists()); i += 1) await Bun.sleep(20);
+        expect(await Bun.file(`${ready}.done`).exists()).toBe(true);
+
+        const mark = db.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get() as { n: number };
+        expect(mark.n).toBe(1);
+      } finally {
+        holder.kill();
+        await holder.exited;
+        db.$client.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
