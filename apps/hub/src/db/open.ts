@@ -56,7 +56,7 @@ export function openDb(path: string): Db {
  * 古い版の center が書いた分と、その後でこの版が書いた分 (目印が末尾に居ないので進めなかった) がある。古い版が集計表も足していた
  * か (#335〜#346) いないか (#335 より前) はこちらから分からず、1 件ずつ足し直すと前者で件数が二重になるので、触れた session の行
  * を消して作り直す。宣言状態や session の無い行の鍵も混ざるが、作り直しの絞り込みで何も入らない。ふだんは 0 行で、rowid の範囲
- * を索引で引くだけ
+ * を rowid の B-tree で引くだけ
  */
 function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: number): void {
   const keys = sqlite
@@ -67,7 +67,7 @@ function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: num
 
 type SessionKey = { machine: string; os_user: string; session_id: string };
 
-/** 1 文に入れる session の数。1 件に 3 個の変数を使うので 1 文 1,500 個で、SQLite の 1 文の上限 (3.32 以降 32,766) に収まる */
+/** 1 文に入れる session の数。1 件に 3 個の変数を使うので 1 文 1,500 個ほどで、SQLite の 1 文の上限 (3.32 以降 32,766) に収まる */
 const KEY_CHUNK = 500;
 
 /**

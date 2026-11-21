@@ -8,9 +8,10 @@
  */
 import { Database } from "bun:sqlite";
 
-const [dbPath, readyFile, holdMsRaw] = process.argv.slice(2);
+// sql を渡すと、ロックを持っている間にそれを書く (ロックの間に他のプロセスが書いた行を作るため)
+const [dbPath, readyFile, holdMsRaw, writeSql] = process.argv.slice(2);
 if (!dbPath || !readyFile) {
-  process.stderr.write("usage: lock-holder <db> <ready-file> [hold-ms]\n");
+  process.stderr.write("usage: lock-holder <db> <ready-file> [hold-ms] [sql]\n");
   process.exit(2);
 }
 const holdMs = Number(holdMsRaw ?? 400);
@@ -19,7 +20,7 @@ const db = new Database(dbPath, { create: true });
 db.exec("PRAGMA busy_timeout = 0");
 db.exec("CREATE TABLE IF NOT EXISTS lock_probe (x INTEGER)");
 db.exec("BEGIN EXCLUSIVE");
-db.exec("INSERT INTO lock_probe (x) VALUES (1)");
+db.exec(writeSql ?? "INSERT INTO lock_probe (x) VALUES (1)");
 
 await Bun.write(readyFile, "locked");
 await Bun.sleep(holdMs);

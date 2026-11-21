@@ -176,8 +176,8 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
       accepted += 1;
     }
     return accepted;
-    // 目印を読む SELECT が先に来るので、deferred だと読んだ後で書き込みに上げるときに、間に他プロセスが書いていると
-    // SQLITE_BUSY_SNAPSHOT で落ちる (busy_timeout では待てない)。書き込みロックを先に取る (#340)
+    // 上の目印を読む SELECT が先に来るので、deferred だと WAL (openDb が設定する) では読んだ後で書き込みに上げるときに、
+    // 間に他プロセスが書いていると SQLITE_BUSY_SNAPSHOT で落ちる (busy_timeout では待てない)。書き込みロックを先に取る (#340)
   }, { behavior: "immediate" });
 }
 
