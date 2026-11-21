@@ -631,9 +631,13 @@ describe("ingest と他プロセスの書き込みが重なったとき (#340)",
         for (let i = 0; i < 100 && !(await Bun.file(ready).exists()); i += 1) await Bun.sleep(20);
         expect(await Bun.file(ready).exists()).toBe(true);
 
-        // 目印を読む SELECT を書き込みロックより先にすると、ロックの解放後に SQLITE_BUSY_SNAPSHOT で落ちる。保持を 1.5 秒に
-        // して、ready を見てからここに来るまでに親が遅れても、まだロックの中に入るようにしてある
+        // ロックの中に入ったことを、離した印がまだ無いことで確かめる。無ければ deferred でも immediate でも同じ結果になり、
+        // この検査に判別能力が無い (そのときはテストを落として知らせる)
+        expect(await Bun.file(`${ready}.done`).exists()).toBe(false);
+        // 目印を読む SELECT を書き込みロックより先にすると、ロックの解放後に SQLITE_BUSY_SNAPSHOT で落ちる
         expect(ingest(db, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } })])).toBe(1);
+        for (let i = 0; i < 100 && !(await Bun.file(`${ready}.done`).exists()); i += 1) await Bun.sleep(20);
+        expect(await Bun.file(`${ready}.done`).exists()).toBe(true);
 
         const mark = db.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get() as { n: number };
         expect(mark.n).toBe(1);

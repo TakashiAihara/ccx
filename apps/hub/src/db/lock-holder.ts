@@ -27,3 +27,5 @@ await Bun.sleep(holdMs);
 
 db.exec("COMMIT");
 db.close();
+// 離した後で知らせる。待つ側は、自分の操作の前にこれが無かったことで、ロックの中に入ったと言える
+await Bun.write(`${readyFile}.done`, "released");
