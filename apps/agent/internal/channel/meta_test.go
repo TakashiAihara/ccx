@@ -109,3 +109,22 @@ func TestAutoMetaGivesNoBranchOnADetachedCheckout(t *testing.T) {
 		t.Fatalf("branch %q on a detached checkout", b)
 	}
 }
+
+func TestRepoOfReadsOnlyThePathSoNoCredentialsLeak(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://github.com/octo/repo.git":              "octo/repo",
+		"https://user:secret@git.example/repo.git":      "",
+		"https://user:secret@git.example/octo/repo.git": "octo/repo",
+		"ssh://git@host:2222/octo/repo.git":             "octo/repo",
+		"ssh://git@host/repo.git":                       "",
+		"git@host:octo/repo.git":                        "octo/repo",
+		"host:repo.git":                                 "",
+		"https://gitlab.example/group/sub/repo/":        "sub/repo",
+		"/srv/git/team/tool.git":                        "team/tool",
+		"":                                              "",
+	} {
+		if got := repoOf(url); got != want {
+			t.Errorf("repoOf(%q) = %q, want %q", url, got, want)
+		}
+	}
+}

@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage, senderMeta, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, repoOf, sendMessage, senderMeta, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -492,4 +492,38 @@ test("the command adds this session's meta unless --no-meta or [message] meta sa
 
   const r = await send(["--meta", "Task=x"]);
   expect([r.code, r.err]).toEqual([1, expect.stringContaining("--meta takes key=value")]);
+});
+
+test("repoOf reads only the path, so no credentials leak, and agrees with ccx-agent's", () => {
+  const cases: [string, string | undefined][] = [
+    ["https://github.com/octo/repo.git", "octo/repo"],
+    ["https://user:secret@git.example/repo.git", undefined],
+    ["https://user:secret@git.example/octo/repo.git", "octo/repo"],
+    ["ssh://git@host:2222/octo/repo.git", "octo/repo"],
+    ["ssh://git@host/repo.git", undefined],
+    ["git@host:octo/repo.git", "octo/repo"],
+    ["host:repo.git", undefined],
+    ["https://gitlab.example/group/sub/repo/", "sub/repo"],
+    ["/srv/git/team/tool.git", "team/tool"],
+    ["", undefined],
+  ];
+  expect(cases.map(([u]) => repoOf(u))).toEqual(cases.map(([, w]) => w));
+});
+
+test("--meta without = is refused, and an unreadable declaration does not stop the send", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml") };
+  const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--meta", "task", "hi"], env, repo);
+  expect([r.code, r.err]).toEqual([1, expect.stringContaining("--meta takes key=value")]);
+
+  // A meta that is a file, not a directory, makes readDeclared throw (ENOTDIR, root or not).
+  writeFileSync(join(home, "sessions", SID, "meta"), "");
+  const ok = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "hi"], env, repo);
+  expect(ok.code).toBe(0);
+  expect([got?.senderMeta.from_session, got?.senderMeta.from_label]).toEqual([SID, undefined]);
 });

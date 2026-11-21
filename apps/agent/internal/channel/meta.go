@@ -4,7 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+
 	"strings"
 	"time"
 
@@ -12,19 +12,33 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/message"
 )
 
-// originRepo is owner/repo at the end of a remote URL (https, ssh or scp form).
-var originRepo = regexp.MustCompile(`([^/:]+/[^/]+?)(\.git)?/?$`)
+// repoOf is owner/repo, the last two parts of a remote's path, or "" when the path has fewer. Only the path is
+// read: the part before it (scheme://user:password@host, or user@host: in scp form) can hold credentials.
+func repoOf(url string) string {
+	path := url
+	if i := strings.Index(url, "://"); i >= 0 {
+		rest := url[i+3:]
+		j := strings.Index(rest, "/")
+		if j < 0 {
+			return ""
+		}
+		path = rest[j:]
+	} else if i := strings.Index(url, ":"); i >= 0 {
+		path = url[i+1:]
+	}
+	segs := strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/")
+	if len(segs) < 2 || segs[len(segs)-2] == "" || segs[len(segs)-1] == "" {
+		return ""
+	}
+	return segs[len(segs)-2] + "/" + segs[len(segs)-1]
+}
 
 // autoMeta is what a send from this session says about itself (#346): its session id, cwd, the git repo and
 // branch there, its declared label and role, and the msg_id it answers. A value it cannot find or show is
 // left out.
 func autoMeta(sessionID, home, cwd, replyTo string) map[string]string {
 	m := map[string]string{message.MetaSession: sessionID, message.MetaCwd: cwd, message.MetaInReplyTo: replyTo}
-	if url := gitOut(cwd, "remote", "get-url", "origin"); url != "" {
-		if g := originRepo.FindStringSubmatch(url); g != nil {
-			m[message.MetaRepo] = g[1]
-		}
-	}
+	m[message.MetaRepo] = repoOf(gitOut(cwd, "remote", "get-url", "origin"))
 	// Nothing on a detached checkout; a branch with no commit yet still has its name.
 	m[message.MetaBranch] = gitOut(cwd, "symbolic-ref", "--short", "-q", "HEAD")
 	dir := filepath.Join(home, "sessions", sessionID)
@@ -48,4 +62,3 @@ func gitOut(dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-

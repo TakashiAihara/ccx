@@ -120,8 +120,26 @@ const metaValueOK = (v: string) => META_VALUE.test(v) && Buffer.byteLength(v) <=
 function addPair(v: string, prev?: MetaOption): MetaOption {
   const eq = v.indexOf("=");
   const key = eq < 0 ? v : v.slice(0, eq);
-  if (!META_KEY.test(key) || !metaValueOK(v.slice(eq + 1))) throw new InvalidArgumentError("--meta takes key=value: key 1 to 32 of a-z 0-9 _, value one line of at most 256 bytes");
+  if (eq < 0 || !META_KEY.test(key) || !metaValueOK(v.slice(eq + 1))) throw new InvalidArgumentError("--meta takes key=value: key 1 to 32 of a-z 0-9 _, value one line of at most 256 bytes");
   return { auto: prev?.auto ?? true, pairs: [...(prev?.pairs ?? []), v] };
+}
+
+/**
+ * owner/repo, the last two parts of a remote's path, or undefined when it has fewer. Only the path is read: what
+ * comes before it (scheme://user:password@host, or user@host: in scp form) can hold credentials. ccx-agent's
+ * repoOf (apps/agent/internal/channel/meta.go) reads it the same way.
+ */
+export function repoOf(url: string): string | undefined {
+  let path = url;
+  const scheme = url.indexOf("://");
+  if (scheme >= 0) {
+    const slash = url.indexOf("/", scheme + 3);
+    if (slash < 0) return undefined;
+    path = url.slice(slash);
+  } else if (url.includes(":")) path = url.slice(url.indexOf(":") + 1);
+  const segs = path.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "").split("/");
+  const [owner, repo] = segs.slice(-2);
+  return segs.length >= 2 && owner && repo ? `${owner}/${repo}` : undefined;
 }
 
 /** git's trimmed output in cwd, or "" when git is missing, fails, or takes over 2 s. */
@@ -141,8 +159,9 @@ export async function senderMeta(o: MetaOption & { session?: string; reply?: str
   const m: Record<string, string> = {};
   if (o.auto) {
     // Only a Claude Code session declares (ccx session label / role); a Devin name finds no files.
-    const declared = o.session ? await readDeclared(o.session, o.home) : undefined;
-    const repo = /([^/:]+\/[^/]+?)(\.git)?\/?$/.exec(gitOut(o.cwd, "remote", "get-url", "origin"))?.[1];
+    // An unreadable declaration leaves label and role out; it does not stop the send.
+    const declared = o.session ? await readDeclared(o.session, o.home).catch(() => undefined) : undefined;
+    const repo = repoOf(gitOut(o.cwd, "remote", "get-url", "origin"));
     const found: Record<string, string | undefined> = {
       from_session: o.session, from_cwd: o.cwd, from_repo: repo,
       // Nothing on a detached checkout; a branch with no commit yet still has its name.
