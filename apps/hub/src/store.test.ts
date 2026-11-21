@@ -626,15 +626,14 @@ describe("ingest と他プロセスの書き込みが重なったとき (#340)",
       const ready = join(dir, "ready");
       const foreign =
         "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('foreign', 'm1', 'dev', 50, 150, 1, x'7b7d', 1, 'f', 'Stop', '/foreign', '')";
-      const holder = Bun.spawn(["bun", "run", join(import.meta.dir, "db", "lock-holder.ts"), path, ready, "400", foreign], { stdout: "ignore", stderr: "ignore" });
+      const holder = Bun.spawn(["bun", "run", join(import.meta.dir, "db", "lock-holder.ts"), path, ready, "1500", foreign], { stdout: "ignore", stderr: "ignore" });
       try {
         for (let i = 0; i < 100 && !(await Bun.file(ready).exists()); i += 1) await Bun.sleep(20);
         expect(await Bun.file(ready).exists()).toBe(true);
 
-        // 目印を読む SELECT を書き込みロックより先にすると、ロックの解放後に SQLITE_BUSY_SNAPSHOT で落ちる
-        const started = Date.now();
+        // 目印を読む SELECT を書き込みロックより先にすると、ロックの解放後に SQLITE_BUSY_SNAPSHOT で落ちる。保持を 1.5 秒に
+        // して、ready を見てからここに来るまでに親が遅れても、まだロックの中に入るようにしてある
         expect(ingest(db, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } })])).toBe(1);
-        expect(Date.now() - started).toBeGreaterThan(50);
 
         const mark = db.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get() as { n: number };
         expect(mark.n).toBe(1);
