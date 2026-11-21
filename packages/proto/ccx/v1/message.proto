@@ -68,6 +68,13 @@ message SendRequest {
   // 0 ends after working / not-started, as before. For later it is how long to wait for the receiver's next
   // turn to take it. Needs Devin's hooks wired to `ccx-agent devin-hook`.
   uint32 wait_seconds = 8;
+  // The machine and OS user of the ccx-agent the sender went through. That ccx-agent fills them with its own,
+  // whatever the caller put there, so the receiver can tell (and send back to) where it came from (#334).
+  string sender_machine = 9;
+  string sender_user = 10;
+  // Instead of target / machine / user: a msg_id the caller's ccx-agent delivered to it, which that agent
+  // turns into the sender's name, machine and user. The agent remembers the ids it delivered for a while.
+  string reply_to = 11;
 }
 
 // A question the receiver put to its user (Devin's ask_user_question).

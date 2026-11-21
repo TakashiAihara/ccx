@@ -379,6 +379,42 @@ test("a --wait whose stream ends without the agent saying it ran out exits 0, ho
   expect([r.code, r.out]).toEqual([0, "sent\nnot-started\n"]);
 });
 
+test("--reply sends the msg_id for the agent to turn into the target, and every word is the body", async () => {
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const r = await runCli(["msg", "send", "--reply", "870ca1f60db13297", "--socket", socket, "--summary", "re", "--from", "me", "reply", "received"], {});
+  expect([r.code, r.out]).toEqual([0, "sent\n"]);
+  expect([got?.replyTo, got?.target, got?.body, got?.machine, got?.user]).toEqual(["870ca1f60db13297", "", "reply received", "", ""]);
+
+  const plain = await runCli(["msg", "send", "quick-kitten", "--socket", socket, "--summary", "s", "--from", "me", "hi", "there"], {});
+  expect(plain.code).toBe(0);
+  expect([got?.replyTo, got?.target, got?.body]).toEqual(["", "quick-kitten", "hi there"]);
+});
+
+test("--reply goes alone: with -m / -u, without a message, or with no target and no --reply, nothing is sent", async () => {
+  let sent = 0;
+  const socket = fakeAgent(async function* () {
+    sent++;
+    yield { state: SendResponse_State.SENT };
+  });
+  const base = ["msg", "send", "--socket", socket, "--summary", "s", "--from", "me"];
+  for (const [args, why] of [
+    [["--reply", "id1", "-m", "x", "hi"], "--reply takes the place of <target>, -m and -u"],
+    [["--reply", "id1", "-u", "x", "hi"], "--reply takes the place of <target>, -m and -u"],
+    [["--reply", "id1"], "give the message"],
+    [["--reply", "", "word1", "word2"], "--reply needs a msg_id"],
+    [["quick-kitten"], "give the message"],
+    [[], "give <target>, or --reply <msg_id>"],
+  ] as const) {
+    const r = await runCli([...base, ...args], {});
+    expect([r.code, r.err]).toEqual([1, expect.stringContaining(why)]);
+  }
+  expect(sent).toBe(0);
+});
+
 // Bun's fetch cuts a response that has been silent for about 6 minutes; a --wait on an unanswered question goes past that (#318).
 test("the agent's stream is fetched with Bun's own timeout off", async () => {
   const real = globalThis.fetch;

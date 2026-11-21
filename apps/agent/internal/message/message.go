@@ -57,7 +57,29 @@ type Request struct {
 	Mode                          ccxv1.DeliveryMode
 	// WaitSeconds keeps the send going after sent for the question / done acks.
 	WaitSeconds uint32
+	// SenderMachine / SenderUser are where it came from (the sending ccx-agent's own; empty from one too old to
+	// fill them), and MsgID the id a reply to it names, which the delivering agent makes up (#334).
+	SenderMachine, SenderUser, MsgID string
+	// ReplyLine is typed under the body for Devin (where it came from, how to answer). It is not the body: the
+	// body's checks (empty, size) see only what the sender wrote.
+	ReplyLine string
+	// onTaken runs when a turn takes a later message (Devin's next UserPromptSubmit).
+	onTaken func()
 }
+
+// typed is what goes into a Devin pane under the header: the body, and the reply line when there is one.
+func (r Request) typed() string {
+	if r.ReplyLine == "" {
+		return r.Body
+	}
+	return r.Body + "\n" + r.ReplyLine
+}
+
+// MetaFromMachine / MetaFromUser are the channel event's attributes naming the sender's machine and user.
+const (
+	MetaFromMachine = "from_machine"
+	MetaFromUser    = "from_user"
+)
 
 // Devin delivers to Devin sessions running in herdr panes.
 type Devin struct {
@@ -315,7 +337,7 @@ func (d *Devin) send(ctx context.Context, req Request, emit func(*ccxv1.SendResp
 		var cancel func()
 		events, cancel = d.hooks().subscribe(req.Target)
 		defer cancel()
-		beforeTyping = func() { ts, drop = d.hooks().expect(req.Target, header+"\n"+req.Body) }
+		beforeTyping = func() { ts, drop = d.hooks().expect(req.Target, header+"\n"+req.typed()) }
 	}
 	err := d.typeIn(ctx, req, header, emit, typed, beforeTyping)
 	if drop != nil {
@@ -351,7 +373,7 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 	}
 	// A header sent before is already in the history; only a new one counts. Read
 	// before the screen, so the box is looked at right before typing.
-	lines := strconv.Itoa(historyLines(req.Body))
+	lines := strconv.Itoa(historyLines(req.typed()))
 	before, err := d.Herdr(ctx, "agent", "read", p.ID, "--source", "recent-unwrapped", "--format", "text", "--lines", lines)
 	if err != nil {
 		return connect.NewError(connect.CodeUnavailable, err)
@@ -429,13 +451,13 @@ func (d *Devin) typeIn(ctx context.Context, req Request, header string, emit fun
 
 	beforeTyping()
 	*typed = true
-	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.Body); err != nil {
+	if _, err := d.Herdr(ctx, "agent", "prompt", p.ID, header+"\n"+req.typed()); err != nil {
 		// herdr may have written part of it before failing.
 		return connect.NewError(connect.CodeUnknown, err)
 	}
 
 	// A long body takes longer to paste and render.
-	wait := d.SentWait + time.Duration(len(req.Body)/(16<<10))*time.Second
+	wait := d.SentWait + time.Duration(len(req.typed())/(16<<10))*time.Second
 	if queues {
 		inQueue, err := d.waitQueued(ctx, p.ID, header, seen, lines, wait)
 		if err != nil {
@@ -733,10 +755,40 @@ type Service struct {
 	Machine, User string
 	Relay         *Relay
 	Log           func(string, ...any)
+
+	booked  sync.Once
+	replies *replyBook
+}
+
+func (s *Service) book() *replyBook {
+	s.booked.Do(func() {
+		if s.replies == nil {
+			s.replies = newReplyBook(time.Now)
+		}
+	})
+	return s.replies
 }
 
 func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendRequest], stream *connect.ServerStream[ccxv1.SendResponse]) error {
-	return s.route(ctx, req.Msg, stream.Send, s.Deliver)
+	return s.send(ctx, req.Msg, stream.Send)
+}
+
+// send takes a send from this agent's socket: it names this agent as where it came from and turns a reply_to
+// into its target, then routes it.
+func (s *Service) send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
+	// This agent's own, whatever the caller said: the receiver sends replies here (#334).
+	m.SenderMachine, m.SenderUser = s.Machine, s.User
+	if id := m.GetReplyTo(); id != "" {
+		if m.GetTarget() != "" || m.GetMachine() != "" || m.GetUser() != "" {
+			return markNotTyped(connect.NewError(connect.CodeInvalidArgument, errors.New("reply_to takes the place of target, machine and user; give one or the other")))
+		}
+		to, ok := s.book().get(id)
+		if !ok {
+			return markNotTyped(connect.NewError(connect.CodeNotFound, fmt.Errorf("this ccx-agent delivered no message with msg_id %s in the last %d days (it forgets them when it restarts)", id, int(replyKeep.Hours()/24))))
+		}
+		m.Target, m.Machine, m.User, m.ReplyTo = to.Sender, to.Machine, to.User, ""
+	}
+	return s.route(ctx, m, emit, s.Deliver)
 }
 
 // route hands m to local when it is for this agent, and to the relay otherwise.
@@ -763,17 +815,71 @@ func (s *Service) route(ctx context.Context, m *ccxv1.SendRequest, emit func(*cc
 // from the center for this machine.
 func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	var last ccxv1.SendResponse_State
-	req := Request{Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds()}
+	req := Request{
+		Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds(),
+		SenderMachine: m.GetSenderMachine(), SenderUser: m.GetSenderUser(), MsgID: newMsgID(),
+	}
 	send := s.Devin.Send
 	if IsClaudeSession(req.Target) {
 		send = s.sendClaude
 	}
+	// Both halves, or a reply would be routed with the replier's own user filling the gap. Each one line without
+	// control characters, as the sender line is: a put through the center names them as it likes, and they are
+	// typed into Devin and set as channel attributes.
+	if !originOK(req.SenderMachine) || !originOK(req.SenderUser) {
+		req.SenderMachine, req.SenderUser = "", ""
+	}
+	booked := req.SenderMachine != "" && req.SenderUser != ""
+	if booked {
+		// Booked before it is typed: the receiver can answer while a --wait still holds this send.
+		to := replyTo{Sender: req.Sender, Machine: req.SenderMachine, User: req.SenderUser}
+		s.book().add(req.MsgID, to)
+		// A later message can wait in the queue for days: the id's time starts again when a turn takes it.
+		req.onTaken = func() {
+			s.book().add(req.MsgID, to)
+			s.book().confirm(req.MsgID)
+		}
+		// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
+		if !IsClaudeSession(req.Target) {
+			req.ReplyLine = devinReplyLine(req)
+		}
+	}
 	err := send(ctx, req, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
+		// Sent is the receiver having it: confirm then, not when a --wait ends, so waiting sends do not sit
+		// outside the count of 1000.
+		if booked && last == ccxv1.SendResponse_STATE_SENT {
+			s.book().confirm(req.MsgID)
+		}
 		return emit(r)
 	})
+	// Nobody saw an id that was never typed: drop it, and only a send that reached the receiver makes room.
+	if booked && notTyped(err) {
+		s.book().remove(req.MsgID)
+	} else if booked {
+		s.book().confirm(req.MsgID)
+	}
 	s.logSend(m, "", last, err)
 	return err
+}
+
+// MaxOrigin bounds a sender_machine / sender_user (a host or user name).
+const MaxOrigin = 255
+
+// originOK is whether a sender_machine / sender_user can be shown: one line, no control characters, not too long.
+func originOK(s string) bool {
+	return utf8.ValidString(s) && len(s) <= MaxOrigin && oneLine.MatchString(s)
+}
+
+// notTyped reports whether err carries NotTypedKey: nothing reached the receiver.
+func notTyped(err error) bool {
+	ce := new(connect.Error)
+	return errors.As(err, &ce) && ce.Meta().Get(NotTypedKey) == "1"
+}
+
+// devinReplyLine is the line typed under the body for Devin: where it came from and how to answer it.
+func devinReplyLine(req Request) string {
+	return fmt.Sprintf("(ccx: from %s/%s, reply: ccx msg send --reply %s --summary \"...\" \"...\")", req.SenderMachine, req.SenderUser, req.MsgID)
 }
 
 func (s *Service) logSend(m *ccxv1.SendRequest, via string, last ccxv1.SendResponse_State, err error) {

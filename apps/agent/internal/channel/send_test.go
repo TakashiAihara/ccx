@@ -74,6 +74,23 @@ func TestSendToolSendsAsThisSessionAndListsTheAcks(t *testing.T) {
 	}
 }
 
+func TestSendToolRepliesByMsgIDAndNeedsATargetOrAReplyTo(t *testing.T) {
+	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}}
+	tool := SendTool(sid, messagesClient(t, f))
+	if text, isErr := call(t, tool, `{"reply_to":"870ca1f60db13297","body":"ok","summary":"re"}`); isErr || text != "sent" {
+		t.Fatalf("text %q, isErr %v", text, isErr)
+	}
+	if g := f.got; g.GetReplyTo() != "870ca1f60db13297" || g.GetTarget() != "" || g.GetSender() != sid || g.GetBody() != "ok" {
+		t.Fatalf("request %v", g)
+	}
+
+	f.got = nil
+	text, isErr := call(t, tool, `{"body":"ok","summary":"re"}`)
+	if !isErr || text != "not sent: give target, or reply_to" || f.got != nil {
+		t.Fatalf("text %q, sent %v", text, f.got)
+	}
+}
+
 func TestSendToolDefaultsToAfterTurnAndRefusesAnUnknownMode(t *testing.T) {
 	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}}
 	tool := SendTool(sid, messagesClient(t, f))

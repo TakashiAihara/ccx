@@ -260,7 +260,14 @@ type SendRequest struct {
 	// How long, in seconds, to keep the stream open after sent for the receiver's question / done (up to 3600).
 	// 0 ends after working / not-started, as before. For later it is how long to wait for the receiver's next
 	// turn to take it. Needs Devin's hooks wired to `ccx-agent devin-hook`.
-	WaitSeconds   uint32 `protobuf:"varint,8,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
+	WaitSeconds uint32 `protobuf:"varint,8,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
+	// The machine and OS user of the ccx-agent the sender went through. That ccx-agent fills them with its own,
+	// whatever the caller put there, so the receiver can tell (and send back to) where it came from (#334).
+	SenderMachine string `protobuf:"bytes,9,opt,name=sender_machine,json=senderMachine,proto3" json:"sender_machine,omitempty"`
+	SenderUser    string `protobuf:"bytes,10,opt,name=sender_user,json=senderUser,proto3" json:"sender_user,omitempty"`
+	// Instead of target / machine / user: a msg_id the caller's ccx-agent delivered to it, which that agent
+	// turns into the sender's name, machine and user. The agent remembers the ids it delivered for a while.
+	ReplyTo       string `protobuf:"bytes,11,opt,name=reply_to,json=replyTo,proto3" json:"reply_to,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -349,6 +356,27 @@ func (x *SendRequest) GetWaitSeconds() uint32 {
 		return x.WaitSeconds
 	}
 	return 0
+}
+
+func (x *SendRequest) GetSenderMachine() string {
+	if x != nil {
+		return x.SenderMachine
+	}
+	return ""
+}
+
+func (x *SendRequest) GetSenderUser() string {
+	if x != nil {
+		return x.SenderUser
+	}
+	return ""
+}
+
+func (x *SendRequest) GetReplyTo() string {
+	if x != nil {
+		return x.ReplyTo
+	}
+	return ""
 }
 
 // A question the receiver put to its user (Devin's ask_user_question).
@@ -1078,7 +1106,7 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\x10DevinHookRequest\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\"+\n" +
 	"\x11DevinHookResponse\x12\x16\n" +
-	"\x06output\x18\x01 \x01(\tR\x06output\"\xe6\x01\n" +
+	"\x06output\x18\x01 \x01(\tR\x06output\"\xc9\x02\n" +
 	"\vSendRequest\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12(\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x14.ccx.v1.DeliveryModeR\x04mode\x12\x18\n" +
@@ -1087,7 +1115,12 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\x06sender\x18\x05 \x01(\tR\x06sender\x12\x18\n" +
 	"\amachine\x18\x06 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\a \x01(\tR\x04user\x12!\n" +
-	"\fwait_seconds\x18\b \x01(\rR\vwaitSeconds\"\xb3\x01\n" +
+	"\fwait_seconds\x18\b \x01(\rR\vwaitSeconds\x12%\n" +
+	"\x0esender_machine\x18\t \x01(\tR\rsenderMachine\x12\x1f\n" +
+	"\vsender_user\x18\n" +
+	" \x01(\tR\n" +
+	"senderUser\x12\x19\n" +
+	"\breply_to\x18\v \x01(\tR\areplyTo\"\xb3\x01\n" +
 	"\bQuestion\x12\x1a\n" +
 	"\bquestion\x18\x01 \x01(\tR\bquestion\x12\x16\n" +
 	"\x06header\x18\x02 \x01(\tR\x06header\x121\n" +
