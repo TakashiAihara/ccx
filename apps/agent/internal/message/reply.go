@@ -1,6 +1,7 @@
 package message
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -39,9 +40,11 @@ func (b *replyBook) add(id string, to replyTo) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	to.at = b.now()
-	if _, ok := b.ids[id]; !ok {
-		b.order = append(b.order, id)
+	// Booked again (a later message a turn took), it goes to the back as the newest.
+	if i := slices.Index(b.order, id); i >= 0 {
+		b.order = slices.Delete(b.order, i, i+1)
 	}
+	b.order = append(b.order, id)
 	b.ids[id] = to
 }
 

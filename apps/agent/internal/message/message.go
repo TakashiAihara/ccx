@@ -63,6 +63,8 @@ type Request struct {
 	// ReplyLine is typed under the body for Devin (where it came from, how to answer). It is not the body: the
 	// body's checks (empty, size) see only what the sender wrote.
 	ReplyLine string
+	// onTaken runs when a turn takes a later message (Devin's next UserPromptSubmit).
+	onTaken func()
 }
 
 // typed is what goes into a Devin pane under the header: the body, and the reply line when there is one.
@@ -825,7 +827,13 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	booked := req.SenderMachine != "" && req.SenderUser != ""
 	if booked {
 		// Booked before it is typed: the receiver can answer while a --wait still holds this send.
-		s.book().add(req.MsgID, replyTo{Sender: req.Sender, Machine: req.SenderMachine, User: req.SenderUser})
+		to := replyTo{Sender: req.Sender, Machine: req.SenderMachine, User: req.SenderUser}
+		s.book().add(req.MsgID, to)
+		// A later message can wait in the queue for days: the id's time starts again when a turn takes it.
+		req.onTaken = func() {
+			s.book().add(req.MsgID, to)
+			s.book().trim()
+		}
 		// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
 		if !IsClaudeSession(req.Target) {
 			req.ReplyLine = devinReplyLine(req)

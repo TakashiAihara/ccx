@@ -228,3 +228,36 @@ func TestTheReplyLineIsTypedUnderTheBody(t *testing.T) {
 		t.Fatalf("prompt = %q", p)
 	}
 }
+
+func TestALaterMessageTakenAfterDaysCanStillBeRepliedTo(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	d := newDevin(&fakeHerdr{panes: panesWith("working")})
+	svc := &Service{Devin: d, replies: newReplyBook(func() time.Time { return now })}
+	in := &ccxv1.SendRequest{Target: "excited-giraffe", Sender: "c1", Summary: "s", Body: "hello", Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER, SenderMachine: "d1", SenderUser: "root"}
+	if err := svc.Deliver(context.Background(), in, discard); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for k := range svc.book().ids {
+		id = k
+	}
+
+	// Taken eight days later: the id the turn reads is good for seven days from then.
+	now = now.Add(8 * 24 * time.Hour)
+	_ = hook(t, d, userPrompt("excited-giraffe", "p1", "next"))
+	now = now.Add(6 * 24 * time.Hour)
+	if to, ok := svc.book().get(id); !ok || to.Sender != "c1" || to.Machine != "d1" {
+		t.Fatalf("the id a turn took eight days in was gone six days later: %v %v", to, ok)
+	}
+}
+
+func TestBookingAnIDAgainMovesItToTheBack(t *testing.T) {
+	b := newReplyBook(time.Now)
+	for _, id := range []string{"a", "b", "c"} {
+		b.add(id, replyTo{Sender: id})
+	}
+	b.add("a", replyTo{Sender: "a"})
+	if fmt.Sprint(b.order) != "[b c a]" || len(b.ids) != 3 {
+		t.Fatalf("order %v ids %d", b.order, len(b.ids))
+	}
+}
