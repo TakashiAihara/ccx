@@ -10,6 +10,9 @@ import (
 type replyTo struct {
 	Sender, Machine, User string
 	at                    time.Time
+	// pending: booked before it is typed (a reply can come while a --wait still holds the send), not yet known to
+	// have reached the receiver. It does not count toward replyMax, so a send that fails cannot push one out.
+	pending bool
 }
 
 // replyBook remembers the msg_ids this agent delivered, so `ccx msg send --reply <msg_id>` can be sent back
@@ -34,12 +37,11 @@ func newReplyBook(now func() time.Time) *replyBook {
 	return &replyBook{ids: map[string]replyTo{}, now: now}
 }
 
-// add books id without dropping anything: until the send is known to have reached the receiver (trim), a
-// refused one must not push out ids that did.
+// add books id as pending, dropping nothing; confirm or remove settles it.
 func (b *replyBook) add(id string, to replyTo) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	to.at = b.now()
+	to.at, to.pending = b.now(), true
 	// Booked again (a later message a turn took), it goes to the back as the newest.
 	if i := slices.Index(b.order, id); i >= 0 {
 		b.order = slices.Delete(b.order, i, i+1)
@@ -48,14 +50,31 @@ func (b *replyBook) add(id string, to replyTo) {
 	b.ids[id] = to
 }
 
-// trim drops the oldest ids past replyMax.
-func (b *replyBook) trim() {
+// confirm marks id as having reached the receiver, then drops the oldest such ids past replyMax. Pending ones
+// are neither counted nor dropped.
+func (b *replyBook) confirm(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for len(b.order) > replyMax {
-		delete(b.ids, b.order[0])
-		b.order = b.order[1:]
+	to, ok := b.ids[id]
+	if !ok {
+		return
 	}
+	to.pending = false
+	b.ids[id] = to
+	n := 0
+	for _, o := range b.order {
+		if !b.ids[o].pending {
+			n++
+		}
+	}
+	b.order = slices.DeleteFunc(b.order, func(o string) bool {
+		if n <= replyMax || b.ids[o].pending {
+			return false
+		}
+		delete(b.ids, o)
+		n--
+		return true
+	})
 }
 
 func (b *replyBook) get(id string) (replyTo, bool) {

@@ -74,6 +74,7 @@ func TestARefusedSendDoesNotPushOutAnIDThatWasDelivered(t *testing.T) {
 	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes})}
 	for i := range replyMax {
 		svc.book().add(fmt.Sprint("id", i), replyTo{Sender: "x", Machine: "m", User: "u"})
+		svc.book().confirm(fmt.Sprint("id", i))
 	}
 	err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: "no-such-devin", Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}, discard)
 	if !notTyped(err) {
@@ -89,6 +90,7 @@ func TestADeliveredSendMakesRoomByDroppingTheOldestID(t *testing.T) {
 	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes}), Claude: testClaude(&fakeChannels{home: home, registered: true})}
 	for i := range replyMax {
 		svc.book().add(fmt.Sprint("id", i), replyTo{Sender: "x", Machine: "m", User: "u"})
+		svc.book().confirm(fmt.Sprint("id", i))
 	}
 	if err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}, discard); err != nil {
 		t.Fatal(err)
@@ -193,6 +195,7 @@ func TestTheReplyBookForgetsAfterSevenDaysAndKeepsTheLatestThousand(t *testing.T
 	now := time.Unix(1_800_000_000, 0)
 	b := newReplyBook(func() time.Time { return now })
 	b.add("a", replyTo{Sender: "x"})
+	b.confirm("a")
 	now = now.Add(7*24*time.Hour - time.Second)
 	if _, ok := b.get("a"); !ok {
 		t.Fatal("forgot before 7 days")
@@ -204,7 +207,7 @@ func TestTheReplyBookForgetsAfterSevenDaysAndKeepsTheLatestThousand(t *testing.T
 
 	for i := range 1001 {
 		b.add(fmt.Sprint("id", i), replyTo{Sender: "x"})
-		b.trim()
+		b.confirm(fmt.Sprint("id", i))
 	}
 	if _, ok := b.get("id0"); ok {
 		t.Fatal("kept more than 1000")
@@ -282,5 +285,41 @@ func TestAnOriginWithControlCharactersIsShownAsNone(t *testing.T) {
 	}
 	if ch.pushed[len(ch.pushed)-1].Meta[MetaFromUser] != "root" {
 		t.Fatalf("meta %v", ch.pushed[len(ch.pushed)-1].Meta)
+	}
+}
+
+// A sends and waits on herdr (pending) while B reaches the receiver; then A fails.
+func TestAPendingIDNeitherCountsNorIsDroppedWhileAnotherSendLands(t *testing.T) {
+	b := newReplyBook(time.Now)
+	for i := range replyMax {
+		b.add(fmt.Sprint("id", i), replyTo{Sender: "x"})
+		b.confirm(fmt.Sprint("id", i))
+	}
+	b.add("A", replyTo{Sender: "a"})
+	b.add("B", replyTo{Sender: "b"})
+	b.confirm("B")
+	if _, ok := b.get("A"); !ok {
+		t.Fatal("B landing dropped the pending A")
+	}
+	b.remove("A")
+	_, id0 := b.get("id0")
+	_, id1 := b.get("id1")
+	if id0 || !id1 || len(b.ids) != replyMax {
+		t.Fatalf("id0 %v id1 %v, %d ids (want exactly the oldest dropped, %d kept)", id0, id1, len(b.ids), replyMax)
+	}
+}
+
+// The oldest one is pending (a long --wait): making room skips it and drops the oldest delivered one.
+func TestMakingRoomSkipsAPendingIDEvenWhenItIsTheOldest(t *testing.T) {
+	b := newReplyBook(time.Now)
+	b.add("A", replyTo{Sender: "a"})
+	for i := range replyMax + 1 {
+		b.add(fmt.Sprint("id", i), replyTo{Sender: "x"})
+		b.confirm(fmt.Sprint("id", i))
+	}
+	_, a := b.get("A")
+	_, id0 := b.get("id0")
+	if !a || id0 || len(b.ids) != replyMax+1 {
+		t.Fatalf("A %v id0 %v, %d ids", a, id0, len(b.ids))
 	}
 }

@@ -837,7 +837,7 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 		// A later message can wait in the queue for days: the id's time starts again when a turn takes it.
 		req.onTaken = func() {
 			s.book().add(req.MsgID, to)
-			s.book().trim()
+			s.book().confirm(req.MsgID)
 		}
 		// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
 		if !IsClaudeSession(req.Target) {
@@ -852,7 +852,7 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	if booked && notTyped(err) {
 		s.book().remove(req.MsgID)
 	} else if booked {
-		s.book().trim()
+		s.book().confirm(req.MsgID)
 	}
 	s.logSend(m, "", last, err)
 	return err
