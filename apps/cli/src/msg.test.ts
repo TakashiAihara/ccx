@@ -515,6 +515,8 @@ test("repoOf reads only the path, so no credentials leak, and agrees with ccx-ag
     ["host:repo.git", undefined],
     ["https://gitlab.example/group/sub/repo/", "sub/repo"],
     ["/srv/git/team/tool.git", "team/tool"],
+    ["https://git.example/team/repo.git?x=y#z", "team/repo"],
+    ["https://git.example/team/re po.git", undefined],
     ["", undefined],
   ];
   expect(cases.map(([u]) => repoOf(u))).toEqual(cases.map(([, w]) => w));

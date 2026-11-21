@@ -135,11 +135,14 @@ export function repoOf(url: string): string | undefined {
   if (scheme >= 0) {
     const slash = url.indexOf("/", scheme + 3);
     if (slash < 0) return undefined;
-    path = url.slice(slash);
+    // The query and fragment can carry a token too.
+    path = url.slice(slash).split(/[?#]/)[0] ?? "";
   } else if (url.includes(":")) path = url.slice(url.indexOf(":") + 1);
   const segs = path.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "").split("/");
   const [owner, repo] = segs.slice(-2);
-  return segs.length >= 2 && owner && repo ? `${owner}/${repo}` : undefined;
+  // What a forge allows in a name: anything else is not one, and could be a secret.
+  const part = /^[A-Za-z0-9._-]+$/;
+  return owner !== undefined && repo !== undefined && part.test(owner) && part.test(repo) ? `${owner}/${repo}` : undefined;
 }
 
 /** git's trimmed output in cwd, or "" when git is missing, fails, or takes over 2 s. */

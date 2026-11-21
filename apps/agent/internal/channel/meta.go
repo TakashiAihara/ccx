@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 
 	"strings"
 	"time"
@@ -11,6 +12,9 @@ import (
 	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/message"
 )
+
+// repoPart is what a forge allows in an owner or repo name: anything else is not a name, and could be a secret.
+var repoPart = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // repoOf is owner/repo, the last two parts of a remote's path, or "" when the path has fewer. Only the path is
 // read: the part before it (scheme://user:password@host, or user@host: in scp form) can hold credentials.
@@ -22,12 +26,16 @@ func repoOf(url string) string {
 		if j < 0 {
 			return ""
 		}
+		// The query and fragment can carry a token too.
 		path = rest[j:]
+		if k := strings.IndexAny(path, "?#"); k >= 0 {
+			path = path[:k]
+		}
 	} else if i := strings.Index(url, ":"); i >= 0 {
 		path = url[i+1:]
 	}
 	segs := strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/")
-	if len(segs) < 2 || segs[len(segs)-2] == "" || segs[len(segs)-1] == "" {
+	if len(segs) < 2 || !repoPart.MatchString(segs[len(segs)-2]) || !repoPart.MatchString(segs[len(segs)-1]) {
 		return ""
 	}
 	return segs[len(segs)-2] + "/" + segs[len(segs)-1]
@@ -56,7 +64,10 @@ func autoMeta(sessionID, home, cwd, replyTo string) map[string]string {
 func gitOut(dir string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	// A git wrapper whose child keeps the pipe open would hold Output past the kill without this.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

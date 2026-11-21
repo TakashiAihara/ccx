@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
@@ -126,10 +127,25 @@ func TestRepoOfReadsOnlyThePathSoNoCredentialsLeak(t *testing.T) {
 		"host:repo.git":                                 "",
 		"https://gitlab.example/group/sub/repo/":        "sub/repo",
 		"/srv/git/team/tool.git":                        "team/tool",
+		"https://git.example/team/repo.git?x=y#z":       "team/repo",
+		"https://git.example/team/re po.git":            "",
 		"":                                              "",
 	} {
 		if got := repoOf(url); got != want {
 			t.Errorf("repoOf(%q) = %q, want %q", url, got, want)
 		}
+	}
+}
+
+func TestGitOutGivesUpOnAWrapperWhoseChildHoldsThePipe(t *testing.T) {
+	bin := t.TempDir()
+	// A git that hands its stdout to a child outliving it, and never answers itself.
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	start := time.Now()
+	if got := gitOut(t.TempDir(), "status"); got != "" || time.Since(start) > 6*time.Second {
+		t.Fatalf("got %q after %v", got, time.Since(start))
 	}
 }
