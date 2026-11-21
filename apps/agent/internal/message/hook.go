@@ -361,7 +361,7 @@ func (d *Devin) sendLater(ctx context.Context, req Request, wait time.Duration, 
 		events, cancel = h.subscribe(req.Target)
 		defer cancel()
 	}
-	q, err := h.queue(req.Target, headerLine(req.Sender, req.Summary)+"\n"+req.Body)
+	q, err := h.queue(req.Target, headerLine(req.Sender, req.Summary)+"\n"+req.typed())
 	if err != nil {
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	}

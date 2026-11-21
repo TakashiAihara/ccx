@@ -47,8 +47,38 @@ func TestClaudeSeesWhereAMessageCameFromAndAReplyToItsMsgIDGoesBackThere(t *test
 	if err := svc.send(context.Background(), reply, discard); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.puts) != 1 || f.puts[0].GetTarget() != "quick-kitten" || f.puts[0].GetMachine() != "WIN-TAKASHI" || f.puts[0].GetUser() != "admin" {
-		t.Fatalf("reply put %v", f.puts)
+	if len(f.puts) != 1 || f.puts[0].GetTarget() != "quick-kitten" || f.puts[0].GetMachine() != "WIN-TAKASHI" || f.puts[0].GetUser() != "admin" || f.puts[0].GetReplyTo() != "" {
+		t.Fatalf("reply put %v (reply_to is spent once it names the target)", f.puts)
+	}
+}
+
+func TestAnIDThatWasNeverTypedIsForgottenAndHalfAnOriginIsNotBooked(t *testing.T) {
+	home, _ := newTranscript(t, "")
+	ch := &fakeChannels{home: home, registered: true}
+	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes}), Claude: testClaude(ch)}
+
+	err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: "no-such-devin", Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}, discard)
+	if !notTyped(err) || len(svc.book().ids) != 0 || len(svc.book().order) != 0 {
+		t.Fatalf("err %v, booked %v", err, svc.book().ids)
+	}
+
+	if err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: "m"}, discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ch.pushed[0].Meta[MetaFromMachine]; ok || len(svc.book().ids) != 0 {
+		t.Fatalf("meta %v, booked %v", ch.pushed[0].Meta, svc.book().ids)
+	}
+}
+
+func TestTheReplyBookRemovesAnIDFromBothItsMapAndItsOrder(t *testing.T) {
+	b := newReplyBook(time.Now)
+	for _, id := range []string{"a", "b", "c"} {
+		b.add(id, replyTo{Sender: id})
+	}
+	b.remove("b")
+	b.remove("none")
+	if _, ok := b.get("b"); ok || len(b.ids) != 2 || fmt.Sprint(b.order) != "[a c]" {
+		t.Fatalf("ids %v order %v", b.ids, b.order)
 	}
 }
 
@@ -64,9 +94,31 @@ func TestDevinGetsALastLineSayingWhereItCameFromAndHowToReply(t *testing.T) {
 		id = k
 	}
 	out := hook(t, d, userPrompt("excited-giraffe", "p1", "next"))
-	want := fmt.Sprintf(`ccx: c1: s\nhello\n(ccx: from d1/root, reply: ccx msg send --reply %s \"...\")`, id)
+	want := fmt.Sprintf(`ccx: c1: s\nhello\n(ccx: from d1/root, reply: ccx msg send --reply %s --summary \"...\" \"...\")`, id)
 	if id == "" || !strings.Contains(out, want) {
 		t.Fatalf("hook output %s, want it to hold %s", out, want)
+	}
+}
+
+func TestTheReplyLineIsNotCountedAsTheBody(t *testing.T) {
+	d := newDevin(&fakeHerdr{panes: panesWith("working")})
+	svc := &Service{Devin: d}
+	from := func(body string) *ccxv1.SendRequest {
+		return &ccxv1.SendRequest{Target: "excited-giraffe", Sender: "c1", Summary: "s", Body: body, Mode: ccxv1.DeliveryMode_DELIVERY_MODE_LATER, SenderMachine: "d1", SenderUser: "root"}
+	}
+
+	err := svc.Deliver(context.Background(), from(""), discard)
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !notTyped(err) || !strings.Contains(err.Error(), "body is empty") {
+		t.Fatalf("empty body: %v", err)
+	}
+
+	full := strings.Repeat("x", MaxBody)
+	if err := svc.Deliver(context.Background(), from(full), discard); err != nil {
+		t.Fatalf("a body at the limit: %v", err)
+	}
+	out := hook(t, d, userPrompt("excited-giraffe", "p1", "next"))
+	if !strings.Contains(out, full[:100]) || !strings.Contains(out, `(ccx: from d1/root, reply: ccx msg send --reply `) {
+		t.Fatalf("hook output lacks the body or the reply line (%d bytes)", len(out))
 	}
 }
 
@@ -133,5 +185,17 @@ func TestTheReplyBookForgetsAfterSevenDaysAndKeepsTheLatestThousand(t *testing.T
 	}
 	if len(b.ids) != 1000 || len(b.order) != 1000 {
 		t.Fatalf("ids %d order %d", len(b.ids), len(b.order))
+	}
+}
+
+func TestTheReplyLineIsTypedUnderTheBody(t *testing.T) {
+	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, history: "❭ ccx: claude-a1b2c3d4: review 3\nline 1\n", status: []string{"idle", "working"}}
+	r := req(ccxv1.DeliveryMode_DELIVERY_MODE_UNSPECIFIED)
+	r.ReplyLine = "(ccx: from d1/root, reply: ...)"
+	if _, err := send(newDevin(f), r); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.prompted(); p == nil || p[3] != "ccx: claude-a1b2c3d4: review 3\nline 1\nline 2\n(ccx: from d1/root, reply: ...)" {
+		t.Fatalf("prompt = %q", p)
 	}
 }

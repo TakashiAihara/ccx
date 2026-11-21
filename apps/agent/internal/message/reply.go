@@ -56,3 +56,18 @@ func (b *replyBook) get(id string) (replyTo, bool) {
 	}
 	return to, true
 }
+
+func (b *replyBook) remove(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.ids[id]; !ok {
+		return
+	}
+	delete(b.ids, id)
+	for i, o := range b.order {
+		if o == id {
+			b.order = append(b.order[:i], b.order[i+1:]...)
+			break
+		}
+	}
+}

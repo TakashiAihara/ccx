@@ -405,6 +405,7 @@ test("--reply goes alone: with -m / -u, without a message, or with no target and
     [["--reply", "id1", "-m", "x", "hi"], "--reply takes the place of <target>, -m and -u"],
     [["--reply", "id1", "-u", "x", "hi"], "--reply takes the place of <target>, -m and -u"],
     [["--reply", "id1"], "give the message"],
+    [["--reply", "", "word1", "word2"], "--reply needs a msg_id"],
     [["quick-kitten"], "give the message"],
     [[], "give <target>, or --reply <msg_id>"],
   ] as const) {

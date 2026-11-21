@@ -502,10 +502,6 @@ func TestNotStartedSaysWhyStatusCouldNotBeRead(t *testing.T) {
 	}
 }
 
-func notTyped(err error) bool {
-	ce := new(connect.Error)
-	return errors.As(err, &ce) && ce.Meta().Get(NotTypedKey) == "1"
-}
 
 func TestSentNeedsTheExactHeaderLine(t *testing.T) {
 	// "review 10" sent earlier is not "review 1"; Devin pads the line with spaces.

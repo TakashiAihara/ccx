@@ -78,7 +78,7 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 		"msg_id": id,
 	}}
 	// Where it came from, so the receiver can send back with -m / -u, or with --reply <msg_id> (#334).
-	if req.SenderMachine != "" {
+	if req.SenderMachine != "" && req.SenderUser != "" {
 		ev.Meta[MetaFromMachine], ev.Meta[MetaFromUser] = req.SenderMachine, req.SenderUser
 	}
 	// The transcript's size before the push: the event is looked for only in what

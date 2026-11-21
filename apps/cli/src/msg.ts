@@ -190,11 +190,14 @@ export function registerMsg(program: Command): void {
     .option("--reply <msg_id>", "send back to whoever sent the message with this msg_id (shown with each message ccx delivered here), in place of <target> / -m / -u")
     .action(async (first: string | undefined, rest: string[], o: SendOptions) => {
       let state: "queued" | "sent" | undefined;
-      // With --reply every word is the body; the agent turns the id into the target.
-      const target = o.reply ? "" : (first ?? "");
-      const body = o.reply ? [first ?? "", ...rest].filter((w, i) => i > 0 || w !== "") : rest;
-      if (o.reply && (o.machine || o.user)) throw new InvalidArgumentError("--reply takes the place of <target>, -m and -u");
-      if (!o.reply && !target) throw new InvalidArgumentError("give <target>, or --reply <msg_id>");
+      // With --reply every word is the body; the agent turns the id into the target. Given at all, not
+      // truthy: an empty id (an unset variable) must not turn the first word into a target.
+      const replying = o.reply !== undefined;
+      if (replying && !o.reply) throw new InvalidArgumentError("--reply needs a msg_id");
+      const target = replying ? "" : (first ?? "");
+      const body = replying ? [first ?? "", ...rest].filter((w, i) => i > 0 || w !== "") : rest;
+      if (replying && (o.machine || o.user)) throw new InvalidArgumentError("--reply takes the place of <target>, -m and -u");
+      if (!replying && !target) throw new InvalidArgumentError("give <target>, or --reply <msg_id>");
       if (body.length === 0) throw new InvalidArgumentError("give the message");
       try {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
