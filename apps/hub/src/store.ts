@@ -126,6 +126,9 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
 
   return db.transaction((tx) => {
     let accepted = 0;
+    // 目印が events の末尾に居るときだけ、この ingest の後で末尾まで進める。末尾に居ないなら、目印の後に他の版の center が
+    // 書いた行があるので、進めるとその行を数えないまま越えてしまう。進めずに置けば次の起動で作り直す (#340)
+    const caughtUp = tx.all<{ ok: number }>(sql`SELECT (SELECT last_event_rowid FROM session_summary_mark WHERE id = 1) = (SELECT coalesce(max(rowid), 0) FROM events) AS ok`)[0]?.ok === 1;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const inserted = tx
         .insert(events)
@@ -142,7 +145,7 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         if (r.producer === Producer.CLAUDE_CODE_HOOK && r.sessionId !== "") summarize(tx, r);
       }
     }
-    if (rows.length > 0) markSummarized(tx);
+    if (rows.length > 0 && caughtUp) markSummarized(tx);
     // 同じ (machine, user) が同じバッチに 2 つあれば、後のものが残る
     for (const l of lists) {
       const ids = JSON.stringify(parseSessionIds(l));
@@ -258,7 +261,7 @@ export function markSummarized(tx: Pick<Db, "run">): void {
  * cwd / transcript_path / last_hook は (received_at_ms, seq) が今までより新しいときだけ置き換える。
  * ON CONFLICT の SET の右辺は全部更新前の行の値で評価される。
  */
-export function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sessionId: string; receivedAtMs: number; seq: number; hookEventName: string; cwd: string; transcriptPath: string }): void {
+function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sessionId: string; receivedAtMs: number; seq: number; hookEventName: string; cwd: string; transcriptPath: string }): void {
   const ended = r.hookEventName === "SessionEnd" ? r.receivedAtMs : null;
   const newer = sql`(excluded.last_seen_ms, excluded.last_seq) > (last_seen_ms, last_seq)`;
   tx.run(sql`

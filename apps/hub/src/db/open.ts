@@ -4,7 +4,7 @@ import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
-import { markSummarized, summarize } from "../store.ts";
+import { markSummarized } from "../store.ts";
 import * as schema from "./schema.ts";
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -52,27 +52,32 @@ export function openDb(path: string): Db {
 }
 
 /**
- * 目印より後に入った hook の event を、入った順 (rowid の順) に session_summary へ足す (#340)。ingest を通らずに入った行
- * (目印を進めない古い版の center が同じ DB に書いた分) がここに来る。ふだんは 0 行で、rowid の範囲を索引で引くだけ
+ * 目印より後に入った hook の event の session を、events から作り直す (#340)。ここに来るのは ingest で目印が進まなかった行
+ * (目印を知らない古い版の center が同じ DB に書いた分) で、その版が集計表も足していたか (#335〜#346) いないか (#335 より前)
+ * はこちらから分からない。1 件ずつ足し直すと前者で件数が二重になるので、触れた session の行を消して作り直す。ふだんは 0 行で、
+ * rowid の範囲を索引で引くだけ
  */
 function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: number): void {
-  const rows = sqlite
-    .query(
-      `SELECT machine, os_user AS user, session_id AS sessionId, received_at_ms AS receivedAtMs, seq, hook_event_name AS hookEventName, cwd, transcript_path AS transcriptPath
-       FROM events WHERE rowid > ? AND session_id != '' AND producer = ? ORDER BY rowid`,
-    )
-    .all(after, Producer.CLAUDE_CODE_HOOK) as Parameters<typeof summarize>[1][];
-  for (const r of rows) summarize(tx, r);
+  const keys = sqlite
+    .query(`SELECT DISTINCT machine, os_user, session_id FROM events WHERE rowid > ?`)
+    .all(after) as SessionKey[];
+  for (let i = 0; i < keys.length; i += KEY_CHUNK) buildSessionSummary(tx, keys.slice(i, i + KEY_CHUNK));
 }
 
+type SessionKey = { machine: string; os_user: string; session_id: string };
+
+/** 1 文に入れる session の数。1 件に 3 個の変数を使い、DELETE と INSERT で 2 回並べる */
+const KEY_CHUNK = 500;
+
 /**
- * session_summary を events から作り直す (#307)。表を足す前からある DB と、目印 (session_summary_mark) の行が無いときの経路。
- * 作り直したいときは目印の行を消して起動し直す (DROP TABLE session_summary でもよい)。
- * events を全部読むので大きい DB では数十秒かかり、その間 center は起動しない。以後は ingest が足していく。
+ * session_summary を events から作り直す (#307)。keys を渡せばその session だけ、省けば全部。
+ * 全部を作り直すのは表を足す前からある DB と目印 (session_summary_mark) の行が無いときで、作り直したいときは目印の行を消して
+ * 起動し直す (DROP TABLE session_summary でもよい)。events を全部読むので大きい DB では数十秒かかり、その間 center は起動しない。
  * 完全に同じ (received_at_ms, seq) の event どうしは先に入った方 (rowid の小さい方) を取り、ingest の summarize と揃える。
  */
-function buildSessionSummary(tx: Pick<Db, "run">): void {
-  tx.run(sql`DELETE FROM session_summary`);
+function buildSessionSummary(tx: Pick<Db, "run">, keys?: SessionKey[]): void {
+  const only = keys ? sql`AND (machine, os_user, session_id) IN (${sql.join(keys.map((k) => sql`(${k.machine}, ${k.os_user}, ${k.session_id})`), sql`, `)})` : sql``;
+  tx.run(sql`DELETE FROM session_summary WHERE 1 ${only}`);
   tx.run(sql`
       INSERT INTO session_summary (machine, os_user, session_id, first_seen_ms, last_seen_ms, last_seq, ended_at_ms, event_count, cwd, transcript_path, last_hook)
       SELECT machine, os_user, session_id, first_seen_ms, last_seen_ms, seq, ended_at_ms, event_count, cwd, transcript_path, hook_event_name
@@ -84,7 +89,7 @@ function buildSessionSummary(tx: Pick<Db, "run">): void {
           MAX(CASE WHEN hook_event_name = 'SessionEnd' THEN received_at_ms END) OVER w AS ended_at_ms,
           ROW_NUMBER() OVER (PARTITION BY machine, os_user, session_id ORDER BY received_at_ms DESC, seq DESC, rowid ASC) AS rn
         FROM events
-        WHERE session_id != '' AND producer = ${Producer.CLAUDE_CODE_HOOK}
+        WHERE session_id != '' AND producer = ${Producer.CLAUDE_CODE_HOOK} ${only}
         WINDOW w AS (PARTITION BY machine, os_user, session_id)
       )
       WHERE rn = 1

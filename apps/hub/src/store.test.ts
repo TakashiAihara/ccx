@@ -498,13 +498,8 @@ describe("listSessions の宣言状態の引き方 (#307)", () => {
     expect(plan).not.toContain("events USING INDEX events_session_idx");
   });
 
-  test("集計表の作り直しは宣言状態の部分 index を使わない (#340)", () => {
-    // open.ts の buildSessionSummary と同じ絞り込み。hook の event はほぼ全行なので、部分 index に乗ると遠回りになる
-    const plan = (db.$client.query(`EXPLAIN QUERY PLAN SELECT machine FROM events WHERE session_id != '' AND producer = ${Producer.CLAUDE_CODE_HOOK}`).all() as { detail: string }[])
-      .map((p) => p.detail)
-      .join("\n");
-    expect(plan).toContain("events");
-    expect(plan).not.toContain("events_state_session_idx");
+  test("宣言状態の index は宣言状態の行だけを持つ部分 index (#340)", () => {
+    // 部分 index は条件の合わない問い合わせ (hook の event を数える集計表の作り直し) に選ばれない
     const idx = db.$client.query("PRAGMA index_list(events)").all() as { name: string; partial: number }[];
     expect(idx.find((i) => i.name === "events_state_session_idx")?.partial).toBe(1);
   });
@@ -525,7 +520,10 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
   test("ingest を通らずに入った event (戻した古い版が書いた分) は、次に開いたときに入った順で数え足す", () => {
     withFile((path) => {
       const a = openDb(path);
-      ingest(a, [ev({ receivedAtMs: 100, seq: 1, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      ingest(a, [
+        ev({ receivedAtMs: 100, seq: 1, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } }),
+        ev({ receivedAtMs: 50, seq: 1, payload: { session_id: "keep", hook_event_name: "Stop", cwd: "/keep" } }),
+      ]);
       // 古い版の center は集計表も目印も知らずに events だけへ書く
       const raw = a.$client.prepare(
         "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES (?, 'm1', 'dev', ?, ?, 1, x'7b7d', 1, ?, 'Stop', ?, '')",
@@ -537,17 +535,52 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
       // 完全に同じ (received_at, seq) は先に入った方 (ingest と作り直しと同じ)
       raw.run("old-5", 6, 120, "u", "/first");
       raw.run("old-6", 6, 120, "u", "/second");
-      expect(listed(a)).toEqual(["s:1:/a"]);
+      a.$client.run("INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('old-7', 'm1', 'dev', 7, 900, 2, x'7b7d', 1, 'st', '', '/state', '')");
+      expect(listed(a)).toEqual(["s:1:/a", "keep:1:/keep"]);
       a.$client.close();
 
       const b = openDb(path);
-      expect(listed(b)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first"]);
+      expect(listed(b)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       b.$client.close();
 
       // 数え足した後は目印が末尾にあるので、もう一度開いても二重に数えない
       const c = openDb(path);
-      expect(listed(c)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first"]);
+      expect(listed(c)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       c.$client.close();
+    });
+  });
+
+  test("集計表を足すが目印を知らない版 (#335〜#346) に戻して上げ直しても、件数を二重に数えない", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      const before = a.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get() as { n: number };
+      // その版の ingest: 集計表は足すが目印は進めない
+      ingest(a, [ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/b" } })]);
+      a.$client.run("UPDATE session_summary_mark SET last_event_rowid = ?", [before.n]);
+      expect(listed(a)).toEqual(["s:2:/b"]);
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:2:/b"]);
+      b.$client.close();
+    });
+  });
+
+  test("目印の後に他の版が書いた行があれば、ingest は目印を進めず、次に開いたときに数える", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      a.$client.run(
+        "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('foreign', 'm1', 'dev', 50, 150, 1, x'7b7d', 1, 'f', 'Stop', '/foreign', '')",
+      );
+      ingest(a, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } })]);
+      expect(listed(a)).toEqual(["s:2:/c"]);
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:2:/c", "f:1:/foreign"]);
+      b.$client.close();
     });
   });
 
@@ -569,6 +602,8 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
     withFile((path) => {
       const a = openDb(path);
       ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } }), ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/b" } })]);
+      // ingest が目印を末尾まで進めている (進めないと起動のたびに目印から後を全部作り直す)
+      expect(a.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get()).toEqual({ n: 2 });
       a.$client.close();
 
       const b = openDb(path);
