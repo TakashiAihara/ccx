@@ -142,6 +142,7 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         if (r.producer === Producer.CLAUDE_CODE_HOOK && r.sessionId !== "") summarize(tx, r);
       }
     }
+    if (rows.length > 0) markSummarized(tx);
     // 同じ (machine, user) が同じバッチに 2 つあれば、後のものが残る
     for (const l of lists) {
       const ids = JSON.stringify(parseSessionIds(l));
@@ -244,12 +245,20 @@ export type ListSessionsFilter = {
   stoppedOnly?: boolean;
 };
 
+/** session_summary が events の末尾 (最大の rowid) まで数えたと記録する (#340)。rowid の最大は索引 1 回で引ける */
+export function markSummarized(tx: Pick<Db, "run">): void {
+  tx.run(sql`
+    INSERT INTO session_summary_mark (id, last_event_rowid) VALUES (1, (SELECT coalesce(max(rowid), 0) FROM events))
+    ON CONFLICT (id) DO UPDATE SET last_event_rowid = excluded.last_event_rowid
+  `);
+}
+
 /**
  * 新しく入った hook の event 1 件を session_summary に足す (#307)。届く順は時刻順と限らない (spool の再送) ので、
  * cwd / transcript_path / last_hook は (received_at_ms, seq) が今までより新しいときだけ置き換える。
  * ON CONFLICT の SET の右辺は全部更新前の行の値で評価される。
  */
-function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sessionId: string; receivedAtMs: number; seq: number; hookEventName: string; cwd: string; transcriptPath: string }): void {
+export function summarize(tx: Pick<Db, "run">, r: { machine: string; user: string; sessionId: string; receivedAtMs: number; seq: number; hookEventName: string; cwd: string; transcriptPath: string }): void {
   const ended = r.hookEventName === "SessionEnd" ? r.receivedAtMs : null;
   const newer = sql`(excluded.last_seen_ms, excluded.last_seq) > (last_seen_ms, last_seq)`;
   tx.run(sql`
@@ -363,7 +372,7 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
         FROM (
           SELECT machine, os_user, session_id, rowid AS rid, CAST(payload AS TEXT) AS doc
           FROM events
-          WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+          WHERE producer = ${sql.raw(String(Producer.CCX_SESSION_STATE))} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
         )
         WHERE json_valid(doc) AND json_type(doc, '$.state') = 'object'
       )

@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import { blob, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
 /**
  * 集めた event を 1 行 1 件で持つテーブル。
  *
@@ -52,8 +54,7 @@ export const events = sqliteTable(
   (t) => [
     // 1 session の履歴。
     index("events_session_idx").on(t.machine, t.user, t.sessionId, t.receivedAtMs),
-    // session ごとの宣言状態 (latestStates)。理由は ddl の同じ行
-    index("events_producer_session_idx").on(t.producer, t.machine, t.user, t.sessionId),
+
     // 「machine Y で T 以降に何が起きたか」。
     index("events_machine_time_idx").on(t.machine, t.user, t.receivedAtMs),
     // hook 種別での絞り込み。SessionEnd の有無を引くのもここ。
@@ -178,10 +179,12 @@ export const ddl = [
   sql`CREATE INDEX IF NOT EXISTS events_machine_time_idx ON events (machine, os_user, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_hook_idx ON events (hook_event_name, received_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS events_time_idx ON events (received_at_ms)`,
-  // ListSessions が session ごとに宣言状態の event だけを引く (store.ts の latestStates)。producer を含む index が無いと
-  // events_session_idx で session の hook event を全部たどり、producer を見るために行本体を読む。stoppedOnly (全 session、
-  // 約 2,000) で 1 回 2.2 GB 読んでいた (#307)
-  sql`CREATE INDEX IF NOT EXISTS events_producer_session_idx ON events (producer, machine, os_user, session_id)`,
+  // ListSessions が session ごとに宣言状態の event だけを引く (store.ts の latestStates)。これが無いと events_session_idx で
+  // session の hook event を全部たどり、producer を見るために行本体を読む。stoppedOnly (全 session、約 2,000) で 1 回 2.2 GB
+  // 読んでいた (#307)。宣言状態の行だけを持つ部分 index にして、hook の event を数える他の計画に選ばれないようにする (#340)。
+  // 部分 index は問い合わせの側にも同じリテラルが要るので、latestStates は producer を埋め込みで書く
+  sql`DROP INDEX IF EXISTS events_producer_session_idx`,
+  sql.raw(`CREATE INDEX IF NOT EXISTS events_state_session_idx ON events (machine, os_user, session_id) WHERE producer = ${Producer.CCX_SESSION_STATE}`),
   sql`
     CREATE TABLE IF NOT EXISTS agent_running (
       machine TEXT NOT NULL,
@@ -256,6 +259,15 @@ export const ddl = [
     )
   `,
   sql`CREATE INDEX IF NOT EXISTS session_summary_last_seen_idx ON session_summary (last_seen_ms)`,
+  // session_summary が events のどこまでを数えたか (events の rowid)。ingest が同じトランザクションで進める。
+  // これより後の行は ingest を通らずに入ったもの (戻した古い版の center が書いた等) なので、起動時に数え足す (#340)。
+  // 行が無ければ session_summary を events から作り直す
+  sql`
+    CREATE TABLE IF NOT EXISTS session_summary_mark (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      last_event_rowid INTEGER NOT NULL
+    )
+  `,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_pending_idx ON relay_messages (machine, os_user, claimed_at_ms, put_at_ms)`,
   sql`CREATE INDEX IF NOT EXISTS relay_messages_put_at_idx ON relay_messages (put_at_ms)`,
   sql`

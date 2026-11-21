@@ -4,6 +4,7 @@ import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
+import { markSummarized, summarize } from "../store.ts";
 import * as schema from "./schema.ts";
 
 export type Db = BunSQLiteDatabase<typeof schema> & { $client: Database };
@@ -34,14 +35,16 @@ export function openDb(path: string): Db {
   sqlite.exec("PRAGMA foreign_keys = ON");
 
   const db = drizzle(sqlite, { schema }) as Db;
-  // 空かどうかではなく表が在ったかで決める。hook の event が 1 件も無い DB で起動のたびに全件を読み直さないため。
   // 書き込みロックを取ってから見るので、同時に開いた 2 つ目が作り直しを重ねることは無い。ただし作り直しの間 (大きい DB で
   // 数十秒) ロックを持つので、2 つ目の起動と他プロセスの書き込みは busy_timeout (5 秒) を過ぎると SQLITE_BUSY で落ちる
   db.transaction(
     (tx) => {
       const hadSummary = sqlite.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summary'").get() !== null;
       for (const stmt of schema.ddl) tx.run(stmt);
-      if (!hadSummary) buildSessionSummary(tx);
+      const mark = sqlite.query("SELECT last_event_rowid AS n FROM session_summary_mark WHERE id = 1").get() as { n: number } | null;
+      if (!hadSummary || mark === null) buildSessionSummary(tx);
+      else catchUpSessionSummary(sqlite, tx, mark.n);
+      markSummarized(tx);
     },
     { behavior: "immediate" },
   );
@@ -49,11 +52,27 @@ export function openDb(path: string): Db {
 }
 
 /**
- * session_summary を events から作る (#307)。表を足す前からある DB と、表を DROP して作り直すときの経路。
+ * 目印より後に入った hook の event を、入った順 (rowid の順) に session_summary へ足す (#340)。ingest を通らずに入った行
+ * (目印を進めない古い版の center が同じ DB に書いた分) がここに来る。ふだんは 0 行で、rowid の範囲を索引で引くだけ
+ */
+function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: number): void {
+  const rows = sqlite
+    .query(
+      `SELECT machine, os_user AS user, session_id AS sessionId, received_at_ms AS receivedAtMs, seq, hook_event_name AS hookEventName, cwd, transcript_path AS transcriptPath
+       FROM events WHERE rowid > ? AND session_id != '' AND producer = ? ORDER BY rowid`,
+    )
+    .all(after, Producer.CLAUDE_CODE_HOOK) as Parameters<typeof summarize>[1][];
+  for (const r of rows) summarize(tx, r);
+}
+
+/**
+ * session_summary を events から作り直す (#307)。表を足す前からある DB と、目印 (session_summary_mark) の行が無いときの経路。
+ * 作り直したいときは目印の行を消して起動し直す (DROP TABLE session_summary でもよい)。
  * events を全部読むので大きい DB では数十秒かかり、その間 center は起動しない。以後は ingest が足していく。
  * 完全に同じ (received_at_ms, seq) の event どうしは先に入った方 (rowid の小さい方) を取り、ingest の summarize と揃える。
  */
 function buildSessionSummary(tx: Pick<Db, "run">): void {
+  tx.run(sql`DELETE FROM session_summary`);
   tx.run(sql`
       INSERT INTO session_summary (machine, os_user, session_id, first_seen_ms, last_seen_ms, last_seq, ended_at_ms, event_count, cwd, transcript_path, last_hook)
       SELECT machine, os_user, session_id, first_seen_ms, last_seen_ms, seq, ended_at_ms, event_count, cwd, transcript_path, hook_event_name
