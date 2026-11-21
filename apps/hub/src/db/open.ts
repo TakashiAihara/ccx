@@ -52,10 +52,11 @@ export function openDb(path: string): Db {
 }
 
 /**
- * 目印より後に入った hook の event の session を、events から作り直す (#340)。ここに来るのは ingest で目印が進まなかった行
- * (目印を知らない古い版の center が同じ DB に書いた分) で、その版が集計表も足していたか (#335〜#346) いないか (#335 より前)
- * はこちらから分からない。1 件ずつ足し直すと前者で件数が二重になるので、触れた session の行を消して作り直す。ふだんは 0 行で、
- * rowid の範囲を索引で引くだけ
+ * 目印より後に入った行の session を、events から作り直す (#340)。ここに来るのは ingest が目印を進めなかった行で、目印を知らない
+ * 古い版の center が書いた分と、その後でこの版が書いた分 (目印が末尾に居ないので進めなかった) がある。古い版が集計表も足していた
+ * か (#335〜#346) いないか (#335 より前) はこちらから分からず、1 件ずつ足し直すと前者で件数が二重になるので、触れた session の行
+ * を消して作り直す。宣言状態や session の無い行の鍵も混ざるが、作り直しの絞り込みで何も入らない。ふだんは 0 行で、rowid の範囲
+ * を索引で引くだけ
  */
 function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: number): void {
   const keys = sqlite
@@ -66,7 +67,7 @@ function catchUpSessionSummary(sqlite: Database, tx: Pick<Db, "run">, after: num
 
 type SessionKey = { machine: string; os_user: string; session_id: string };
 
-/** 1 文に入れる session の数。1 件に 3 個の変数を使い、DELETE と INSERT で 2 回並べる */
+/** 1 文に入れる session の数。1 件に 3 個の変数を使うので 1 文 1,500 個で、SQLite の 1 文の上限 (3.32 以降 32,766) に収まる */
 const KEY_CHUNK = 500;
 
 /**

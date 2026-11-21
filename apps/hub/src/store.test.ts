@@ -502,6 +502,8 @@ describe("listSessions の宣言状態の引き方 (#307)", () => {
     // 部分 index は条件の合わない問い合わせ (hook の event を数える集計表の作り直し) に選ばれない
     const idx = db.$client.query("PRAGMA index_list(events)").all() as { name: string; partial: number }[];
     expect(idx.find((i) => i.name === "events_state_session_idx")?.partial).toBe(1);
+    const def = db.$client.query("SELECT sql FROM sqlite_master WHERE name = 'events_state_session_idx'").get() as { sql: string };
+    expect(def.sql).toContain(`WHERE producer = ${Producer.CCX_SESSION_STATE}`);
   });
 });
 
@@ -517,7 +519,7 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
     }
   }
 
-  test("ingest を通らずに入った event (戻した古い版が書いた分) は、次に開いたときに入った順で数え足す", () => {
+  test("ingest を通らずに入った event (戻した古い版が書いた分) は、次に開いたときにその session ごと数え直す", () => {
     withFile((path) => {
       const a = openDb(path);
       ingest(a, [
@@ -543,7 +545,7 @@ describe("集計表と events の食い違いを起動時に直す (#340)", () =
       expect(listed(b)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       b.$client.close();
 
-      // 数え足した後は目印が末尾にあるので、もう一度開いても二重に数えない
+      // もう一度開いても同じ (作り直しは何度走っても同じ結果)
       const c = openDb(path);
       expect(listed(c)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
       c.$client.close();
