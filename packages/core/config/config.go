@@ -106,6 +106,9 @@ type Config struct {
 	// Transcript is the live transcript's settings (#120,
 	// docs/design/live-transcript.md): the store ccx-agent appends a running
 	// session's transcript.jsonl to.
+	// MessageMeta: a send from the CLI or the send_message tool says where it came from (#346). [message] meta.
+	MessageMeta bool
+
 	Transcript Transcript
 }
 
@@ -193,6 +196,10 @@ type fileShape struct {
 		Prefix string `toml:"prefix"`
 		Live   *bool  `toml:"live"`
 	} `toml:"transcript"`
+	// [message] is how sends go out (#346).
+	Message struct {
+		Meta *bool `toml:"meta"`
+	} `toml:"message"`
 }
 
 // Load resolves the config from the real environment.
@@ -306,6 +313,8 @@ func load(
 		APIURLErr:         apiURLErr,
 		APIToken:          apiToken,
 		APITokenErr:       apiTokenErr,
+		// Whether a send says where it came from (repo, branch, cwd, session, label, role) unless told not to.
+		MessageMeta: fileToggle(getenv, "CCX_MESSAGE_META", file.Message.Meta, true),
 		Transcript: Transcript{
 			// git config is being taken out of the resolution (kaneo
 			// ccx#24), so a new switch does not start there. Env or the file stops it.

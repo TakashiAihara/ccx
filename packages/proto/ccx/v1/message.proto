@@ -75,6 +75,10 @@ message SendRequest {
   // Instead of target / machine / user: a msg_id the caller's ccx-agent delivered to it, which that agent
   // turns into the sender's name, machine and user. The agent remembers the ids it delivered for a while.
   string reply_to = 11;
+  // What the sender says about itself (#346), shown to the receiver: from_repo, from_branch, from_cwd,
+  // from_session, from_label, from_role and in_reply_to, filled by the sending CLI or tool unless turned off,
+  // and meta_<key> the caller added. A claim, unlike sender_machine / sender_user: nobody checks it.
+  map<string, string> sender_meta = 12;
 }
 
 // A question the receiver put to its user (Devin's ask_user_question).

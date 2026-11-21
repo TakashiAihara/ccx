@@ -65,6 +65,8 @@ type Request struct {
 	ReplyLine string
 	// onTaken runs when a turn takes a later message (Devin's next UserPromptSubmit).
 	onTaken func()
+	// Meta is sender_meta (#346): what the sender says about itself, shown to the receiver as it is.
+	Meta map[string]string
 }
 
 // typed is what goes into a Devin pane under the header: the body, and the reply line when there is one.
@@ -778,6 +780,9 @@ func (s *Service) Send(ctx context.Context, req *connect.Request[ccxv1.SendReque
 func (s *Service) send(ctx context.Context, m *ccxv1.SendRequest, emit func(*ccxv1.SendResponse) error) error {
 	// This agent's own, whatever the caller said: the receiver sends replies here (#334).
 	m.SenderMachine, m.SenderUser = s.Machine, s.User
+	if err := ValidateMeta(m.GetSenderMeta()); err != nil {
+		return markNotTyped(err)
+	}
 	if id := m.GetReplyTo(); id != "" {
 		if m.GetTarget() != "" || m.GetMachine() != "" || m.GetUser() != "" {
 			return markNotTyped(connect.NewError(connect.CodeInvalidArgument, errors.New("reply_to takes the place of target, machine and user; give one or the other")))
@@ -819,6 +824,10 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 		Target: m.GetTarget(), Sender: m.GetSender(), Summary: m.GetSummary(), Body: m.GetBody(), Mode: m.GetMode(), WaitSeconds: m.GetWaitSeconds(),
 		SenderMachine: m.GetSenderMachine(), SenderUser: m.GetSenderUser(), MsgID: newMsgID(),
 	}
+	// A put through the center can carry any sender_meta: one that would not have been sent from here is not shown.
+	if ValidateMeta(m.GetSenderMeta()) == nil {
+		req.Meta = m.GetSenderMeta()
+	}
 	send := s.Devin.Send
 	if IsClaudeSession(req.Target) {
 		send = s.sendClaude
@@ -832,17 +841,21 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	booked := req.SenderMachine != "" && req.SenderUser != ""
 	if booked {
 		// Booked before it is typed: the receiver can answer while a --wait still holds this send.
+		// The session itself when the sender said it: the sender name can be a label (--from) no session has.
 		to := replyTo{Sender: req.Sender, Machine: req.SenderMachine, User: req.SenderUser}
+		if s := req.Meta[MetaSession]; s != "" {
+			to.Sender = s
+		}
 		s.book().add(req.MsgID, to)
 		// A later message can wait in the queue for days: the id's time starts again when a turn takes it.
 		req.onTaken = func() {
 			s.book().add(req.MsgID, to)
 			s.book().confirm(req.MsgID)
 		}
-		// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
-		if !IsClaudeSession(req.Target) {
-			req.ReplyLine = devinReplyLine(req)
-		}
+	}
+	// Claude Code sees these as channel attributes; Devin only sees what is typed, so it gets a last line.
+	if !IsClaudeSession(req.Target) {
+		req.ReplyLine = devinReplyLine(req, booked)
 	}
 	err := send(ctx, req, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
@@ -878,8 +891,20 @@ func notTyped(err error) bool {
 }
 
 // devinReplyLine is the line typed under the body for Devin: where it came from and how to answer it.
-func devinReplyLine(req Request) string {
-	return fmt.Sprintf("(ccx: from %s/%s, reply: ccx msg send --reply %s --summary \"...\" \"...\")", req.SenderMachine, req.SenderUser, req.MsgID)
+// devinReplyLine is where the message came from and how to answer it, or "" when it says neither.
+func devinReplyLine(req Request, booked bool) string {
+	var parts []string
+	if booked {
+		parts = append(parts, "from "+req.SenderMachine+"/"+req.SenderUser)
+	}
+	parts = append(parts, metaParts(req.Meta)...)
+	if booked {
+		parts = append(parts, fmt.Sprintf("reply: ccx msg send --reply %s --summary \"...\" \"...\"", req.MsgID))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(ccx: " + strings.Join(parts, ", ") + ")"
 }
 
 func (s *Service) logSend(m *ccxv1.SendRequest, via string, last ccxv1.SendResponse_State, err error) {

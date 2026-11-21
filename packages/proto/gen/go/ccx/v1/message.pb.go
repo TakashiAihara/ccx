@@ -267,7 +267,11 @@ type SendRequest struct {
 	SenderUser    string `protobuf:"bytes,10,opt,name=sender_user,json=senderUser,proto3" json:"sender_user,omitempty"`
 	// Instead of target / machine / user: a msg_id the caller's ccx-agent delivered to it, which that agent
 	// turns into the sender's name, machine and user. The agent remembers the ids it delivered for a while.
-	ReplyTo       string `protobuf:"bytes,11,opt,name=reply_to,json=replyTo,proto3" json:"reply_to,omitempty"`
+	ReplyTo string `protobuf:"bytes,11,opt,name=reply_to,json=replyTo,proto3" json:"reply_to,omitempty"`
+	// What the sender says about itself (#346), shown to the receiver: from_repo, from_branch, from_cwd,
+	// from_session, from_label, from_role and in_reply_to, filled by the sending CLI or tool unless turned off,
+	// and meta_<key> the caller added. A claim, unlike sender_machine / sender_user: nobody checks it.
+	SenderMeta    map[string]string `protobuf:"bytes,12,rep,name=sender_meta,json=senderMeta,proto3" json:"sender_meta,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -377,6 +381,13 @@ func (x *SendRequest) GetReplyTo() string {
 		return x.ReplyTo
 	}
 	return ""
+}
+
+func (x *SendRequest) GetSenderMeta() map[string]string {
+	if x != nil {
+		return x.SenderMeta
+	}
+	return nil
 }
 
 // A question the receiver put to its user (Devin's ask_user_question).
@@ -1056,7 +1067,7 @@ type Question_Option struct {
 
 func (x *Question_Option) Reset() {
 	*x = Question_Option{}
-	mi := &file_ccx_v1_message_proto_msgTypes[14]
+	mi := &file_ccx_v1_message_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1068,7 +1079,7 @@ func (x *Question_Option) String() string {
 func (*Question_Option) ProtoMessage() {}
 
 func (x *Question_Option) ProtoReflect() protoreflect.Message {
-	mi := &file_ccx_v1_message_proto_msgTypes[14]
+	mi := &file_ccx_v1_message_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1106,7 +1117,7 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\x10DevinHookRequest\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\"+\n" +
 	"\x11DevinHookResponse\x12\x16\n" +
-	"\x06output\x18\x01 \x01(\tR\x06output\"\xc9\x02\n" +
+	"\x06output\x18\x01 \x01(\tR\x06output\"\xce\x03\n" +
 	"\vSendRequest\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12(\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x14.ccx.v1.DeliveryModeR\x04mode\x12\x18\n" +
@@ -1120,7 +1131,12 @@ const file_ccx_v1_message_proto_rawDesc = "" +
 	"\vsender_user\x18\n" +
 	" \x01(\tR\n" +
 	"senderUser\x12\x19\n" +
-	"\breply_to\x18\v \x01(\tR\areplyTo\"\xb3\x01\n" +
+	"\breply_to\x18\v \x01(\tR\areplyTo\x12D\n" +
+	"\vsender_meta\x18\f \x03(\v2#.ccx.v1.SendRequest.SenderMetaEntryR\n" +
+	"senderMeta\x1a=\n" +
+	"\x0fSenderMetaEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x01\n" +
 	"\bQuestion\x12\x1a\n" +
 	"\bquestion\x18\x01 \x01(\tR\bquestion\x12\x16\n" +
 	"\x06header\x18\x02 \x01(\tR\x06header\x121\n" +
@@ -1216,7 +1232,7 @@ func file_ccx_v1_message_proto_rawDescGZIP() []byte {
 }
 
 var file_ccx_v1_message_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_ccx_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_ccx_v1_message_proto_goTypes = []any{
 	(DeliveryMode)(0),             // 0: ccx.v1.DeliveryMode
 	(SendResponse_State)(0),       // 1: ccx.v1.SendResponse.State
@@ -1234,41 +1250,43 @@ var file_ccx_v1_message_proto_goTypes = []any{
 	(*ClaimMessageResponse)(nil),  // 13: ccx.v1.ClaimMessageResponse
 	(*ReportMessageRequest)(nil),  // 14: ccx.v1.ReportMessageRequest
 	(*ReportMessageResponse)(nil), // 15: ccx.v1.ReportMessageResponse
-	(*Question_Option)(nil),       // 16: ccx.v1.Question.Option
-	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	nil,                           // 16: ccx.v1.SendRequest.SenderMetaEntry
+	(*Question_Option)(nil),       // 17: ccx.v1.Question.Option
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_ccx_v1_message_proto_depIdxs = []int32{
 	0,  // 0: ccx.v1.SendRequest.mode:type_name -> ccx.v1.DeliveryMode
-	16, // 1: ccx.v1.Question.options:type_name -> ccx.v1.Question.Option
-	1,  // 2: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
-	5,  // 3: ccx.v1.SendResponse.questions:type_name -> ccx.v1.Question
-	4,  // 4: ccx.v1.RelayedMessage.request:type_name -> ccx.v1.SendRequest
-	17, // 5: ccx.v1.RelayedMessage.put_at:type_name -> google.protobuf.Timestamp
-	17, // 6: ccx.v1.RelayedMessage.claimed_at:type_name -> google.protobuf.Timestamp
-	17, // 7: ccx.v1.RelayedMessage.finished_at:type_name -> google.protobuf.Timestamp
-	6,  // 8: ccx.v1.RelayedMessage.acks:type_name -> ccx.v1.SendResponse
-	4,  // 9: ccx.v1.PutMessageRequest.request:type_name -> ccx.v1.SendRequest
-	7,  // 10: ccx.v1.PutMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	7,  // 11: ccx.v1.GetMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	7,  // 12: ccx.v1.ClaimMessageResponse.message:type_name -> ccx.v1.RelayedMessage
-	6,  // 13: ccx.v1.ReportMessageRequest.acks:type_name -> ccx.v1.SendResponse
-	4,  // 14: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
-	2,  // 15: ccx.v1.MessageService.DevinHook:input_type -> ccx.v1.DevinHookRequest
-	8,  // 16: ccx.v1.MessageRelayService.PutMessage:input_type -> ccx.v1.PutMessageRequest
-	10, // 17: ccx.v1.MessageRelayService.GetMessage:input_type -> ccx.v1.GetMessageRequest
-	12, // 18: ccx.v1.MessageRelayService.ClaimMessage:input_type -> ccx.v1.ClaimMessageRequest
-	14, // 19: ccx.v1.MessageRelayService.ReportMessage:input_type -> ccx.v1.ReportMessageRequest
-	6,  // 20: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
-	3,  // 21: ccx.v1.MessageService.DevinHook:output_type -> ccx.v1.DevinHookResponse
-	9,  // 22: ccx.v1.MessageRelayService.PutMessage:output_type -> ccx.v1.PutMessageResponse
-	11, // 23: ccx.v1.MessageRelayService.GetMessage:output_type -> ccx.v1.GetMessageResponse
-	13, // 24: ccx.v1.MessageRelayService.ClaimMessage:output_type -> ccx.v1.ClaimMessageResponse
-	15, // 25: ccx.v1.MessageRelayService.ReportMessage:output_type -> ccx.v1.ReportMessageResponse
-	20, // [20:26] is the sub-list for method output_type
-	14, // [14:20] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	16, // 1: ccx.v1.SendRequest.sender_meta:type_name -> ccx.v1.SendRequest.SenderMetaEntry
+	17, // 2: ccx.v1.Question.options:type_name -> ccx.v1.Question.Option
+	1,  // 3: ccx.v1.SendResponse.state:type_name -> ccx.v1.SendResponse.State
+	5,  // 4: ccx.v1.SendResponse.questions:type_name -> ccx.v1.Question
+	4,  // 5: ccx.v1.RelayedMessage.request:type_name -> ccx.v1.SendRequest
+	18, // 6: ccx.v1.RelayedMessage.put_at:type_name -> google.protobuf.Timestamp
+	18, // 7: ccx.v1.RelayedMessage.claimed_at:type_name -> google.protobuf.Timestamp
+	18, // 8: ccx.v1.RelayedMessage.finished_at:type_name -> google.protobuf.Timestamp
+	6,  // 9: ccx.v1.RelayedMessage.acks:type_name -> ccx.v1.SendResponse
+	4,  // 10: ccx.v1.PutMessageRequest.request:type_name -> ccx.v1.SendRequest
+	7,  // 11: ccx.v1.PutMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	7,  // 12: ccx.v1.GetMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	7,  // 13: ccx.v1.ClaimMessageResponse.message:type_name -> ccx.v1.RelayedMessage
+	6,  // 14: ccx.v1.ReportMessageRequest.acks:type_name -> ccx.v1.SendResponse
+	4,  // 15: ccx.v1.MessageService.Send:input_type -> ccx.v1.SendRequest
+	2,  // 16: ccx.v1.MessageService.DevinHook:input_type -> ccx.v1.DevinHookRequest
+	8,  // 17: ccx.v1.MessageRelayService.PutMessage:input_type -> ccx.v1.PutMessageRequest
+	10, // 18: ccx.v1.MessageRelayService.GetMessage:input_type -> ccx.v1.GetMessageRequest
+	12, // 19: ccx.v1.MessageRelayService.ClaimMessage:input_type -> ccx.v1.ClaimMessageRequest
+	14, // 20: ccx.v1.MessageRelayService.ReportMessage:input_type -> ccx.v1.ReportMessageRequest
+	6,  // 21: ccx.v1.MessageService.Send:output_type -> ccx.v1.SendResponse
+	3,  // 22: ccx.v1.MessageService.DevinHook:output_type -> ccx.v1.DevinHookResponse
+	9,  // 23: ccx.v1.MessageRelayService.PutMessage:output_type -> ccx.v1.PutMessageResponse
+	11, // 24: ccx.v1.MessageRelayService.GetMessage:output_type -> ccx.v1.GetMessageResponse
+	13, // 25: ccx.v1.MessageRelayService.ClaimMessage:output_type -> ccx.v1.ClaimMessageResponse
+	15, // 26: ccx.v1.MessageRelayService.ReportMessage:output_type -> ccx.v1.ReportMessageResponse
+	21, // [21:27] is the sub-list for method output_type
+	15, // [15:21] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_message_proto_init() }
@@ -1282,7 +1300,7 @@ func file_ccx_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ccx_v1_message_proto_rawDesc), len(file_ccx_v1_message_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

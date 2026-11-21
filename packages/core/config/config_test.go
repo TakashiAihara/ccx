@@ -577,3 +577,22 @@ func TestChannelAndAPISocket_AgreeWithLoad(t *testing.T) {
 		t.Errorf("override: ChannelSocket = %q", ChannelSocket())
 	}
 }
+
+func TestMessageMeta_OnByDefault_OffFromTheFileOrEnv(t *testing.T) {
+	c, err := load(env(map[string]string{"CCX_CONFIG": filepath.Join(t.TempDir(), "none.toml")}), noGit, fixedHost("h"))
+	if err != nil || !c.MessageMeta {
+		t.Fatalf("default: %v %v", c.MessageMeta, err)
+	}
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("[message]\nmeta = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = load(env(map[string]string{"CCX_CONFIG": p}), noGit, fixedHost("h"))
+	if err != nil || c.MessageMeta {
+		t.Fatalf("file false: %v %v", c.MessageMeta, err)
+	}
+	c, err = load(env(map[string]string{"CCX_CONFIG": p, "CCX_MESSAGE_META": "on"}), noGit, fixedHost("h"))
+	if err != nil || !c.MessageMeta {
+		t.Fatalf("env on over file false: %v %v", c.MessageMeta, err)
+	}
+}
