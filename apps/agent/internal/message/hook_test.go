@@ -641,7 +641,7 @@ func TestAnEndedHookCallStillPublishesTheTurn(t *testing.T) {
 
 func TestRestorePutsMessagesAheadOfLaterOnes(t *testing.T) {
 	h := newDevin(&fakeHerdr{}).hooks()
-	c, _ := h.queue("s", "c")
+	c, _ := h.queue("s", "c", nil)
 	a, b := &queued{text: "a"}, &queued{text: "b"}
 	h.restore("s", []*queued{a, b})
 	if got := h.take("s"); len(got) != 3 || got[0] != a || got[1] != b || got[2] != c {

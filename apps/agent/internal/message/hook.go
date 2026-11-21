@@ -77,6 +77,8 @@ type typedSend struct {
 // theirs in hookEvent.taken by pointer.
 type queued struct {
 	text string
+	// onTake runs once a turn has taken it (the hook's answer went back).
+	onTake func()
 }
 
 // MaxQueued bounds the later messages one session holds, so a receiver that never
@@ -130,13 +132,13 @@ func (h *hooks) publish(e hookEvent) {
 	}
 }
 
-func (h *hooks) queue(session, text string) (*queued, error) {
+func (h *hooks) queue(session, text string, onTake func()) (*queued, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.inbox[session]) >= MaxQueued {
 		return nil, fmt.Errorf("%s already holds %d later messages that no turn has taken", session, MaxQueued)
 	}
-	q := &queued{text: text}
+	q := &queued{text: text, onTake: onTake}
 	h.inbox[session] = append(h.inbox[session], q)
 	return q, nil
 }
@@ -233,6 +235,11 @@ func (d *Devin) Hook(ctx context.Context, payload []byte) (string, error) {
 		return "", connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("the hook call ended before the later messages for %s went back; they wait for the next turn", e.Session))
 	}
 	h.publish(e)
+	for _, q := range e.taken {
+		if q.onTake != nil {
+			q.onTake()
+		}
+	}
 	return out, nil
 }
 
@@ -361,7 +368,7 @@ func (d *Devin) sendLater(ctx context.Context, req Request, wait time.Duration, 
 		events, cancel = h.subscribe(req.Target)
 		defer cancel()
 	}
-	q, err := h.queue(req.Target, headerLine(req.Sender, req.Summary)+"\n"+req.Body)
+	q, err := h.queue(req.Target, headerLine(req.Sender, req.Summary)+"\n"+req.typed(), req.onTaken)
 	if err != nil {
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	}
