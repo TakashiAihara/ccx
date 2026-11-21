@@ -835,9 +835,11 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 		last = r.GetState()
 		return emit(r)
 	})
-	// Nobody saw an id that was never typed; keeping it would only push out ones that were.
+	// Nobody saw an id that was never typed: drop it, and only a send that reached the receiver makes room.
 	if booked && notTyped(err) {
 		s.book().remove(req.MsgID)
+	} else if booked {
+		s.book().trim()
 	}
 	s.logSend(m, "", last, err)
 	return err

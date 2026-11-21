@@ -70,6 +70,34 @@ func TestAnIDThatWasNeverTypedIsForgottenAndHalfAnOriginIsNotBooked(t *testing.T
 	}
 }
 
+func TestARefusedSendDoesNotPushOutAnIDThatWasDelivered(t *testing.T) {
+	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes})}
+	for i := range replyMax {
+		svc.book().add(fmt.Sprint("id", i), replyTo{Sender: "x", Machine: "m", User: "u"})
+	}
+	err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: "no-such-devin", Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}, discard)
+	if !notTyped(err) {
+		t.Fatalf("err %v", err)
+	}
+	if _, ok := svc.book().get("id0"); !ok || len(svc.book().ids) != replyMax {
+		t.Fatalf("the oldest delivered id was pushed out by a refused send (%d ids)", len(svc.book().ids))
+	}
+}
+
+func TestADeliveredSendMakesRoomByDroppingTheOldestID(t *testing.T) {
+	home, _ := newTranscript(t, "")
+	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes}), Claude: testClaude(&fakeChannels{home: home, registered: true})}
+	for i := range replyMax {
+		svc.book().add(fmt.Sprint("id", i), replyTo{Sender: "x", Machine: "m", User: "u"})
+	}
+	if err := svc.Deliver(context.Background(), &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}, discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.book().get("id0"); ok || len(svc.book().ids) != replyMax {
+		t.Fatalf("kept %d ids, id0 still there: %v", len(svc.book().ids), ok)
+	}
+}
+
 func TestTheReplyBookRemovesAnIDFromBothItsMapAndItsOrder(t *testing.T) {
 	b := newReplyBook(time.Now)
 	for _, id := range []string{"a", "b", "c"} {
@@ -176,6 +204,7 @@ func TestTheReplyBookForgetsAfterSevenDaysAndKeepsTheLatestThousand(t *testing.T
 
 	for i := range 1001 {
 		b.add(fmt.Sprint("id", i), replyTo{Sender: "x"})
+		b.trim()
 	}
 	if _, ok := b.get("id0"); ok {
 		t.Fatal("kept more than 1000")

@@ -33,6 +33,8 @@ func newReplyBook(now func() time.Time) *replyBook {
 	return &replyBook{ids: map[string]replyTo{}, now: now}
 }
 
+// add books id without dropping anything: until the send is known to have reached the receiver (trim), a
+// refused one must not push out ids that did.
 func (b *replyBook) add(id string, to replyTo) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -41,6 +43,12 @@ func (b *replyBook) add(id string, to replyTo) {
 		b.order = append(b.order, id)
 	}
 	b.ids[id] = to
+}
+
+// trim drops the oldest ids past replyMax.
+func (b *replyBook) trim() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for len(b.order) > replyMax {
 		delete(b.ids, b.order[0])
 		b.order = b.order[1:]
