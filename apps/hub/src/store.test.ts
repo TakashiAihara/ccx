@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
+
 import { openDb, type Db } from "./db/open.ts";
 import { ingest, listEvents, listEventsQuery, listSessions, type IncomingEvent } from "./store.ts";
 
@@ -240,6 +242,13 @@ describe("listSessions", () => {
     expect(listSessions(db, { limit: 1 })[0]!.cwd).toBe("/seq8");
   });
 
+  test("新しい event の後に古い event が来ても、比べる seq は新しい方のまま (#340)", () => {
+    ingest(db, [ev({ receivedAtMs: 300, seq: 7, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq7" } })]);
+    ingest(db, [ev({ receivedAtMs: 100, seq: 9, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/old" } })]);
+    ingest(db, [ev({ receivedAtMs: 300, seq: 8, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/seq8" } })]);
+    expect(listSessions(db, { limit: 1 })[0]!.cwd).toBe("/seq8");
+  });
+
   test("SessionEnd が古い順に届いても ended_at は最も遅いもの", () => {
     ingest(db, [ev({ receivedAtMs: 150, payload: { session_id: "s", hook_event_name: "SessionEnd" } })]);
     ingest(db, [ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "SessionEnd" } })]);
@@ -462,10 +471,10 @@ describe("session state events (producer 2, #127)", () => {
 });
 
 describe("listSessions の宣言状態の引き方 (#307)", () => {
-  test("session ごとの宣言状態は producer を含む index で引き、hook の event をたどらない", () => {
+  test("session ごとの宣言状態は宣言状態だけの部分 index で引き、hook の event をたどらない", () => {
     ingest(db, [
       ev({ payload: { session_id: "s", hook_event_name: "Stop" } }),
-      ev({ producer: 2, payload: { session_id: "s", state: { archived: true } } }),
+      ev({ producer: Producer.CCX_SESSION_STATE, payload: { session_id: "s", state: { archived: true } } }),
     ]);
 
     // listSessions が実際に出す SQL を捕まえて、その計画を見る
@@ -483,10 +492,125 @@ describe("listSessions の宣言状態の引き方 (#307)", () => {
 
     const stateSql = seen.filter((q) => q.includes("json_extract(doc, '$.rev')"));
     expect(stateSql).toHaveLength(1);
-    const params = [2, "m1", "dev", "s"];
-    const plan = (db.$client.query(`EXPLAIN QUERY PLAN ${stateSql[0]}`).all(...params) as { detail: string }[]).map((p) => p.detail).join("\n");
-    const seek = plan.match(/events USING INDEX events_producer_session_idx \(([^)]*)\)/)?.[1] ?? "";
-    expect(seek.split(" AND ").sort()).toEqual(["machine=?", "os_user=?", "producer=?", "session_id=?"]);
+    const plan = (db.$client.query(`EXPLAIN QUERY PLAN ${stateSql[0]}`).all("m1", "dev", "s") as { detail: string }[]).map((p) => p.detail).join("\n");
+    const seek = plan.match(/events USING INDEX events_state_session_idx \(([^)]*)\)/)?.[1] ?? "";
+    expect(seek.split(" AND ").sort()).toEqual(["machine=?", "os_user=?", "session_id=?"]);
     expect(plan).not.toContain("events USING INDEX events_session_idx");
+  });
+
+  test("宣言状態の index は宣言状態の行だけを持つ部分 index (#340)", () => {
+    // 部分 index は条件の合わない問い合わせ (hook の event を数える集計表の作り直し) に選ばれない
+    const idx = db.$client.query("PRAGMA index_list(events)").all() as { name: string; partial: number }[];
+    expect(idx.find((i) => i.name === "events_state_session_idx")?.partial).toBe(1);
+    const def = db.$client.query("SELECT sql FROM sqlite_master WHERE name = 'events_state_session_idx'").get() as { sql: string };
+    expect(def.sql).toContain(`WHERE producer = ${Producer.CCX_SESSION_STATE}`);
+  });
+});
+
+describe("集計表と events の食い違いを起動時に直す (#340)", () => {
+  const listed = (d: Db) => listSessions(d, { limit: 10, nowMs: 0 }).map((s) => `${s.sessionId}:${s.eventCount}:${s.cwd}`);
+
+  function withFile(fn: (path: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-mark-"));
+    try {
+      fn(join(dir, "center.db"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("ingest を通らずに入った event (戻した古い版が書いた分) は、次に開いたときにその session ごと数え直す", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [
+        ev({ receivedAtMs: 100, seq: 1, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } }),
+        ev({ receivedAtMs: 50, seq: 1, payload: { session_id: "keep", hook_event_name: "Stop", cwd: "/keep" } }),
+      ]);
+      // 古い版の center は集計表も目印も知らずに events だけへ書く
+      const raw = a.$client.prepare(
+        "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES (?, 'm1', 'dev', ?, ?, 1, x'7b7d', 1, ?, 'Stop', ?, '')",
+      );
+      raw.run("old-1", 2, 300, "s", "/old-late");
+      raw.run("old-2", 3, 200, "s", "/old-mid");
+      raw.run("old-3", 4, 150, "t", "/t");
+      raw.run("old-4", 5, 400, "", "/no-session");
+      // 完全に同じ (received_at, seq) は先に入った方 (ingest と作り直しと同じ)
+      raw.run("old-5", 6, 120, "u", "/first");
+      raw.run("old-6", 6, 120, "u", "/second");
+      a.$client.run("INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('old-7', 'm1', 'dev', 7, 900, 2, x'7b7d', 1, 'st', '', '/state', '')");
+      expect(listed(a)).toEqual(["s:1:/a", "keep:1:/keep"]);
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
+      b.$client.close();
+
+      // もう一度開いても同じ (作り直しは何度走っても同じ結果)
+      const c = openDb(path);
+      expect(listed(c)).toEqual(["s:3:/old-late", "t:1:/t", "u:2:/first", "keep:1:/keep"]);
+      c.$client.close();
+    });
+  });
+
+  test("集計表を足すが目印を知らない版 (#335〜#346) に戻して上げ直しても、件数を二重に数えない", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      const before = a.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get() as { n: number };
+      // その版の ingest: 集計表は足すが目印は進めない
+      ingest(a, [ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/b" } })]);
+      a.$client.run("UPDATE session_summary_mark SET last_event_rowid = ?", [before.n]);
+      expect(listed(a)).toEqual(["s:2:/b"]);
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:2:/b"]);
+      b.$client.close();
+    });
+  });
+
+  test("目印の後に他の版が書いた行があれば、ingest は目印を進めず、次に開いたときに数える", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      a.$client.run(
+        "INSERT INTO events (event_id, machine, os_user, seq, received_at_ms, producer, payload, parsed, session_id, hook_event_name, cwd, transcript_path) VALUES ('foreign', 'm1', 'dev', 50, 150, 1, x'7b7d', 1, 'f', 'Stop', '/foreign', '')",
+      );
+      ingest(a, [ev({ receivedAtMs: 300, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/c" } })]);
+      expect(listed(a)).toEqual(["s:2:/c"]);
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:2:/c", "f:1:/foreign"]);
+      b.$client.close();
+    });
+  });
+
+  test("目印の行が無ければ集計表を events から作り直す (#307 の表だけがある DB / 手で消したとき)", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } })]);
+      a.$client.exec("UPDATE session_summary SET event_count = 99, cwd = '/stale'");
+      a.$client.exec("DELETE FROM session_summary_mark");
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:1:/a"]);
+      b.$client.close();
+    });
+  });
+
+  test("ingest は目印を events の末尾まで進め、次に開いたときに作り直す行を残さない", () => {
+    withFile((path) => {
+      const a = openDb(path);
+      ingest(a, [ev({ receivedAtMs: 100, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/a" } }), ev({ receivedAtMs: 200, payload: { session_id: "s", hook_event_name: "Stop", cwd: "/b" } })]);
+      // ingest が目印を末尾まで進めている (進めないと起動のたびに目印から後を全部作り直す)
+      expect(a.$client.query("SELECT last_event_rowid AS n FROM session_summary_mark").get()).toEqual({ n: 2 });
+      a.$client.close();
+
+      const b = openDb(path);
+      expect(listed(b)).toEqual(["s:2:/b"]);
+      b.$client.close();
+    });
   });
 });

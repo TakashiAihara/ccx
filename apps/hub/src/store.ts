@@ -126,6 +126,9 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
 
   return db.transaction((tx) => {
     let accepted = 0;
+    // 目印が events の末尾に居るときだけ、この ingest の後で末尾まで進める。末尾に居ないなら、目印の後に他の版の center が
+    // 書いた行があるので、進めるとその行を数えないまま越えてしまう。進めずに置けば次の起動で作り直す (#340)
+    const caughtUp = tx.all<{ ok: number }>(sql`SELECT (SELECT last_event_rowid FROM session_summary_mark WHERE id = 1) = (SELECT coalesce(max(rowid), 0) FROM events) AS ok`)[0]?.ok === 1;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const inserted = tx
         .insert(events)
@@ -142,6 +145,7 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
         if (r.producer === Producer.CLAUDE_CODE_HOOK && r.sessionId !== "") summarize(tx, r);
       }
     }
+    if (rows.length > 0 && caughtUp) markSummarized(tx);
     // 同じ (machine, user) が同じバッチに 2 つあれば、後のものが残る
     for (const l of lists) {
       const ids = JSON.stringify(parseSessionIds(l));
@@ -172,7 +176,9 @@ export function ingest(db: Db, batch: IncomingEvent[], nowMs = Date.now()): numb
       accepted += 1;
     }
     return accepted;
-  });
+    // 目印を読む SELECT が先に来るので、deferred だと読んだ後で書き込みに上げるときに、間に他プロセスが書いていると
+    // SQLITE_BUSY_SNAPSHOT で落ちる (busy_timeout では待てない)。書き込みロックを先に取る (#340)
+  }, { behavior: "immediate" });
 }
 
 /**
@@ -243,6 +249,14 @@ export type ListSessionsFilter = {
   /** stopped で archived でないものだけを返す */
   stoppedOnly?: boolean;
 };
+
+/** session_summary が events の末尾 (最大の rowid) まで数えたと記録する (#340)。rowid の最大は索引 1 回で引ける */
+export function markSummarized(tx: Pick<Db, "run">): void {
+  tx.run(sql`
+    INSERT INTO session_summary_mark (id, last_event_rowid) VALUES (1, (SELECT coalesce(max(rowid), 0) FROM events))
+    ON CONFLICT (id) DO UPDATE SET last_event_rowid = excluded.last_event_rowid
+  `);
+}
 
 /**
  * 新しく入った hook の event 1 件を session_summary に足す (#307)。届く順は時刻順と限らない (spool の再送) ので、
@@ -363,7 +377,7 @@ function latestStates(db: Db, keys: { machine: string; os_user: string; session_
         FROM (
           SELECT machine, os_user, session_id, rowid AS rid, CAST(payload AS TEXT) AS doc
           FROM events
-          WHERE producer = ${Producer.CCX_SESSION_STATE} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
+          WHERE producer = ${sql.raw(String(Producer.CCX_SESSION_STATE))} AND (machine, os_user, session_id) IN (${sql.join(tuples, sql`, `)})
         )
         WHERE json_valid(doc) AND json_type(doc, '$.state') = 'object'
       )
