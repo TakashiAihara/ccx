@@ -80,7 +80,7 @@ func SendTool(sessionID, home string, metaOn func() bool, client ccxv1connect.Me
 				"user":     map[string]any{"type": "string", "description": "the OS user whose ccx-agent delivers it (default: this agent's)"},
 				"reply_to": map[string]any{"type": "string", "description": "the msg_id of a message ccx delivered here: sends this back to its sender (its from_machine / from_user), in place of target, machine and user"},
 				"meta":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "extra one-line facts the receiver sees as meta_<key> (key: 1 to 32 of a-z 0-9 _), e.g. {\"task\": \"kaneo ccx#75\"}"},
-				"no_meta":  map[string]any{"type": "boolean", "description": "do not add this session's repo, branch, cwd, session id, label and role (added by default)"},
+				"no_meta":  map[string]any{"type": "boolean", "description": "do not add this session's repo, branch, cwd, session id, label, role and the msg_id a reply_to answers (added by default)"},
 			},
 			"required": []string{"body", "summary"},
 		},

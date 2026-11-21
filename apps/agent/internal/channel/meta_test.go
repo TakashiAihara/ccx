@@ -68,7 +68,9 @@ func TestAutoMetaLeavesOutWhatItCannotFindOrShow(t *testing.T) {
 	// Outside git: no repo and no branch, the rest still there.
 	plain := t.TempDir()
 	got = autoMeta(sid, home, plain, "")
-	if _, ok := got["from_repo"]; ok || got["from_branch"] != "" || got["from_cwd"] != plain || got["from_role"] != "impl" {
+	_, repoThere := got["from_repo"]
+	_, branchThere := got["from_branch"]
+	if repoThere || branchThere || got["from_cwd"] != plain || got["from_role"] != "impl" {
 		t.Fatalf("outside git: %v", got)
 	}
 }
@@ -95,8 +97,11 @@ func TestSendToolAddsThisSessionsMetaUnlessTurnedOffAndAlwaysTheCallersOwn(t *te
 		if m["meta_task"] != "kaneo ccx#75" {
 			t.Fatalf("%s: the caller's own meta is always sent: %v", tc.name, m)
 		}
-		if _, auto := m["from_session"]; auto != tc.auto || (tc.auto && (m["from_repo"] != "octo/repo" || m["from_label"] != "L")) {
-			t.Fatalf("%s: auto %v, meta %v", tc.name, tc.auto, m)
+		if !tc.auto && !maps.Equal(m, map[string]string{"meta_task": "kaneo ccx#75"}) {
+			t.Fatalf("%s: only the caller's own meta, got %v", tc.name, m)
+		}
+		if tc.auto && (m["from_session"] != sid || m["from_repo"] != "octo/repo" || m["from_branch"] != "feat/x" || m["from_label"] != "L" || m["from_role"] != "impl" || m["from_cwd"] == "") {
+			t.Fatalf("%s: meta %v", tc.name, m)
 		}
 	}
 }

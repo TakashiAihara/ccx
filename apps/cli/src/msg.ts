@@ -10,7 +10,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import { hostname, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 
-import { loadConfig, readDeclared } from "@ccx/core";
+import { messageMetaOn, readDeclared } from "@ccx/core";
 import { DeliveryMode, MessageService, SendResponse_State, type SendResponse } from "@ccx/proto/ccx/v1/message_pb.ts";
 
 import { defaultSocketPath } from "./agent.ts";
@@ -146,8 +146,12 @@ export function repoOf(url: string): string | undefined {
 function gitOut(cwd: string, ...args: string[]): string {
   const git = Bun.which("git", { PATH: process.env.PATH ?? "" });
   if (!git) return "";
-  const p = Bun.spawnSync([git, "-C", cwd, ...args], { stdout: "pipe", stderr: "ignore", timeout: 2000, killSignal: "SIGKILL" });
-  return p.exitCode === 0 ? p.stdout.toString().trim() : "";
+  try {
+    const p = Bun.spawnSync([git, "-C", cwd, ...args], { stdout: "pipe", stderr: "ignore", timeout: 2000, killSignal: "SIGKILL" });
+    return p.exitCode === 0 ? p.stdout.toString().trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -272,7 +276,7 @@ export function registerMsg(program: Command): void {
     .option("--wait <seconds>", "after sent, wait this long for the receiver's question / done (needs Devin's hooks wired to `ccx-agent devin-hook`)", parseWait, 0)
     .option("--reply <msg_id>", "send back to whoever sent the message with this msg_id (shown with each message ccx delivered here), in place of <target> / -m / -u")
     .option("--meta <key=value>", "add a fact the receiver sees as meta_<key>, e.g. --meta task='kaneo ccx#75' (repeatable)", addPair)
-    .option("--no-meta", "do not add this session's repo, branch, cwd, session, label and role ([message] meta in config.toml turns it off for every send)", (_v: unknown, prev?: MetaOption) => ({ auto: false, pairs: prev?.pairs ?? [] }))
+    .option("--no-meta", "do not add this session's repo, branch, cwd, session, label, role and the msg_id a --reply answers ([message] meta in config.toml turns it off for every send)", (_v: unknown, prev?: MetaOption) => ({ auto: false, pairs: prev?.pairs ?? [] }))
     .action(async (first: string | undefined, rest: string[], o: SendOptions & { meta?: MetaOption }) => {
       let state: "queued" | "sent" | undefined;
       // With --reply every word is the body; the agent turns the id into the target. Given at all, not
@@ -287,12 +291,12 @@ export function registerMsg(program: Command): void {
       try {
         // Worked out here, not at registration: userInfo() throws for a uid with no passwd entry,
         // and that must not break every other ccx command.
-        const session = ownSession(process.env, herdrPane, o.from === undefined ? (l) => console.error(l) : undefined);
+        const auto = (o.meta?.auto ?? true) && (await messageMetaOn());
+        // Asked only when something uses it: herdr can take up to 3 s.
+        const session = o.from === undefined || auto ? ownSession(process.env, herdrPane, o.from === undefined ? (l) => console.error(l) : undefined) : undefined;
         o.from ??= session ?? userAtHost(process.env, userInfo);
-        // A config that does not load leaves meta on, its default; the send itself does not need the config.
-        const configured = await loadConfig().then((c) => c.message.meta, () => true);
         o.senderMeta = await senderMeta({
-          auto: (o.meta?.auto ?? true) && configured, pairs: o.meta?.pairs ?? [], session, reply: o.reply,
+          auto, pairs: o.meta?.pairs ?? [], session, reply: o.reply,
           cwd: process.cwd(),
         });
         const ranOut = await sendMessage(target, body.join(" "), o, (l) => {

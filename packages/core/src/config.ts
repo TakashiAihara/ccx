@@ -55,11 +55,6 @@ export type Config = {
    * agent は、そのコマンドが上げる agent の名前 (herdr の pane が報告する名前)。上がったかをこれで見る
    */
   resume: { command: string; agent: string };
-  /**
-   * `ccx msg send` が送り手の情報 (repo / branch / cwd / session / label / role) を付けるか (#346)。
-   * CCX_MESSAGE_META か [message] meta。git config は読まない (ccx-agent の send_message ツールと同じ)
-   */
-  message: { meta: boolean };
 };
 
 const DEFAULT_MIRROR_MAX_AGE_MS = 10 * 60 * 1000;
@@ -127,7 +122,6 @@ export function defaultConfig(): Config {
     mirrorMaxAgeMs: DEFAULT_MIRROR_MAX_AGE_MS,
     defaults: { agent: "claude" },
     resume: { command: "claude --resume {session_id}", agent: "claude" },
-    message: { meta: true },
   };
 }
 
@@ -238,8 +232,27 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
         }
       : undefined,
     resume: { command: resumeCommand, agent: resumeAgent },
-    message: { meta: parseBool(env.CCX_MESSAGE_META) ?? fileBool((file.message as Record<string, unknown> | undefined)?.meta) ?? base.message.meta },
   };
+}
+
+/**
+ * `ccx msg send` が送り手の情報 (session / cwd / repo / branch / label / role / 返信先の msg_id) を付けるか (#346)。
+ * CCX_MESSAGE_META、なければ config.toml の [message] meta、既定は on。loadConfig を通さないのは、送るたびに
+ * git config を何本も起こさないためと、他の項目の誤り (hub-token の権限など) で off の指定が消えないため。
+ * ファイルが読めない・壊れているときは off (off と書いたかもしれないものを on と読まない)。
+ * ccx-agent の config.MessageMeta (packages/core/config/config.go) と同じ規則。
+ */
+export async function messageMetaOn(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const fromEnv = parseBool(env.CCX_MESSAGE_META);
+  if (fromEnv !== undefined) return fromEnv;
+  const f = Bun.file(configPath(env));
+  try {
+    if (!(await f.exists())) return true;
+    const meta = ((Bun.TOML.parse(await f.text()) as Record<string, unknown>).message as Record<string, unknown> | undefined)?.meta;
+    return typeof meta === "boolean" ? meta : true;
+  } catch {
+    return false;
+  }
 }
 
 /** ccx-agent の parseBool と同じ綴り。読めない値は undefined で、次の段に落ちる */
@@ -250,6 +263,3 @@ function parseBool(v: string | undefined): boolean | undefined {
   return undefined;
 }
 
-function fileBool(v: unknown): boolean | undefined {
-  return typeof v === "boolean" ? v : undefined;
-}

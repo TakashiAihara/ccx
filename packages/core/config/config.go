@@ -106,9 +106,6 @@ type Config struct {
 	// Transcript is the live transcript's settings (#120,
 	// docs/design/live-transcript.md): the store ccx-agent appends a running
 	// session's transcript.jsonl to.
-	// MessageMeta: a send from the CLI or the send_message tool says where it came from (#346). [message] meta.
-	MessageMeta bool
-
 	Transcript Transcript
 }
 
@@ -196,10 +193,41 @@ type fileShape struct {
 		Prefix string `toml:"prefix"`
 		Live   *bool  `toml:"live"`
 	} `toml:"transcript"`
-	// [message] is how sends go out (#346).
-	Message struct {
-		Meta *bool `toml:"meta"`
-	} `toml:"message"`
+}
+
+// MessageMeta is whether a send from the send_message tool says where it came from (#346): CCX_MESSAGE_META,
+// else [message] meta in config.toml, else on. Read on its own, not through Load: a send must not start the git
+// config lookups, and a mistake elsewhere in the config (a hub-token's mode) must not turn an off back on. A
+// file it cannot read or parse is off, since it may say off. The CLI reads it the same way
+// (packages/core/src/config.ts messageMetaOn).
+func MessageMeta() bool {
+	return messageMeta(os.Getenv)
+}
+
+func messageMeta(getenv func(string) string) bool {
+	if b, ok := parseBool(getenv("CCX_MESSAGE_META")); ok {
+		return b
+	}
+	p := configPath(getenv)
+	if p == "" {
+		return true
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	var f struct {
+		Message struct {
+			Meta *bool `toml:"meta"`
+		} `toml:"message"`
+	}
+	if err != nil {
+		return false
+	}
+	if _, err := toml.Decode(string(b), &f); err != nil {
+		return false
+	}
+	return f.Message.Meta == nil || *f.Message.Meta
 }
 
 // Load resolves the config from the real environment.
@@ -313,8 +341,6 @@ func load(
 		APIURLErr:         apiURLErr,
 		APIToken:          apiToken,
 		APITokenErr:       apiTokenErr,
-		// Whether a send says where it came from (repo, branch, cwd, session, label, role) unless told not to.
-		MessageMeta: fileToggle(getenv, "CCX_MESSAGE_META", file.Message.Meta, true),
 		Transcript: Transcript{
 			// git config is being taken out of the resolution (kaneo
 			// ccx#24), so a new switch does not start there. Env or the file stops it.

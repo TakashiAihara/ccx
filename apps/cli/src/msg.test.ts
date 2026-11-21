@@ -442,7 +442,17 @@ function repoAndHome(label: string): { repo: string; home: string } {
   const repo = mkdtempSync(join(tmpdir(), "ccx-meta-repo-"));
   const home = mkdtempSync(join(tmpdir(), "ccx-meta-home-"));
   cleanups.push(() => rmSync(repo, { recursive: true, force: true }), () => rmSync(home, { recursive: true, force: true }));
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  // The developer's own git config (url.insteadOf) must not change what `git remote get-url` says, here or in senderMeta.
+  const saved = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_NOSYSTEM];
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  cleanups.push(() => {
+    for (const [k, v] of [["GIT_CONFIG_GLOBAL", saved[0]], ["GIT_CONFIG_NOSYSTEM", saved[1]]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+  const env = { ...process.env };
   for (const args of [["init", "-q", "-b", "feat/x"], ["remote", "add", "origin", "https://github.com/octo/repo.git"]]) {
     expect(Bun.spawnSync(["git", "-C", repo, ...args], { env }).exitCode).toBe(0);
   }
@@ -476,7 +486,7 @@ test("the command adds this session's meta unless --no-meta or [message] meta sa
   });
   const off = join(home, "off.toml");
   writeFileSync(off, "[message]\nmeta = false\n");
-  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml") };
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const send = (extra: string[], e: Record<string, string> = env) =>
     runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", ...extra, "hi"], e, repo);
 
@@ -517,7 +527,7 @@ test("--meta without = is refused, and an unreadable declaration does not stop t
     got = req;
     yield { state: SendResponse_State.SENT };
   });
-  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml") };
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--meta", "task", "hi"], env, repo);
   expect([r.code, r.err]).toEqual([1, expect.stringContaining("--meta takes key=value")]);
 
@@ -526,4 +536,27 @@ test("--meta without = is refused, and an unreadable declaration does not stop t
   const ok = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "hi"], env, repo);
   expect(ok.code).toBe(0);
   expect([got?.senderMeta.from_session, got?.senderMeta.from_label]).toEqual([SID, undefined]);
+});
+
+test("--reply says in_reply_to, and herdr is not asked when --from is given and meta is off", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  expect((await runCli(["msg", "send", "--reply", "m9", "--socket", socket, "--summary", "s", "--from", "me", "ok"], { ...env, CLAUDE_CODE_SESSION_ID: SID }, repo)).code).toBe(0);
+  expect([got?.replyTo, got?.senderMeta.in_reply_to]).toEqual(["m9", "m9"]);
+
+  // A herdr that records being asked, first on PATH.
+  const bin = mkdtempSync(join(tmpdir(), "ccx-herdr-asked-"));
+  cleanups.push(() => rmSync(bin, { recursive: true, force: true }));
+  writeFileSync(join(bin, "herdr"), `#!/bin/sh\ntouch ${join(bin, "asked")}\necho '{}'\n`);
+  chmodSync(join(bin, "herdr"), 0o755);
+  const inPane = { ...env, HERDR_PANE_ID: "w1:p1", PATH: `${bin}:${process.env.PATH ?? ""}` };
+  expect((await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "--no-meta", "x"], inPane, repo)).code).toBe(0);
+  expect(await Bun.file(join(bin, "asked")).exists()).toBe(false);
+  expect((await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], inPane, repo)).code).toBe(0);
+  expect(await Bun.file(join(bin, "asked")).exists()).toBe(true);
 });

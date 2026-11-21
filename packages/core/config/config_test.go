@@ -578,21 +578,32 @@ func TestChannelAndAPISocket_AgreeWithLoad(t *testing.T) {
 	}
 }
 
-func TestMessageMeta_OnByDefault_OffFromTheFileOrEnv(t *testing.T) {
-	c, err := load(env(map[string]string{"CCX_CONFIG": filepath.Join(t.TempDir(), "none.toml")}), noGit, fixedHost("h"))
-	if err != nil || !c.MessageMeta {
-		t.Fatalf("default: %v %v", c.MessageMeta, err)
+func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
-	p := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(p, []byte("[message]\nmeta = false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err = load(env(map[string]string{"CCX_CONFIG": p}), noGit, fixedHost("h"))
-	if err != nil || c.MessageMeta {
-		t.Fatalf("file false: %v %v", c.MessageMeta, err)
-	}
-	c, err = load(env(map[string]string{"CCX_CONFIG": p, "CCX_MESSAGE_META": "on"}), noGit, fixedHost("h"))
-	if err != nil || !c.MessageMeta {
-		t.Fatalf("env on over file false: %v %v", c.MessageMeta, err)
+	off := write("off.toml", "[message]\nmeta = false\n")
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"no file", map[string]string{"CCX_CONFIG": filepath.Join(dir, "none.toml")}, true},
+		{"file off", map[string]string{"CCX_CONFIG": off}, false},
+		{"file without [message]", map[string]string{"CCX_CONFIG": write("other.toml", "machine = \"m\"\n")}, true},
+		{"env on over file off", map[string]string{"CCX_CONFIG": off, "CCX_MESSAGE_META": "on"}, true},
+		{"env off, no file", map[string]string{"CCX_CONFIG": filepath.Join(dir, "none.toml"), "CCX_MESSAGE_META": "off"}, false},
+		{"broken file", map[string]string{"CCX_CONFIG": write("broken.toml", "[message\nmeta = true\n")}, false},
+		{"typo env falls to the file", map[string]string{"CCX_CONFIG": off, "CCX_MESSAGE_META": "of"}, false},
+	} {
+		if got := messageMeta(env(tc.env)); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

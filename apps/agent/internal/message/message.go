@@ -890,8 +890,8 @@ func notTyped(err error) bool {
 	return errors.As(err, &ce) && ce.Meta().Get(NotTypedKey) == "1"
 }
 
-// devinReplyLine is the line typed under the body for Devin: where it came from and how to answer it.
-// devinReplyLine is where the message came from and how to answer it, or "" when it says neither.
+// devinReplyLine is the line typed under the body for Devin: where the message came from, what the sender said
+// about itself, and how to answer it; "" when there is none of that.
 func devinReplyLine(req Request, booked bool) string {
 	var parts []string
 	if booked {

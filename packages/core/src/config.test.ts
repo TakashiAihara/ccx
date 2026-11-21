@@ -6,11 +6,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadConfig, parseDuration } from "./config.ts";
+import { loadConfig, messageMetaOn, parseDuration } from "./config.ts";
 
 let tmp: string;
 let cfgFile: string;
@@ -245,4 +246,28 @@ describe("parseDuration", () => {
   test("読めない値は理由を添えて失敗する", () => {
     expect(() => parseDuration("soon")).toThrow(/invalid duration/);
   });
+});
+
+test("messageMetaOn: CCX_MESSAGE_META, then [message] meta in the file only, then on; a broken file is off", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccx-msgmeta-"));
+  try {
+    const write = (name: string, body: string) => {
+      writeFileSync(join(dir, name), body);
+      return join(dir, name);
+    };
+    const off = write("off.toml", "[message]\nmeta = false\n");
+    const cases: [Record<string, string>, boolean][] = [
+      [{ CCX_CONFIG: join(dir, "none.toml") }, true],
+      [{ CCX_CONFIG: off }, false],
+      [{ CCX_CONFIG: write("other.toml", 'machine = "m"\n') }, true],
+      [{ CCX_CONFIG: off, CCX_MESSAGE_META: "on" }, true],
+      [{ CCX_CONFIG: join(dir, "none.toml"), CCX_MESSAGE_META: "off" }, false],
+      [{ CCX_CONFIG: write("broken.toml", "[message\nmeta = true\n") }, false],
+      [{ CCX_CONFIG: off, CCX_MESSAGE_META: "of" }, false],
+    ];
+    const got = await Promise.all(cases.map(([env]) => messageMetaOn(env)));
+    expect(got).toEqual(cases.map(([, want]) => want));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
