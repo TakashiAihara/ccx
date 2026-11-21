@@ -57,8 +57,8 @@ type Request struct {
 	Mode                          ccxv1.DeliveryMode
 	// WaitSeconds keeps the send going after sent for the question / done acks.
 	WaitSeconds uint32
-	// SenderMachine / SenderUser are where it came from (the sending ccx-agent's own), and MsgID the id a reply
-	// to it names (#334). Empty from a sending agent too old to fill them.
+	// SenderMachine / SenderUser are where it came from (the sending ccx-agent's own; empty from one too old to
+	// fill them), and MsgID the id a reply to it names, which the delivering agent makes up (#334).
 	SenderMachine, SenderUser, MsgID string
 	// ReplyLine is typed under the body for Devin (where it came from, how to answer). It is not the body: the
 	// body's checks (empty, size) see only what the sender wrote.

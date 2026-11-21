@@ -77,7 +77,8 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 		"title":  headerLine(req.Sender, req.Summary),
 		"msg_id": id,
 	}}
-	// Where it came from, so the receiver can send back with -m / -u, or with --reply <msg_id> (#334).
+	// Where it came from, so the receiver can send back with -m / -u, or with --reply <msg_id> (#334). Both
+	// halves or neither, as Deliver books it: half an origin would route a reply with the replier's own user.
 	if req.SenderMachine != "" && req.SenderUser != "" {
 		ev.Meta[MetaFromMachine], ev.Meta[MetaFromUser] = req.SenderMachine, req.SenderUser
 	}

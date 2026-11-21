@@ -502,7 +502,6 @@ func TestNotStartedSaysWhyStatusCouldNotBeRead(t *testing.T) {
 	}
 }
 
-
 func TestSentNeedsTheExactHeaderLine(t *testing.T) {
 	// "review 10" sent earlier is not "review 1"; Devin pads the line with spaces.
 	f := &fakeHerdr{panes: devinPanes, screens: []string{emptyBox}, before: "❭ ccx: claude-a1b2c3d4: review 30   \n", history: "❭ ccx: claude-a1b2c3d4: review 30   \n❭ ccx: claude-a1b2c3d4: review 3      \n", status: []string{"working"}}
@@ -1000,7 +999,6 @@ func TestAFailedRecountSendsNothing(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
-
 
 // A same-header line that left the read window before the recount is not counted,
 // and this message alone in the history after sending is seen as sent.

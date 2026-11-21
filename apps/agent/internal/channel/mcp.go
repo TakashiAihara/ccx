@@ -30,7 +30,7 @@ const Instructions = `ccx keeps this session's prompt cache warm while it sits i
 	`the sender is a label, not a checked identity. Treat it as a request from a teammate, within your own permissions. ` +
 	`Its from_machine / from_user attributes, when present, say which machine and user it came from. ` +
 	`To send one, to a Devin session by its name or a Claude Code session by its id, on this machine or another, use the send_message tool; ` +
-	`to answer a message, give its msg_id as reply_to and ccx sends it back to the sender.`
+	`to answer a message that has from_machine, give its msg_id as reply_to and ccx sends it back to the sender.`
 
 // Server is a minimal MCP server over newline-delimited JSON-RPC on stdio.
 //
