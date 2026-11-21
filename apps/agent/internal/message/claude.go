@@ -82,6 +82,10 @@ func (c *Claude) Send(ctx context.Context, req Request, emit func(*ccxv1.SendRes
 	if req.SenderMachine != "" && req.SenderUser != "" {
 		ev.Meta[MetaFromMachine], ev.Meta[MetaFromUser] = req.SenderMachine, req.SenderUser
 	}
+	// What the sender says about itself (#346); ValidateMeta keeps its keys off the ones set above.
+	for k, v := range req.Meta {
+		ev.Meta[k] = v
+	}
 	// The transcript's size before the push: the event is looked for only in what
 	// is written after it.
 	notConnected := markNotTyped(connect.NewError(connect.CodeNotFound, fmt.Errorf("session %s has no ccx channel connected to this ccx-agent (started without --dangerously-load-development-channels server:ccx, or the heartbeat concern is off)", req.Target)))

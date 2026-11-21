@@ -63,7 +63,7 @@ func TestSendToolSendsAsThisSessionAndListsTheAcks(t *testing.T) {
 		{State: ccxv1.SendResponse_STATE_SENT, Detail: "pane w1:p1"},
 		{State: ccxv1.SendResponse_STATE_WORKING},
 	}}
-	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"urgent","machine":"ccx1","user":"dev"}`)
+	text, isErr := call(t, SendTool(sid, "", metaOff, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"urgent","machine":"ccx1","user":"dev"}`)
 	if isErr || text != "sent  pane w1:p1\nworking" {
 		t.Fatalf("text %q, isErr %v", text, isErr)
 	}
@@ -76,7 +76,7 @@ func TestSendToolSendsAsThisSessionAndListsTheAcks(t *testing.T) {
 
 func TestSendToolRepliesByMsgIDAndNeedsATargetOrAReplyTo(t *testing.T) {
 	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}}
-	tool := SendTool(sid, messagesClient(t, f))
+	tool := SendTool(sid, "", metaOff, messagesClient(t, f))
 	if text, isErr := call(t, tool, `{"reply_to":"870ca1f60db13297","body":"ok","summary":"re"}`); isErr || text != "sent" {
 		t.Fatalf("text %q, isErr %v", text, isErr)
 	}
@@ -93,7 +93,7 @@ func TestSendToolRepliesByMsgIDAndNeedsATargetOrAReplyTo(t *testing.T) {
 
 func TestSendToolDefaultsToAfterTurnAndRefusesAnUnknownMode(t *testing.T) {
 	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_SENT}}}
-	tool := SendTool(sid, messagesClient(t, f))
+	tool := SendTool(sid, "", metaOff, messagesClient(t, f))
 	if _, isErr := call(t, tool, `{"target":"t","body":"b","summary":"s"}`); isErr || f.got.GetMode() != ccxv1.DeliveryMode_DELIVERY_MODE_AFTER_TURN || f.got.GetMachine() != "" {
 		t.Fatalf("mode %v, machine %q", f.got.GetMode(), f.got.GetMachine())
 	}
@@ -121,7 +121,7 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 		{"lost after queued", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nqueued, then lost the ack stream: gone"},
 		{"lost after queued and taken", &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED}, {State: ccxv1.SendResponse_STATE_SENT}}, err: connect.NewError(connect.CodeUnknown, errors.New("gone"))}, "queued\nsent\nsent, then lost the ack stream: gone"},
 	} {
-		text, isErr := call(t, SendTool(sid, messagesClient(t, tc.f)), `{"target":"t","body":"b","summary":"s"}`)
+		text, isErr := call(t, SendTool(sid, "", metaOff, messagesClient(t, tc.f)), `{"target":"t","body":"b","summary":"s"}`)
 		if !isErr || text != tc.prefix {
 			t.Errorf("%s: %q", tc.name, text)
 		}
@@ -129,7 +129,7 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 
 	// No ccx-agent on the socket: never reached, so not sent.
 	none := filepath.Join(t.TempDir(), "none.sock")
-	text, isErr := call(t, SendTool(sid, UnixMessageClient(func() string { return none })), `{"target":"t","body":"b","summary":"s"}`)
+	text, isErr := call(t, SendTool(sid, "", metaOff, UnixMessageClient(func() string { return none })), `{"target":"t","body":"b","summary":"s"}`)
 	if !isErr || !strings.HasPrefix(text, "not sent: ") {
 		t.Fatalf("unreachable: %q", text)
 	}
@@ -137,7 +137,7 @@ func TestSendToolSaysNotSentOnlyWhenNothingWasTyped(t *testing.T) {
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	text, isErr = call(t, SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
+	text, isErr = call(t, SendTool(sid, "", metaOff, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
 	if !isErr || !strings.HasPrefix(text, "not sent: ") {
 		t.Fatalf("unimplemented: %q", text)
 	}
@@ -206,7 +206,7 @@ func TestServerOffersAndRunsItsTools(t *testing.T) {
 
 func TestSendToolRefusesThisSessionAsTheTarget(t *testing.T) {
 	f := &fakeMessages{}
-	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"`+sid+`","body":"b","summary":"s"}`)
+	text, isErr := call(t, SendTool(sid, "", metaOff, messagesClient(t, f)), `{"target":"`+sid+`","body":"b","summary":"s"}`)
 	if !isErr || text != "not sent: that is this session" || f.got != nil {
 		t.Fatalf("text %q, sent %v", text, f.got)
 	}
@@ -234,7 +234,7 @@ func TestSendToolSendsOneAtATime(t *testing.T) {
 	mux.Handle(ccxv1connect.NewMessageServiceHandler(s))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	tool := SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
+	tool := SendTool(sid, "", metaOff, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
 	done := make(chan string, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -274,7 +274,7 @@ func TestSendToolStartsTheTimeoutWhenTheSendsTurnComes(t *testing.T) {
 	})))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	tool := SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
+	tool := SendTool(sid, "", metaOff, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL))
 
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -315,7 +315,7 @@ func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	start := time.Now()
-	text, isErr := call(t, SendTool(sid, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
+	text, isErr := call(t, SendTool(sid, "", metaOff, ccxv1connect.NewMessageServiceClient(srv.Client(), srv.URL)), `{"target":"t","body":"b","summary":"s"}`)
 	if !isErr || !strings.HasPrefix(text, "may have been sent") || time.Since(start) > 2*time.Second {
 		t.Fatalf("text %q after %v", text, time.Since(start))
 	}
@@ -323,7 +323,7 @@ func TestSendToolGivesUpAtTheTimeout(t *testing.T) {
 
 func TestSendToolNamesTheQueuedAck(t *testing.T) {
 	f := &fakeMessages{acks: []*ccxv1.SendResponse{{State: ccxv1.SendResponse_STATE_QUEUED, Detail: "next turn"}}}
-	text, isErr := call(t, SendTool(sid, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"later"}`)
+	text, isErr := call(t, SendTool(sid, "", metaOff, messagesClient(t, f)), `{"target":"bird-baseball","body":"hi","summary":"s","mode":"later"}`)
 	if isErr || text != "queued  next turn" {
 		t.Fatalf("text %q, isErr %v", text, isErr)
 	}
@@ -347,7 +347,7 @@ func TestUnixMessageClientResolvesThePathOnEveryDial(t *testing.T) {
 
 	var path atomic.Value
 	path.Store(sock + ".elsewhere")
-	tool := SendTool(sid, UnixMessageClient(func() string { return path.Load().(string) }))
+	tool := SendTool(sid, "", metaOff, UnixMessageClient(func() string { return path.Load().(string) }))
 	if text, isErr := call(t, tool, `{"target":"t","body":"b","summary":"s"}`); !isErr || !strings.HasPrefix(text, "not sent: ") {
 		t.Fatalf("before the move: %q", text)
 	}

@@ -234,3 +234,42 @@ export async function loadConfig(opts: LoadOptions = {}): Promise<Config> {
     resume: { command: resumeCommand, agent: resumeAgent },
   };
 }
+
+/**
+ * `ccx msg send` が送り手の情報 (session / cwd / repo / branch / label / role / 返信先の msg_id) を付けるか (#346)。
+ * CCX_MESSAGE_META、なければ config.toml の [message] meta、既定は on。loadConfig を通さないのは、送るたびに
+ * git config を何本も起こさないためと、他の項目の誤り (hub-token の権限など) で off の指定が消えないため。
+ * ファイルが読めない・壊れているときは off (off と書いたかもしれないものを on と読まない)。
+ * ccx-agent の config.MessageMeta (packages/core/config/config.go) と同じ規則。
+ */
+export async function messageMetaOn(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  const fromEnv = parseBool(env.CCX_MESSAGE_META);
+  if (fromEnv !== undefined) return fromEnv;
+  let text: string;
+  try {
+    text = await Bun.file(configPath(env)).text();
+  } catch (e) {
+    // Only a file that is not there is on; one there but unreadable (a directory, an unsearchable parent) is off.
+    return (e as { code?: string }).code === "ENOENT";
+  }
+  try {
+    const message = (Bun.TOML.parse(text) as Record<string, unknown>).message;
+    if (message === undefined) return true;
+    // As Go decodes it into a *bool: [message] that is not a table, or a meta that is not a boolean, is off.
+    // Bun reads a datetime as a Date: only a plain object is a table.
+    if (typeof message !== "object" || message === null || Object.getPrototypeOf(message) !== Object.prototype) return false;
+    const meta = (message as Record<string, unknown>).meta;
+    return meta === undefined ? true : meta === true;
+  } catch {
+    return false;
+  }
+}
+
+/** ccx-agent の parseBool と同じ綴り。読めない値は undefined で、次の段に落ちる */
+function parseBool(v: string | undefined): boolean | undefined {
+  const s = v?.trim().toLowerCase();
+  if (s === "1" || s === "true" || s === "on" || s === "yes") return true;
+  if (s === "0" || s === "false" || s === "off" || s === "no") return false;
+  return undefined;
+}
+

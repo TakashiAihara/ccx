@@ -2,13 +2,13 @@ import { create } from "@bufbuild/protobuf";
 import { afterEach, expect, test } from "bun:test";
 import { createClient, createConnectRouter, Code, ConnectError } from "@connectrpc/connect";
 import { createFetchHandler } from "@connectrpc/connect/protocol";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DeliveryMode, MessageService, SendResponseSchema, SendResponse_State, type SendRequest } from "@ccx/proto/ccx/v1/message_pb.ts";
 
-import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, sendMessage, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
+import { ackLines, defaultApiSocketPath, defaultSender, failurePrefix, repoOf, sendMessage, senderMeta, unixTransport, WAIT_RAN_OUT } from "./msg.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -141,8 +141,8 @@ test("a sender outside Claude Code is user@host", () => {
   expect(defaultSender({})).toMatch(/^[^@\s]+@[^@\s]+$/);
 });
 
-async function runCli(args: string[], env: Record<string, string>): Promise<{ code: number; out: string; err: string }> {
-  const p = Bun.spawn(["bun", join(import.meta.dir, "index.ts"), ...args], { env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env }, stdout: "pipe", stderr: "pipe" });
+async function runCli(args: string[], env: Record<string, string>, cwd?: string): Promise<{ code: number; out: string; err: string }> {
+  const p = Bun.spawn(["bun", join(import.meta.dir, "index.ts"), ...args], { cwd, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env }, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, out, err };
 }
@@ -433,4 +433,144 @@ test("the agent's stream is fetched with Bun's own timeout off", async () => {
   }
   expect(seen).toMatchObject({ unix: "/nonexistent.sock", timeout: false });
   expect(seen?.signal).toBeInstanceOf(AbortSignal);
+});
+
+const SID = "abcdef12-3456-4789-8abc-def012345678";
+
+/** A checkout of octo/repo on feat/x, and a Claude Code home where SID declared label and role. */
+function repoAndHome(label: string): { repo: string; home: string } {
+  const repo = mkdtempSync(join(tmpdir(), "ccx-meta-repo-"));
+  const home = mkdtempSync(join(tmpdir(), "ccx-meta-home-"));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }), () => rmSync(home, { recursive: true, force: true }));
+  // The developer's own git config (url.insteadOf) must not change what `git remote get-url` says, here or in senderMeta.
+  const saved = [process.env.GIT_CONFIG_GLOBAL, process.env.GIT_CONFIG_NOSYSTEM];
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  cleanups.push(() => {
+    for (const [k, v] of [["GIT_CONFIG_GLOBAL", saved[0]], ["GIT_CONFIG_NOSYSTEM", saved[1]]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+  const env = { ...process.env };
+  for (const args of [["init", "-q", "-b", "feat/x"], ["remote", "add", "origin", "https://github.com/octo/repo.git"]]) {
+    expect(Bun.spawnSync(["git", "-C", repo, ...args], { env }).exitCode).toBe(0);
+  }
+  mkdirSync(join(home, "sessions", SID), { recursive: true });
+  writeFileSync(join(home, "sessions", SID, "label"), label);
+  writeFileSync(join(home, "sessions", SID, "role"), "impl\n");
+  return { repo, home };
+}
+
+test("senderMeta says the session, cwd, repo, branch, label, role and the message it answers, then the --meta pairs", async () => {
+  const { repo, home } = repoAndHome("reviewing #346\n");
+  expect(await senderMeta({ auto: true, pairs: ["task=kaneo ccx#75", "a=x=y"], session: SID, reply: "m1", cwd: repo, home })).toEqual({
+    from_session: SID, from_cwd: repo, from_repo: "octo/repo", from_branch: "feat/x",
+    from_label: "reviewing #346", from_role: "impl", in_reply_to: "m1", meta_task: "kaneo ccx#75", meta_a: "x=y",
+  });
+  // Off: only the pairs. A label it cannot show, and a Devin sender's (no declared state), are left out.
+  expect(await senderMeta({ auto: false, pairs: ["task=t"], session: SID, cwd: repo, home })).toEqual({ meta_task: "t" });
+  const bad = repoAndHome("two\nlines");
+  const m = await senderMeta({ auto: true, pairs: [], session: SID, cwd: bad.repo, home: bad.home });
+  expect([m.from_label, m.from_role, m.in_reply_to]).toEqual([undefined, "impl", undefined]);
+  const devin = await senderMeta({ auto: true, pairs: [], session: "quick-kitten", cwd: repo, home });
+  expect([devin.from_session, devin.from_role]).toEqual(["quick-kitten", undefined]);
+});
+
+test("the command adds this session's meta unless --no-meta or [message] meta says no, and always the --meta pairs", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const off = join(home, "off.toml");
+  writeFileSync(off, "[message]\nmeta = false\n");
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const send = (extra: string[], e: Record<string, string> = env) =>
+    runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", ...extra, "hi"], e, repo);
+
+  expect((await send(["--meta", "task=kaneo ccx#75"])).code).toBe(0);
+  expect([got?.senderMeta.from_session, got?.senderMeta.from_repo, got?.senderMeta.from_label, got?.senderMeta.meta_task]).toEqual([SID, "octo/repo", "L", "kaneo ccx#75"]);
+  for (const [extra, e] of [[["--meta", "task=x", "--no-meta"], env], [["--meta", "task=x"], { ...env, CCX_CONFIG: off }], [["--meta", "task=x"], { ...env, CCX_MESSAGE_META: "off" }]] as const) {
+    expect((await send([...extra], e)).code).toBe(0);
+    expect(got?.senderMeta).toEqual({ meta_task: "x" });
+  }
+  // The env turns it back on over the file.
+  expect((await send([], { ...env, CCX_CONFIG: off, CCX_MESSAGE_META: "on" })).code).toBe(0);
+  expect(got?.senderMeta.from_session).toBe(SID);
+
+  const r = await send(["--meta", "Task=x"]);
+  expect([r.code, r.err]).toEqual([1, expect.stringContaining("--meta takes key=value")]);
+});
+
+test("repoOf reads only the path, so no credentials leak, and agrees with ccx-agent's", () => {
+  const cases: [string, string | undefined][] = [
+    ["https://github.com/octo/repo.git", "octo/repo"],
+    ["https://user:secret@git.example/repo.git", undefined],
+    ["https://user:secret@git.example/octo/repo.git", "octo/repo"],
+    ["ssh://git@host:2222/octo/repo.git", "octo/repo"],
+    ["ssh://git@host/repo.git", undefined],
+    ["git@host:octo/repo.git", "octo/repo"],
+    ["host:repo.git", undefined],
+    ["https://gitlab.example/group/sub/repo/", "sub/repo"],
+    ["/srv/git/team/tool.git", "team/tool"],
+    ["https://git.example/team/repo.git?x=y#z", "team/repo"],
+    ["https://git.example/team/re po.git", undefined],
+    ["", undefined],
+  ];
+  expect(cases.map(([u]) => repoOf(u))).toEqual(cases.map(([, w]) => w));
+});
+
+test("--meta without = is refused, and an unreadable declaration does not stop the send", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const r = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--meta", "task", "hi"], env, repo);
+  expect([r.code, r.err]).toEqual([1, expect.stringContaining("--meta takes key=value")]);
+
+  // A meta that is a file, not a directory, makes readDeclared throw (ENOTDIR, root or not).
+  writeFileSync(join(home, "sessions", SID, "meta"), "");
+  const ok = await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "hi"], env, repo);
+  expect(ok.code).toBe(0);
+  expect([got?.senderMeta.from_session, got?.senderMeta.from_label]).toEqual([SID, undefined]);
+});
+
+test("--reply says in_reply_to, and herdr is not asked when --from is given and meta is off", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  expect((await runCli(["msg", "send", "--reply", "m9", "--socket", socket, "--summary", "s", "--from", "me", "ok"], { ...env, CLAUDE_CODE_SESSION_ID: SID }, repo)).code).toBe(0);
+  expect([got?.replyTo, got?.senderMeta.in_reply_to]).toEqual(["m9", "m9"]);
+
+  // A herdr that records being asked, first on PATH.
+  const bin = mkdtempSync(join(tmpdir(), "ccx-herdr-asked-"));
+  cleanups.push(() => rmSync(bin, { recursive: true, force: true }));
+  writeFileSync(join(bin, "herdr"), `#!/bin/sh\ntouch ${join(bin, "asked")}\necho '{}'\n`);
+  chmodSync(join(bin, "herdr"), 0o755);
+  const inPane = { ...env, HERDR_PANE_ID: "w1:p1", PATH: `${bin}:${process.env.PATH ?? ""}` };
+  expect((await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "--no-meta", "x"], inPane, repo)).code).toBe(0);
+  expect(await Bun.file(join(bin, "asked")).exists()).toBe(false);
+  expect((await runCli(["msg", "send", "t", "--socket", socket, "--summary", "s", "--from", "me", "x"], inPane, repo)).code).toBe(0);
+  expect(await Bun.file(join(bin, "asked")).exists()).toBe(true);
+});
+
+test("--no-meta drops in_reply_to too", async () => {
+  const { repo, home } = repoAndHome("L");
+  let got: SendRequest | undefined;
+  const socket = fakeAgent(async function* (req) {
+    got = req;
+    yield { state: SendResponse_State.SENT };
+  });
+  const env = { CLAUDE_CODE_SESSION_ID: SID, CLAUDE_CONFIG_DIR: home, CCX_CONFIG: join(home, "none.toml"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  expect((await runCli(["msg", "send", "--reply", "m9", "--no-meta", "--socket", socket, "--summary", "s", "--from", "me", "ok"], env, repo)).code).toBe(0);
+  expect([got?.replyTo, got?.senderMeta]).toEqual(["m9", {}]);
 });

@@ -577,3 +577,40 @@ func TestChannelAndAPISocket_AgreeWithLoad(t *testing.T) {
 		t.Errorf("override: ChannelSocket = %q", ChannelSocket())
 	}
 }
+
+func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	off := write("off.toml", "[message]\nmeta = false\n")
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"no file", map[string]string{"CCX_CONFIG": filepath.Join(dir, "none.toml")}, true},
+		{"file off", map[string]string{"CCX_CONFIG": off}, false},
+		{"file without [message]", map[string]string{"CCX_CONFIG": write("other.toml", "machine = \"m\"\n")}, true},
+		{"env on over file off", map[string]string{"CCX_CONFIG": off, "CCX_MESSAGE_META": "on"}, true},
+		{"env off, no file", map[string]string{"CCX_CONFIG": filepath.Join(dir, "none.toml"), "CCX_MESSAGE_META": "off"}, false},
+		{"broken file", map[string]string{"CCX_CONFIG": write("broken.toml", "[message\nmeta = true\n")}, false},
+		{"typo env falls to the file", map[string]string{"CCX_CONFIG": off, "CCX_MESSAGE_META": "of"}, false},
+		{"a string meta", map[string]string{"CCX_CONFIG": write("str.toml", "[message]\nmeta = \"off\"\n")}, false},
+		{"a number meta", map[string]string{"CCX_CONFIG": write("num.toml", "[message]\nmeta = 1\n")}, false},
+		{"message not a table", map[string]string{"CCX_CONFIG": write("notable.toml", "message = \"x\"\n")}, false},
+		{"[message] without meta", map[string]string{"CCX_CONFIG": write("nometa.toml", "[message]\n")}, true},
+		{"message a datetime", map[string]string{"CCX_CONFIG": write("date.toml", "message = 2026-11-21T00:00:00Z\n")}, false},
+		{"message an array", map[string]string{"CCX_CONFIG": write("array.toml", "message = [1]\n")}, false},
+		{"a directory", map[string]string{"CCX_CONFIG": dir}, false},
+	} {
+		if got := messageMeta(env(tc.env)); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

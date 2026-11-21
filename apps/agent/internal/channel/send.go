@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -44,6 +45,9 @@ type sendArgs struct {
 	Machine string `json:"machine"`
 	User    string `json:"user"`
 	ReplyTo string `json:"reply_to"`
+	// Meta is meta_<key> for each key; NoMeta leaves out what the send would say about this session (#346).
+	Meta   map[string]string `json:"meta"`
+	NoMeta bool              `json:"no_meta"`
 }
 
 // SendTool is the send_message tool: the same send as `ccx msg send`, through
@@ -53,7 +57,10 @@ type sendArgs struct {
 // comes: Claude Code calls tools in parallel, and a send that had spent part of
 // its time waiting behind others would have less left for its own delivery,
 // running out mid-send and ending as "may have been sent".
-func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
+//
+// Unless no_meta, or metaOn (config [message] meta) says no, a send also says where it came from: autoMeta,
+// read from home (Claude Code's) and this process's cwd, which Claude Code starts it in.
+func SendTool(sessionID, home string, metaOn func() bool, client ccxv1connect.MessageServiceClient) Tool {
 	var mu sync.Mutex
 	return Tool{
 		Name: "send_message",
@@ -72,6 +79,8 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 				"machine":  map[string]any{"type": "string", "description": "the machine whose ccx-agent delivers it, through the center (default: this one)"},
 				"user":     map[string]any{"type": "string", "description": "the OS user whose ccx-agent delivers it (default: this agent's)"},
 				"reply_to": map[string]any{"type": "string", "description": "the msg_id of a message ccx delivered here: sends this back to its sender (its from_machine / from_user), in place of target, machine and user"},
+				"meta":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "extra one-line facts the receiver sees as meta_<key> (key: 1 to 32 of a-z 0-9 _), e.g. {\"task\": \"kaneo ccx#75\"}"},
+				"no_meta":  map[string]any{"type": "boolean", "description": "do not add this session's repo, branch, cwd, session id, label, role and the msg_id a reply_to answers (added by default)"},
 			},
 			"required": []string{"body", "summary"},
 		},
@@ -93,13 +102,21 @@ func SendTool(sessionID string, client ccxv1connect.MessageServiceClient) Tool {
 			if a.Target == sessionID {
 				return "not sent: that is this session", true
 			}
+			meta := map[string]string{}
+			if !a.NoMeta && metaOn() {
+				cwd, _ := os.Getwd()
+				meta = autoMeta(sessionID, home, cwd, a.ReplyTo)
+			}
+			for k, v := range a.Meta {
+				meta[message.MetaUserKey+k] = v
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 			defer cancel()
 			stream, err := client.Send(ctx, connect.NewRequest(&ccxv1.SendRequest{
 				Target: a.Target, Body: a.Body, Summary: a.Summary, Mode: mode, Machine: a.Machine, User: a.User,
-				Sender: sessionID, ReplyTo: a.ReplyTo,
+				Sender: sessionID, ReplyTo: a.ReplyTo, SenderMeta: meta,
 			}))
 			if err != nil {
 				return failure(err, nil), true
