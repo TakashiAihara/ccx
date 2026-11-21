@@ -846,6 +846,11 @@ func (s *Service) Deliver(ctx context.Context, m *ccxv1.SendRequest, emit func(*
 	}
 	err := send(ctx, req, func(r *ccxv1.SendResponse) error {
 		last = r.GetState()
+		// Sent is the receiver having it: confirm then, not when a --wait ends, so waiting sends do not sit
+		// outside the count of 1000.
+		if booked && last == ccxv1.SendResponse_STATE_SENT {
+			s.book().confirm(req.MsgID)
+		}
 		return emit(r)
 	})
 	// Nobody saw an id that was never typed: drop it, and only a send that reached the receiver makes room.

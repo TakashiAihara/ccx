@@ -323,3 +323,22 @@ func TestMakingRoomSkipsAPendingIDEvenWhenItIsTheOldest(t *testing.T) {
 		t.Fatalf("A %v id0 %v, %d ids", a, id0, len(b.ids))
 	}
 }
+
+func TestAnIDIsConfirmedWhenItsSendIsSentNotWhenTheWaitEnds(t *testing.T) {
+	home, _ := newTranscript(t, "")
+	ch := &fakeChannels{home: home, registered: true}
+	svc := &Service{Devin: newDevin(&fakeHerdr{panes: devinPanes}), Claude: testClaude(ch)}
+	pendingAtSent := true
+	in := &ccxv1.SendRequest{Target: claudeID, Sender: "a", Summary: "s", Body: "b", SenderMachine: "m", SenderUser: "u"}
+	err := svc.Deliver(context.Background(), in, func(r *ccxv1.SendResponse) error {
+		if r.GetState() == ccxv1.SendResponse_STATE_SENT {
+			for _, to := range svc.book().ids {
+				pendingAtSent = to.pending
+			}
+		}
+		return nil
+	})
+	if err != nil || pendingAtSent {
+		t.Fatalf("err %v; the id was still pending when sent went out", err)
+	}
+}
