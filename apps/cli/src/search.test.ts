@@ -15,6 +15,7 @@ import { createApp } from "@ccx/hub/src/server.ts";
 import { encodeCwd, localTranscripts, TranscriptClient, writeDeclared, type TranscriptStore } from "@ccx/core";
 
 import { openDuckDB } from "./duckdb.ts";
+import { SEARCH_VIEW_COLUMNS } from "./transcript.ts";
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const SID2 = "1a2b3c4d-5e6f-4a70-8b9c-0d1e2f3a4b5c";
@@ -90,6 +91,23 @@ afterEach(async () => {
 });
 
 describe("search: embedded DuckDB over the store", () => {
+  test("--help lists every view's columns as the views have them, and its JSON-path example runs (#345)", async () => {
+    const c = await openDuckDB(store, { withHistory: true });
+    for (const [view, cols] of Object.entries(SEARCH_VIEW_COLUMNS)) {
+      const described = (await c.runAndReadAll(`SELECT column_name FROM (DESCRIBE ${view})`)).getRowObjectsJson().map((r) => r.column_name);
+      expect([view, ...described]).toEqual([view, ...cols]);
+    }
+
+    const help = await ccx("--help");
+    expect(help.code).toBe(0);
+    expect(help.out).toContain(`sessions     ${SEARCH_VIEW_COLUMNS.sessions.join(", ")}`);
+    const example = help.out.match(/ccx tr search --sql "(.+)"/)?.[1];
+    expect(example).toContain("json->>'$.type' = 'user'");
+    const ran = await ccx("--sql", example!, "--json");
+    expect(ran.code).toBe(0);
+    expect(JSON.parse(ran.out)).toContainEqual({ session_id: SID2, "(\"json\" ->> '$.message.content')": "nothing here" });
+  });
+
   test("transcripts view carries the hive columns and message fields; a present word hits, an absent one does not", async () => {
     const c = await openDuckDB(store, { withHistory: true, withTranscripts: true });
 

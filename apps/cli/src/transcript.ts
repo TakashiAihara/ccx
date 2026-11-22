@@ -116,6 +116,27 @@ export async function select(
   return { picked, running, skippedRunning };
 }
 
+/** The `--sql` views' columns, as `tr search --help` lists them. `transcripts` is left out: its columns are inferred per store */
+export const SEARCH_VIEW_COLUMNS = {
+  lines: ["session_id", "machine", "user", "json"],
+  sessions: ["session_id", "machine", "user", "label", "task", "role", "archived", "metadata", "label_history", "label_recorded_at", "json"],
+  history: ["session_id", "op", "machine", "user", "occurred_at", "pushed_by_machine", "pushed_by_user"],
+} as const;
+
+const SEARCH_HELP = `
+Views for --sql:
+  lines        ${SEARCH_VIEW_COLUMNS.lines.join(", ")}
+               one row per transcript record; json is the raw record
+  transcripts  machine, session_id, user, and the record keys found in the first 32 files
+               (run --sql "describe transcripts" to see them); a key only later files carry is read from lines
+  sessions     ${SEARCH_VIEW_COLUMNS.sessions.join(", ")}
+  history      ${SEARCH_VIEW_COLUMNS.history.join(", ")}
+               machine / user did the op; pushed_by_* pushed the file
+
+Read a field out of a JSON column with a JSON path:
+  ccx tr search --sql "select session_id, json->>'\$.message.content' from lines where json->>'\$.type' = 'user' limit 5"
+`;
+
 export function registerTranscript(program: Command, VERSION: string): void {
   const transcript = program
     .command("transcript")
@@ -284,10 +305,11 @@ export function registerTranscript(program: Command, VERSION: string): void {
     .command("search")
     .description("Search every transcript in the store with DuckDB (embedded)")
     .argument("[text]", "case-insensitive substring of any message")
-    .option("--sql <query>", "run this SQL instead; the views are `transcripts`, `lines` (raw records), `history` and `sessions` (label, label_history, role, metadata)")
+    .option("--sql <query>", "run this SQL instead (views and their columns are listed below)")
     .option("-s, --session <id>", "only this session (full id or prefix)")
     .option("-n, --limit <count>", "at most this many rows (default 50)", parseLimit)
     .option("--json", "print rows as JSON")
+    .addHelpText("after", SEARCH_HELP)
     .action(async (text: string | undefined, o) => {
       if (!text && !o.sql) throw new Error("give text to search for, or --sql");
       if (text && o.sql) throw new Error("give either text or --sql, not both");
