@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
 )
 
 // reapRecord is what one stop leaves: a line in the session's `reaped` file and
@@ -169,6 +171,24 @@ func pssOf(root string, pid int) int64 {
 	return 0
 }
 
+// heartbeatDeclarationReadable: the heartbeat declaration is absent, or reads as
+// on or off. wanted() takes an unreadable or garbled file for "no declaration",
+// which would put a session declared on onto the one-hour clock; the reaper keeps
+// such a session instead.
+func (h *Heartbeat) heartbeatDeclarationReadable() bool {
+	p := filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "heartbeat")
+	if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return true
+	} else if err != nil {
+		return false
+	}
+	switch declared.Text(p) {
+	case "on", "off":
+		return true
+	}
+	return false
+}
+
 // pinned: `ccx session pin` left the flag file (a directory of that name is not it,
 // as for archived).
 func (h *Heartbeat) pinned() bool {
@@ -199,6 +219,9 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	// archived) has nothing to wait for once its cache is cold (user decision
 	// 2026-11-22), so the cache TTL below is its whole clock.
 	idle := now.Sub(idleSince(s, procStart))
+	if !h.heartbeatDeclarationReadable() {
+		return Scan{}, false
+	}
 	if h.wanted() {
 		if h.MaxIdle <= 0 || idle <= h.MaxIdle {
 			return Scan{}, false

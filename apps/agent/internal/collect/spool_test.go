@@ -486,6 +486,9 @@ func TestCollectAppendEventWaitsForTheStartupDrain(t *testing.T) {
 			t.Error("AppendEvent was let in while the startup drain was still writing")
 		}
 	}
+	// The probe takes holdMu.RLock; AppendEvent holds it too, and a read lock must
+	// not be taken twice on one goroutine. Put the real fsync back first.
+	fsync = realFsync
 	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("late")); err != nil {
 		t.Errorf("AppendEvent after the drain: %v", err)
 	}

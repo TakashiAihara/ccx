@@ -1373,6 +1373,7 @@ func TestReapTakesASessionWithoutKeepaliveOnceItsCacheIsCold(t *testing.T) {
 	}{
 		{"off, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 61 * time.Minute, true},
 		{"off, cache warm", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 59 * time.Minute, false},
+		{"no declaration, agent default off, cache cold", func(d string) {}, 61 * time.Minute, true},
 		{"archived, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "archived"), nil, 0o600) }, 61 * time.Minute, true},
 		{"on, cache cold, under maxIdle", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("on\n"), 0o600) }, 61 * time.Minute, false},
 		// A local command (no request) 30 minutes ago is use: the cache is cold, the session is not idle.
@@ -1385,7 +1386,8 @@ func TestReapTakesASessionWithoutKeepaliveOnceItsCacheIsCold(t *testing.T) {
 			if tc.idle < 0 {
 				transcript = answered("1", reapNow.Add(-2*time.Hour)) + tr(userAt("lc", reapNow.Add(tc.idle), `"<command-name>/model</command-name>"`))
 			}
-			e.session(id, 100, goodStart, transcript)
+			// The agent's own default (off) is what a session with no declaration gets.
+			e.session(id, 100, goodStart, transcript).Default = false
 			e.procEntry(100, "claude", 1, goodStart, 10)
 			dir := filepath.Join(e.home, "sessions", id)
 			if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1395,6 +1397,33 @@ func TestReapTakesASessionWithoutKeepaliveOnceItsCacheIsCold(t *testing.T) {
 			e.c.reapOnce(context.Background(), reapNow)
 			if got := len(e.killed); got != map[bool]int{true: 1, false: 0}[tc.reaped] {
 				t.Errorf("idle %v: signalled %v, want reaped=%v", tc.idle, e.killed, tc.reaped)
+			}
+		})
+	}
+}
+
+// wanted() reads an unreadable or garbled heartbeat file as no declaration; the
+// reaper keeps such a session rather than put a session declared on onto the
+// one-hour clock.
+func TestReapKeepsASessionWhoseHeartbeatDeclarationCannotBeRead(t *testing.T) {
+	for name, write := range map[string]func(dir string){
+		"garbled":        func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("o n\n"), 0o600) },
+		"not UTF-8":      func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte{0xff, 0xfe}, 0o600) },
+		"a symlink loop": func(d string) { _ = os.Symlink(filepath.Join(d, "heartbeat"), filepath.Join(d, "heartbeat")) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			id := "00000000-0000-4000-8000-000000000001"
+			e.session(id, 100, goodStart, answered("1", reapNow.Add(-61*time.Minute))).Default = false
+			e.procEntry(100, "claude", 1, goodStart, 10)
+			dir := filepath.Join(e.home, "sessions", id)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			write(dir)
+			e.c.reapOnce(context.Background(), reapNow)
+			if len(e.killed) != 0 {
+				t.Errorf("signalled %v, want the session kept", e.killed)
 			}
 		})
 	}
