@@ -289,7 +289,7 @@ func TestAssembleSaysReapingNeedsAHeartbeatMaxIdle(t *testing.T) {
 			cfg.Heartbeat.MaxIdle = tc.maxIdle
 			cfg.Reap = config.Reap{Enabled: tc.reap, Interval: time.Minute}
 			_, logs := runAssemble(t, cfg)
-			got := strings.Count(logs, "reap on but the heartbeat maxIdle is off: nothing will be reaped\n")
+			got := strings.Count(logs, "reap on but the heartbeat maxIdle is off: only sessions without keepalive will be reaped\n")
 			if want := map[bool]int{true: 1, false: 0}[tc.say]; got != want {
 				t.Errorf("logs %q: said %d times, want %d", logs, got, want)
 			}

@@ -195,7 +195,15 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	if !ok || s.LastAssistant.IsZero() {
 		return Scan{}, false
 	}
-	if h.MaxIdle <= 0 || now.Sub(idleSince(s, procStart)) <= h.MaxIdle {
+	// A session keepalive holds waits out maxIdle; one it does not (declared off,
+	// archived) has nothing to wait for once its cache is cold (user decision
+	// 2026-11-22), so the cache TTL below is its whole clock.
+	idle := now.Sub(idleSince(s, procStart))
+	if h.wanted() {
+		if h.MaxIdle <= 0 || idle <= h.MaxIdle {
+			return Scan{}, false
+		}
+	} else if idle < cacheTTL {
 		return Scan{}, false
 	}
 	last := s.LastRequest

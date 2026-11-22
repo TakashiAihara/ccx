@@ -107,7 +107,8 @@ func (e *reapEnv) session(id string, pid int, start uint64, transcript string) *
 			e.t.Fatal(err)
 		}
 	}
-	h := &Heartbeat{SessionID: id, ClaudeHome: e.home, MaxIdle: 2 * time.Hour, Log: e.c.log, pid: pid, pidStart: start, boot: testBoot}
+	// Keepalive on by default here, so maxIdle is the clock; off sessions have their own test.
+	h := &Heartbeat{SessionID: id, ClaudeHome: e.home, MaxIdle: 2 * time.Hour, Default: true, Log: e.c.log, pid: pid, pidStart: start, boot: testBoot}
 	e.pidFile(pid, id)
 	e.c.registered[id] = h
 	e.c.channels[id] = &channel{}
@@ -1358,5 +1359,43 @@ func TestReapKeepMinEndsTheTickEvenWhenTheCandidateWentAway(t *testing.T) {
 	e.c.reapOnce(context.Background(), reapNow)
 	if len(e.killed) != 0 || walks != 1 {
 		t.Errorf("signalled %v after %d walks: only b is left running, below keepMin 2, so the tick must end after the first walk", e.killed, walks)
+	}
+}
+
+// A session keepalive does not hold (declared off, or archived) is expired once its
+// cache is cold, without waiting for maxIdle (user decision 2026-11-22).
+func TestReapTakesASessionWithoutKeepaliveOnceItsCacheIsCold(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		declare func(dir string)
+		idle    time.Duration
+		reaped  bool
+	}{
+		{"off, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 61 * time.Minute, true},
+		{"off, cache warm", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 59 * time.Minute, false},
+		{"archived, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "archived"), nil, 0o600) }, 61 * time.Minute, true},
+		{"on, cache cold, under maxIdle", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("on\n"), 0o600) }, 61 * time.Minute, false},
+		// A local command (no request) 30 minutes ago is use: the cache is cold, the session is not idle.
+		{"off, cold cache, used since", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, -30 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newReapEnv(t)
+			id := "00000000-0000-4000-8000-000000000001"
+			transcript := answered("1", reapNow.Add(-tc.idle))
+			if tc.idle < 0 {
+				transcript = answered("1", reapNow.Add(-2*time.Hour)) + tr(userAt("lc", reapNow.Add(tc.idle), `"<command-name>/model</command-name>"`))
+			}
+			e.session(id, 100, goodStart, transcript)
+			e.procEntry(100, "claude", 1, goodStart, 10)
+			dir := filepath.Join(e.home, "sessions", id)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			tc.declare(dir)
+			e.c.reapOnce(context.Background(), reapNow)
+			if got := len(e.killed); got != map[bool]int{true: 1, false: 0}[tc.reaped] {
+				t.Errorf("idle %v: signalled %v, want reaped=%v", tc.idle, e.killed, tc.reaped)
+			}
+		})
 	}
 }

@@ -1053,6 +1053,8 @@ func TestScanTranscriptBackgroundStartsFromAnyToolAndEndsOnlyFromTaskStop(t *tes
 		"Agent that finished":              {"Agent", `{"status":"completed","agentId":"b"}`, ""},
 		"a task list's taskId":             {"TaskUpdate", `{"taskId":"b"}`, ""},
 		"TaskCreate's taskId":              {"TaskCreate", `{"taskId":"b"}`, ""},
+		"TaskGet's taskId":                 {"TaskGet", `{"taskId":"b"}`, ""},
+		"TaskList's taskId":                {"TaskList", `{"taskId":"b"}`, ""},
 		"another tool's taskId":            {"Workflow", `{"taskId":"b"}`, "b"},
 		"an unknown tool":                  {"", `{"backgroundTaskId":"b"}`, "b"},
 		"a renamed Bash":                   {"Shell", `{"backgroundTaskId":"b"}`, "b"},
