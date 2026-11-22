@@ -888,8 +888,8 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3.step(&sent3)
-	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleNoRequest || !st.Next.IsZero() {
-		t.Errorf("after a failed read: %+v, want the last count 3, no_request (the file is gone), no due time", st)
+	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleTranscriptUnreadable || !st.Next.IsZero() {
+		t.Errorf("after a failed read: %+v, want the last count 3, transcript_unreadable (it was read before and is gone), no due time", st)
 	}
 }
 

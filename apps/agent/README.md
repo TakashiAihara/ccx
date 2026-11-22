@@ -98,8 +98,8 @@ last request wrote a 5-minute cache; serve also logs when this starts and ends),
 `beat_pending` (a pushed beat has not reached the transcript yet),
 `push_failed` (the push failed; the next look tries again), `no_request` (no
 answered request yet; a session before its first prompt has no transcript and
-reads this too), or `transcript_unreadable` (the transcript is there and could
-not be read). It is empty only when a heartbeat is scheduled, the session is not
+reads this too), or `transcript_unreadable` (the transcript could not be read,
+or was read before and is gone). It is empty only when a heartbeat is scheduled, the session is not
 registered (or registered a moment ago and not looked at yet), or heartbeat is
 off in serve's config (`enabled` is false). A
 heartbeat just pushed reads `beat_pending` until serve next looks (up to a

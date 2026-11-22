@@ -63,6 +63,8 @@ type Heartbeat struct {
 	mtime  time.Time
 	size   int64
 	last   Scan
+	// seen: a read has succeeded once, so a transcript that is missing later was lost, not never written.
+	seen bool
 	// shortTTL is what the last read said, to log only when it changes.
 	shortTTL bool
 
@@ -102,7 +104,7 @@ const (
 	IdleBeatPending          = "beat_pending"          // a beat was pushed and has not reached the transcript yet
 	IdlePushFailed           = "push_failed"           // the push failed; the next step tries again
 	IdleNoRequest            = "no_request"            // no answered request yet (a session before its first prompt has no transcript)
-	IdleTranscriptUnreadable = "transcript_unreadable" // the transcript is there and could not be read
+	IdleTranscriptUnreadable = "transcript_unreadable" // the transcript could not be read, or was read before and is gone
 )
 
 // Stats is safe to call while Run is running.
@@ -210,9 +212,10 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	}
 	s, ok = h.read()
 	if !ok {
-		// No file is how every session starts; only a file that fails to read is a fault.
+		// No file is how every session starts. A file that fails to read, or one
+		// that was read before and is gone, is a fault.
 		reason = IdleNoRequest
-		if h.hasTranscript() {
+		if h.transcriptSeen() {
 			reason = IdleTranscriptUnreadable
 		}
 		return poll
@@ -351,15 +354,16 @@ func (h *Heartbeat) read() (Scan, bool) {
 		h.Log("ccx channel: reading %s: %v", h.file, err)
 		return Scan{}, false
 	}
-	h.last, h.mtime, h.size = s, st.ModTime(), st.Size()
+	h.last, h.mtime, h.size, h.seen = s, st.ModTime(), st.Size(), true
 	return h.last, true
 }
 
-// hasTranscript says whether the last read found the session's transcript file.
-func (h *Heartbeat) hasTranscript() bool {
+// transcriptSeen says whether the session's transcript file is known: the last
+// read found its path, or an earlier read succeeded.
+func (h *Heartbeat) transcriptSeen() bool {
 	h.readMu.Lock()
 	defer h.readMu.Unlock()
-	return h.file != ""
+	return h.file != "" || h.seen
 }
 
 // ScanTranscript walks the records in order. A heartbeat turn runs from a user

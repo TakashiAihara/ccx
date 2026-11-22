@@ -157,7 +157,7 @@ test("ccx session status shows the keepalive line and carries the agent's answer
   expect(json.sessionId).toBe(SID);
   // Fields at their zero value are spelled out, as `ccx-agent status` does.
   expect(json.agent.heartbeat).toMatchObject({ registered: true, idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2, sent: 0 });
-  // collect is the machine's spool, not this session's: `ccx agent status` has it.
+  // collect is the machine's spool, not this session's.
   expect(Object.keys(json.agent)).toEqual(["heartbeat"]);
 
   const down = { CLAUDE_CONFIG_DIR: home, CCX_API_SOCKET: join(home, "none.sock") };

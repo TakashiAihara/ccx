@@ -172,7 +172,8 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
    * "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた) /
    * "beat_pending" (打った heartbeat が transcript に届くのを待っている) / "push_failed" (push が失敗した。
    * 次の見直しでもう一度打つ) / "no_request" (応答のある request がまだ無い。最初のプロンプトの前で
-   * transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript はあるが読めない)。
+   * transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript を読めない。一度読めた後に
+   * 消えた場合を含む)。
    * 空になるのは、予定がある (next_at が設定済み) か、未登録か、enabled が false のときだけ
    * (理由の値を持たない古い agent と、登録直後で最初の見直しがまだの一瞬も空を返す)。打った直後は次の見直し (最大 1 分) まで "beat_pending" に
    * なるので、正常に回っている session でも heartbeat の間隔ごとに最大 1 分はこの値を返す。
