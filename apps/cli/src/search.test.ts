@@ -175,6 +175,25 @@ describe("search: embedded DuckDB over the store", () => {
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
   });
 
+  test("--sql builds `transcripts` only when the query reads it as a table, not for the word in a path or a string (#325)", async () => {
+    const json = async (sql: string) => {
+      const r = await ccx("--sql", sql, "--json");
+      expect(r.err).toBe("");
+      expect(r.code).toBe(0);
+      return JSON.parse(r.out) as unknown;
+    };
+    expect(await json(`SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts' OR 's3://x/transcripts/y' = ''`)).toEqual([{ n: "0" }]);
+    // The table in any case, inside a subquery, and in a later statement of several
+    expect(await json(`SELECT (SELECT count(*) FROM TRANSCRIPTS) AS n`)).toEqual([{ n: "3" }]);
+    expect(await json(`SET threads = 1; SELECT count(*) AS n FROM transcripts`)).toEqual([{ n: "3" }]);
+    // A statement that cannot bind before the one ahead of it runs (a table it creates) is no reason to build the view
+    expect(await json(`CREATE TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts' OR (SELECT a FROM t) = 0`)).toEqual([{ n: "0" }]);
+    // Another error in the query is the run's to report, not a reason to build the view
+    const bad = await ccx("--sql", "SELECT count(*) FROM no_such_table");
+    expect(bad.code).not.toBe(0);
+    expect(bad.err).toContain("Table with name no_such_table does not exist");
+  });
+
   test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
     // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample
     // stands in for "a file the inference read": building the view (which samples) must not touch it.

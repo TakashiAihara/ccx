@@ -4,6 +4,8 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { DuckDBConnection } from "@duckdb/node-api";
+
 import { normalizePrefix, S3_REGION, s3AccessKeyId, type TranscriptStore } from "@ccx/core";
 
 import { httpfs, libduckdb, meta } from "./duckdb-assets.ts";
@@ -27,9 +29,11 @@ export type OpenOptions = {
   /** `history` view も作る (`--sql` 用。作ると history/ を全部読む) */
   withHistory?: boolean;
   /**
-   * `transcripts` view も作る。作るときに標本のファイルを読んで型を推定するので、使う問い合わせのときだけ作る
+   * `transcripts` view も作る。作るときに標本のファイルを読んで型を推定するので、使う問い合わせのときだけ作る。
+   * `{ sql }` なら、その SQL を DuckDB に bind させ、`transcripts` を表として引くときだけ作る (#325)。
+   * 文字列の照合ではパスや文字列リテラルの中の語 (`s3://.../transcripts/...`) でも作ってしまう
    */
-  withTranscripts?: boolean;
+  withTranscripts?: boolean | { sql: string };
 };
 
 /**
@@ -111,53 +115,6 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
     await c.run(
       `CREATE VIEW lines AS SELECT ${cols(tPart)}, json FROM read_json_objects(${q(files)}, format='newline_delimited', ${reader})`,
     );
-    if (opts.withTranscripts) {
-      // The schema comes from the first 32 files in listing (path) order (up to sample_size records), not from every file:
-      // on 1304 files, union_by_name
-      // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
-      // maximum_sample_files over all files and json_group_structure over `lines`.
-      // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
-      // turn the whole row into one MAP(VARCHAR, JSON) column
-      const sampled = await c.runAndReadAll(
-        `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, hive_partitioning=false, ${maxObject})`,
-      );
-      // The view reads with that schema stated. Inferred, read_json rejects a key the sample lacks once a query reads
-      // the whole record (SELECT *); stated, a key only later files carry is left out, while a later value that does not
-      // fit the sampled type still fails the query (JSON transform error). Such keys are read from `lines` with ->>.
-      // No ignore_errors: it would drop those records from the result silently. Path order puts the earliest machines'
-      // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
-      // absent for good
-      const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
-      // hive_partitioning=false here and in the view: a prefix may carry its own key=value segments, and their columns
-      // would make an empty sample look like it has some and show up in the view (#171: no view reads hive columns).
-      // A record's own session_id / machine / user is not stated: the view drops them for the path's values anyway
-      const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
-      // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
-      // it would read every later record as NULL. Records holding only session_id / machine / user leave no column at
-      // all, and an empty columns={} is a parser error
-      if (own.length === 0 || (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON")) {
-        throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no record keys besides session_id / machine / user, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
-      }
-      // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
-      // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)
-      // Only outside double-quoted field names (a key may contain the word: "delivery DATE format"), and only in type
-      // position: DuckDB leaves a key named DATE unquoted, and a name is followed by a space where a type is not
-      const asText = (type: string) =>
-        type
-          .split(/("(?:[^"]|"")*")/)
-          .map((part, i) => (i % 2 ? part : part.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[])/g, "VARCHAR")))
-          .join("");
-      const schema = own.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
-      await c.run(
-        // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
-        // hive_partitioning did. COLUMNS rather than EXCLUDE: EXCLUDE fails on a missing column, and neither the stated
-        // schema nor the read (hive off) carries these three.
-        // The path columns stay in hive_partitioning's (alphabetical) order
-        `CREATE VIEW transcripts AS SELECT COLUMNS(lambda c: c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
-           ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
-         FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, hive_partitioning=false, ${reader})`,
-      );
-    }
   } catch (e) {
     if (/No files found/i.test(String(e))) throw new EmptyStore(opts.session ? `${base} for session ${opts.session}` : base);
     throw e;
@@ -191,7 +148,80 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
        WHERE ${["op", "machine", "user", "at"].map((k) => `json_type(json, '$.${k}') = 'VARCHAR'`).join(" AND ")}`,
     );
   }
+  // Last, so the probe binds the query with every other view in place: the binder stops at the first table it cannot find
+  if (opts.withTranscripts === true || (opts.withTranscripts && (await references(c, opts.withTranscripts.sql, "transcripts")))) {
+    // The schema comes from the first 32 files in listing (path) order (up to sample_size records), not from every file:
+    // on 1304 files, union_by_name
+    // passed 3 GB within 5 seconds before the query ran and was still growing (2026-11-17, #300), and so did
+    // maximum_sample_files over all files and json_group_structure over `lines`.
+    // map_inference_threshold=-1 keeps objects structs, nested ones too: with the default, the records' many rare keys
+    // turn the whole row into one MAP(VARCHAR, JSON) column
+    const sampled = await c.runAndReadAll(
+      `DESCRIBE SELECT * FROM read_json(${q(files)}, format='newline_delimited', maximum_sample_files=32, map_inference_threshold=-1, hive_partitioning=false, ${maxObject})`,
+    );
+    // The view reads with that schema stated. Inferred, read_json rejects a key the sample lacks once a query reads
+    // the whole record (SELECT *); stated, a key only later files carry is left out, while a later value that does not
+    // fit the sampled type still fails the query (JSON transform error). Such keys are read from `lines` with ->>.
+    // No ignore_errors: it would drop those records from the result silently. Path order puts the earliest machines'
+    // sessions in the sample and a new session rarely sorts into it, so a field only newer sessions carry can stay
+    // absent for good
+    const pairs = sampled.getRowObjects().map((r) => [String(r.column_name), String(r.column_type)] as const);
+    // hive_partitioning=false here and in the view: a prefix may carry its own key=value segments, and their columns
+    // would make an empty sample look like it has some and show up in the view (#171: no view reads hive columns).
+    // A record's own session_id / machine / user is not stated: the view drops them for the path's values anyway
+    const own = pairs.filter(([name]) => !["session_id", "machine", "user"].includes(name));
+    // Sampled files with no records (a pushed session that never wrote one) yield the lone column `json JSON`; stated,
+    // it would read every later record as NULL. Records holding only session_id / machine / user leave no column at
+    // all, and an empty columns={} is a parser error
+    if (own.length === 0 || (own.length === 1 && own[0]![0] === "json" && own[0]![1] === "JSON")) {
+      throw new Error("the transcripts DuckDB samples first (up to 32, in path order) hold no record keys besides session_id / machine / user, so `transcripts` has no columns to infer; query `lines` (raw JSON) instead");
+    }
+    // Dates and times stay strings: inference may pick a non-ISO format (17-11-2026 as DATE) that a stated column does
+    // not carry over, and the same value then fails the read. Cast them in the query (timestamp::TIMESTAMP)
+    // Only outside double-quoted field names (a key may contain the word: "delivery DATE format"), and only in type
+    // position: DuckDB leaves a key named DATE unquoted, and a name is followed by a space where a type is not
+    const asText = (type: string) =>
+      type
+        .split(/("(?:[^"]|"")*")/)
+        .map((part, i) => (i % 2 ? part : part.replace(/(?<=^|[ (,])(?:TIMESTAMP WITH TIME ZONE|TIMESTAMP|DATE|TIME)(?=$|[,)\[])/g, "VARCHAR")))
+        .join("");
+    const schema = own.map(([name, type]) => `${q(name)}: ${q(asText(type))}`);
+    await c.run(
+      // A record's own top-level session_id / machine / user is dropped so the path values keep these names, as
+      // hive_partitioning did. COLUMNS rather than EXCLUDE: EXCLUDE fails on a missing column, and neither the stated
+      // schema nor the read (hive off) carries these three.
+      // The path columns stay in hive_partitioning's (alphabetical) order
+      `CREATE VIEW transcripts AS SELECT COLUMNS(lambda c: c NOT IN ('session_id', 'machine', 'user', ${q(PATH)})),
+         ${tPart("machine")} AS machine, ${tPart("session_id")} AS session_id, ${tPart("user")} AS "user"
+       FROM read_json(${q(files)}, format='newline_delimited', columns={${schema.join(", ")}}, hive_partitioning=false, ${reader})`,
+    );
+  }
   return c;
+}
+
+/**
+ * Whether binding `sql` fails for want of the table `name`: only a query that reads it as a table hits this, not a path
+ * or a string literal holding the word. Binding runs nothing. A query DuckDB cannot parse or bind for another reason is
+ * left to the real run to report.
+ * shortcut: a statement that also reads a table an earlier statement of the same --sql creates fails to bind on that
+ * table first, so it is missed; build the view by hand-splitting such SQL if it ever matters
+ */
+async function references(c: DuckDBConnection, sql: string, name: string) {
+  const missing = new RegExp(`Table with name ${name} does not exist`, "i");
+  let statements;
+  try {
+    statements = await c.extractStatements(sql);
+  } catch {
+    return false;
+  }
+  for (let i = 0; i < statements.count; i++) {
+    try {
+      await statements.prepare(i);
+    } catch (e) {
+      if (missing.test(String(e))) return true;
+    }
+  }
+  return false;
 }
 
 export class EmptyStore extends Error {
