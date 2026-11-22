@@ -12,6 +12,10 @@ import (
 // noGit stands in for a machine with nothing in git config.
 func noGit(string) string { return "" }
 
+// missingConfig is a config path that does not exist on any host: a fixed one
+// like /nonexistent can be a directory, and load then fails reading it.
+func missingConfig(t *testing.T) string { return filepath.Join(t.TempDir(), "config.toml") }
+
 func fixedHost(name string) func() (string, error) {
 	return func() (string, error) { return name, nil }
 }
@@ -81,7 +85,7 @@ func TestMachine_DefaultsToHostname_ButIsOverridable(t *testing.T) {
 func TestNoConfigAtAll_StillResolves(t *testing.T) {
 	// scope.md: it must run with no configuration. Empty hub is fine — ccx-agent
 	// spools and simply has nowhere to drain to.
-	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
+	c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t)}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +205,7 @@ func TestConfigFile_UnreadableIsSurfaced(t *testing.T) {
 }
 
 func TestHeartbeat_DefaultsAndFile(t *testing.T) {
-	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml"}), noGit, fixedHost("h"))
+	c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t)}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,12 +227,12 @@ func TestHeartbeat_DefaultsAndFile(t *testing.T) {
 	// heartbeat off with a reason, not silently to a default. Everything else in
 	// the config still loads: collect keeps running.
 	for k, v := range map[string]string{"CCX_HEARTBEAT_INTERVAL": "50 minutes", "CCX_HEARTBEAT_MAX_IDLE": "forever"} {
-		c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", k: v, "CCX_MACHINE": "m"}), noGit, fixedHost("h"))
+		c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t), k: v, "CCX_MACHINE": "m"}), noGit, fixedHost("h"))
 		if err != nil || c.Concerns.Heartbeat || c.Heartbeat.Err == nil || !c.Concerns.Collect || c.Machine != "m" {
 			t.Errorf("%s=%s: err=%v heartbeat=%v reason=%v collect=%v", k, v, err, c.Concerns.Heartbeat, c.Heartbeat.Err, c.Concerns.Collect)
 		}
 	}
-	c, _ = load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_HEARTBEAT_INTERVAL": "1h"}), noGit, fixedHost("h"))
+	c, _ = load(env(map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_HEARTBEAT_INTERVAL": "1h"}), noGit, fixedHost("h"))
 	if c.Concerns.Heartbeat || c.Heartbeat.Err == nil {
 		t.Errorf("interval of 1h: heartbeat=%v reason=%v, want off with a reason", c.Concerns.Heartbeat, c.Heartbeat.Err)
 	}
@@ -250,11 +254,17 @@ func TestChannelSocket_NextToTheHookSocket(t *testing.T) {
 }
 
 func TestAPI_SocketAndListen(t *testing.T) {
-	c, _ := load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	c, err := load(env(map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "CCX_CONFIG": missingConfig(t)}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.APISocketPath != "/run/user/1000/ccx/ccx-api.sock" || c.APIListen != "" {
 		t.Errorf("defaults: socket %q listen %q, want next to the hook socket and off", c.APISocketPath, c.APIListen)
 	}
-	c, _ = load(env(map[string]string{"CCX_SOCKET": "/s/hook.sock", "CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	c, err = load(env(map[string]string{"CCX_SOCKET": "/s/hook.sock", "CCX_CONFIG": missingConfig(t)}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.APISocketPath != "/s/ccx-api.sock" {
 		t.Errorf("with CCX_SOCKET = %q, want next to it", c.APISocketPath)
 	}
@@ -515,7 +525,7 @@ func TestSocketPath_WithoutRuntimeDir_FollowsASystemdAgentsSocket(t *testing.T) 
 	if err := os.WriteFile(systemd, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent"}), noGit, fixedHost("h"))
+	c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t)}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +570,7 @@ func TestChannelAndAPISocket_AgreeWithLoad(t *testing.T) {
 	t.Setenv("CCX_SOCKET", "")
 	t.Setenv("CCX_CHANNEL_SOCKET", "")
 	t.Setenv("CCX_API_SOCKET", "")
-	t.Setenv("CCX_CONFIG", "/nonexistent")
+	t.Setenv("CCX_CONFIG", missingConfig(t))
 	c, err := load(os.Getenv, noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
