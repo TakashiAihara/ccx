@@ -140,8 +140,10 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	}()
 	if !h.wanted() {
 		// Declared off, or folded away. Looked at again each poll, so turning it
-		// back on takes effect within a minute.
+		// back on takes effect within a minute. Still read: the count of beats is
+		// the transcript's history, not the declaration's, and must not drop to 0.
 		reason = IdleNotWanted
+		s, _ = h.read()
 		return poll
 	}
 	s, ok := h.read()

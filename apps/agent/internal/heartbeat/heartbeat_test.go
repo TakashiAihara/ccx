@@ -784,4 +784,10 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 	if n := h.Stats().BeatsSinceReal; n != 3 {
 		t.Errorf("Stats().BeatsSinceReal = %d, want 3", n)
 	}
+	// Declared off: no more beats, but the count is the transcript's and stays.
+	h.Default = false
+	h.step(&sent)
+	if st := h.Stats(); st.IdleReason != IdleNotWanted || st.BeatsSinceReal != 3 {
+		t.Errorf("declared off: %+v, want not_wanted and still 3", st)
+	}
 }
