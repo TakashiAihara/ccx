@@ -266,6 +266,14 @@ Then two steps install does not do for you:
    If the center has a token (`CCX_CENTER_TOKEN`, #158), put the same value in
    `~/.config/ccx/hub-token` (mode 600). Without it the center refuses every event
    and ccx-agent keeps them spooled.
+   The token goes in every call to the center as `Authorization: Bearer`, so with
+   an `http://` center URL on another host the token, and every event and
+   transcript the agent forwards, cross the network in the clear. Where the
+   network is not trusted, put TLS in front of the center and use its `https://`
+   URL (TLS by default is #357). ccx-agent follows no redirect from the center
+   (#353), so the URL must be the one that answers: a front that redirects http to
+   https makes every call fail, after the token has already gone out in the
+   clear; set the https URL itself.
 2. Wire the hooks (below).
 
 ## Wiring the hooks
