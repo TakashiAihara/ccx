@@ -41,6 +41,8 @@ type Heartbeat struct {
 	mtime time.Time
 	size  int64
 	last  Scan
+	// shortTTL is what the last read said, to log only when it changes.
+	shortTTL bool
 
 	mu    sync.Mutex
 	stats Stats
@@ -51,7 +53,23 @@ type Stats struct {
 	Next     time.Time // when the next heartbeat is due; zero when none is scheduled
 	Sent     int
 	LastSent time.Time
+	// IdleReason is why no heartbeat is scheduled (#274): one of the Idle*
+	// values, or "" while one is scheduled, pushed and waiting to land, or the
+	// session has no transcript yet.
+	IdleReason string
+	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read (#362).
+	BeatsSinceReal int
 }
+
+// Why a heartbeat is not scheduled (Stats.IdleReason). These strings are the
+// status API's values.
+const (
+	IdleNotWanted   = "not_wanted"   // declared off, archived, or off by default
+	IdleShortTTL    = "short_ttl"    // the last request wrote a 5-minute cache
+	IdleExpired     = "expired"      // the cache is already gone
+	IdleTurnRunning = "turn_running" // a turn is running; a beat would queue behind it
+	IdleMaxIdle     = "max_idle"     // no real use for longer than MaxIdle
+)
 
 // Stats is safe to call while Run is running.
 func (h *Heartbeat) Stats() Stats {
@@ -77,6 +95,9 @@ type Scan struct {
 	ToolRunning bool
 	LastReal    time.Time // the last record outside a heartbeat turn
 	LastBeat    time.Time // the last heartbeat that arrived
+	// BeatsSinceReal is how many heartbeats arrived after LastReal: a person's
+	// prompt or another channel's event sets it back to 0.
+	BeatsSinceReal int
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
@@ -110,21 +131,34 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	// Only the branch that waits for a due time schedules one; every other branch
 	// is waiting on something else (a declaration, a turn, a landing).
 	var next time.Time
+	var reason string
+	var s Scan
 	defer func() {
 		h.mu.Lock()
-		h.stats.Next = next
+		h.stats.Next, h.stats.IdleReason, h.stats.BeatsSinceReal = next, reason, s.BeatsSinceReal
 		h.mu.Unlock()
 	}()
 	if !h.wanted() {
 		// Declared off, or folded away. Looked at again each poll, so turning it
 		// back on takes effect within a minute.
+		reason = IdleNotWanted
 		return poll
 	}
 	s, ok := h.read()
 	if !ok || s.LastAssistant.IsZero() {
 		return poll // no request yet, so no cache to keep
 	}
+	if s.ShortTTL != h.shortTTL {
+		// Logged on the change only: keepalive stopping here is silent otherwise (#274).
+		if s.ShortTTL {
+			h.Log("ccx channel: heartbeat paused for %s: the last request wrote a 5-minute cache", h.SessionID)
+		} else {
+			h.Log("ccx channel: heartbeat resumed for %s: the cache is written for an hour again", h.SessionID)
+		}
+		h.shortTTL = s.ShortTTL
+	}
 	if s.ShortTTL {
+		reason = IdleShortTTL
 		return h.Interval // a 5-minute cache: every heartbeat would be a full rewrite
 	}
 	now := h.Now()
@@ -133,6 +167,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		// answered): a heartbeat would only rewrite the prefix early, and the next
 		// real turn does that anyway. Checked before the running-turn test, so a
 		// turn that never answered does not keep this looking forever.
+		reason = IdleExpired
 		return h.Interval
 	}
 	if s.ToolRunning || (s.LastInput.After(s.LastAssistant) && now.Sub(s.LastInput) < turnStart) {
@@ -143,6 +178,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		// manual /compact, a stopped task's notice). That is a heuristic: a
 		// response slower than turnStart gets one extra heartbeat turn (~0.03% of
 		// the 5h window), which is cheaper than stopping keepalive after every Esc.
+		reason = IdleTurnRunning
 		return poll
 	}
 	if !sent.IsZero() {
@@ -157,6 +193,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		*sent = time.Time{}
 	}
 	if h.MaxIdle > 0 && now.Sub(s.LastReal) > h.MaxIdle {
+		reason = IdleMaxIdle
 		return h.Interval // left alone too long to be worth keeping; real use resumes it
 	}
 	// Counted from the later of the two: a heartbeat that landed but was never
@@ -295,6 +332,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			s.ToolRunning = len(pending) > 0
 			if rec.IsMeta && strings.Contains(tag, Marker) {
 				inBeat, s.LastBeat = true, rec.Timestamp
+				s.BeatsSinceReal++
 			} else if !isToolResult(rec.Message.Content) && (!rec.IsMeta || tag != "" || isCrossSessionMessage(rec.Message.Content)) {
 				// Channel events and cross-session messages are meta records too: a
 				// comment arriving on akapen, or another session asking for work, is
@@ -342,7 +380,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			continue
 		}
 		if !inBeat {
-			s.LastReal = rec.Timestamp
+			s.LastReal, s.BeatsSinceReal = rec.Timestamp, 0
 		}
 	}
 	return s, sc.Err()

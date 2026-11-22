@@ -710,3 +710,78 @@ func TestWantedReadsTheFileLikeCore(t *testing.T) {
 		}
 	}
 }
+
+// Why nothing is scheduled, branch by branch (#274), as the status API shows it.
+func TestStepRecordsWhyNothingIsScheduled(t *testing.T) {
+	usage5m := `,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":9,"ephemeral_1h_input_tokens":0}}}`
+	base := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	for _, c := range []struct {
+		name    string
+		tr      string
+		now     string
+		off     bool
+		maxIdle time.Duration
+		want    string
+	}{
+		{"scheduled", base, "10:30:05", false, 0, ""},
+		{"declared off", base, "10:30:05", true, 0, IdleNotWanted},
+		{"5-minute cache", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage5m), "10:30:05", false, 0, IdleShortTTL},
+		{"expired", base, "13:00:05", false, 0, IdleExpired},
+		{"turn running", base + rec("user", "10:30:00", human), "10:30:05", false, 0, IdleTurnRunning},
+		{"max idle", base, "10:30:05", false, 20 * time.Minute, IdleMaxIdle},
+	} {
+		h, _, _ := fixture(t, c.tr, at(c.now))
+		h.MaxIdle = c.maxIdle
+		h.Default = !c.off
+		var sent time.Time
+		h.step(&sent)
+		if got := h.Stats().IdleReason; got != c.want {
+			t.Errorf("%s: IdleReason = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Keepalive pausing on a 5-minute cache is logged once when it starts and once
+// when it ends, not on every step (#274).
+func TestStepLogsShortTTLChangesOnce(t *testing.T) {
+	usage := func(short, long int) string {
+		return fmt.Sprintf(`,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d}}}`, short, long)
+	}
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(9, 0))
+	h, _, write := fixture(t, tr, at("10:30:05"))
+	var logs []string
+	h.Log = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	var sent time.Time
+	h.step(&sent)
+	h.step(&sent)
+	write(tr + rec("user", "10:10:00", human) + rec("assistant", "10:10:05", usage(0, 9)))
+	h.step(&sent)
+	if len(logs) != 2 || !strings.Contains(logs[0], "heartbeat paused") || !strings.Contains(logs[1], "heartbeat resumed") {
+		t.Errorf("logs = %q, want one pause then one resume", logs)
+	}
+}
+
+// Heartbeats since the last real record (#362): a person's prompt or another
+// channel's event sets the count back; a beat's own reply and tool results do not.
+func TestScanCountsBeatsSinceReal(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply) +
+		rec("user", "10:50:05", beat) + rec("assistant", "10:50:07", reply) +
+		rec("user", "11:40:05", beat) + rec("assistant", "11:40:06", toolUse) +
+		rec("user", "11:40:07", toolRes) + rec("assistant", "11:40:08", reply) +
+		rec("user", "12:30:05", beat) + rec("assistant", "12:30:07", reply)
+	if n := mustScan(t, tr).BeatsSinceReal; n != 3 {
+		t.Errorf("three beats after the prompt: %d, want 3", n)
+	}
+	if n := mustScan(t, tr+rec("user", "12:40:00", human)).BeatsSinceReal; n != 0 {
+		t.Errorf("after a prompt: %d, want 0", n)
+	}
+	if n := mustScan(t, tr+rec("user", "12:40:00", otherChan)+rec("user", "13:30:05", beat)).BeatsSinceReal; n != 1 {
+		t.Errorf("a beat after another channel's event: %d, want 1", n)
+	}
+	h, _, _ := fixture(t, tr, at("12:40:00"))
+	var sent time.Time
+	h.step(&sent)
+	if n := h.Stats().BeatsSinceReal; n != 3 {
+		t.Errorf("Stats().BeatsSinceReal = %d, want 3", n)
+	}
+}

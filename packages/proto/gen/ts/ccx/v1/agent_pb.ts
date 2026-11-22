@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/agent.proto.
  */
 export const file_ccx_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSINCgtXYWtlUmVxdWVzdCIOCgxXYWtlUmVzcG9uc2UiQgoXR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRITCgtjbGF1ZGVfaG9tZRgCIAEoCSKWAQoYR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEiYKCGRlY2xhcmVkGAEgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIqCgloZWFydGJlYXQYAiABKAsyFy5jY3gudjEuSGVhcnRiZWF0U3RhdHVzEiYKB2NvbGxlY3QYAyABKAsyFS5jY3gudjEuQ29sbGVjdFN0YXR1cyLYAQoPSGVhcnRiZWF0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSEQoJbGlzdGVuaW5nGAggASgIEhAKCGRlY2xhcmVkGAIgASgJEg4KBndhbnRlZBgDIAEoCBISCgpyZWdpc3RlcmVkGAQgASgIEisKB25leHRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNlbnQYBiABKA0SMAoMbGFzdF9zZW50X2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLfAQoNQ29sbGVjdFN0YXR1cxIPCgdlbmFibGVkGAEgASgIEhkKEWNlbnRlcl9jb25maWd1cmVkGAIgASgIEg8KB3BlbmRpbmcYAyABKA0SNQoRbGFzdF9mb3J3YXJkZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjEKDWxhc3RfZXJyb3JfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhIKCmxhc3RfZXJyb3IYBiABKAkSEwoLc3Bvb2xfZXJyb3IYByABKAkymAEKDEFnZW50U2VydmljZRJVChBHZXRTZXNzaW9uU3RhdHVzEh8uY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXF1ZXN0GiAuY2N4LnYxLkdldFNlc3Npb25TdGF0dXNSZXNwb25zZRIxCgRXYWtlEhMuY2N4LnYxLldha2VSZXF1ZXN0GhQuY2N4LnYxLldha2VSZXNwb25zZWIGcHJvdG8z", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSINCgtXYWtlUmVxdWVzdCIOCgxXYWtlUmVzcG9uc2UiQgoXR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRITCgtjbGF1ZGVfaG9tZRgCIAEoCSKWAQoYR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEiYKCGRlY2xhcmVkGAEgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIqCgloZWFydGJlYXQYAiABKAsyFy5jY3gudjEuSGVhcnRiZWF0U3RhdHVzEiYKB2NvbGxlY3QYAyABKAsyFS5jY3gudjEuQ29sbGVjdFN0YXR1cyKHAgoPSGVhcnRiZWF0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSEQoJbGlzdGVuaW5nGAggASgIEhAKCGRlY2xhcmVkGAIgASgJEg4KBndhbnRlZBgDIAEoCBISCgpyZWdpc3RlcmVkGAQgASgIEisKB25leHRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNlbnQYBiABKA0SMAoMbGFzdF9zZW50X2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtpZGxlX3JlYXNvbhgJIAEoCRIYChBiZWF0c19zaW5jZV9yZWFsGAogASgNIt8BCg1Db2xsZWN0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSGQoRY2VudGVyX2NvbmZpZ3VyZWQYAiABKAgSDwoHcGVuZGluZxgDIAEoDRI1ChFsYXN0X2ZvcndhcmRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF9lcnJvcl9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKbGFzdF9lcnJvchgGIAEoCRITCgtzcG9vbF9lcnJvchgHIAEoCTKYAQoMQWdlbnRTZXJ2aWNlElUKEEdldFNlc3Npb25TdGF0dXMSHy5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QaIC5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEjEKBFdha2USEy5jY3gudjEuV2FrZVJlcXVlc3QaFC5jY3gudjEuV2FrZVJlc3BvbnNlYgZwcm90bzM", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
 
 /**
  * 中身は無い。宛先は叩かれた agent 自身で、どの依頼かは ClaimResume が決める。
@@ -165,6 +165,25 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
    * @generated from field: google.protobuf.Timestamp last_sent_at = 7;
    */
   lastSentAt?: Timestamp | undefined;
+
+  /**
+   * 予定が無い (next_at が未設定) ときの理由。"not_wanted" (打たない宣言 / archived) /
+   * "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
+   * "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
+   * 予定がある / 打った直後で着地待ち / transcript がまだ無い / 未登録のときは空。
+   *
+   * @generated from field: string idle_reason = 9;
+   */
+  idleReason: string;
+
+  /**
+   * heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event) より後に
+   * transcript へ届いた heartbeat の数。プロンプトで 0 に戻る。sent と違い agent の再起動では
+   * 戻らない (transcript から数える)。未登録なら 0。
+   *
+   * @generated from field: uint32 beats_since_real = 10;
+   */
+  beatsSinceReal: number;
 };
 
 /**
