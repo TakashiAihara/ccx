@@ -1,6 +1,8 @@
 package collect
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
@@ -367,6 +370,9 @@ func TestAppendProducerKeepsItsProducerAndTheHookPathKeepsItsOwn(t *testing.T) {
 func TestCollectAppendEventSpoolsWithTheGivenProducerAndWakesTheDrain(t *testing.T) {
 	s := openTestSpool(t, t.TempDir())
 	c := newCollect("", s, &stubForwarder{}, t.Logf)
+	// The forward loop is not run here, so its nudge stays visible; Run is what
+	// sets this in service.
+	c.holding = true
 	if len(c.loop.nudge) != 0 {
 		t.Fatal("the drain loop was already nudged before anything was spooled")
 	}
@@ -382,14 +388,53 @@ func TestCollectAppendEventSpoolsWithTheGivenProducerAndWakesTheDrain(t *testing
 	}
 }
 
-// With no center configured there is no drain loop; the event is still spooled.
+// With no center configured there is no drain loop; the event is still spooled
+// while collect runs.
 func TestCollectAppendEventWithoutACenterStillSpools(t *testing.T) {
-	s := openTestSpool(t, t.TempDir())
-	c := newCollect("", s, nil, t.Logf)
-	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r")); err != nil {
+	srv, _, spoolDir, cancel := startServer(t, nil)
+	defer cancel()
+	waitFor(t, 2*time.Second, func() bool { return srv.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r")) == nil })
+	s, err := OpenSpool(spoolDir, testOrigin())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := s.Pending(); n != 1 {
 		t.Errorf("pending = %d, want 1", n)
+	}
+}
+
+// The spool belongs to whoever holds its lock: before Run has it and after Run has
+// let go, an append is refused and writes nothing.
+func TestCollectAppendEventRefusesWhileCollectIsNotRunning(t *testing.T) {
+	dir := t.TempDir()
+	sock := testsock.Path(t, "ccx-agent.sock")
+	spool, err := OpenSpool(dir+"/spool", testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCollect(sock, spool, nil, quietLog)
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("before")); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("before Run: err = %v, want ErrNotRunning", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("during")); err != nil {
+		t.Errorf("during Run: err = %v", err)
+	}
+	cancel()
+	<-done
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("after")); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("after Run: err = %v, want ErrNotRunning", err)
+	}
+
+	e, err := spool.Oldest()
+	if err != nil || e == nil || string(e.Event.GetPayload()) != "during" {
+		t.Fatalf("oldest = %v, %v, want the one written during Run", e, err)
+	}
+	if n, _ := spool.Pending(); n != 1 {
+		t.Errorf("pending = %d, want only the one written during Run", n)
 	}
 }

@@ -20,9 +20,19 @@ type reapRecord struct {
 	Reason   string `json:"reason"`
 	PID      int    `json:"pid"`
 	PSSBytes int64  `json:"pssBytes"`
-	// Start is the process's start time in clock ticks since boot: with PID it names
-	// one process, so a later registration can tell it was already signalled.
+	// Start is the process's start time in clock ticks since boot and Boot the
+	// host's boot id (/proc/sys/kernel/random/boot_id): together with PID they name
+	// one process, so a later registration can tell it was already signalled. Start
+	// alone repeats after a reboot.
 	Start uint64 `json:"start"`
+	Boot  string `json:"boot"`
+}
+
+// bootID is the host's boot id: constant for a boot and different for the next.
+func bootID(root string) (string, bool) {
+	b, err := os.ReadFile(filepath.Join(root, "sys", "kernel", "random", "boot_id"))
+	id := strings.TrimSpace(string(b))
+	return id, err == nil && id != ""
 }
 
 // procDir is where the process table is read from; tests point it at a fake.
@@ -211,7 +221,7 @@ func idleSince(s Scan, procStart time.Time) time.Time {
 }
 
 // reapedBefore: the session's reaped file already has a line for this very
-// process (pid and start time). A serve restart or a channel reconnect makes a new
+// process (pid, start time and boot id). A serve restart or a channel reconnect makes a new
 // Heartbeat, and a claude that ignored SIGTERM must not be signalled and recorded
 // again for it.
 func (h *Heartbeat) reapedBefore() bool {
@@ -226,8 +236,10 @@ func (h *Heartbeat) reapedBefore() bool {
 		var r struct {
 			PID   int    `json:"pid"`
 			Start uint64 `json:"start"`
+			Boot  string `json:"boot"`
 		}
-		if json.Unmarshal([]byte(line), &r) == nil && r.PID == h.pid && r.Start == h.pidStart {
+		// A record without a boot id (an earlier format) names no boot and does not match.
+		if json.Unmarshal([]byte(line), &r) == nil && r.PID == h.pid && r.Start == h.pidStart && r.Boot == h.boot {
 			h.signalled.Store(true)
 			return true
 		}
@@ -323,21 +335,26 @@ func (c *Concern) reapOnce(now time.Time) {
 		return
 	}
 	type candidate struct {
-		h    *Heartbeat
-		scan Scan
+		h *Heartbeat
+		// idle is when the session was last left alone from (idleSince): the order
+		// is by this, the clock the expiry test counts, not by the raw last use. A
+		// resumed old transcript is as fresh as its process, and a transcript with
+		// no real record (zero last use) is not older than everything.
+		idle time.Time
 	}
 	var cands []candidate
 	for _, h := range hs {
 		if h.pid <= 1 || h.signalled.Load() {
 			continue
 		}
-		if s, ok := h.expired(now, startWallClock(btime, h.pidStart)); ok {
-			cands = append(cands, candidate{h, s})
+		procStart := startWallClock(btime, h.pidStart)
+		if s, ok := h.expired(now, procStart); ok {
+			cands = append(cands, candidate{h, idleSince(s, procStart)})
 		}
 	}
 	sort.Slice(cands, func(i, j int) bool {
-		if !cands[i].scan.LastReal.Equal(cands[j].scan.LastReal) {
-			return cands[i].scan.LastReal.Before(cands[j].scan.LastReal)
+		if !cands[i].idle.Equal(cands[j].idle) {
+			return cands[i].idle.Before(cands[j].idle)
 		}
 		return cands[i].h.SessionID < cands[j].h.SessionID
 	})
@@ -354,13 +371,17 @@ func (c *Concern) reapOnce(now time.Time) {
 			c.beforeSignal()
 		}
 		// Everything is looked at again after the slow part, right before the signal,
-		// which keeps the window small: the process may have been replaced, the
-		// session pinned or used, or the transcript moved on while the walk ran.
-		if !c.ownsPID(root, h) {
-			continue
-		}
+		// which keeps the window small: the session pinned or used, or the transcript
+		// moved on while the walk ran, then the process itself.
 		fresh, ok := h.expired(now, procStart)
 		if !ok {
+			continue
+		}
+		if c.afterRecheck != nil {
+			c.afterRecheck()
+		}
+		// Last, so the pid file read closest to the signal is the one that counts.
+		if !c.ownsPID(root, h) {
 			continue
 		}
 		// Re-counted under the lock: a session may have gone, or been signalled, since
@@ -393,7 +414,7 @@ func (c *Concern) reapOnce(now time.Time) {
 // not depend on the center; a failure of one is logged and does not stop the others.
 func (c *Concern) record(h *Heartbeat, idle time.Duration, now time.Time, pss int64) {
 	c.log("reap: stopped %s (expired, %d MiB, idle %v)", h.SessionID, pss>>20, idle.Round(time.Second))
-	rec := reapRecord{At: now.UTC().Format(time.RFC3339), Reason: "expired", PID: h.pid, PSSBytes: pss, Start: h.pidStart}
+	rec := reapRecord{At: now.UTC().Format(time.RFC3339), Reason: "expired", PID: h.pid, PSSBytes: pss, Start: h.pidStart, Boot: h.boot}
 	line, err := json.Marshal(rec)
 	if err != nil {
 		c.log("reap: encoding the record of %s: %v", h.SessionID, err)

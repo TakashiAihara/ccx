@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
@@ -200,6 +203,7 @@ func TestAssembleWiresTheReapRecordToCollect(t *testing.T) {
 	for name, collectOn := range map[string]bool{"collect on": true, "collect off": false} {
 		t.Run(name, func(t *testing.T) {
 			cfg := assembleConfig(t, "box", "alice")
+			cfg.SocketPath = testsock.Path(t, "hook.sock")
 			cfg.Concerns.Collect = collectOn
 			concerns, err := assemble(cfg, func(string, ...any) {})
 			if err != nil {
@@ -223,9 +227,26 @@ func TestAssembleWiresTheReapRecordToCollect(t *testing.T) {
 			if h.Record == nil {
 				t.Fatal("Record is not set with collect on")
 			}
+			// Collect only takes a write while it runs and holds the spool.
+			var col concern.Concern
+			for _, c := range concerns {
+				if c.Name() == "collect" {
+					col = c
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { _ = col.Run(ctx); close(done) }()
+			t.Cleanup(func() { cancel(); <-done })
 			const payload = `{"session_id":"s","reaped":{"pid":7}}`
-			if err := h.Record([]byte(payload)); err != nil {
-				t.Fatal(err)
+			var recordErr error
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if recordErr = h.Record([]byte(payload)); recordErr == nil {
+					break
+				}
+			}
+			if recordErr != nil {
+				t.Fatal(recordErr)
 			}
 			spool, err := collect.OpenSpool(cfg.SpoolDir, &ccxv1.Origin{Machine: "box", User: "alice"})
 			if err != nil {

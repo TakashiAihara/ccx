@@ -23,6 +23,13 @@ var reapNow = time.Unix(1700100000, 0).UTC()
 
 const bootTimeSec = 1700000000
 
+// testBoot is the fake host's boot id.
+const testBoot = "boot-A"
+
+func lineBoot(pid, start int, boot string) string {
+	return fmt.Sprintf(`{"at":"2023-11-16T01:00:00Z","reason":"expired","pid":%d,"pssBytes":1,"start":%d,"boot":%q}`+"\n", pid, start, boot)
+}
+
 type reapEnv struct {
 	t         *testing.T
 	home      string
@@ -39,6 +46,12 @@ func newReapEnv(t *testing.T) *reapEnv {
 	t.Helper()
 	e := &reapEnv{t: t, home: t.TempDir(), proc: t.TempDir()}
 	if err := os.WriteFile(filepath.Join(e.proc, "stat"), []byte(fmt.Sprintf("cpu  1 2 3\nbtime %d\nprocesses 9\n", bootTimeSec)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(e.proc, "sys", "kernel", "random"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.proc, "sys", "kernel", "random", "boot_id"), []byte(testBoot+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	e.c = &Concern{
@@ -94,7 +107,7 @@ func (e *reapEnv) session(id string, pid int, start uint64, transcript string) *
 			e.t.Fatal(err)
 		}
 	}
-	h := &Heartbeat{SessionID: id, ClaudeHome: e.home, MaxIdle: 2 * time.Hour, Log: e.c.log, pid: pid, pidStart: start}
+	h := &Heartbeat{SessionID: id, ClaudeHome: e.home, MaxIdle: 2 * time.Hour, Log: e.c.log, pid: pid, pidStart: start, boot: testBoot}
 	e.pidFile(pid, id)
 	e.c.registered[id] = h
 	e.c.channels[id] = &channel{}
@@ -158,11 +171,11 @@ func TestReapStopsAnExpiredSession(t *testing.T) {
 	if fmt.Sprint(e.killed) != "[100]" {
 		t.Fatalf("signalled %v, want only 100", e.killed)
 	}
-	want := `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":3670016,"start":1000}` + "\n"
+	want := `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":3670016,"start":1000,"boot":"boot-A"}` + "\n"
 	if got := e.reapedFile(id); got != want {
 		t.Errorf("reaped file = %q, want %q", got, want)
 	}
-	wantPayload := `{"session_id":"` + id + `","reaped":{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":3670016,"start":1000}}`
+	wantPayload := `{"session_id":"` + id + `","reaped":{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":3670016,"start":1000,"boot":"boot-A"}}`
 	if len(e.records) != 1 || e.records[0] != wantPayload {
 		t.Errorf("sent to the center = %q, want [%s]", e.records, wantPayload)
 	}
@@ -209,10 +222,10 @@ func TestReapExpiryConditionsOneByOne(t *testing.T) {
 		{name: "input waited past turnStart", reaped: true, transcript: answered("1", old) + userAt("u-2", reapNow.Add(-10*time.Minute), `"more"`) + "\n",
 			tweak: func(h *Heartbeat, _ *reapEnv, _ string) { h.MaxIdle = time.Minute }},
 		{name: "background task from this process", start: goodStart,
-			transcript: tr(userAt("u-1", old, `"hi"`), bgStart(old.Add(2*time.Second)), assistantAt("a-1", "u-1", old.Add(10*time.Second), ""))},
+			transcript: tr(userAt("u-1", old, `"hi"`), assistantAt("tu", "u-1", old.Add(time.Second), `{"type":"tool_use","id":"x","name":"Bash"}`), bgStart(old.Add(2*time.Second)), assistantAt("a-1", "tu", old.Add(10*time.Second), ""))},
 		{name: "background task from before the process started", reaped: true,
 			start:      uint64(old.Add(time.Minute).Unix()-bootTimeSec) * 100,
-			transcript: tr(userAt("u-1", old, `"hi"`), bgStart(old.Add(2*time.Second)), assistantAt("a-1", "u-1", old.Add(10*time.Second), ""))},
+			transcript: tr(userAt("u-1", old, `"hi"`), assistantAt("tu", "u-1", old.Add(time.Second), `{"type":"tool_use","id":"x","name":"Bash"}`), bgStart(old.Add(2*time.Second)), assistantAt("a-1", "tu", old.Add(10*time.Second), ""))},
 		{name: "pinned", transcript: answered("1", old), tweak: func(_ *Heartbeat, e *reapEnv, id string) {
 			_ = os.MkdirAll(filepath.Join(e.home, "sessions", id), 0o700)
 			_ = os.WriteFile(filepath.Join(e.home, "sessions", id, "pinned"), nil, 0o600)
@@ -394,7 +407,7 @@ func TestReapRecordFuncErrorDoesNotStopTheLocalWrite(t *testing.T) {
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 1024)
 	e.c.reapOnce(reapNow)
-	want := `{"earlier":true}` + "\n" + `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":1048576,"start":1000}` + "\n"
+	want := `{"earlier":true}` + "\n" + `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":1048576,"start":1000,"boot":"boot-A"}` + "\n"
 	if got := e.reapedFile(id); got != want {
 		t.Errorf("reaped file = %q, want %q", got, want)
 	}
@@ -613,19 +626,19 @@ func TestReapSaysWhichSessionThePidRunsNow(t *testing.T) {
 // process under the same pid (another start time) is not covered by it.
 func TestReapDoesNotSignalAProcessItsFileSaysWasSignalled(t *testing.T) {
 	const id = "00000000-0000-4000-8000-000000000001"
-	line := func(pid, start int) string {
-		return fmt.Sprintf(`{"at":"2023-11-16T01:00:00Z","reason":"expired","pid":%d,"pssBytes":1,"start":%d}`+"\n", pid, start)
-	}
+	line := func(pid, start int) string { return lineBoot(pid, start, "boot-A") }
 	for name, tc := range map[string]struct {
 		file   string
 		reaped bool
 	}{
-		"same pid and start":              {file: line(100, 1000)},
-		"among older lines":               {file: line(55, 5) + "not json\n" + line(100, 1000) + line(7, 7)},
-		"same pid, another start":         {file: line(100, 999), reaped: true},
-		"same start, another pid":         {file: line(101, 1000), reaped: true},
-		"an older record without a start": {file: `{"at":"x","reason":"expired","pid":100,"pssBytes":1}` + "\n", reaped: true},
-		"no file":                         {reaped: true},
+		"same pid and start":                          {file: line(100, 1000)},
+		"among older lines":                           {file: line(55, 5) + "not json\n" + line(100, 1000) + line(7, 7)},
+		"same pid, another start":                     {file: line(100, 999), reaped: true},
+		"same start, another pid":                     {file: line(101, 1000), reaped: true},
+		"same pid and start, another boot":            {file: lineBoot(100, 1000, "boot-B"), reaped: true},
+		"same pid and start, a record without a boot": {file: `{"at":"x","reason":"expired","pid":100,"pssBytes":1,"start":1000}` + "\n", reaped: true},
+		"an older record without a start":             {file: `{"at":"x","reason":"expired","pid":100,"pssBytes":1}` + "\n", reaped: true},
+		"no file":                                     {reaped: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newReapEnv(t)
@@ -652,7 +665,7 @@ func TestReapKeepMinDoesNotCountASessionAlreadySignalled(t *testing.T) {
 		"flag in memory": func(_ *reapEnv, h *Heartbeat) { h.signalled.Store(true) },
 		"reaped file": func(e *reapEnv, h *Heartbeat) {
 			_ = os.MkdirAll(filepath.Join(e.home, "sessions", h.SessionID), 0o700)
-			_ = os.WriteFile(filepath.Join(e.home, "sessions", h.SessionID, "reaped"), []byte(`{"pid":300,"start":1000}`+"\n"), 0o600)
+			_ = os.WriteFile(filepath.Join(e.home, "sessions", h.SessionID, "reaped"), []byte(`{"pid":300,"start":1000,"boot":"boot-A"}`+"\n"), 0o600)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1016,7 +1029,7 @@ func TestRegistrationOfAnAlreadyReapedProcessStartsSignalled(t *testing.T) {
 	const reaped, fresh = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"
 	dir := filepath.Join(e.home, "sessions", reaped)
 	_ = os.MkdirAll(dir, 0o700)
-	_ = os.WriteFile(filepath.Join(dir, "reaped"), []byte(`{"pid":100,"start":777}`+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "reaped"), []byte(`{"pid":100,"start":777,"boot":"boot-A"}`+"\n"), 0o600)
 	runConcern(t, e)
 	registerChannel(t, e, reaped, "100")
 	registerChannel(t, e, fresh, "200")
@@ -1058,6 +1071,150 @@ func TestReapLogsIdleFromTheSameBaselineAsTheExpiryTest(t *testing.T) {
 			e.c.reapOnce(reapNow)
 			if len(e.killed) != 1 || !strings.Contains(e.logText(), tc.want) {
 				t.Errorf("signalled %v, log %q, want a stop logged with %q", e.killed, e.logText(), tc.want)
+			}
+		})
+	}
+}
+
+// The pid file is read last: one that changes after the expiry was re-checked,
+// which is the moment closest to the signal, still keeps the session.
+func TestReapReadsThePidFileAfterTheExpiryRecheck(t *testing.T) {
+	e := newReapEnv(t)
+	const id = "00000000-0000-4000-8000-000000000001"
+	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	hooked := 0
+	e.c.afterRecheck = func() { hooked++; e.pidFile(100, "00000000-0000-4000-8000-0000000000ff") }
+	e.c.reapOnce(reapNow)
+	if hooked != 1 {
+		t.Fatalf("afterRecheck ran %d times, want 1", hooked)
+	}
+	if len(e.killed) != 0 || e.reapedFile(id) != "" {
+		t.Errorf("signalled %v, reaped %q: the pid file changed after the expiry check", e.killed, e.reapedFile(id))
+	}
+
+	// Nothing changing there lets the stop through.
+	e = newReapEnv(t)
+	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	hooked = 0
+	e.c.afterRecheck = func() { hooked++ }
+	e.c.reapOnce(reapNow)
+	if hooked != 1 || fmt.Sprint(e.killed) != "[100]" {
+		t.Errorf("afterRecheck ran %d times, signalled %v, want once and 100", hooked, e.killed)
+	}
+}
+
+// A session registers only if the host's boot id can be read: without it a record
+// could not tell this boot's process from an earlier one's.
+func TestRegistrationWithoutABootIDIsNotReaped(t *testing.T) {
+	for name, damage := range map[string]func(path string){
+		"missing": func(p string) { _ = os.Remove(p) },
+		"empty":   func(p string) { _ = os.WriteFile(p, []byte("\n"), 0o644) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			e.c.socketPath = testsock.Path(t, "ch.sock")
+			e.c.reap.Interval = 24 * time.Hour
+			e.procEntry(100, "claude", 1, 777, 10)
+			damage(filepath.Join(e.proc, "sys", "kernel", "random", "boot_id"))
+			runConcern(t, e)
+			const id = "00000000-0000-4000-8000-00000000000a"
+			registerChannel(t, e, id, "100")
+			e.c.mu.Lock()
+			pid := e.c.registered[id].pid
+			e.c.mu.Unlock()
+			if pid != 0 || !strings.Contains(e.logText(), "reap: session "+id+": the host's boot id cannot be read; it will not be reaped") {
+				t.Errorf("pid kept %d, log %q: want no pid and the reason said", pid, e.logText())
+			}
+		})
+	}
+}
+
+// Sessions idle for the same time go in id order, so a tick is repeatable.
+func TestReapBreaksTiesByID(t *testing.T) {
+	e := newReapEnv(t)
+	const lo, hi = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"
+	e.session(hi, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.session(lo, 300, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	e.procEntry(300, "claude", 1, goodStart, 10)
+	e.c.reapOnce(reapNow)
+	if fmt.Sprint(e.killed) != "[300]" {
+		t.Errorf("signalled %v, want the lower id's process (300) first", e.killed)
+	}
+}
+
+// The registration keeps the boot id with the pid and start time.
+func TestRegistrationKeepsTheBootID(t *testing.T) {
+	e := newReapEnv(t)
+	e.c.socketPath = testsock.Path(t, "ch.sock")
+	e.c.reap.Interval = 24 * time.Hour
+	e.procEntry(100, "claude", 1, 777, 10)
+	runConcern(t, e)
+	const id = "00000000-0000-4000-8000-00000000000a"
+	registerChannel(t, e, id, "100")
+	e.c.mu.Lock()
+	boot := e.c.registered[id].boot
+	e.c.mu.Unlock()
+	if boot != "boot-A" {
+		t.Errorf("boot = %q, want boot-A", boot)
+	}
+}
+
+// The oldest goes first by the idle clock the expiry test counts: a resumed old
+// transcript is as fresh as its process, and a transcript with no real record is
+// not older than everything.
+func TestReapOrdersByIdleSinceTheProcessStart(t *testing.T) {
+	old := func(h time.Duration) time.Time { return reapNow.Add(-h) }
+	beatOnly := tr(
+		fmt.Sprintf(`{"type":"user","uuid":"b","isMeta":true,"timestamp":%q,"message":{"content":"<channel source=\"ccx\" kind=\"heartbeat\">heartbeat</channel>"}}`, ts(old(4*time.Hour))),
+		assistantAt("a", "b", old(4*time.Hour).Add(time.Second), ""),
+	)
+	type sess struct {
+		id         string
+		pid        int
+		transcript string
+		started    time.Duration
+	}
+	const a, b, c, d = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-00000000000c", "00000000-0000-4000-8000-00000000000d"
+	for name, tc := range map[string]struct {
+		sessions []sess
+		want     string
+	}{
+		"a resumed old transcript against one idle longer since its process start": {
+			sessions: []sess{
+				{a, 100, answered("1", old(9*time.Hour)), 90 * time.Minute}, // idle since 1h30m ago
+				{b, 300, answered("2", old(5*time.Hour)), 6 * time.Hour},    // idle since 5h ago
+			},
+			want: "[300 100]"},
+		"a transcript with no real record against a normal one": {
+			sessions: []sess{
+				{c, 100, beatOnly, 4 * time.Hour},                        // idle since the process start, 4h ago
+				{d, 300, answered("2", old(5*time.Hour)), 6 * time.Hour}, // idle since 5h ago
+			},
+			want: "[300 100]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			for _, s := range tc.sessions {
+				start := ticksAgo(s.started)
+				h := e.session(s.id, s.pid, start, s.transcript)
+				h.MaxIdle = 30 * time.Minute
+				e.procEntry(s.pid, "claude", 1, start, 10)
+			}
+			e.c.reapOnce(reapNow)
+			for _, s := range tc.sessions {
+				e.c.mu.Lock()
+				if h := e.c.registered[s.id]; h.signalled.Load() {
+					delete(e.c.registered, s.id)
+					delete(e.c.channels, s.id)
+				}
+				e.c.mu.Unlock()
+			}
+			e.c.reapOnce(reapNow)
+			if fmt.Sprint(e.killed) != tc.want {
+				t.Errorf("signalled %v over two ticks, want %s (longest idle since its process start first)", e.killed, tc.want)
 			}
 		})
 	}

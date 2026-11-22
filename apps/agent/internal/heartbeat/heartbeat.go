@@ -44,6 +44,9 @@ type Heartbeat struct {
 	// one (the session is then never reaped).
 	pid      int
 	pidStart uint64
+	// boot is the host's boot id when it registered: with pid and pidStart it
+	// names the process across reboots.
+	boot string
 	// signalled: the reaper sent this process SIGTERM, or its reaped file says it
 	// did before this registration. The reaper's goroutine writes it and the
 	// keepMin count reads it under Concern.mu, so it is atomic.
@@ -329,6 +332,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	nodes := map[string]node{}
 	starts := map[string]time.Time{}    // assistant uuid -> its request's start
 	pending := map[string]bool{}        // tool_use ids with no result yet
+	toolNames := map[string]string{}    // tool_use id -> the tool's name
 	responses := map[string]time.Time{} // response (message) id -> its request's start
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
@@ -363,7 +367,15 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 		switch rec.Type {
 		case "user":
-			tr := parseToolResult(rec.ToolResult)
+			resultIDs := toolIDs(rec.Message.Content, "tool_result", "tool_use_id")
+			// Which tool a toolUseResult came from is told by the tool_use that asked
+			// for it: an object shaped like a background start from another tool (a
+			// task list's {"taskId"}) is not one.
+			tool := ""
+			if len(resultIDs) > 0 {
+				tool = toolNames[resultIDs[0]]
+			}
+			tr := parseToolResult(rec.ToolResult, tool)
 			trackBackground(s.Background, tr.backgroundTaskID, tr.taskID, tr.agentID, tr.status, tr.stopped, rec.Message.Content, rec.Timestamp)
 			tag := channelTag(rec.Message.Content)
 			// A local command (/model and its output) is typed by a person but sends
@@ -376,7 +388,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// Only a tool's own result, or an interrupt, ends a running tool: another
 			// record (a hook's, a channel's, a sibling tool's result) can land while
 			// it runs.
-			for _, id := range toolIDs(rec.Message.Content, "tool_result", "tool_use_id") {
+			for _, id := range resultIDs {
 				delete(pending, id)
 			}
 			if isInterrupt(rec.Message.Content) {
@@ -421,6 +433,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
 				pending[id] = true
 			}
+			for id, name := range toolUseNames(rec.Message.Content) {
+				toolNames[id] = name
+			}
 			s.ToolRunning = len(pending) > 0
 			s.LastRequest = start
 			if rec.UUID != "" {
@@ -446,29 +461,118 @@ type toolResultFields struct {
 	backgroundTaskID, taskID, agentID, status, stopped string
 }
 
-// parseToolResult reads the fields from a toolUseResult that is an object and
-// ignores any value that is not a string; a string or array result has none.
-func parseToolResult(raw json.RawMessage) toolResultFields {
-	var o map[string]any
+// parseToolResult reads the fields background tracking uses from a toolUseResult,
+// each only from the tool that writes it: a Bash's backgroundTaskId, a Monitor's
+// taskId, an Agent's agentId and status, a TaskStop's task_id. An unknown tool
+// yields nothing. Only an object is decoded (most results are, and the rest are
+// not worth an allocation), and a value that is not a string is ignored.
+func parseToolResult(raw json.RawMessage, tool string) toolResultFields {
+	if len(raw) == 0 || raw[0] != '{' {
+		return toolResultFields{}
+	}
+	var o struct {
+		BackgroundTaskID json.RawMessage `json:"backgroundTaskId"`
+		TaskID           json.RawMessage `json:"taskId"`
+		AgentID          json.RawMessage `json:"agentId"`
+		Status           json.RawMessage `json:"status"`
+		Stopped          json.RawMessage `json:"task_id"`
+	}
 	if json.Unmarshal(raw, &o) != nil {
 		return toolResultFields{}
 	}
-	str := func(k string) string { s, _ := o[k].(string); return s }
-	return toolResultFields{str("backgroundTaskId"), str("taskId"), str("agentId"), str("status"), str("task_id")}
+	str := func(v json.RawMessage) string {
+		var s string
+		_ = json.Unmarshal(v, &s)
+		return s
+	}
+	switch tool {
+	case "Bash":
+		return toolResultFields{backgroundTaskID: str(o.BackgroundTaskID)}
+	case "Monitor":
+		return toolResultFields{taskID: str(o.TaskID)}
+	case "Agent":
+		return toolResultFields{agentID: str(o.AgentID), status: str(o.Status)}
+	case "TaskStop":
+		return toolResultFields{stopped: str(o.Stopped)}
+	}
+	return toolResultFields{}
+}
+
+// toolUseNames is the name of each tool_use block in the content, by its id.
+func toolUseNames(content json.RawMessage) map[string]string {
+	var parts []struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return nil
+	}
+	var names map[string]string
+	for _, p := range parts {
+		if p.Type == "tool_use" && p.ID != "" {
+			if names == nil {
+				names = map[string]string{}
+			}
+			names[p.ID] = p.Name
+		}
+	}
+	return names
 }
 
 var (
 	taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
 	// One record can carry several notifications; each is read on its own.
 	notificationBlock = regexp.MustCompile(`(?s)<task-notification>(.*?)</task-notification>`)
-	// Text inside these is a command's output or a tool's own words, not the
-	// notification's structure: it can quote anything, task ids and tags included.
-	// A literal "</event>" (or "</summary>", "</result>") inside such output ends
-	// the body early and is out of scope: nothing is known to write one.
-	notificationEvent   = regexp.MustCompile(`(?s)<event>(.*?)</event>`)
-	notificationSummary = regexp.MustCompile(`(?s)<summary>.*?</summary>`)
-	notificationResult  = regexp.MustCompile(`(?s)<result>.*?</result>`)
 )
+
+// monitorExpired stands in the text for an <event> that says its Monitor expired,
+// so the expiry stays attached to the notification it came in after the event's
+// body is gone. NUL does not occur in the text outside the bodies it replaces.
+const monitorExpired = "\x00monitor-expired\x00"
+
+// stripBodies replaces each outermost <tag>…</tag> span of s with what replace
+// returns for its body. Pairs of the same tag inside a body are matched by depth,
+// so a notification quoted whole inside a <result> (which has its own <result>)
+// is one body, not the end of the outer one. A body that never closes runs to the
+// end and is dropped with it: that ends no task, which keeps the session.
+//
+// A literal closing tag in a body that has no opening one is out of scope: it
+// ends the body early. Nothing is known to write one.
+func stripBodies(s, tag string, replace func(body string) string) string {
+	open, closing := "<"+tag+">", "</"+tag+">"
+	var out strings.Builder
+	for {
+		i := strings.Index(s, open)
+		if i < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		out.WriteString(s[:i])
+		s = s[i+len(open):]
+		depth, pos := 1, 0
+		for depth > 0 {
+			c := strings.Index(s[pos:], closing)
+			if c < 0 {
+				return out.String()
+			}
+			if o := strings.Index(s[pos:], open); o >= 0 && o < c {
+				depth++
+				pos += o + len(open)
+				continue
+			}
+			depth--
+			if depth == 0 {
+				out.WriteString(replace(s[:pos+c]))
+				s = s[pos+c+len(closing):]
+			} else {
+				pos += c + len(closing)
+			}
+		}
+	}
+}
+
+func dropBody(string) string { return "" }
 
 // trackBackground records background work starting or ending in one user record.
 // Starts are what the tool result says it launched (a Bash's backgroundTaskId,
@@ -494,18 +598,20 @@ func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stop
 	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<task-notification>") {
 		return
 	}
+	// The bodies go from the whole record first, so a notification quoted inside a
+	// <result> neither closes the outer block nor leaks its task ids. An event
+	// that says its Monitor expired leaves a marker in its place.
+	s = stripBodies(s, "event", func(body string) string {
+		if strings.HasPrefix(strings.TrimSpace(body), "[Monitor expired") {
+			return monitorExpired
+		}
+		return ""
+	})
+	s = stripBodies(s, "summary", dropBody)
+	s = stripBodies(s, "result", dropBody)
 	for _, block := range notificationBlock.FindAllStringSubmatch(s, -1) {
-		expired := false
-		for _, m := range notificationEvent.FindAllStringSubmatch(block[1], -1) {
-			if strings.HasPrefix(strings.TrimSpace(m[1]), "[Monitor expired") {
-				expired = true
-			}
-		}
 		body := block[1]
-		for _, quoted := range []*regexp.Regexp{notificationEvent, notificationSummary, notificationResult} {
-			body = quoted.ReplaceAllString(body, "")
-		}
-		if !strings.Contains(body, "<status>") && !expired {
+		if !strings.Contains(body, "<status>") && !strings.Contains(body, monitorExpired) {
 			continue
 		}
 		for _, m := range taskIDs.FindAllStringSubmatch(body, -1) {

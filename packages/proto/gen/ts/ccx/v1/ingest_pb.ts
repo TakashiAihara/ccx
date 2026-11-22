@@ -218,8 +218,9 @@ export enum Producer {
 
   /**
    * ccx-agent が session の claude に SIGTERM を送って止めたときの記録 (docs/design/reap.md)。payload は ccx 自身の
-   * JSON: `{"session_id": "...", "reaped": {"at": "<RFC3339 UTC>", "reason": "expired", "pid": <int>, "pssBytes": <int>, "start": <int>}}`。start は止めた process の起動時刻
-   * (boot からの clock tick)。pid と合わせて 1 つの process を指す。
+   * JSON: `{"session_id": "...", "reaped": {"at": "<RFC3339 UTC>", "reason": "expired", "pid": <int>, "pssBytes": <int>, "start": <int>, "boot": "<boot id>"}}`。start は止めた process の起動時刻
+   * (boot からの clock tick)、boot はそのマシンの boot id (/proc/sys/kernel/random/boot_id)。pid と合わせて
+   * 1 つの process を指す (start だけでは再起動の後に同じ値が出る)。
    * reaped の中身は、そのマシンの `~/.claude/sessions/<id>/reaped` に 1 行ずつ追記する JSON と同じ。止めた事実は
    * そのマシンだけが知っているので、事実として運ぶ (ccx-agent の COLLECT)。1 回の停止につき 1 件で、events に積む
    * (後から「なぜこの session は消えたか」を読む用途がある)。center に届かなければ spool で待ち、手元の記録は

@@ -173,7 +173,8 @@ free-text `label`, one external `task` reference and a free-text `role`. `ccx se
 machine that holds none yet (marks already set there are never overwritten). With a center
 configured, every `mark` / `label` / `task` / `role` also reports the state there, so `ccx session ls` shows
 other machines' and users' flags from the center's own database (this machine's rows come from its
-own files, plus one store GET to tell `remote` from `unknown`). What you *do* with
+own files, plus one store GET to tell `remote` from `unknown`). The center's copy does not carry `pinned`
+(nor `heartbeat`), so other machines' rows show it as off; the reaper is local and reads the file on its own machine. What you *do* with
 `archived` — fold it, push and prune it, close it — stays yours; ccx only holds and carries it.
 
 Point the CLI at a center the same way `ccx-agent` is pointed at one (`CCX_HUB_URL` / `ccx.hubUrl` /

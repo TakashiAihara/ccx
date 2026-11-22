@@ -65,6 +65,9 @@ type Concern struct {
 	// beforeSignal runs after a stop's process tree is measured and before the
 	// checks that precede the signal; a test closes the window it leaves.
 	beforeSignal func()
+	// afterRecheck runs after the session's expiry is checked again and before the
+	// last check of its process.
+	afterRecheck func()
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
@@ -270,8 +273,10 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 			c.log("reap: session %s registered no usable pid (%q); it will not be reaped", reg.Session, reg.PID)
 		} else if start, ok := claudeProc(c.procDir(), pid); !ok {
 			c.log("reap: session %s registered pid %d, which is not a claude process; it will not be reaped", reg.Session, pid)
+		} else if boot, ok := bootID(c.procDir()); !ok {
+			c.log("reap: session %s: the host's boot id cannot be read; it will not be reaped", reg.Session)
 		} else {
-			h.pid, h.pidStart = pid, start
+			h.pid, h.pidStart, h.boot = pid, start, boot
 			// A reconnect of a process that was already signalled starts out signalled,
 			// so keepMin does not count it as running.
 			h.reapedBefore()

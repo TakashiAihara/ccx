@@ -683,7 +683,7 @@ func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) 
 }
 
 func TestReap_DefaultsOffAndTheSources(t *testing.T) {
-	none := "/nonexistent/x.toml"
+	none := missingConfig(t)
 	c, err := load(env(map[string]string{"CCX_CONFIG": none}), noGit, fixedHost("h"))
 	if err != nil {
 		t.Fatal(err)
@@ -743,7 +743,7 @@ func TestReap_UnusableValueTurnsItOffWithAReason(t *testing.T) {
 		"env enabled is not a bool":  {env: map[string]string{"CCX_REAP": "maybe"}, want: "reap: enabled maybe: want true or false"},
 		"env enabled is a typo":      {env: map[string]string{"CCX_REAP": "ture"}, want: "reap: enabled ture"},
 	} {
-		e := map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_REAP": "on", "CCX_MACHINE": "m"}
+		e := map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_MACHINE": "m"}
 		for k, v := range tc.env {
 			e[k] = v
 		}
@@ -767,7 +767,7 @@ func TestReap_UnusableValueTurnsItOffWithAReason(t *testing.T) {
 
 // Every bad value is reported, not only the last one found.
 func TestReap_AllReasonsAreKept(t *testing.T) {
-	c, err := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_REAP": "on", "CCX_REAP_INTERVAL": "soon", "CCX_REAP_KEEP_MIN": "two"}), noGit, fixedHost("h"))
+	c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_REAP_INTERVAL": "soon", "CCX_REAP_KEEP_MIN": "two"}), noGit, fixedHost("h"))
 	if err != nil || c.Reap.Enabled || c.Reap.Err == nil {
 		t.Fatalf("err=%v reap=%+v", err, c.Reap)
 	}
@@ -778,7 +778,7 @@ func TestReap_AllReasonsAreKept(t *testing.T) {
 }
 
 func TestReap_TenSecondsIsTheFloor(t *testing.T) {
-	c, _ := load(env(map[string]string{"CCX_CONFIG": "/nonexistent/x.toml", "CCX_REAP": "on", "CCX_REAP_INTERVAL": "10s", "CCX_REAP_KEEP_MIN": "0"}), noGit, fixedHost("h"))
+	c, _ := load(env(map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_REAP_INTERVAL": "10s", "CCX_REAP_KEEP_MIN": "0"}), noGit, fixedHost("h"))
 	if !c.Reap.Enabled || c.Reap.Interval != 10*time.Second || c.Reap.KeepMin != 0 || c.Reap.Err != nil {
 		t.Errorf("10s and keepMin 0 = %+v, want accepted", c.Reap)
 	}
@@ -799,6 +799,7 @@ func TestReap_EnabledEnvOverFileAndABadFileValueSurvivesAnOverride(t *testing.T)
 		"env on over file false":                  {env: map[string]string{"CCX_REAP": "on"}, file: "[reap]\nenabled = false\n", enabled: true},
 		"env off over file true":                  {env: map[string]string{"CCX_REAP": "off"}, file: "[reap]\nenabled = true\n"},
 		"empty env falls to the file":             {env: map[string]string{"CCX_REAP": " "}, file: "[reap]\nenabled = true\n", enabled: true},
+		"bad file enabled under CCX_REAP=on":      {env: map[string]string{"CCX_REAP": "on"}, file: "[reap]\nenabled = \"yes\"\n", failed: true},
 		"bad file keepMin under an env keepMin":   {env: map[string]string{"CCX_REAP": "on", "CCX_REAP_KEEP_MIN": "1"}, file: "[reap]\nkeepMin = \"2\"\n", failed: true},
 		"bad file interval under an env interval": {env: map[string]string{"CCX_REAP": "on", "CCX_REAP_INTERVAL": "2m"}, file: "[reap]\ninterval = 5\n", failed: true},
 	} {
