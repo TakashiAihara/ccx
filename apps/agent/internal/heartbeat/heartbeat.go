@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,9 +76,9 @@ type Stats struct {
 	Sent     int
 	LastSent time.Time
 	// IdleReason is why no heartbeat is scheduled (#274): one of the Idle*
-	// values, or "" when one is scheduled (Next is set). (The status API also
-	// answers "" for a session whose channel is not registered, and for every
-	// session when the heartbeat concern is off.)
+	// values, or "" when one is scheduled (Next is set) or step has not run yet.
+	// (The status API also answers "" for a session whose channel is not
+	// registered, and for every session when the heartbeat concern is off.)
 	IdleReason string
 	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read that succeeded
 	// (#362); 0 until one has.
@@ -328,7 +330,11 @@ func (h *Heartbeat) read() (Scan, bool) {
 	}
 	st, err := os.Stat(h.file)
 	if err != nil {
-		h.file = ""
+		// Gone (moved, deleted): look for it again next time. Any other error
+		// keeps the path, so the failure reads as a transcript that is there.
+		if errors.Is(err, fs.ErrNotExist) {
+			h.file = ""
+		}
 		return Scan{}, false
 	}
 	if st.ModTime().Equal(h.mtime) && st.Size() == h.size {

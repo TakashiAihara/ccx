@@ -243,7 +243,7 @@ type HeartbeatStatus struct {
 	// transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript はあるが読めない)。
 	// 空になるのは、予定がある (next_at が設定済み) か、未登録か、enabled が false のときだけ
 	// (理由の値を持たない古い agent と、登録直後で最初の見直しがまだの一瞬も空を返す)。打った直後は次の見直し (最大 1 分) まで "beat_pending" に
-	// なるので、正常に回っている session でも約 50 分に 1 分はこの値を返す。
+	// なるので、正常に回っている session でも heartbeat の間隔ごとに最大 1 分はこの値を返す。
 	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
 	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
 	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event、別 session からの
@@ -257,7 +257,8 @@ type HeartbeatStatus struct {
 	// 未登録なら未設定。
 	LastBeatAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=last_beat_at,json=lastBeatAt,proto3" json:"last_beat_at,omitempty"`
 	// cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
-	// "5m" の間は heartbeat を打たない (idle_reason は、打たない宣言や応答待ちが先に当たらなければ "short_ttl")。
+	// "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" /
+	// "no_request" に当たる session はそちらが先に出る)。
 	// transcript を読めなかった回は直前の値のまま。
 	// 未登録なら空。
 	CacheTtl      string `protobuf:"bytes,12,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`

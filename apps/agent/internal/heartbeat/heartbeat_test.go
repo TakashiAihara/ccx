@@ -541,6 +541,23 @@ func TestStepWaitsForATranscript(t *testing.T) {
 	if st := u.Stats(); *upushes != 0 || st.IdleReason != IdleTranscriptUnreadable {
 		t.Errorf("unreadable transcript: pushes=%d IdleReason = %q, want 0 and %q", *upushes, st.IdleReason, IdleTranscriptUnreadable)
 	}
+
+	// A transcript read once whose stat then fails for a reason other than
+	// "gone" (here its directory became a file: ENOTDIR) is unreadable too.
+	s, _, _ := fixture(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", reply), at("10:30:05"))
+	var ssent time.Time
+	s.step(&ssent)
+	dir := filepath.Join(s.ClaudeHome, "projects", "-some-cwd")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.step(&ssent)
+	if st := s.Stats(); st.IdleReason != IdleTranscriptUnreadable {
+		t.Errorf("stat failing with ENOTDIR: IdleReason = %q, want %q", st.IdleReason, IdleTranscriptUnreadable)
+	}
 }
 
 // Run never sleeps past a poll, even with the next heartbeat 20 minutes away:

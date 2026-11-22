@@ -34,7 +34,6 @@ import { stat } from "node:fs/promises";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 
-
 import { centerTransport, type Hub } from "./fleet.ts";
 
 import { table } from "./format.ts";
@@ -434,10 +433,12 @@ export function registerSessionState(session: Command): void {
       const hasTranscript = running.has(id) || (await hasLocalTranscript(id, home));
       const lifecycle = await lifecycleOf(id, running, hasTranscript, store);
       const s = await declaredFor(id, home, lifecycle, store);
-      // Only a session running here can be kept alive by this machine's agent; for any other the agent has nothing to say
-      const live = lifecycle === "running";
-      const res = live ? await sessionAgentStatus(defaultApiSocketPath(), id, home) : undefined;
+      const res = await sessionAgentStatus(defaultApiSocketPath(), id, home);
+      // The agent knows a session by its channel, not by this home's pid files: one it still holds (a /clear left
+      // the old id registered, another CLAUDE_CONFIG_DIR) is shown even when it does not read as running here.
+      // "-" is only for a session neither running here nor registered: there is no keepalive to speak of.
+      const shown = lifecycle === "running" || res?.heartbeat?.registered;
       if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s, agent: res ? { heartbeat: heartbeatJson(res) } : null }, null, 2));
-      else for (const line of show(id, lifecycle, s, live ? keepaliveLine(res?.heartbeat) : "-")) console.log(line);
+      else for (const line of show(id, lifecycle, s, shown ? keepaliveLine(res?.heartbeat) : "-")) console.log(line);
     });
 }

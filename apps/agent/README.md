@@ -100,7 +100,8 @@ last request wrote a 5-minute cache; serve also logs when this starts and ends),
 answered request yet; a session before its first prompt has no transcript and
 reads this too), or `transcript_unreadable` (the transcript is there and could
 not be read). It is empty only when a heartbeat is scheduled, the session is not
-registered, or heartbeat is off in serve's config (`enabled` is false). A
+registered (or registered a moment ago and not looked at yet), or heartbeat is
+off in serve's config (`enabled` is false). A
 heartbeat just pushed reads `beat_pending` until serve next looks (up to a
 minute), so a healthy session shows it for about a minute in every interval.
 

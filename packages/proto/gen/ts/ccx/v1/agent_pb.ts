@@ -175,7 +175,7 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
    * transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript はあるが読めない)。
    * 空になるのは、予定がある (next_at が設定済み) か、未登録か、enabled が false のときだけ
    * (理由の値を持たない古い agent と、登録直後で最初の見直しがまだの一瞬も空を返す)。打った直後は次の見直し (最大 1 分) まで "beat_pending" に
-   * なるので、正常に回っている session でも約 50 分に 1 分はこの値を返す。
+   * なるので、正常に回っている session でも heartbeat の間隔ごとに最大 1 分はこの値を返す。
    * next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
    *
    * @generated from field: string idle_reason = 9;
@@ -204,7 +204,8 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
 
   /**
    * cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
-   * "5m" の間は heartbeat を打たない (idle_reason は、打たない宣言や応答待ちが先に当たらなければ "short_ttl")。
+   * "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" /
+   * "no_request" に当たる session はそちらが先に出る)。
    * transcript を読めなかった回は直前の値のまま。
    * 未登録なら空。
    *

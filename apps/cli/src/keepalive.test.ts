@@ -145,11 +145,8 @@ function homeWithRunningSessions(...ids: string[]): string {
 
 test("ccx session status shows the keepalive line and carries the agent's answer in --json; with no agent it says unknown", async () => {
   const home = homeWithRunningSessions(SID);
-  let asked = 0;
-  const socket = fakeAgent(() => {
-    asked++;
-    return { idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2 };
-  });
+  let answer: MessageInitShape<typeof HeartbeatStatusSchema> = { idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2 };
+  const socket = fakeAgent(() => answer);
   const env = { CLAUDE_CONFIG_DIR: home, CCX_API_SOCKET: socket };
 
   const shown = await run(["session", "status", SID], env);
@@ -169,14 +166,23 @@ test("ccx session status shows the keepalive line and carries the agent's answer
   expect(off.out).toMatch(/^keepalive\s+unknown \(ccx-agent is not answering\)$/m);
   expect(JSON.parse((await run(["session", "status", SID, "--json"], down)).out).agent).toBeNull();
 
-  // A session that is not running here has no keepalive on this machine: the agent is not asked.
+  // A session neither running here nor registered with the agent has no keepalive to speak of;
+  // --json still carries what the agent said.
   rmSync(join(home, "sessions", `${process.pid}.json`));
-  asked = 0;
+  answer = { registered: false };
   const ended = await run(["session", "status", SID], env);
   expect(ended.out).toMatch(/^lifecycle\s+ended$/m);
   expect(ended.out).toMatch(/^keepalive\s+-$/m);
-  expect(JSON.parse((await run(["session", "status", SID, "--json"], env)).out).agent).toBeNull();
-  expect(asked).toBe(0);
+  expect(JSON.parse((await run(["session", "status", SID, "--json"], env)).out).agent.heartbeat).toMatchObject({ registered: false });
+  // Not running and no agent: still "-", not "unknown".
+  expect((await run(["session", "status", SID], down)).out).toMatch(/^keepalive\s+-$/m);
+
+  // One the agent still holds is shown even though this home has no live pid for it
+  // (the old id after /clear, a session under another CLAUDE_CONFIG_DIR).
+  answer = { idleReason: "beat_pending", cacheTtl: "1h" };
+  const held = await run(["session", "status", SID], env);
+  expect(held.out).toMatch(/^lifecycle\s+ended$/m);
+  expect(held.out).toMatch(/^keepalive\s+beat_pending, 1h cache$/m);
 });
 
 test("ccx agent status counts the running sessions' keepalive states on one line and lists them in --json", async () => {
