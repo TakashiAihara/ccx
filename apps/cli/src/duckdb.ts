@@ -207,6 +207,8 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
  * table first, so it is missed; build the view by hand-splitting such SQL if it ever matters
  */
 async function references(c: DuckDBConnection, sql: string, name: string) {
+  // Without the word the query cannot read the table, and the probe's bind costs a glob of the store (about 0.5 s on d1, 1433 transcripts)
+  if (!new RegExp(`\\b${name}\\b`, "i").test(sql)) return false;
   const missing = new RegExp(`Table with name ${name} does not exist`, "i");
   let statements;
   try {
