@@ -205,8 +205,8 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
 
   /**
    * cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
-   * "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" /
-   * "no_request" に当たる session はそちらが先に出る)。
+   * "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" に
+   * 当たる session はそちらが先に出る)。
    * transcript を読めなかった回は直前の値のまま。
    * 未登録なら空。
    *

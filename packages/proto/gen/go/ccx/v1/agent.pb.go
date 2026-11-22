@@ -258,8 +258,8 @@ type HeartbeatStatus struct {
 	// 未登録なら未設定。
 	LastBeatAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=last_beat_at,json=lastBeatAt,proto3" json:"last_beat_at,omitempty"`
 	// cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
-	// "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" /
-	// "no_request" に当たる session はそちらが先に出る)。
+	// "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" に
+	// 当たる session はそちらが先に出る)。
 	// transcript を読めなかった回は直前の値のまま。
 	// 未登録なら空。
 	CacheTtl      string `protobuf:"bytes,12,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`

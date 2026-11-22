@@ -542,8 +542,8 @@ func TestStepWaitsForATranscript(t *testing.T) {
 		t.Errorf("unreadable transcript: pushes=%d IdleReason = %q, want 0 and %q", *upushes, st.IdleReason, IdleTranscriptUnreadable)
 	}
 
-	// A transcript read once whose stat then fails for a reason other than
-	// "gone" (here its directory became a file: ENOTDIR) is unreadable too.
+	// A transcript read once whose stat then fails (here its directory became
+	// a file) is unreadable too: it was there.
 	s, _, _ := fixture(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", reply), at("10:30:05"))
 	var ssent time.Time
 	s.step(&ssent)

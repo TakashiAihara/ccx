@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -333,11 +331,7 @@ func (h *Heartbeat) read() (Scan, bool) {
 	}
 	st, err := os.Stat(h.file)
 	if err != nil {
-		// Gone (moved, deleted): look for it again next time. Any other error
-		// keeps the path, so the failure reads as a transcript that is there.
-		if errors.Is(err, fs.ErrNotExist) {
-			h.file = ""
-		}
+		h.file = ""
 		return Scan{}, false
 	}
 	if st.ModTime().Equal(h.mtime) && st.Size() == h.size {
