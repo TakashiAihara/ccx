@@ -911,6 +911,8 @@ func TestStepRecordsTheLastBeatAndTheCacheTTL(t *testing.T) {
 		{"5m, a beat landed", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(9, 0)) + landed, false, at("10:20:06"), "5m"},
 		{"a later request that wrote nothing keeps 5m", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", usage(9, 0)) + rec("user", "10:00:03", human) + rec("assistant", "10:00:05", usage(0, 0)), false, time.Time{}, "5m"},
 		{"not wanted", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(0, 9)) + landed, true, at("10:20:06"), "1h"},
+		// A request that wrote both is not a 5-minute-only write: heartbeats go on (ShortTTL is false).
+		{"both written is 1h", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(5, 9)), false, time.Time{}, "1h"},
 	} {
 		h, _, _ := fixture(t, c.tr, at("10:30:05"))
 		h.Default = !c.off
