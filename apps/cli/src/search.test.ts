@@ -192,8 +192,8 @@ describe("search: embedded DuckDB over the store", () => {
     expect(((await json(`DESCRIBE transcripts`)) as { column_name: string }[]).map((r) => r.column_name)).toContain("session_id");
     // A statement that cannot bind before the one ahead of it runs (a table it creates, bound first) still gets the view
     expect(await json(`CREATE TEMP TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM t CROSS JOIN transcripts`)).toEqual([{ n: "3" }]);
-    // A Binder Error (here EXECUTE before its PREPARE has run) is no reason to build the view
-    expect(await json(`PREPARE p AS SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts'; EXECUTE p`)).toEqual([{ n: "0" }]);
+    // A name an earlier statement sets binds as NULL (a Binder Error), and still gets the view
+    expect(await json(`SET VARIABLE t = 'transcripts'; SELECT count(*) AS n FROM query_table(getvariable('t'))`)).toEqual([{ n: "3" }]);
     // Errors in the query are the run's to report, whether or not the view was built
     const bad = await ccx("--sql", "SELECT count(*) FROM no_such_table WHERE 'transcripts' = ''");
     expect(bad.code).not.toBe(0);
