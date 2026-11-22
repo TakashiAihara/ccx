@@ -188,6 +188,8 @@ describe("search: embedded DuckDB over the store", () => {
     expect(await json(`SET threads = 1; SELECT count(*) AS n FROM transcripts`)).toEqual([{ n: "3" }]);
     expect(await json(`SELECT count(*) AS n FROM main."transcripts"`)).toEqual([{ n: "3" }]);
     expect(await json(`PREPARE p AS SELECT count(*) AS n FROM transcripts; EXECUTE p`)).toEqual([{ n: "3" }]);
+    expect(await json(`SELECT count(*) AS n FROM query_table('transcripts')`)).toEqual([{ n: "3" }]);
+    expect(((await json(`DESCRIBE transcripts`)) as { column_name: string }[]).map((r) => r.column_name)).toContain("session_id");
     // A statement that cannot bind before the one ahead of it runs (a table it creates, bound first) still gets the view
     expect(await json(`CREATE TEMP TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM t CROSS JOIN transcripts`)).toEqual([{ n: "3" }]);
     // A Binder Error (here EXECUTE before its PREPARE has run) is no reason to build the view

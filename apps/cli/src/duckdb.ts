@@ -148,7 +148,8 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
        WHERE ${["op", "machine", "user", "at"].map((k) => `json_type(json, '$.${k}') = 'VARCHAR'`).join(" AND ")}`,
     );
   }
-  // Last, so the probe binds the query with every other view in place: the binder stops at the first table it cannot find
+  // Last, so the probe binds the query with every other view in place: a query reading `sessions` or `history` would
+  // otherwise fail to bind on them with a Catalog Error and build this view for nothing
   if (opts.withTranscripts === true || (opts.withTranscripts && (await references(c, opts.withTranscripts.sql, "transcripts")))) {
     // The schema comes from the first 32 files in listing (path) order (up to sample_size records), not from every file:
     // on 1304 files, union_by_name
@@ -203,9 +204,9 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
  * Whether `sql` reads the table `name`: binding fails for want of it only when the query reads it as a table, not for a
  * path or a string literal holding the word. Binding runs nothing. Any Catalog Error counts as reading it, as the word
  * did before: a table an earlier statement creates (not run yet) stops the binder before it reaches this one, and a
- * qualified or quoted name, PREPARE, DESCRIBE and query() all report it as one. A Binder Error (a column, `EXECUTE p`
- * before its PREPARE has run) comes after the tables are found, so the next statement is checked. A query DuckDB
- * cannot parse throws its parser error here
+ * qualified or quoted name, PREPARE, DESCRIBE, query() and DROP / ALTER VIEW all report it as one. A Binder Error (a
+ * column, an unknown prepared statement in `EXECUTE p` whose PREPARE has not run) means no table was missing, so the
+ * next statement is checked. A query DuckDB cannot parse throws its parser error here
  */
 async function references(c: DuckDBConnection, sql: string, name: string) {
   // Without the word the query cannot read the table, and the probe's bind costs a glob of the store (about 0.5 s on d1, 1433 transcripts)
