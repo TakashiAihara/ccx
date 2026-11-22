@@ -39,7 +39,8 @@ func TestMain(m *testing.M) {
 }
 
 // env builds a getenv from a map, so a test states exactly what is set and
-// nothing leaks in from the real environment, including the config file.
+// nothing leaks in from the real environment. Omitting CCX_CONFIG gives a
+// missing file; an explicit "" still falls through to the user's config dir.
 func env(m map[string]string) func(string) string {
 	return func(k string) string {
 		if v, ok := m[k]; ok || k != "CCX_CONFIG" {
@@ -120,6 +121,20 @@ func TestEnv_DoesNotReadTheHomeConfig(t *testing.T) {
 	}
 	if c.Machine != "the-host" {
 		t.Errorf("machine = %q, want the-host: env() let the home config.toml in", c.Machine)
+	}
+}
+
+func TestConfigPath_DefaultsToTheUserConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got, want := configPath(env(map[string]string{"CCX_CONFIG": ""})), filepath.Join(home, ".config", "ccx", "config.toml"); got != want {
+		t.Errorf("no XDG_CONFIG_HOME: got %q, want %q", got, want)
+	}
+	if got := configPath(env(map[string]string{"CCX_CONFIG": "", "XDG_CONFIG_HOME": "/xdg"})); got != "/xdg/ccx/config.toml" {
+		t.Errorf("with XDG_CONFIG_HOME: got %q", got)
+	}
+	if got := configPath(env(map[string]string{"CCX_CONFIG": "/c.toml"})); got != "/c.toml" {
+		t.Errorf("with CCX_CONFIG: got %q", got)
 	}
 }
 
