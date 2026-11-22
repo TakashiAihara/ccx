@@ -171,22 +171,30 @@ func pssOf(root string, pid int) int64 {
 	return 0
 }
 
-// heartbeatDeclarationReadable: the heartbeat declaration is absent, or reads as
-// on or off. wanted() takes an unreadable or garbled file for "no declaration",
-// which would put a session declared on onto the one-hour clock; the reaper keeps
-// such a session instead.
-func (h *Heartbeat) heartbeatDeclarationReadable() bool {
-	p := filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "heartbeat")
+// keepalive says whether keepalive holds the session, read once so the answer
+// and its readability come from the same read. It follows wanted() (archived,
+// then the on/off declaration, then the agent's default), except that a
+// declaration that exists but cannot be read as on or off is not taken for "no
+// declaration": wanted() would put a session declared on onto the one-hour
+// clock, so ok is false and the reaper keeps it.
+func (h *Heartbeat) keepalive() (held, ok bool) {
+	dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
+	if fi, err := os.Stat(filepath.Join(dir, "archived")); err == nil && !fi.IsDir() {
+		return false, true
+	}
+	p := filepath.Join(dir, "heartbeat")
 	if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-		return true
+		return h.Default, true
 	} else if err != nil {
-		return false
+		return false, false
 	}
 	switch declared.Text(p) {
-	case "on", "off":
-		return true
+	case "on":
+		return true, true
+	case "off":
+		return false, true
 	}
-	return false
+	return false, false
 }
 
 // pinned: `ccx session pin` left the flag file (a directory of that name is not it,
@@ -219,10 +227,11 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	// archived) has nothing to wait for once its cache is cold (user decision
 	// 2026-11-22), so the cache TTL below is its whole clock.
 	idle := now.Sub(idleSince(s, procStart))
-	if !h.heartbeatDeclarationReadable() {
+	held, ok := h.keepalive()
+	if !ok {
 		return Scan{}, false
 	}
-	if h.wanted() {
+	if held {
 		if h.MaxIdle <= 0 || idle <= h.MaxIdle {
 			return Scan{}, false
 		}

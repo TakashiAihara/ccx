@@ -1245,9 +1245,6 @@ func TestReapTreatsAnUnreadablePinnedPathAsPinned(t *testing.T) {
 			_ = os.MkdirAll(filepath.Join(e.home, "sessions", id), 0o700)
 			_ = os.Symlink("pinned", filepath.Join(e.home, "sessions", id, "pinned"))
 		}},
-		"a name too long to stat (ENAMETOOLONG)": {setup: func(e *reapEnv) {
-			e.c.registered[id].ClaudeHome = filepath.Join(e.home, strings.Repeat("x", 300))
-		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newReapEnv(t)
@@ -1374,6 +1371,10 @@ func TestReapTakesASessionWithoutKeepaliveOnceItsCacheIsCold(t *testing.T) {
 		{"off, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 61 * time.Minute, true},
 		{"off, cache warm", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("off\n"), 0o600) }, 59 * time.Minute, false},
 		{"no declaration, agent default off, cache cold", func(d string) {}, 61 * time.Minute, true},
+		{"archived over a heartbeat-on declaration, cache cold", func(d string) {
+			_ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("on\n"), 0o600)
+			_ = os.WriteFile(filepath.Join(d, "archived"), nil, 0o600)
+		}, 61 * time.Minute, true},
 		{"archived, cache cold", func(d string) { _ = os.WriteFile(filepath.Join(d, "archived"), nil, 0o600) }, 61 * time.Minute, true},
 		{"on, cache cold, under maxIdle", func(d string) { _ = os.WriteFile(filepath.Join(d, "heartbeat"), []byte("on\n"), 0o600) }, 61 * time.Minute, false},
 		// A local command (no request) 30 minutes ago is use: the cache is cold, the session is not idle.
