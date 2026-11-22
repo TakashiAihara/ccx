@@ -327,6 +327,10 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		!got.Heartbeat.GetWanted() || got.Heartbeat.GetRegistered() || got.Heartbeat.GetNextAt() != nil {
 		t.Errorf("before register: %v", got)
 	}
+	// Not registered: what the transcript says about beats and the cache is not read.
+	if got.Heartbeat.GetLastBeatAt() != nil || got.Heartbeat.GetCacheTtl() != "" || got.Heartbeat.GetIdleReason() != "" {
+		t.Errorf("before register: last_beat_at = %v, cache_ttl = %q, idle_reason = %q, want none", got.Heartbeat.GetLastBeatAt(), got.Heartbeat.GetCacheTtl(), got.Heartbeat.GetIdleReason())
+	}
 	if !got.Collect.GetEnabled() || got.Collect.GetCenterConfigured() || got.Collect.GetPending() != 0 {
 		t.Errorf("collect: %v", got.Collect)
 	}
