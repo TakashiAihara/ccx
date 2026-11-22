@@ -200,27 +200,21 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
 }
 
 /**
- * Whether binding `sql` fails for want of the table `name`: only a query that reads it as a table hits this, not a path
- * or a string literal holding the word. Binding runs nothing. A query DuckDB cannot parse or bind for another reason is
- * left to the real run to report.
- * shortcut: a statement that also reads a table an earlier statement of the same --sql creates fails to bind on that
- * table first, so it is missed; build the view by hand-splitting such SQL if it ever matters
+ * Whether `sql` reads the table `name`: binding fails for want of it only when the query reads it as a table, not for a
+ * path or a string literal holding the word. Binding runs nothing. A statement that fails to bind for another reason
+ * may still read it — a table an earlier statement creates stops the binder first — so it counts as reading, as the word
+ * did before. A query DuckDB cannot parse throws its parser error here
  */
 async function references(c: DuckDBConnection, sql: string, name: string) {
   // Without the word the query cannot read the table, and the probe's bind costs a glob of the store (about 0.5 s on d1, 1433 transcripts)
   if (!new RegExp(`\\b${name}\\b`, "i").test(sql)) return false;
-  const missing = new RegExp(`Table with name ${name} does not exist`, "i");
-  let statements;
-  try {
-    statements = await c.extractStatements(sql);
-  } catch {
-    return false;
-  }
+
+  const statements = await c.extractStatements(sql);
   for (let i = 0; i < statements.count; i++) {
     try {
       await statements.prepare(i);
-    } catch (e) {
-      if (missing.test(String(e))) return true;
+    } catch {
+      return true;
     }
   }
   return false;

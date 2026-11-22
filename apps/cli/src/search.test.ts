@@ -186,12 +186,17 @@ describe("search: embedded DuckDB over the store", () => {
     // The table in any case, inside a subquery, and in a later statement of several
     expect(await json(`SELECT (SELECT count(*) FROM TRANSCRIPTS) AS n`)).toEqual([{ n: "3" }]);
     expect(await json(`SET threads = 1; SELECT count(*) AS n FROM transcripts`)).toEqual([{ n: "3" }]);
-    // A statement that cannot bind before the one ahead of it runs (a table it creates) is no reason to build the view
-    expect(await json(`CREATE TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts' OR (SELECT a FROM t) = 0`)).toEqual([{ n: "0" }]);
+    expect(await json(`SELECT count(*) AS n FROM main."transcripts"`)).toEqual([{ n: "3" }]);
+    expect(await json(`PREPARE p AS SELECT count(*) AS n FROM transcripts; EXECUTE p`)).toEqual([{ n: "3" }]);
+    // A statement that cannot bind before the one ahead of it runs (a table it creates, bound first) still gets the view
+    expect(await json(`CREATE TEMP TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM t CROSS JOIN transcripts`)).toEqual([{ n: "3" }]);
     // Another error in the query is the run's to report, not a reason to build the view
-    const bad = await ccx("--sql", "SELECT count(*) FROM no_such_table");
+    const bad = await ccx("--sql", "SELECT count(*) FROM no_such_table WHERE 'transcripts' = ''");
     expect(bad.code).not.toBe(0);
     expect(bad.err).toContain("Table with name no_such_table does not exist");
+    const unparsable = await ccx("--sql", "SELEC * FROM transcripts");
+    expect(unparsable.code).not.toBe(0);
+    expect(unparsable.err).toContain(`syntax error at or near "SELEC"`);
   });
 
   test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
