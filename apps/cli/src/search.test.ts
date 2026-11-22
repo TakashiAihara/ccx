@@ -201,7 +201,8 @@ describe("search: embedded DuckDB over the store", () => {
     const unparsable = await ccx("--sql", "SELEC * FROM transcripts");
     expect(unparsable.code).not.toBe(0);
     expect(unparsable.err).toContain(`syntax error at or near "SELEC"`);
-  });
+    // 13 runs of ccx: past bun's default 5 s on a loaded host
+  }, 20_000);
 
   test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
     // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample

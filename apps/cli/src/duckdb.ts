@@ -206,7 +206,9 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
  * did before: a table an earlier statement creates (not run yet) stops the binder before it reaches this one, and a
  * qualified or quoted name, PREPARE, DESCRIBE, query() and DROP / ALTER VIEW all report it as one. A Binder Error (a
  * column, an unknown prepared statement in `EXECUTE p` whose PREPARE has not run) means no table was missing, so the
- * next statement is checked. A query DuckDB cannot parse throws its parser error here
+ * next statement is checked. A query DuckDB cannot parse throws its parser error here.
+ * Out of scope: a name an earlier statement computes (`SET VARIABLE t = 'transcripts'; ... query_table(getvariable('t'))`)
+ * binds as NULL, a Binder Error, so the view is not built and the run fails with "Table with name transcripts does not exist"
  */
 async function references(c: DuckDBConnection, sql: string, name: string) {
   // Without the word the query cannot read the table, and the probe's bind costs a glob of the store (about 0.5 s on d1, 1433 transcripts)
