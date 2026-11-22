@@ -233,10 +233,23 @@ type HeartbeatStatus struct {
 	// 直後で transcript への着地待ち) なら未設定。
 	NextAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=next_at,json=nextAt,proto3" json:"next_at,omitempty"`
 	// この登録 (channel の接続) の間に打った回数と、最後に打った時刻。
-	Sent          uint32                 `protobuf:"varint,6,opt,name=sent,proto3" json:"sent,omitempty"`
-	LastSentAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_sent_at,json=lastSentAt,proto3" json:"last_sent_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Sent       uint32                 `protobuf:"varint,6,opt,name=sent,proto3" json:"sent,omitempty"`
+	LastSentAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_sent_at,json=lastSentAt,proto3" json:"last_sent_at,omitempty"`
+	// 予定を入れない理由。"not_wanted" (打たない宣言 / archived / 宣言が無く agent の既定が off) /
+	// "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
+	// "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
+	// 空になるのは、予定がある (next_at が設定済み) か、どれにも当たらないとき: 打った heartbeat の
+	// 着地待ち、push の失敗、応答のある request がまだ無い、transcript を読めない、未登録。
+	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
+	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
+	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event、別 session からの
+	// message) より後に
+	// transcript へ届いた heartbeat の数。プロンプトで 0 に戻る。sent と違い agent の再起動では
+	// 戻らない (transcript から数える)。transcript を読めなかった回は直前の値のまま (起動後に一度も
+	// 読めていなければ 0)。next_at と同じく最大 1 分遅れる。未登録なら 0。
+	BeatsSinceReal uint32 `protobuf:"varint,10,opt,name=beats_since_real,json=beatsSinceReal,proto3" json:"beats_since_real,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *HeartbeatStatus) Reset() {
@@ -323,6 +336,20 @@ func (x *HeartbeatStatus) GetLastSentAt() *timestamppb.Timestamp {
 		return x.LastSentAt
 	}
 	return nil
+}
+
+func (x *HeartbeatStatus) GetIdleReason() string {
+	if x != nil {
+		return x.IdleReason
+	}
+	return ""
+}
+
+func (x *HeartbeatStatus) GetBeatsSinceReal() uint32 {
+	if x != nil {
+		return x.BeatsSinceReal
+	}
+	return 0
 }
 
 type CollectStatus struct {
@@ -439,7 +466,7 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\x18GetSessionStatusResponse\x120\n" +
 	"\bdeclared\x18\x01 \x01(\v2\x14.ccx.v1.SessionStateR\bdeclared\x125\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x17.ccx.v1.HeartbeatStatusR\theartbeat\x12/\n" +
-	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\xa4\x02\n" +
+	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\xef\x02\n" +
 	"\x0fHeartbeatStatus\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1c\n" +
 	"\tlistening\x18\b \x01(\bR\tlistening\x12\x1a\n" +
@@ -451,7 +478,11 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\anext_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06nextAt\x12\x12\n" +
 	"\x04sent\x18\x06 \x01(\rR\x04sent\x12<\n" +
 	"\flast_sent_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastSentAt\"\xb8\x02\n" +
+	"lastSentAt\x12\x1f\n" +
+	"\vidle_reason\x18\t \x01(\tR\n" +
+	"idleReason\x12(\n" +
+	"\x10beats_since_real\x18\n" +
+	" \x01(\rR\x0ebeatsSinceReal\"\xb8\x02\n" +
 	"\rCollectStatus\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12+\n" +
 	"\x11center_configured\x18\x02 \x01(\bR\x10centerConfigured\x12\x18\n" +

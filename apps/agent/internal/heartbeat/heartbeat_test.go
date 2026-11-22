@@ -710,3 +710,144 @@ func TestWantedReadsTheFileLikeCore(t *testing.T) {
 		}
 	}
 }
+
+// Why nothing is scheduled, branch by branch (#274), as the status API shows it.
+func TestStepRecordsWhyNothingIsScheduled(t *testing.T) {
+	usage5m := `,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":9,"ephemeral_1h_input_tokens":0}}}`
+	base := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	for _, c := range []struct {
+		name    string
+		tr      string
+		now     string
+		off     bool   // the machine's default is off
+		file    string // a declaration under sessions/<id>: "heartbeat" (off) or "archived"
+		maxIdle time.Duration
+		want    string
+	}{
+		{"scheduled", base, "10:30:05", false, "", 0, ""},
+		{"off by default", base, "10:30:05", true, "", 0, IdleNotWanted},
+		{"declared off", base, "10:30:05", false, "heartbeat", 0, IdleNotWanted},
+		{"archived", base, "10:30:05", false, "archived", 0, IdleNotWanted},
+		{"5-minute cache", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage5m), "10:30:05", false, "", 0, IdleShortTTL},
+		{"expired", base, "13:00:05", false, "", 0, IdleExpired},
+		{"turn running", base + rec("user", "10:30:00", human), "10:30:05", false, "", 0, IdleTurnRunning},
+		{"max idle", base, "10:30:05", false, "", 20 * time.Minute, IdleMaxIdle},
+	} {
+		h, _, _ := fixture(t, c.tr, at(c.now))
+		h.MaxIdle = c.maxIdle
+		h.Default = !c.off
+		if c.file != "" {
+			dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "" // archived is an empty file; only its existence counts
+			if c.file == "heartbeat" {
+				body = "off\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, c.file), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var sent time.Time
+		h.step(&sent)
+		// A reason and a due time never come together: a reason says why there is none.
+		if st := h.Stats(); st.IdleReason != c.want || st.Next.IsZero() != (c.want != "") {
+			t.Errorf("%s: IdleReason = %q, Next = %v, want %q and a due time only without a reason", c.name, st.IdleReason, st.Next, c.want)
+		}
+	}
+}
+
+// Keepalive pausing on a 5-minute cache is logged once when it starts and once
+// when it ends, not on every step (#274).
+func TestStepLogsShortTTLChangesOnce(t *testing.T) {
+	usage := func(short, long int) string {
+		return fmt.Sprintf(`,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d}}}`, short, long)
+	}
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(9, 0))
+	h, _, write := fixture(t, tr, at("10:30:05"))
+	var logs []string
+	h.Log = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	var sent time.Time
+	h.step(&sent)
+	h.step(&sent)
+	tr += rec("user", "10:10:00", human) + rec("assistant", "10:10:05", usage(0, 9))
+	write(tr)
+	h.step(&sent)
+	// Another fresh scan with the same TTL is not a change.
+	write(tr + rec("user", "10:20:00", human) + rec("assistant", "10:20:05", usage(0, 9)))
+	h.step(&sent)
+	if len(logs) != 2 || !strings.Contains(logs[0], "5-minute cache") || !strings.Contains(logs[1], "1-hour cache") {
+		t.Errorf("logs = %q, want one 5-minute line then one 1-hour line", logs)
+	}
+}
+
+// Heartbeats since the last real record (#362): a person's prompt or another
+// channel's event sets the count back; a beat's own reply and tool results do not.
+func TestScanCountsBeatsSinceReal(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply) +
+		rec("user", "10:50:05", beat) + rec("assistant", "10:50:07", reply) +
+		rec("user", "11:40:05", beat) + rec("assistant", "11:40:06", toolUse) +
+		rec("user", "11:40:07", toolRes) + rec("assistant", "11:40:08", reply) +
+		rec("user", "12:30:05", beat) + rec("assistant", "12:30:07", reply)
+	if n := mustScan(t, tr).BeatsSinceReal; n != 3 {
+		t.Errorf("three beats after the prompt: %d, want 3", n)
+	}
+	if n := mustScan(t, tr+rec("user", "12:40:00", human)).BeatsSinceReal; n != 0 {
+		t.Errorf("after a prompt: %d, want 0", n)
+	}
+	if n := mustScan(t, tr+rec("user", "12:40:00", otherChan)+rec("user", "13:30:05", beat)).BeatsSinceReal; n != 1 {
+		t.Errorf("a beat after another channel's event: %d, want 1", n)
+	}
+	// A beat counts once it is in the transcript, answered or not.
+	if n := mustScan(t, tr+rec("user", "13:20:05", beat)).BeatsSinceReal; n != 4 {
+		t.Errorf("an unanswered fourth beat: %d, want 4", n)
+	}
+	h, _, write := fixture(t, tr, at("12:40:00"))
+	var sent time.Time
+	h.step(&sent)
+	if n := h.Stats().BeatsSinceReal; n != 3 {
+		t.Errorf("Stats().BeatsSinceReal = %d, want 3", n)
+	}
+	// Off by default: no more beats, but the count is the transcript's and stays.
+	h.Default = false
+	h.step(&sent)
+	if st := h.Stats(); st.IdleReason != IdleNotWanted || st.BeatsSinceReal != 3 {
+		t.Errorf("off by default: %+v, want not_wanted and still 3", st)
+	}
+	// Still off, and the transcript moves: a prompt sets the count back to 0.
+	write(tr + rec("user", "12:41:00", human))
+	h.step(&sent)
+	if n := h.Stats().BeatsSinceReal; n != 0 {
+		t.Errorf("a prompt while off: %d, want 0", n)
+	}
+
+	// Off from the first step (a serve that starts with the session off).
+	h2, _, _ := fixture(t, tr, at("12:40:00"))
+	h2.Default = false
+	var sent2 time.Time
+	h2.step(&sent2)
+	if n := h2.Stats().BeatsSinceReal; n != 3 {
+		t.Errorf("off from the start: %d, want 3", n)
+	}
+	// Off and the read fails: the count still stays.
+	if err := os.Remove(h2.file); err != nil {
+		t.Fatal(err)
+	}
+	h2.step(&sent2)
+	if st := h2.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleNotWanted {
+		t.Errorf("off and unreadable: %+v, want not_wanted and still 3", st)
+	}
+
+	// A read that fails keeps the last count instead of showing 0.
+	h3, _, _ := fixture(t, tr, at("12:40:00"))
+	var sent3 time.Time
+	h3.step(&sent3)
+	if err := os.Remove(h3.file); err != nil {
+		t.Fatal(err)
+	}
+	h3.step(&sent3)
+	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != "" || !st.Next.IsZero() {
+		t.Errorf("after a failed read: %+v, want the last count 3, no reason, no due time", st)
+	}
+}

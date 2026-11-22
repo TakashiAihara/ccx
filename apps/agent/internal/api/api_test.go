@@ -29,6 +29,7 @@ import (
 )
 
 const sid = "00000000-0000-4000-8000-000000000001"
+const offSid = "00000000-0000-4000-8000-000000000002"
 
 func write(t *testing.T, path, body string) {
 	t.Helper()
@@ -265,8 +266,14 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	now := time.Now().UTC()
 	write(t, filepath.Join(home, "projects", "-cwd", sid+".jsonl"),
 		`{"type":"user","timestamp":"`+now.Add(-2*time.Minute).Format(time.RFC3339Nano)+`","message":{"content":"hi"}}`+"\n"+
+			`{"type":"assistant","timestamp":"`+now.Add(-110*time.Second).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n"+
+			`{"type":"user","isMeta":true,"timestamp":"`+now.Add(-90*time.Second).Format(time.RFC3339Nano)+`","message":{"content":"<channel source=\"ccx\" kind=\"heartbeat\">\nheartbeat\n</channel>"}}`+"\n"+
 			`{"type":"assistant","timestamp":"`+now.Add(-time.Minute).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n")
 	write(t, filepath.Join(home, "sessions", sid, "label"), "lbl\n")
+	// A second session declared off: the reason nothing is scheduled shows up.
+	write(t, filepath.Join(home, "projects", "-cwd", offSid+".jsonl"),
+		`{"type":"assistant","timestamp":"`+now.Add(-time.Minute).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n")
+	write(t, filepath.Join(home, "sessions", offSid, "heartbeat"), "off\n")
 	write(t, filepath.Join(home, "sessions", sid, "role"), "worker\n")
 	write(t, filepath.Join(home, "sessions", sid, "heartbeat"), "on\n")
 
@@ -277,7 +284,9 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		SocketPath:        filepath.Join(work, "h.sock"),
 		ChannelSocketPath: filepath.Join(work, "c.sock"),
 		APISocketPath:     filepath.Join(work, "a.sock"),
-		Heartbeat:         config.Heartbeat{Interval: 50 * time.Minute},
+		// Default on, so offSid reads not_wanted from its own declaration, not
+		// from the machine's default.
+		Heartbeat: config.Heartbeat{Interval: 50 * time.Minute, Default: true},
 	}
 	col, err := collect.New(cfg, t.Logf)
 	if err != nil {
@@ -344,8 +353,26 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	if want := now.Add(49 * time.Minute); next.Sub(want).Abs() > time.Millisecond {
 		t.Errorf("next_at = %v, want %v", next, want)
 	}
-	if !ask().Heartbeat.GetRegistered() {
-		t.Error("registered = false after the channel connected")
+	if got := ask().Heartbeat; !got.GetRegistered() || got.GetBeatsSinceReal() != 1 || got.GetIdleReason() != "" {
+		t.Errorf("after the channel connected: %v, want registered, 1 beat since the prompt, no idle reason", got)
+	}
+	offConn, err := net.Dial("unix", cfg.ChannelSocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer offConn.Close()
+	_ = json.NewEncoder(offConn).Encode(heartbeat.Register{Session: offSid, ClaudeHome: home})
+	var reason string
+	for i := 0; i < 100 && reason == ""; i++ {
+		time.Sleep(20 * time.Millisecond)
+		res, err := client.GetSessionStatus(context.Background(), connect.NewRequest(&ccxv1.GetSessionStatusRequest{SessionId: offSid, ClaudeHome: home}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reason = res.Msg.Heartbeat.GetIdleReason()
+	}
+	if reason != heartbeat.IdleNotWanted {
+		t.Errorf("declared off: idle_reason = %q, want %q", reason, heartbeat.IdleNotWanted)
 	}
 	// Asked without a home (curl), a registered session is read from the home
 	// its channel registered, not the agent's own.

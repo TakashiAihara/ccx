@@ -58,7 +58,7 @@ ccx-agent status --session <id> [--json]
                    ask the running serve about one session and print JSON:
                    its declared state (archived / label / task / metadata),
                    its heartbeat (enabled / listening / declared / wanted /
-                   registered / next / sent),
+                   registered / next / sent / idleReason / beatsSinceReal),
                    and collect (spool backlog, last reach of the center).
 ```
 
@@ -89,6 +89,23 @@ handler on two listeners:
 Fields with no value come back as `null` (timestamps) or empty: `nextAt` is
 null whenever no heartbeat is scheduled, and `lastError` stays after a later
 success (compare `lastErrorAt` with `lastForwardedAt`).
+
+When `nextAt` is null, `idleReason` usually says why: `not_wanted` (declared off,
+archived, or no declaration with the machine's default off), `short_ttl` (the
+last request wrote a 5-minute cache; serve also logs when this starts and ends),
+`expired` (the cache is already gone), `turn_running`, or `max_idle`. It is empty
+when a heartbeat is scheduled or none of these applies: a pushed one has not
+landed yet, a push failed, the session has no answered request yet, its
+transcript could not be read, or it is not registered.
+
+`beatsSinceReal` is how many heartbeats reached the transcript since its last
+real record (a person's prompt, another channel's event, a message from another
+session); unlike `sent`, it is counted from the transcript, so it goes back to 0
+on a prompt and survives a serve restart. A read that fails keeps the last count
+(0 if serve has not read the transcript once since it started).
+
+`nextAt`, `idleReason` and `beatsSinceReal` are looked at again each minute, so
+they can be a minute behind.
 
 Connect unary is HTTP POST + JSON, so curl works too:
 
