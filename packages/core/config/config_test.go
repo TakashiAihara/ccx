@@ -23,10 +23,31 @@ func fixedHost(name string) func() (string, error) {
 	return func() (string, error) { return name, nil }
 }
 
+// noConfigDir holds no config.toml, so a test that names no CCX_CONFIG does not
+// read the developer's ~/.config/ccx/config.toml.
+var noConfigDir string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "ccx-config-test-")
+	if err != nil {
+		panic(err)
+	}
+	noConfigDir = dir
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 // env builds a getenv from a map, so a test states exactly what is set and
-// nothing leaks in from the real environment.
+// nothing leaks in from the real environment. Omitting CCX_CONFIG gives a
+// missing file; an explicit "" still falls through to the user's config dir.
 func env(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+	return func(k string) string {
+		if v, ok := m[k]; ok || k != "CCX_CONFIG" {
+			return v
+		}
+		return filepath.Join(noConfigDir, "config.toml")
+	}
 }
 
 func TestPrecedence_EnvBeatsGitBeatsFileBeatsDefault(t *testing.T) {
@@ -82,6 +103,38 @@ func TestMachine_DefaultsToHostname_ButIsOverridable(t *testing.T) {
 	}
 	if c2.Machine != "chosen" {
 		t.Errorf("machine override should win over hostname, got %q", c2.Machine)
+	}
+}
+
+func TestEnv_DoesNotReadTheHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "ccx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "ccx", "config.toml"), []byte("machine = \"from-home\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	c, err := load(env(nil), noGit, fixedHost("the-host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Machine != "the-host" {
+		t.Errorf("machine = %q, want the-host: env() let the home config.toml in", c.Machine)
+	}
+}
+
+func TestConfigPath_DefaultsToTheUserConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got, want := configPath(env(map[string]string{"CCX_CONFIG": ""})), filepath.Join(home, ".config", "ccx", "config.toml"); got != want {
+		t.Errorf("no XDG_CONFIG_HOME: got %q, want %q", got, want)
+	}
+	if got := configPath(env(map[string]string{"CCX_CONFIG": "", "XDG_CONFIG_HOME": "/xdg"})); got != "/xdg/ccx/config.toml" {
+		t.Errorf("with XDG_CONFIG_HOME: got %q", got)
+	}
+	if got := configPath(env(map[string]string{"CCX_CONFIG": "/c.toml"})); got != "/c.toml" {
+		t.Errorf("with CCX_CONFIG: got %q", got)
 	}
 }
 
