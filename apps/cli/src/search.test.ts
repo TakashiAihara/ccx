@@ -183,12 +183,15 @@ describe("search: embedded DuckDB over the store", () => {
       return JSON.parse(r.out) as unknown;
     };
     expect(await json(`SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts' OR 's3://x/transcripts/y' = ''`)).toEqual([{ n: "0" }]);
+    // The shape #325 is about: a query over `lines` whose filter holds a store path
+    expect(await json(`SELECT (SELECT count(*) FROM duckdb_views() WHERE view_name = 'transcripts') AS n FROM lines WHERE 's3://x/transcripts/y' <> '' LIMIT 1`)).toEqual([{ n: "0" }]);
     // The table in any case, inside a subquery, and in a later statement of several
     expect(await json(`SELECT (SELECT count(*) FROM TRANSCRIPTS) AS n`)).toEqual([{ n: "3" }]);
     expect(await json(`SET threads = 1; SELECT count(*) AS n FROM transcripts`)).toEqual([{ n: "3" }]);
     expect(await json(`SELECT count(*) AS n FROM main."transcripts"`)).toEqual([{ n: "3" }]);
     expect(await json(`PREPARE p AS SELECT count(*) AS n FROM transcripts; EXECUTE p`)).toEqual([{ n: "3" }]);
     expect(await json(`SELECT count(*) AS n FROM query_table('transcripts')`)).toEqual([{ n: "3" }]);
+    expect(await json(`SELECT n FROM query('SELECT count(*) AS n FROM transcripts')`)).toEqual([{ n: "3" }]);
     expect(((await json(`DESCRIBE transcripts`)) as { column_name: string }[]).map((r) => r.column_name)).toContain("session_id");
     // A statement that cannot bind before the one ahead of it runs (a table it creates, bound first) still gets the view
     expect(await json(`CREATE TEMP TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM t CROSS JOIN transcripts`)).toEqual([{ n: "3" }]);
