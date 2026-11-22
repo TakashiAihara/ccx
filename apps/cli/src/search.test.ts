@@ -190,7 +190,8 @@ describe("search: embedded DuckDB over the store", () => {
       { op: "push", machine: "host-a" },
       { op: "push", machine: "host-a" },
     ]);
-  });
+    // 9 runs of ccx at 350-650 ms of CPU each: on a loaded host their combined wall time passes bun's default 5 s (#363)
+  }, 20_000);
 
   test("only a query that names `transcripts` builds it: building it reads files to infer their types (#300)", async () => {
     const c = await openDuckDB(store);
