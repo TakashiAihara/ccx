@@ -295,7 +295,7 @@ export function registerTranscript(program: Command, VERSION: string): void {
       const cfg = await loadConfig();
       if (!cfg.transcript) throw new NoTranscriptStore();
       const { openDuckDB } = await import("./duckdb.ts");
-      const c = await openDuckDB(cfg.transcript, { session: o.session, withHistory: Boolean(o.sql), withTranscripts: /\btranscripts\b/i.test(o.sql ?? "") });
+      const c = await openDuckDB(cfg.transcript, { session: o.session, withHistory: Boolean(o.sql), withTranscripts: o.sql ? { sql: o.sql } : false });
       const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
       // 生の行 (`lines`) を探す。構造化した `transcripts` を to_json すると無いキーが null で
       // 全行に現れ、"null" がすべてに当たる。位置も同じ文字列で取るので snippet は必ず当たりを含む。

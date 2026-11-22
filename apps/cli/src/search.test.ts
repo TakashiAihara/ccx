@@ -175,6 +175,38 @@ describe("search: embedded DuckDB over the store", () => {
     expect((await c.runAndReadAll("SELECT count(*) AS n FROM lines")).getRowObjectsJson()).toEqual([{ n: "3" }]);
   });
 
+  test("--sql builds `transcripts` only when the query reads it as a table, not for the word in a path or a string (#325)", async () => {
+    const json = async (sql: string) => {
+      const r = await ccx("--sql", sql, "--json");
+      expect(r.err).toBe("");
+      expect(r.code).toBe(0);
+      return JSON.parse(r.out) as unknown;
+    };
+    expect(await json(`SELECT count(*) AS n FROM duckdb_views() WHERE view_name = 'transcripts' OR 's3://x/transcripts/y' = ''`)).toEqual([{ n: "0" }]);
+    // The shape #325 is about: a query over `lines` whose filter holds a store path
+    expect(await json(`SELECT (SELECT count(*) FROM duckdb_views() WHERE view_name = 'transcripts') AS n FROM lines WHERE 's3://x/transcripts/y' <> '' LIMIT 1`)).toEqual([{ n: "0" }]);
+    // The table in any case, inside a subquery, and in a later statement of several
+    expect(await json(`SELECT (SELECT count(*) FROM TRANSCRIPTS) AS n`)).toEqual([{ n: "3" }]);
+    expect(await json(`SET threads = 1; SELECT count(*) AS n FROM transcripts`)).toEqual([{ n: "3" }]);
+    expect(await json(`SELECT count(*) AS n FROM main."transcripts"`)).toEqual([{ n: "3" }]);
+    expect(await json(`PREPARE p AS SELECT count(*) AS n FROM transcripts; EXECUTE p`)).toEqual([{ n: "3" }]);
+    expect(await json(`SELECT count(*) AS n FROM query_table('transcripts')`)).toEqual([{ n: "3" }]);
+    expect(await json(`SELECT n FROM query('SELECT count(*) AS n FROM transcripts')`)).toEqual([{ n: "3" }]);
+    expect(((await json(`DESCRIBE transcripts`)) as { column_name: string }[]).map((r) => r.column_name)).toContain("session_id");
+    // A statement that cannot bind before the one ahead of it runs (a table it creates, bound first) still gets the view
+    expect(await json(`CREATE TEMP TABLE t AS SELECT 1 AS a; SELECT count(*) AS n FROM t CROSS JOIN transcripts`)).toEqual([{ n: "3" }]);
+    // A name an earlier statement sets binds as NULL (a Binder Error), and still gets the view
+    expect(await json(`SET VARIABLE t = 'transcripts'; SELECT count(*) AS n FROM query_table(getvariable('t'))`)).toEqual([{ n: "3" }]);
+    // Errors in the query are the run's to report, whether or not the view was built
+    const bad = await ccx("--sql", "SELECT count(*) FROM no_such_table WHERE 'transcripts' = ''");
+    expect(bad.code).not.toBe(0);
+    expect(bad.err).toContain("Table with name no_such_table does not exist");
+    const unparsable = await ccx("--sql", "SELEC * FROM transcripts");
+    expect(unparsable.code).not.toBe(0);
+    expect(unparsable.err).toContain(`syntax error at or near "SELEC"`);
+    // 13 runs of ccx: past bun's default 5 s on a loaded host
+  }, 20_000);
+
   test("building `transcripts` infers its types from a sample of files, not from every transcript in the store (#300)", async () => {
     // Inferring from every file passed 3 GB on 1304 files before the query ran. A broken file past the sample
     // stands in for "a file the inference read": building the view (which samples) must not touch it.
