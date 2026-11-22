@@ -352,7 +352,11 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// attachment of type queued_command, its text in prompt. Raw for the same
 			// reason as toolUseResult: another attachment's shape must not drop the line.
 			Attachment json.RawMessage `json:"attachment"`
-			Message    struct {
+			// A queue-operation record: Claude Code's own log of queued input, the
+			// notification text in the top-level content.
+			Operation    string          `json:"operation"`
+			QueueContent json.RawMessage `json:"content"`
+			Message      struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -450,6 +454,15 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
 				s.ShortTTL = cc.Long == 0
 			}
+		case "queue-operation":
+			// An enqueued notification ends its task even when the process ends before
+			// it is delivered (235 task ids on d1 were ended only here, 2026-11-22).
+			// Nothing else about the session changes.
+			var q string
+			if rec.Operation == "enqueue" && json.Unmarshal(rec.QueueContent, &q) == nil {
+				endNotified(s.Background, q)
+			}
+			continue
 		case "attachment":
 			// Only the end of background work is read from it. A queued_command can
 			// also carry a typed prompt, a channel event or a peer message; it is not

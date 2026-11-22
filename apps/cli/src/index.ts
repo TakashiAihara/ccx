@@ -532,7 +532,8 @@ session
       // 区別がつかなくなる
       const mark = e.parsed ? "" : "  (unparsed)";
       // 宣言状態の event は hook 名を持たない。何の event かは producer で言う
-      const name = e.producer === Producer.CCX_SESSION_STATE ? "ccx.session.state" : e.hookEventName || "?";
+      const name =
+        e.producer === Producer.CCX_SESSION_STATE ? "ccx.session.state" : e.producer === Producer.CCX_AGENT_REAPED ? "ccx.agent.reaped" : e.hookEventName || "?";
       console.log(`${at}  ${name}${mark}`);
       if (o.payload) console.log(`    ${new TextDecoder().decode(e.payload)}`);
     }

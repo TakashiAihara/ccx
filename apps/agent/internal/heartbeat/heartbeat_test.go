@@ -1164,3 +1164,27 @@ func TestScanTranscriptKeepsAnAttachmentOfAnotherShape(t *testing.T) {
 		t.Errorf("LastRequest = %v, want 10:00:00 (the chain through the attachment)", s.LastRequest)
 	}
 }
+
+// An enqueued notification (a queue-operation record, keys seen on d1:
+// content, operation, sessionId, timestamp, type) ends its task; a removal or a
+// record without content ends nothing and changes nothing else.
+func TestScanTranscriptEndsBackgroundWorkFromAnEnqueuedNotification(t *testing.T) {
+	bg := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"started"}]}`
+	done := `<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>`
+	head := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) + rec("user", "10:00:02", bg)
+	qop := func(op, content string) string {
+		return `{"type":"queue-operation","operation":"` + op + `","sessionId":"s","timestamp":"2026-09-23T10:05:00.000Z"` + content + "}\n"
+	}
+	if s := mustScan(t, head+qop("remove", `,"content":"`+done+`"`)+qop("enqueue", "")); running(s) != "bash1" {
+		t.Errorf("a removal or an empty enqueue ended work: running %q", running(s))
+	}
+	before := mustScan(t, head)
+	s := mustScan(t, head+qop("enqueue", `,"content":"`+done+`"`))
+	if running(s) != "" {
+		t.Errorf("an enqueued completion left %q running", running(s))
+	}
+	s.Background, before.Background = nil, nil
+	if fmt.Sprint(s) != fmt.Sprint(before) {
+		t.Errorf("an enqueued notification changed more than Background:\n got %+v\nwant %+v", s, before)
+	}
+}

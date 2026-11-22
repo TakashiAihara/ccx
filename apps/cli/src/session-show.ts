@@ -53,7 +53,7 @@ export class AmbiguousSession extends Error {
  * drop every event and silently stop refusing.
  */
 export function hookStreams(events: readonly (Stream & { producer: Producer })[]): Stream[] {
-  return streamsOf(events.filter((e) => e.producer !== Producer.CCX_SESSION_STATE));
+  return streamsOf(events.filter((e) => e.producer !== Producer.CCX_SESSION_STATE && e.producer !== Producer.CCX_AGENT_REAPED));
 }
 
 /** Distinct (machine, user) pairs, sorted so the candidate list reads the same on every run */
