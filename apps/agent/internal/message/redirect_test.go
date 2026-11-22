@@ -10,7 +10,8 @@ import (
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
-// A center that redirects must not get the token carried to the redirect's target (#306).
+// A center that redirects must not get the call, and so the token, carried to
+// the redirect's target (#306). hubauth's own test checks the header itself.
 func TestCenterCallDoesNotFollowRedirect(t *testing.T) {
 	r := testcenter.StartRedirector()
 	defer r.Close()
