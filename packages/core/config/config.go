@@ -401,42 +401,73 @@ const minReapInterval = 10 * time.Second
 // reapSettings resolves [reap] from env and the file only: git config is being
 // taken out of the resolution (kaneo ccx#24), so a new setting does not start
 // there. Any unusable value turns reaping off with every reason in Err; a typo
-// here must not stop anything else.
+// here must not stop anything else. A file value of the wrong type is unusable
+// whether or not an env value overrides it, and a CCX_REAP that is not a bool is
+// too: reaping signals processes, so a setting that cannot be read is off.
 func reapSettings(getenv func(string) string, fileEnabled, fileInterval, fileKeepMin any) Reap {
 	r := Reap{Interval: time.Minute}
 	var errs []error
-	text := func(v any) string {
-		if v == nil {
-			return ""
+
+	interval := strings.TrimSpace(getenv("CCX_REAP_INTERVAL"))
+	switch v := fileInterval.(type) {
+	case nil:
+	case string:
+		if strings.TrimSpace(v) == "" {
+			errs = append(errs, errors.New("reap: interval is empty: want a duration like 1m"))
+		} else if interval == "" {
+			interval = strings.TrimSpace(v)
 		}
-		return strings.TrimSpace(fmt.Sprint(v))
+	default:
+		errs = append(errs, fmt.Errorf("reap: interval %v: want a duration in a string, like \"1m\"", v))
 	}
-	if v := pick(strings.TrimSpace(getenv("CCX_REAP_INTERVAL")), text(fileInterval)); v != "" {
-		d, err := time.ParseDuration(v)
+	if interval != "" {
+		d, err := time.ParseDuration(interval)
 		if err != nil || d < minReapInterval {
-			errs = append(errs, errors.New("reap: interval "+v+": want a duration of at least "+minReapInterval.String()+", like 1m"))
+			errs = append(errs, errors.New("reap: interval "+interval+": want a duration of at least "+minReapInterval.String()+", like 1m"))
 		} else {
 			r.Interval = d
 		}
 	}
-	if v := pick(strings.TrimSpace(getenv("CCX_REAP_KEEP_MIN")), text(fileKeepMin)); v != "" {
-		n, err := strconv.Atoi(v)
+
+	keepMin := strings.TrimSpace(getenv("CCX_REAP_KEEP_MIN"))
+	switch v := fileKeepMin.(type) {
+	case nil:
+	case int64:
+		if keepMin == "" {
+			keepMin = strconv.FormatInt(v, 10)
+		}
+	default:
+		errs = append(errs, fmt.Errorf("reap: keepMin %v: want an integer", v))
+	}
+	if keepMin != "" {
+		n, err := strconv.Atoi(keepMin)
 		if err != nil || n < 0 {
-			errs = append(errs, errors.New("reap: keepMin "+v+": want a count of 0 or more"))
+			errs = append(errs, errors.New("reap: keepMin "+keepMin+": want a count of 0 or more"))
 		} else {
 			r.KeepMin = n
 		}
 	}
-	var enabled *bool
-	switch b := fileEnabled.(type) {
+
+	enabled := false
+	if v := strings.TrimSpace(getenv("CCX_REAP")); v != "" {
+		if b, ok := parseBool(v); ok {
+			enabled = b
+		} else {
+			errs = append(errs, errors.New("reap: enabled "+v+": want true or false"))
+		}
+	}
+	switch v := fileEnabled.(type) {
 	case nil:
 	case bool:
-		enabled = &b
+		if strings.TrimSpace(getenv("CCX_REAP")) == "" {
+			enabled = v
+		}
 	default:
-		errs = append(errs, fmt.Errorf("reap: enabled %v: want true or false", b))
+		errs = append(errs, fmt.Errorf("reap: enabled %v: want true or false", v))
 	}
+
 	r.Err = errors.Join(errs...)
-	r.Enabled = r.Err == nil && fileToggle(getenv, "CCX_REAP", enabled, false)
+	r.Enabled = r.Err == nil && enabled
 	return r
 }
 

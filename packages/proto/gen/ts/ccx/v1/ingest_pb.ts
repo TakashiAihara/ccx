@@ -184,8 +184,8 @@ export enum Producer {
   CLAUDE_CODE_HOOK = 1,
 
   /**
-   * `ccx session mark / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
-   * `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
+   * `ccx session mark / pin / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
+   * `{"session_id": "...", "state": {"archived": bool, "pinned": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
    * "metadata": {...}}, "rev": <ms>}`。label の履歴 (#169) は送らない (保存先の state.json だけが持つ)。
    * 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
    * session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。

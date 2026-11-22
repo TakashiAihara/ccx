@@ -957,3 +957,37 @@ func TestScanTranscriptBackgroundIgnoresTextInsideAnEvent(t *testing.T) {
 		t.Errorf("Background = %v, want x ended by the expiry notice, z left", s.Background)
 	}
 }
+
+// One record can carry several notifications. Each ends only its own task, and a
+// body's <result> (a command's output) can quote another task's id and status.
+func TestScanTranscriptBackgroundReadsEachNotificationOnItsOwn(t *testing.T) {
+	startBash := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"running"}]}`
+	startMon := `,"toolUseResult":{"taskId":"mon1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	startOther := `,"toolUseResult":{"backgroundTaskId":"other"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"running"}]}`
+	head := rec("user", "10:00:00", startBash) + rec("user", "10:00:10", startMon) + rec("user", "10:00:20", startOther)
+
+	monEventThenBashDone := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n<event>line</event>\n</task-notification>\n<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>"}`
+	s := mustScan(t, head+rec("user", "10:01:00", monEventThenBashDone))
+	if _, ended := s.Background["bash1"]; ended || len(s.Background) != 2 || s.Background["mon1"].IsZero() || s.Background["other"].IsZero() {
+		t.Errorf("Background = %v, want only bash1 ended: the Monitor event block (no status) ends nothing", s.Background)
+	}
+
+	// The status in the first block is not applied to the id in the second.
+	statusThenBareID := `,"message":{"role":"user","content":"<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>\n<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n</task-notification>"}`
+	s = mustScan(t, head+rec("user", "10:01:00", statusThenBareID))
+	if _, ended := s.Background["mon1"]; !ended || len(s.Background) != 2 {
+		t.Errorf("Background = %v, want only bash1 ended: a block's status ends only that block's ids", s.Background)
+	}
+
+	quotedInResult := `,"message":{"role":"user","content":"<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n<result>other said <task-id>other</task-id><status>completed</status></result>\n</task-notification>"}`
+	s = mustScan(t, head+rec("user", "10:01:00", quotedInResult))
+	if _, ended := s.Background["bash1"]; ended || len(s.Background) != 2 || s.Background["other"].IsZero() {
+		t.Errorf("Background = %v, want only bash1 ended: a <result> quoting another task ends nothing else", s.Background)
+	}
+
+	expiryBlock := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<event>[Monitor expired after 30m with no events delivered.]</event>\n</task-notification>\n<task-notification>\n<task-id>bash1</task-id>\n<summary>progress</summary>\n</task-notification>"}`
+	s = mustScan(t, head+rec("user", "10:01:00", expiryBlock))
+	if _, ended := s.Background["mon1"]; ended || len(s.Background) != 2 || s.Background["bash1"].IsZero() {
+		t.Errorf("Background = %v, want only mon1 ended: an expiry in one block ends only that block's ids", s.Background)
+	}
+}

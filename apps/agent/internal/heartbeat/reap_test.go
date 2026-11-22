@@ -434,9 +434,7 @@ func TestRegistrationRecordsOnlyAClaudePid(t *testing.T) {
 	e.procEntry(100, "claude", 1, 777, 10)
 	e.procEntry(101, "bash", 1, 778, 10)
 	e.procEntry(1, "claude", 0, 779, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = e.c.Run(ctx) }()
+	runConcern(t, e)
 
 	register := func(id, pid string) {
 		var conn net.Conn
@@ -690,15 +688,20 @@ func TestReapRechecksKeepMinRightBeforeTheSignal(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	e.session(b, 300, goodStart, answered("2", reapNow.Add(-time.Minute)))
 	// b's channel closes while a's process tree is being measured (after the first
-	// count, before the signal): the readdir of the fake /proc is the hook.
+	// count, before the signal); beforeSignal stands for that moment.
 	e.c.kill = func(pid int) error { t.Errorf("signalled %d with nobody else left running", pid); return nil }
+	hooked := 0
 	e.c.beforeSignal = func() {
+		hooked++
 		e.c.mu.Lock()
 		delete(e.c.registered, b)
 		delete(e.c.channels, b)
 		e.c.mu.Unlock()
 	}
 	e.c.reapOnce(reapNow)
+	if hooked != 1 {
+		t.Fatalf("beforeSignal ran %d times, want 1: the window was never exercised", hooked)
+	}
 	if e.reapedFile(a) != "" {
 		t.Errorf("a was recorded as reaped: %q", e.reapedFile(a))
 	}
@@ -737,8 +740,12 @@ func TestReapVerifiesThePidAfterMeasuring(t *testing.T) {
 	const id = "00000000-0000-4000-8000-000000000001"
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
-	e.c.beforeSignal = func() { e.procEntry(100, "bash", 1, goodStart+5, 10) }
+	hooked := 0
+	e.c.beforeSignal = func() { hooked++; e.procEntry(100, "bash", 1, goodStart+5, 10) }
 	e.c.reapOnce(reapNow)
+	if hooked != 1 {
+		t.Fatalf("beforeSignal ran %d times, want 1", hooked)
+	}
 	if len(e.killed) != 0 || e.reapedFile(id) != "" {
 		t.Errorf("signalled %v, reaped %q: the pid was recycled during the walk", e.killed, e.reapedFile(id))
 	}
@@ -752,9 +759,7 @@ func TestRegistrationSaysWhyASessionWillNotBeReaped(t *testing.T) {
 	e.procEntry(100, "claude", 1, 777, 10)
 	e.procEntry(101, "bash", 1, 778, 10)
 	e.procEntryState(102, "claude", "Z", 1, 779, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = e.c.Run(ctx) }()
+	runConcern(t, e)
 	const a, b, c, d, z = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-00000000000c", "00000000-0000-4000-8000-00000000000d", "00000000-0000-4000-8000-00000000000e"
 	registerChannel(t, e, a, "100")
 	registerChannel(t, e, b, "101")
@@ -784,9 +789,7 @@ func TestRegistrationReadsNoPidWhenReapingIsOff(t *testing.T) {
 	e.c.reap.Enabled = false
 	e.c.socketPath = testsock.Path(t, "ch.sock")
 	e.procEntry(100, "claude", 1, 777, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = e.c.Run(ctx) }()
+	runConcern(t, e)
 	const id = "00000000-0000-4000-8000-00000000000a"
 	registerChannel(t, e, id, "100")
 	registerChannel(t, e, "00000000-0000-4000-8000-00000000000b", "abc")
@@ -896,7 +899,9 @@ func TestReapSkipsACandidateThatUnregisteredDuringTheWalk(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	e.procEntry(300, "claude", 1, goodStart, 10)
 	first := true
+	hooked := 0
 	e.c.beforeSignal = func() {
+		hooked++
 		if first {
 			first = false
 			e.c.mu.Lock()
@@ -906,6 +911,9 @@ func TestReapSkipsACandidateThatUnregisteredDuringTheWalk(t *testing.T) {
 		}
 	}
 	e.c.reapOnce(reapNow)
+	if hooked != 2 {
+		t.Fatalf("beforeSignal ran %d times, want 2 (once per candidate walked)", hooked)
+	}
 	if fmt.Sprint(e.killed) != "[300]" || e.reapedFile(a) != "" {
 		t.Errorf("signalled %v, a=%q: want only 300", e.killed, e.reapedFile(a))
 	}
@@ -928,5 +936,129 @@ func TestReapSignalsOnceEvenWhenTheRecordCannotBeWritten(t *testing.T) {
 	}
 	if !strings.Contains(e.logText(), "reap: writing the record of "+id) {
 		t.Errorf("log %q: want the failed write said", e.logText())
+	}
+}
+
+// runConcern starts the concern's Run and, when the test ends, stops it and waits
+// for it to return, so nothing it started outlives the test's temp directories.
+func runConcern(t *testing.T, e *reapEnv) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = e.c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+// What was true when the candidate list was made is checked again after the walk:
+// a pin, new use of the session, or nothing at all having changed.
+func TestReapRechecksTheSessionAfterTheWalk(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for name, tc := range map[string]struct {
+		change func(e *reapEnv)
+		reaped bool
+	}{
+		"nothing changed": {change: func(*reapEnv) {}, reaped: true},
+		"pinned during the walk": {change: func(e *reapEnv) {
+			_ = os.MkdirAll(filepath.Join(e.home, "sessions", id), 0o700)
+			_ = os.WriteFile(filepath.Join(e.home, "sessions", id, "pinned"), nil, 0o600)
+		}},
+		"used during the walk": {change: func(e *reapEnv) {
+			f, err := os.OpenFile(filepath.Join(e.home, "projects", "-cwd", id+".jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			_, _ = f.WriteString(answered("2", reapNow.Add(-time.Minute)))
+		}},
+		"pid file now names another session": {change: func(e *reapEnv) { e.pidFile(100, "00000000-0000-4000-8000-0000000000ff") }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+			e.procEntry(100, "claude", 1, goodStart, 10)
+			hooked := 0
+			e.c.beforeSignal = func() { hooked++; tc.change(e) }
+			e.c.reapOnce(reapNow)
+			if hooked != 1 {
+				t.Fatalf("beforeSignal ran %d times, want 1", hooked)
+			}
+			if got := len(e.killed) == 1; got != tc.reaped {
+				t.Errorf("signalled %v, want stopped=%v", e.killed, tc.reaped)
+			}
+		})
+	}
+}
+
+// A candidate that is not its process's session is dropped before the walk of
+// /proc, so it costs nothing on each tick.
+func TestReapDoesNotWalkProcForASessionItDoesNotOwn(t *testing.T) {
+	e := newReapEnv(t)
+	const id = "00000000-0000-4000-8000-000000000001"
+	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	e.pidFile(100, "00000000-0000-4000-8000-0000000000ff")
+	hooked := 0
+	e.c.beforeSignal = func() { hooked++ }
+	e.c.reapOnce(reapNow)
+	if hooked != 0 || len(e.killed) != 0 {
+		t.Errorf("beforeSignal ran %d times (the walk happened), signalled %v: want neither", hooked, e.killed)
+	}
+}
+
+// A channel that reconnects for a process already signalled starts out signalled,
+// so keepMin does not count it as running.
+func TestRegistrationOfAnAlreadyReapedProcessStartsSignalled(t *testing.T) {
+	e := newReapEnv(t)
+	e.c.socketPath = testsock.Path(t, "ch.sock")
+	e.c.reap.Interval = 24 * time.Hour
+	e.procEntry(100, "claude", 1, 777, 10)
+	e.procEntry(200, "claude", 1, 888, 10)
+	const reaped, fresh = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"
+	dir := filepath.Join(e.home, "sessions", reaped)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "reaped"), []byte(`{"pid":100,"start":777}`+"\n"), 0o600)
+	runConcern(t, e)
+	registerChannel(t, e, reaped, "100")
+	registerChannel(t, e, fresh, "200")
+	e.c.mu.Lock()
+	defer e.c.mu.Unlock()
+	if !e.c.registered[reaped].signalled.Load() || e.c.registered[fresh].signalled.Load() {
+		t.Errorf("signalled: reaped=%v fresh=%v, want true and false", e.c.registered[reaped].signalled.Load(), e.c.registered[fresh].signalled.Load())
+	}
+	if n := e.c.running(); n != 1 {
+		t.Errorf("running = %d, want 1 (the reaped process is on its way out)", n)
+	}
+}
+
+// The idle time in the log counts from the same point the expiry test did: the
+// process start when that is later than the last real use, and never from a zero
+// time when the transcript has no real record.
+func TestReapLogsIdleFromTheSameBaselineAsTheExpiryTest(t *testing.T) {
+	old := reapNow.Add(-3 * time.Hour)
+	beatOnly := tr(
+		fmt.Sprintf(`{"type":"user","uuid":"b","isMeta":true,"timestamp":%q,"message":{"content":"<channel source=\"ccx\" kind=\"heartbeat\">heartbeat</channel>"}}`, ts(old)),
+		assistantAt("a", "b", old.Add(time.Second), ""),
+	)
+	for name, tc := range map[string]struct {
+		transcript string
+		started    time.Duration
+		maxIdle    time.Duration
+		want       string
+	}{
+		"process started after the last real use": {transcript: answered("1", old), started: 90 * time.Minute, maxIdle: 30 * time.Minute, want: "idle 1h30m0s)"},
+		"no real record in the transcript":        {transcript: beatOnly, started: 150 * time.Minute, maxIdle: 30 * time.Minute, want: "idle 2h30m0s)"},
+		"process started before the last use":     {transcript: answered("1", old), started: 5 * time.Hour, maxIdle: 30 * time.Minute, want: "idle 2h59m50s)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			start := ticksAgo(tc.started)
+			h := e.session("00000000-0000-4000-8000-000000000001", 100, start, tc.transcript)
+			h.MaxIdle = tc.maxIdle
+			e.procEntry(100, "claude", 1, start, 10)
+			e.c.reapOnce(reapNow)
+			if len(e.killed) != 1 || !strings.Contains(e.logText(), tc.want) {
+				t.Errorf("signalled %v, log %q, want a stop logged with %q", e.killed, e.logText(), tc.want)
+			}
+		})
 	}
 }

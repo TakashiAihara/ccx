@@ -272,6 +272,9 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 			c.log("reap: session %s registered pid %d, which is not a claude process; it will not be reaped", reg.Session, pid)
 		} else {
 			h.pid, h.pidStart = pid, start
+			// A reconnect of a process that was already signalled starts out signalled,
+			// so keepMin does not count it as running.
+			h.reapedBefore()
 		}
 	}
 	c.mu.Lock()

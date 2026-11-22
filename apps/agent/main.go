@@ -235,6 +235,10 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 		srv.Heartbeat = h
 		// The channel connections it holds are how a message reaches a Claude Code session (#138).
 		msgs.Claude = message.NewClaude(h)
+		// An expired session is one keepalive has let go of, which is what maxIdle sets.
+		if cfg.Reap.Enabled && cfg.Heartbeat.MaxIdle <= 0 {
+			logger("reap on but the heartbeat maxIdle is off: nothing will be reaped")
+		}
 	} else if cfg.Reap.Enabled {
 		logger("reap on but the heartbeat concern is off: nothing will be reaped")
 	}

@@ -470,6 +470,17 @@ describe("session state events (producer 2, #127)", () => {
   });
 });
 
+describe("ccx-agent の回収の記録 (PRODUCER_CCX_AGENT_REAPED、docs/design/reap.md)", () => {
+  test("events に session 付きで積まれ、hook としては数えない", () => {
+    const reaped = { session_id: "s", reaped: { at: "2026-11-22T00:00:00Z", reason: "expired", pid: 100, pssBytes: 1, start: 5 } };
+    expect(ingest(db, [ev({ producer: Producer.CCX_AGENT_REAPED, payload: reaped })])).toBe(1);
+    const got = listEvents(db, { includePayload: false, limit: 10, sessionId: "s" });
+    expect(got.map((e) => e.producer)).toEqual([Producer.CCX_AGENT_REAPED]);
+    // セッションの一覧 (hook の統計) には出ない
+    expect(listSessions(db, { limit: 10 }).map((r) => r.sessionId)).not.toContain("s");
+  });
+});
+
 describe("listSessions の宣言状態の引き方 (#307)", () => {
   test("session ごとの宣言状態は宣言状態だけの部分 index で引き、hook の event をたどらない", () => {
     ingest(db, [

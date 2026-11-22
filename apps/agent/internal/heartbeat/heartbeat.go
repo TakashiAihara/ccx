@@ -459,19 +459,25 @@ func parseToolResult(raw json.RawMessage) toolResultFields {
 
 var (
 	taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+	// One record can carry several notifications; each is read on its own.
+	notificationBlock = regexp.MustCompile(`(?s)<task-notification>(.*?)</task-notification>`)
 	// Text inside these is a command's output or a tool's own words, not the
-	// notification's structure: a Monitor event can quote anything.
+	// notification's structure: it can quote anything, task ids and tags included.
+	// A literal "</event>" (or "</summary>", "</result>") inside such output ends
+	// the body early and is out of scope: nothing is known to write one.
 	notificationEvent   = regexp.MustCompile(`(?s)<event>(.*?)</event>`)
 	notificationSummary = regexp.MustCompile(`(?s)<summary>.*?</summary>`)
+	notificationResult  = regexp.MustCompile(`(?s)<result>.*?</result>`)
 )
 
 // trackBackground records background work starting or ending in one user record.
 // Starts are what the tool result says it launched (a Bash's backgroundTaskId,
 // a Monitor's taskId, an async Agent's agentId). Ends are a TaskStop's task_id,
 // or a <task-notification> (the record must start with it, as for channelTag)
-// whose own <status> is present (not one inside an <event> or <summary>), or a
-// Monitor's expiry (an event whose text starts with "[Monitor expired"): a
-// Monitor's other events end nothing, and their text names no task.
+// whose own <status> is present (not one inside an <event>, <summary> or
+// <result>), or a Monitor's expiry (an event whose text starts with
+// "[Monitor expired"). A notification ends only its own task ids: a Monitor's
+// other events end nothing, and text quoted inside a body names no task.
 func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stopped string, content json.RawMessage, ts time.Time) {
 	for _, id := range []string{bash, monitor} {
 		if id != "" {
@@ -488,18 +494,23 @@ func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stop
 	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<task-notification>") {
 		return
 	}
-	expired := false
-	for _, m := range notificationEvent.FindAllStringSubmatch(s, -1) {
-		if strings.HasPrefix(strings.TrimSpace(m[1]), "[Monitor expired") {
-			expired = true
+	for _, block := range notificationBlock.FindAllStringSubmatch(s, -1) {
+		expired := false
+		for _, m := range notificationEvent.FindAllStringSubmatch(block[1], -1) {
+			if strings.HasPrefix(strings.TrimSpace(m[1]), "[Monitor expired") {
+				expired = true
+			}
 		}
-	}
-	s = notificationSummary.ReplaceAllString(notificationEvent.ReplaceAllString(s, ""), "")
-	if !strings.Contains(s, "<status>") && !expired {
-		return
-	}
-	for _, m := range taskIDs.FindAllStringSubmatch(s, -1) {
-		delete(bg, m[1])
+		body := block[1]
+		for _, quoted := range []*regexp.Regexp{notificationEvent, notificationSummary, notificationResult} {
+			body = quoted.ReplaceAllString(body, "")
+		}
+		if !strings.Contains(body, "<status>") && !expired {
+			continue
+		}
+		for _, m := range taskIDs.FindAllStringSubmatch(body, -1) {
+			delete(bg, m[1])
+		}
 	}
 }
 

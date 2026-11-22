@@ -177,11 +177,7 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	if !ok || s.LastAssistant.IsZero() {
 		return Scan{}, false
 	}
-	idleSince := s.LastReal
-	if procStart.After(idleSince) {
-		idleSince = procStart
-	}
-	if h.MaxIdle <= 0 || now.Sub(idleSince) <= h.MaxIdle {
+	if h.MaxIdle <= 0 || now.Sub(idleSince(s, procStart)) <= h.MaxIdle {
 		return Scan{}, false
 	}
 	last := s.LastRequest
@@ -201,6 +197,17 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 		return Scan{}, false
 	}
 	return s, true
+}
+
+// idleSince is when the session was last left alone from: the last real use, or
+// the process start when that is later (a resume has not been idle since the
+// transcript's last record). Never the zero time: a scan with no real record
+// would make the idle time overflow.
+func idleSince(s Scan, procStart time.Time) time.Time {
+	if procStart.After(s.LastReal) {
+		return procStart
+	}
+	return s.LastReal
 }
 
 // reapedBefore: the session's reaped file already has a line for this very
@@ -231,10 +238,13 @@ func (h *Heartbeat) reapedBefore() bool {
 // ownsPID: the pid is still the claude that registered, and Claude Code's own
 // record of that process (`<home>/sessions/<pid>.json`) names this session. After
 // /clear the same process runs a new session id while its channel stays
-// registered under the old one, so the pid file is how the two are told apart.
-// Whether Claude Code rewrites sessionId there on /clear is not verified: if it
-// does not, a session cleared and idle is kept until its process ends, and if it
-// does, the old id stops matching here. Anything unreadable keeps the session.
+// registered under the old one, and the pid file is how the two are told apart.
+// Measured on Claude Code 2.1.330 (d1, 2026-11-22, a throwaway interactive
+// session): after /clear the file's sessionId changed to the new id within 5
+// seconds, so the old registration stops matching and is kept. This depends on
+// Claude Code rewriting the field: a version that stopped would leave the old id
+// matching, and the reaper would stop the process now running the new session.
+// Anything unreadable keeps the session.
 func (c *Concern) ownsPID(root string, h *Heartbeat) bool {
 	if start, ok := claudeProc(root, h.pid); !ok || start != h.pidStart {
 		return false
@@ -333,13 +343,24 @@ func (c *Concern) reapOnce(now time.Time) {
 	})
 	for _, cd := range cands {
 		h := cd.h
+		procStart := startWallClock(btime, h.pidStart)
+		// Before the walk, so a session that is not this process's (after /clear) or
+		// has no readable pid file does not cost a walk of /proc on every tick.
+		if !c.ownsPID(root, h) {
+			continue
+		}
 		pss := treePSS(root, h.pid)
 		if c.beforeSignal != nil {
 			c.beforeSignal()
 		}
-		// Checked after the slow part, right before the signal, to keep the window
-		// in which the pid could be recycled small.
+		// Everything is looked at again after the slow part, right before the signal,
+		// which keeps the window small: the process may have been replaced, the
+		// session pinned or used, or the transcript moved on while the walk ran.
 		if !c.ownsPID(root, h) {
+			continue
+		}
+		fresh, ok := h.expired(now, procStart)
+		if !ok {
 			continue
 		}
 		// Re-counted under the lock: a session may have gone, or been signalled, since
@@ -363,15 +384,15 @@ func (c *Concern) reapOnce(now time.Time) {
 			c.log("reap: signalling %s (pid %d): %v", h.SessionID, h.pid, err)
 			continue
 		}
-		c.record(h, cd.scan, now, pss)
+		c.record(h, now.Sub(idleSince(fresh, procStart)), now, pss)
 		return
 	}
 }
 
 // record leaves the three traces of a stop. The local file comes first and does
 // not depend on the center; a failure of one is logged and does not stop the others.
-func (c *Concern) record(h *Heartbeat, s Scan, now time.Time, pss int64) {
-	c.log("reap: stopped %s (expired, %d MiB, idle %v)", h.SessionID, pss>>20, now.Sub(s.LastReal).Round(time.Second))
+func (c *Concern) record(h *Heartbeat, idle time.Duration, now time.Time, pss int64) {
+	c.log("reap: stopped %s (expired, %d MiB, idle %v)", h.SessionID, pss>>20, idle.Round(time.Second))
 	rec := reapRecord{At: now.UTC().Format(time.RFC3339), Reason: "expired", PID: h.pid, PSSBytes: pss, Start: h.pidStart}
 	line, err := json.Marshal(rec)
 	if err != nil {

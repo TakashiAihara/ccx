@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
 	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/packages/core/config"
+	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
 // assembleConfig is a Config with collect and the heartbeat on and no hub, so
@@ -203,15 +205,39 @@ func TestAssembleWiresTheReapRecordToCollect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var h *heartbeat.Concern
 			for _, c := range concerns {
-				if h, ok := c.(*heartbeat.Concern); ok {
-					if (h.Record != nil) != collectOn {
-						t.Errorf("Record set = %v with collect=%v", h.Record != nil, collectOn)
-					}
-					return
+				if hc, ok := c.(*heartbeat.Concern); ok {
+					h = hc
 				}
 			}
-			t.Fatal("no heartbeat concern built")
+			if h == nil {
+				t.Fatal("no heartbeat concern built")
+			}
+			if !collectOn {
+				if h.Record != nil {
+					t.Error("Record is set with collect off")
+				}
+				return
+			}
+			if h.Record == nil {
+				t.Fatal("Record is not set with collect on")
+			}
+			const payload = `{"session_id":"s","reaped":{"pid":7}}`
+			if err := h.Record([]byte(payload)); err != nil {
+				t.Fatal(err)
+			}
+			spool, err := collect.OpenSpool(cfg.SpoolDir, &ccxv1.Origin{Machine: "box", User: "alice"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, err := spool.Oldest()
+			if err != nil || e == nil {
+				t.Fatalf("nothing was spooled: %v, %v", e, err)
+			}
+			if e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != payload {
+				t.Errorf("spooled event = producer %v payload %q, want CCX_AGENT_REAPED and the payload as given", e.Event.GetProducer(), e.Event.GetPayload())
+			}
 		})
 	}
 }
@@ -222,5 +248,30 @@ func TestAssembleLogsWhyReapingIsOff(t *testing.T) {
 	_, logs := runAssemble(t, cfg)
 	if !strings.Contains(logs, "reap off: reap: interval soon: want a duration\n") {
 		t.Errorf("logs %q: want the reason reaping is off", logs)
+	}
+}
+
+// A session is expired only once keepalive has let go of it (maxIdle); with no
+// cap that never happens, and serve says so once at startup.
+func TestAssembleSaysReapingNeedsAHeartbeatMaxIdle(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reap    bool
+		maxIdle time.Duration
+		say     bool
+	}{
+		"reap on, maxIdle off":  {reap: true, maxIdle: 0, say: true},
+		"reap on, maxIdle set":  {reap: true, maxIdle: 12 * time.Hour},
+		"reap off, maxIdle off": {reap: false, maxIdle: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.Heartbeat.MaxIdle = tc.maxIdle
+			cfg.Reap = config.Reap{Enabled: tc.reap, Interval: time.Minute}
+			_, logs := runAssemble(t, cfg)
+			got := strings.Count(logs, "reap on but the heartbeat maxIdle is off: nothing will be reaped\n")
+			if want := map[bool]int{true: 1, false: 0}[tc.say]; got != want {
+				t.Errorf("logs %q: said %d times, want %d", logs, got, want)
+			}
+		})
 	}
 }
