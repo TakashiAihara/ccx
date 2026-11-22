@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1427,5 +1428,31 @@ func TestReapKeepsASessionWhoseHeartbeatDeclarationCannotBeRead(t *testing.T) {
 				t.Errorf("signalled %v, want the session kept", e.killed)
 			}
 		})
+	}
+}
+
+// A reaped path that is a FIFO (it would block the read) keeps the
+// process instead of being read.
+func TestReapKeepsAProcessWhoseReapedPathIsAFIFO(t *testing.T) {
+	e := newReapEnv(t)
+	id := "00000000-0000-4000-8000-000000000001"
+	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	dir := filepath.Join(e.home, "sessions", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "reaped"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { e.c.reapOnce(context.Background(), reapNow); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reapOnce blocked on a FIFO named reaped")
+	}
+	if len(e.killed) != 0 {
+		t.Errorf("signalled %v, want the session kept", e.killed)
 	}
 }

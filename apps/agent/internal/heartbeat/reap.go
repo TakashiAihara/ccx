@@ -276,7 +276,15 @@ func (h *Heartbeat) reapedBefore() bool {
 	if h.signalled.Load() {
 		return true
 	}
-	b, err := os.ReadFile(filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "reaped"))
+	p := filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "reaped")
+	// A FIFO, socket or device would block the read and with it serve's shutdown:
+	// count the process as signalled, which keeps it. (A directory fails the read
+	// at once and is handled below like a missing file.)
+	if fi, err := os.Stat(p); err == nil && fi.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice) != 0 {
+		h.signalled.Store(true)
+		return true
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return false
 	}
