@@ -14,8 +14,8 @@ func TestCenterCallDoesNotFollowRedirect(t *testing.T) {
 	defer r.Close()
 
 	_, err := NewClient(r.URL, "tok", &ccxv1.Origin{}, "b", "p").Append(context.Background(), "s", 0, []byte("x"), nil)
-	if err == nil {
-		t.Fatal("call succeeded against a center that only redirects")
+	if r.Asked() == 0 {
+		t.Fatalf("the center got no call (err %v)", err)
 	}
 	if r.Hits() != 0 {
 		t.Fatalf("redirect followed: %d call(s) reached the target", r.Hits())

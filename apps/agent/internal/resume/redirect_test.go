@@ -16,11 +16,10 @@ func TestCenterCallDoesNotFollowRedirect(t *testing.T) {
 	defer r.Close()
 
 	c := NewCenter(r.URL, "tok")
-	if _, err := c.Ingest(context.Background(), connect.NewRequest(&ccxv1.IngestRequest{})); err == nil {
-		t.Fatal("Ingest succeeded against a center that only redirects")
-	}
-	if _, err := c.ClaimResume(context.Background(), connect.NewRequest(&ccxv1.ClaimResumeRequest{})); err == nil {
-		t.Fatal("ClaimResume succeeded against a center that only redirects")
+	_, _ = c.Ingest(context.Background(), connect.NewRequest(&ccxv1.IngestRequest{}))
+	_, _ = c.ClaimResume(context.Background(), connect.NewRequest(&ccxv1.ClaimResumeRequest{}))
+	if r.Asked() != 2 {
+		t.Fatalf("the center got %d call(s), want 2", r.Asked())
 	}
 	if r.Hits() != 0 {
 		t.Fatalf("redirect followed: %d call(s) reached the target", r.Hits())

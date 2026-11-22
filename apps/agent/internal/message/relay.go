@@ -34,7 +34,7 @@ type timedCenter struct {
 
 // NewCenter points the relay at the center.
 func NewCenter(hubURL, token string) Center {
-	return timedCenter{ccxv1connect.NewMessageRelayServiceClient(hubauth.Client, hubURL, hubauth.Options(token)...)}
+	return timedCenter{ccxv1connect.NewMessageRelayServiceClient(hubauth.Client(), hubURL, hubauth.Options(token)...)}
 }
 
 func (t timedCenter) PutMessage(ctx context.Context, r *connect.Request[ccxv1.PutMessageRequest]) (*connect.Response[ccxv1.PutMessageResponse], error) {

@@ -12,6 +12,7 @@ import (
 type Redirector struct {
 	URL    string
 	hits   atomic.Int32
+	asked  atomic.Int32
 	center *httptest.Server
 	target *httptest.Server
 }
@@ -23,11 +24,16 @@ func StartRedirector() *Redirector {
 		r.hits.Add(1)
 	}))
 	r.center = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.asked.Add(1)
 		http.Redirect(w, req, r.target.URL+req.URL.Path, http.StatusTemporaryRedirect)
 	}))
 	r.URL = r.center.URL
 	return r
 }
+
+// Asked is the number of calls the redirecting center got, so a test can tell
+// a client that never called from one that did not follow.
+func (r *Redirector) Asked() int { return int(r.asked.Load()) }
 
 // Hits is the number of calls that followed the redirect.
 func (r *Redirector) Hits() int { return int(r.hits.Load()) }
