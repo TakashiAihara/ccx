@@ -101,7 +101,8 @@ transcript could not be read, or it is not registered.
 `beatsSinceReal` is how many heartbeats reached the transcript since its last
 real record (a person's prompt, another channel's event, a message from another
 session); unlike `sent`, it is counted from the transcript, so it goes back to 0
-on a prompt and survives a serve restart. A read that fails keeps the last count.
+on a prompt and survives a serve restart. A read that fails keeps the last count
+(0 if serve has not read the transcript once since it started).
 
 `nextAt`, `idleReason` and `beatsSinceReal` are looked at again each minute, so
 they can be a minute behind.

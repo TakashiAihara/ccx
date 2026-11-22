@@ -59,7 +59,8 @@ type Stats struct {
 	// transcript that could not be read. (The status API also answers "" for a
 	// session whose channel is not registered.)
 	IdleReason string
-	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read (#362).
+	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read that succeeded
+	// (#362); 0 until one has.
 	BeatsSinceReal int
 }
 
@@ -98,7 +99,7 @@ type Scan struct {
 	LastReal    time.Time // the last record outside a heartbeat turn
 	LastBeat    time.Time // the last heartbeat that arrived
 	// BeatsSinceReal is how many heartbeats arrived after LastReal: a person's
-	// prompt or another channel's event sets it back to 0.
+	// prompt, another channel's event or another session's message sets it back to 0.
 	BeatsSinceReal int
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.

@@ -830,6 +830,14 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 	if n := h2.Stats().BeatsSinceReal; n != 3 {
 		t.Errorf("off from the start: %d, want 3", n)
 	}
+	// Off and the read fails: the count still stays.
+	if err := os.Remove(h2.file); err != nil {
+		t.Fatal(err)
+	}
+	h2.step(&sent2)
+	if st := h2.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleNotWanted {
+		t.Errorf("off and unreadable: %+v, want not_wanted and still 3", st)
+	}
 
 	// A read that fails keeps the last count instead of showing 0.
 	h3, _, _ := fixture(t, tr, at("12:40:00"))
@@ -839,7 +847,7 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3.step(&sent3)
-	if n := h3.Stats().BeatsSinceReal; n != 3 {
-		t.Errorf("after a failed read: %d, want the last count 3", n)
+	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != "" || !st.Next.IsZero() {
+		t.Errorf("after a failed read: %+v, want the last count 3, no reason, no due time", st)
 	}
 }

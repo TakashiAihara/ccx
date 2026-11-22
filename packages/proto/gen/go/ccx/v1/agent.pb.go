@@ -242,9 +242,11 @@ type HeartbeatStatus struct {
 	// 着地待ち、push の失敗、応答のある request がまだ無い、transcript を読めない、未登録。
 	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
 	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
-	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event) より後に
+	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event、別 session からの
+	// message) より後に
 	// transcript へ届いた heartbeat の数。プロンプトで 0 に戻る。sent と違い agent の再起動では
-	// 戻らない (transcript から数える)。transcript を読めなかった回は直前の値のまま。未登録なら 0。
+	// 戻らない (transcript から数える)。transcript を読めなかった回は直前の値のまま (起動後に一度も
+	// 読めていなければ 0)。next_at と同じく最大 1 分遅れる。未登録なら 0。
 	BeatsSinceReal uint32 `protobuf:"varint,10,opt,name=beats_since_real,json=beatsSinceReal,proto3" json:"beats_since_real,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
