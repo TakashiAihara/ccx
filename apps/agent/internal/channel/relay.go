@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -62,7 +64,9 @@ func relayOnce(ctx context.Context, socketPath, sessionID, claudeHome string, s 
 		}
 	}()
 
-	reg := map[string]string{"session": sessionID}
+	// The parent is the session's claude: Claude Code spawns the channel itself
+	// (measured 2026-11-22 on d1). serve signals it when it reclaims the session.
+	reg := map[string]string{"session": sessionID, "pid": strconv.Itoa(os.Getppid())}
 	if claudeHome != "" {
 		reg["claudeHome"] = claudeHome
 	}

@@ -851,3 +851,53 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 		t.Errorf("after a failed read: %+v, want the last count 3, no reason, no due time", st)
 	}
 }
+
+// Background work as Claude Code 2.1.3xx records it (observed 2026-11-22 on d1):
+// the start is in the tool result's toolUseResult (a Bash's backgroundTaskId, a
+// Monitor's taskId, an async Agent's agentId), the end a <task-notification>
+// carrying <status>, a Monitor's expiry notice, or a TaskStop's task_id.
+func TestScanTranscriptTracksBackgroundWork(t *testing.T) {
+	bgBash := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"Command running in background with ID: bash1."}]}`
+	bgMon := `,"toolUseResult":{"taskId":"mon1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	bgAgent := `,"toolUseResult":{"status":"async_launched","isAsync":true,"agentId":"ag1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"Async agent launched"}]}`
+	syncAgent := `,"toolUseResult":{"status":"completed","agentId":"ag2"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"done"}]}`
+	monEvent := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n<event>line</event>\n</task-notification>"}`
+	monExpired := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<event>[Monitor expired after 30m with no events delivered.]</event>\n</task-notification>"}`
+	bashDone := `,"message":{"role":"user","content":"<task-notification>\n<task-id>bash1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>"}`
+	stopAgent := `,"toolUseResult":{"task_id":"ag1","message":"Successfully stopped task: ag1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"stopped"}]}`
+	quoted := `,"message":{"role":"user","content":"look: <task-notification><task-id>bash1</task-id><status>completed</status></task-notification>"}`
+
+	head := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) +
+		rec("user", "10:00:02", bgBash) + rec("user", "10:00:03", bgMon) + rec("user", "10:00:04", bgAgent) + rec("user", "10:00:05", syncAgent)
+
+	s := mustScan(t, head)
+	if got := len(s.Background); got != 3 {
+		t.Fatalf("Background = %v, want bash1, mon1, ag1 (a sync agent is not background)", s.Background)
+	}
+	if !s.Background["mon1"].Equal(at("10:00:03")) {
+		t.Errorf("mon1 started %v, want 10:00:03", s.Background["mon1"])
+	}
+
+	s = mustScan(t, head+rec("user", "10:01:00", monEvent)+rec("user", "10:02:00", quoted))
+	if _, ok := s.Background["mon1"]; !ok {
+		t.Error("a Monitor event without a status ended the Monitor")
+	}
+	if _, ok := s.Background["bash1"]; !ok {
+		t.Error("a quoted notification (not at the start) ended a task")
+	}
+
+	s = mustScan(t, head+rec("user", "10:03:00", monExpired)+rec("user", "10:04:00", bashDone)+rec("user", "10:05:00", stopAgent))
+	if len(s.Background) != 0 {
+		t.Errorf("Background = %v, want none after expiry, completion and TaskStop", s.Background)
+	}
+}
+
+func TestBackgroundSince(t *testing.T) {
+	s := Scan{Background: map[string]time.Time{"old": at("09:00:00"), "new": at("11:00:00")}}
+	if !s.BackgroundSince(at("10:00:00")) {
+		t.Error("a task started after the process did not count")
+	}
+	if s.BackgroundSince(at("11:00:00")) {
+		t.Error("a task started at or before the process counted (a resume does not carry it)")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,22 @@ type Scan struct {
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
+	// Background is the background work started and not yet ended: task id ->
+	// when its start was recorded. A task outlives neither the process that
+	// started it nor a resume, so a reader keeps only those started since the
+	// current process did (BackgroundSince).
+	Background map[string]time.Time
+}
+
+// BackgroundSince: background work started after t (the session's process
+// start) has not ended.
+func (s Scan) BackgroundSince(t time.Time) bool {
+	for _, at := range s.Background {
+		if at.After(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // poll is how often a transcript is looked at while nothing is due: a session
@@ -289,7 +306,7 @@ func (h *Heartbeat) read() (Scan, bool) {
 // record carrying Marker to the next user prompt, other channel event or
 // cross-session message; nothing inside it counts as the session being used.
 func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
-	var s Scan
+	s := Scan{Background: map[string]time.Time{}}
 	inBeat := false
 	nodes := map[string]node{}
 	starts := map[string]time.Time{}    // assistant uuid -> its request's start
@@ -306,7 +323,14 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			Timestamp  time.Time `json:"timestamp"`
 			IsMeta     bool      `json:"isMeta"`
 			APIError   bool      `json:"isApiErrorMessage"`
-			Message    struct {
+			ToolResult struct {
+				BackgroundTaskID string `json:"backgroundTaskId"`
+				TaskID           string `json:"taskId"`
+				AgentID          string `json:"agentId"`
+				Status           string `json:"status"`
+				Stopped          string `json:"task_id"`
+			} `json:"toolUseResult"`
+			Message struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -325,6 +349,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 		switch rec.Type {
 		case "user":
+			trackBackground(s.Background, rec.ToolResult.BackgroundTaskID, rec.ToolResult.TaskID, rec.ToolResult.AgentID, rec.ToolResult.Status, rec.ToolResult.Stopped, rec.Message.Content, rec.Timestamp)
 			tag := channelTag(rec.Message.Content)
 			// A local command (/model and its output) is typed by a person but sends
 			// no request, so it is not a turn starting. It still counts as use below.
@@ -399,6 +424,39 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 	}
 	return s, sc.Err()
+}
+
+// taskIDs pulls the <task-id> values out of a notification.
+var taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+
+// trackBackground records background work starting or ending in one user record.
+// Starts are what the tool result says it launched (a Bash's backgroundTaskId,
+// a Monitor's taskId, an async Agent's agentId). Ends are a TaskStop's task_id,
+// or a <task-notification> (the record must start with it, as for channelTag)
+// that carries a <status> or a Monitor's expiry: a Monitor's events carry
+// neither and do not end it.
+func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stopped string, content json.RawMessage, ts time.Time) {
+	for _, id := range []string{bash, monitor} {
+		if id != "" {
+			bg[id] = ts
+		}
+	}
+	if agent != "" && status == "async_launched" {
+		bg[agent] = ts
+	}
+	if stopped != "" {
+		delete(bg, stopped)
+	}
+	var s string
+	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<task-notification>") {
+		return
+	}
+	if !strings.Contains(s, "<status>") && !strings.Contains(s, "[Monitor expired") {
+		return
+	}
+	for _, m := range taskIDs.FindAllStringSubmatch(s, -1) {
+		delete(bg, m[1])
+	}
 }
 
 // isLocalCommand is a slash command's echo or output, written as a user record

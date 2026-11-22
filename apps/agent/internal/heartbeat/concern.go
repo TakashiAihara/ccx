@@ -28,6 +28,9 @@ type Register struct {
 	// ClaudeHome is the session's CLAUDE_CONFIG_DIR, when it set one. serve runs
 	// under systemd with its own environment and would look in ~/.claude.
 	ClaudeHome string `json:"claudeHome,omitempty"`
+	// PID is the session's claude process (the channel's parent), as a decimal
+	// string. Older channels leave it out; such a session is never reclaimed.
+	PID string `json:"pid,omitempty"`
 }
 
 // sessionID is the shape Claude Code gives a session. Anything else is refused:

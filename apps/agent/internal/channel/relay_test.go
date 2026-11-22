@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +62,7 @@ func TestRelayRegistersAndPushes(t *testing.T) {
 	select {
 	case line := <-got:
 		var reg map[string]string
-		if json.Unmarshal([]byte(line), &reg) != nil || reg["session"] != "sid-1" || reg["claudeHome"] != "/custom/claude" {
+		if json.Unmarshal([]byte(line), &reg) != nil || reg["session"] != "sid-1" || reg["claudeHome"] != "/custom/claude" || reg["pid"] != strconv.Itoa(os.Getppid()) {
 			t.Errorf("registration = %q", line)
 		}
 	case <-time.After(2 * time.Second):
