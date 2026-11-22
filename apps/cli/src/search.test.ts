@@ -100,12 +100,17 @@ describe("search: embedded DuckDB over the store", () => {
 
     const help = await ccx("--help");
     expect(help.code).toBe(0);
-    expect(help.out).toContain(`sessions     ${SEARCH_VIEW_COLUMNS.sessions.join(", ")}`);
-    const example = help.out.match(/ccx tr search --sql "(.+)"/)?.[1];
+    for (const [view, cols] of Object.entries(SEARCH_VIEW_COLUMNS)) expect(help.out).toContain(`  ${view.padEnd(11)}  ${cols.join(", ")}\n`);
+    expect(help.out).toContain("  transcripts  the record keys found in the first 32 files, then machine, session_id, user\n");
+    const example = help.out.match(/ccx tr search --sql "([^"]+)"/)?.[1];
     expect(example).toContain("json->>'$.type' = 'user'");
     const ran = await ccx("--sql", example!, "--json");
     expect(ran.code).toBe(0);
-    expect(JSON.parse(ran.out)).toContainEqual({ session_id: SID2, "(\"json\" ->> '$.message.content')": "nothing here" });
+    const rows = (JSON.parse(ran.out) as { session_id: string; content: string }[]).sort((x, y) => x.session_id.localeCompare(y.session_id));
+    expect(rows).toEqual([
+      { session_id: SID, content: "find the NEEDLE-ALPHA please, 100% sure" },
+      { session_id: SID2, content: "nothing here" },
+    ]);
   });
 
   test("transcripts view carries the hive columns and message fields; a present word hits, an absent one does not", async () => {
