@@ -255,7 +255,7 @@ func (h *Heartbeat) reapedBefore() bool {
 			Boot  string `json:"boot"`
 		}
 		// A record without a boot id (an earlier format) names no boot and does not match.
-		if json.Unmarshal([]byte(line), &r) == nil && r.PID == h.pid && r.Start == h.pidStart && r.Boot == h.boot {
+		if json.Unmarshal([]byte(line), &r) == nil && r.Boot != "" && r.PID == h.pid && r.Start == h.pidStart && r.Boot == h.boot {
 			h.signalled.Store(true)
 			return true
 		}

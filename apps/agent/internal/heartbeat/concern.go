@@ -271,10 +271,11 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 		pid, err := strconv.Atoi(reg.PID)
 		if err != nil || pid <= 1 {
 			c.log("reap: session %s registered no usable pid (%q); it will not be reaped", reg.Session, reg.PID)
+		} else if boot, ok := bootID(c.procDir()); !ok {
+			// Checked first: without /proc (macOS) every pid would look like "not a claude".
+			c.log("reap: session %s: the host's boot id cannot be read; it will not be reaped", reg.Session)
 		} else if start, ok := claudeProc(c.procDir(), pid); !ok {
 			c.log("reap: session %s registered pid %d, which is not a claude process; it will not be reaped", reg.Session, pid)
-		} else if boot, ok := bootID(c.procDir()); !ok {
-			c.log("reap: session %s: the host's boot id cannot be read; it will not be reaped", reg.Session)
 		} else {
 			h.pid, h.pidStart, h.boot = pid, start, boot
 			// A reconnect of a process that was already signalled starts out signalled,
