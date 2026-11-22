@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +30,10 @@ type Collect struct {
 	loop       *forwardLoop
 	log        func(string, ...any)
 	observer   func([]byte)
+	// holding: Run holds the spool's single-instance lock. AppendEvent writes the
+	// spool only while it does, and Run's release waits for a write in flight.
+	holdMu  sync.RWMutex
+	holding bool
 	// clock and resweepAfter time the second look at incoming/ temps that were
 	// too young at startup; tests shorten them.
 	clock        func() time.Time
@@ -88,6 +93,28 @@ func (s *Collect) Status() (Status, error) {
 // Name identifies the concern in logs and config (ADR 0002).
 func (s *Collect) Name() string { return "collect" }
 
+// ErrNotRunning is AppendEvent's answer while collect does not hold the spool.
+var ErrNotRunning = errors.New("collect is not running: the spool is not held by this agent")
+
+// AppendEvent spools a payload the agent produced itself and nudges the drain
+// loop, so it goes to the center like a hook's event does.
+func (s *Collect) AppendEvent(producer ccxv1.Producer, payload []byte) error {
+	// Another ccx-agent may own the spool once this one lets go of the lock (a
+	// shutdown, a replacement starting), and two writers race the seq counter.
+	s.holdMu.RLock()
+	defer s.holdMu.RUnlock()
+	if !s.holding {
+		return ErrNotRunning
+	}
+	if _, err := s.spool.AppendProducer(producer, payload); err != nil {
+		return err
+	}
+	if s.loop != nil {
+		s.loop.wake()
+	}
+	return nil
+}
+
 // Observe registers the one function that sees each spooled payload after it is
 // durable, so a session's transcript can be followed while the session runs
 // (#120). Set it before Run: it is called from the per-connection handler, so
@@ -115,11 +142,23 @@ func (s *Collect) Run(ctx context.Context) error {
 		return err
 	}
 	defer lock.release()
+	// Registered after the release above, so it runs before it: no write follows
+	// the moment the lock is let go.
+	defer func() {
+		s.holdMu.Lock()
+		s.holding = false
+		s.holdMu.Unlock()
+	}()
 
 	// Startup drain: events hooks wrote to the fallback while ccx-agent was down get
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
 	young := s.takeInIncoming("on startup")
+	// AppendEvent is let in only now: an event it spooled during the drain would
+	// take a seq between the drained ones and go out in front of them.
+	s.holdMu.Lock()
+	s.holding = true
+	s.holdMu.Unlock()
 	// Only the hook writes there and it writes .raw; anything else is left alone,
 	// so say so instead of ignoring it forever (#186).
 	if others, err := s.spool.OtherIncoming(); err != nil {

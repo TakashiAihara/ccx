@@ -58,24 +58,24 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     await mkdir(dir, { recursive: true });
     await Bun.write(join(dir, "archived"), "");
     await Bun.write(join(dir, "label"), "scope｜step\n");
-    // 利用者側の marker (done / pinned / delete) は ccx の状態ではない: 読まない
+    // 利用者側の marker (done / delete) は ccx の状態ではない: 読まない。pinned は ccx-agent が読むので top level に上げた (docs/design/reap.md)
     await Bun.write(join(dir, "done"), "");
     await Bun.write(join(dir, "pinned"), "");
     await Bun.write(join(dir, "delete"), "");
     const s = await readDeclared(SID, home);
     // ccx を通さず書かれた label (claude-config#966 より前の hook) は履歴に残らない (ccx が見ていない)
-    expect(s).toEqual({ archived: true, label: "scope｜step", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
-    expect(flagsOf(s)).toEqual(["archived"]);
+    expect(s).toEqual({ archived: true, pinned: true, label: "scope｜step", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] });
+    expect(flagsOf(s)).toEqual(["archived", "pinned"]);
   });
 
   test("writeDeclared touches only the keys given, clears on false / empty string, and reads back", async () => {
-    expect(await writeDeclared(SID, { archived: true, label: "x" }, home)).toEqual({ archived: true, label: "x", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: true, pinned: false, label: "x" }, home)).toEqual({ archived: true, pinned: false, label: "x", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(true);
     expect(await Bun.file(join(home, "sessions", SID, "label")).text()).toBe("x\n");
 
     // task を書いても archived / label は残る
-    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, label: "x", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
-    expect(await writeDeclared(SID, { archived: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
+    expect(await writeDeclared(SID, { task: "kaneo ccx#1" }, home)).toEqual({ archived: true, pinned: false, label: "x", task: "kaneo ccx#1", role: "", heartbeat: "", metadata: {}, labelHistory: h("x") });
+    expect(await writeDeclared(SID, { archived: false, pinned: false, label: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "archived")).exists()).toBe(false);
     expect(await Bun.file(join(home, "sessions", SID, "label")).exists()).toBe(false);
 
@@ -85,6 +85,8 @@ describe("session-state: local files under ~/.claude/sessions/<id>/", () => {
     expect(await writeDeclared(SID, { role: "" }, home)).toEqual({ ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("x", "") });
     expect(await Bun.file(join(home, "sessions", SID, "role")).exists()).toBe(false);
     expect(normalizeDeclared({ role: "pm" }).role).toBe("pm");
+    // 保存先の写し (state.json / center) から pinned が戻る。true 以外は立てない
+    expect([normalizeDeclared({ pinned: true }).pinned, normalizeDeclared({ pinned: "yes" }).pinned, normalizeDeclared({}).pinned]).toEqual([true, false, false]);
     expect(sameDeclared(EMPTY_DECLARED, { ...EMPTY_DECLARED, role: "pm" })).toBe(false);
     expect(isEmptyDeclared({ ...EMPTY_DECLARED, role: "pm" })).toBe(false);
 

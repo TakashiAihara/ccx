@@ -106,6 +106,8 @@ describe("hookStreams", () => {
       { machine: "m1", user: "a", producer: Producer.CLAUDE_CODE_HOOK },
       { machine: "m2", user: "a", producer: Producer.CCX_SESSION_STATE },
       { machine: "m3", user: "a", producer: Producer.UNSPECIFIED },
+      // a reap record is about the session, like declared state, not a second stream
+      { machine: "m4", user: "a", producer: Producer.CCX_AGENT_REAPED },
     ]);
     expect(got).toEqual([
       { machine: "m1", user: "a" },

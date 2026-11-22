@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -849,5 +852,339 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 	h3.step(&sent3)
 	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != "" || !st.Next.IsZero() {
 		t.Errorf("after a failed read: %+v, want the last count 3, no reason, no due time", st)
+	}
+}
+
+// Background work as Claude Code 2.1.3xx records it (observed 2026-11-22 on d1):
+// the start is in the tool result's toolUseResult (a Bash's backgroundTaskId, a
+// Monitor's taskId, an async Agent's agentId), the end a <task-notification>
+// carrying <status>, a Monitor's expiry notice, or a TaskStop's task_id.
+func TestScanTranscriptTracksBackgroundWork(t *testing.T) {
+	bgBash := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"Command running in background with ID: bash1."}]}`
+	bgMon := `,"toolUseResult":{"taskId":"mon1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	bgAgent := `,"toolUseResult":{"status":"async_launched","isAsync":true,"agentId":"ag1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"Async agent launched"}]}`
+	syncAgent := `,"toolUseResult":{"status":"completed","agentId":"ag2"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"done"}]}`
+	monEvent := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n<event>line</event>\n</task-notification>"}`
+	monExpired := `,"message":{"role":"user","content":"<task-notification>\n<task-id>mon1</task-id>\n<event>[Monitor expired after 30m with no events delivered.]</event>\n</task-notification>"}`
+	bashDone := `,"message":{"role":"user","content":"<task-notification>\n<task-id>bash1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>"}`
+	stopAgent := `,"toolUseResult":{"task_id":"ag1","message":"Successfully stopped task: ag1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"stopped"}]}`
+	quoted := `,"message":{"role":"user","content":"look: <task-notification><task-id>bash1</task-id><status>completed</status></task-notification>"}`
+
+	head := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) +
+		rec("assistant", "10:00:01", namedUse("t2", "Monitor")) + rec("assistant", "10:00:01", namedUse("t3", "Agent")) +
+		rec("assistant", "10:00:01", namedUse("t4", "Agent")) + rec("assistant", "10:00:01", namedUse("t5", "TaskStop")) +
+		rec("user", "10:00:02", bgBash) + rec("user", "10:00:03", bgMon) + rec("user", "10:00:04", bgAgent) + rec("user", "10:00:05", syncAgent)
+
+	s := mustScan(t, head)
+	if got := len(s.Background); got != 3 {
+		t.Fatalf("Background = %v, want bash1, mon1, ag1 (a sync agent is not background)", s.Background)
+	}
+	if !s.Background["mon1"].Equal(at("10:00:03")) {
+		t.Errorf("mon1 started %v, want 10:00:03", s.Background["mon1"])
+	}
+
+	s = mustScan(t, head+rec("user", "10:01:00", monEvent)+rec("user", "10:02:00", quoted))
+	if _, ok := s.Background["mon1"]; !ok {
+		t.Error("a Monitor event without a status ended the Monitor")
+	}
+	if _, ok := s.Background["bash1"]; !ok {
+		t.Error("a quoted notification (not at the start) ended a task")
+	}
+
+	s = mustScan(t, head+rec("user", "10:03:00", monExpired)+rec("user", "10:04:00", bashDone)+rec("user", "10:05:00", stopAgent))
+	if len(s.Background) != 0 {
+		t.Errorf("Background = %v, want none after expiry, completion and TaskStop", s.Background)
+	}
+}
+
+func TestBackgroundSince(t *testing.T) {
+	s := Scan{Background: map[string]time.Time{"old": at("09:00:00"), "new": at("11:00:00")}}
+	if !s.BackgroundSince(at("10:00:00")) {
+		t.Error("a task started after the process did not count")
+	}
+	if s.BackgroundSince(at("11:00:00")) {
+		t.Error("a task started at or before the process counted (a resume does not carry it)")
+	}
+}
+
+// toolUseResult is an object for most tools, a string for an error and an array
+// for some others (counted over 300 real transcripts: 39,360 / 1,999 / 69). Each
+// shape on a tool's result still ends the running tool and counts as use.
+func TestScanTranscriptReadsToolResultsWhateverShapeToolUseResultHas(t *testing.T) {
+	for name, field := range map[string]string{
+		"string":                 `,"toolUseResult":"Error: Exit code 1"`,
+		"array":                  `,"toolUseResult":[{"type":"text","text":"x"}]`,
+		"object with non-string": `,"toolUseResult":{"status":3,"agentId":7,"taskId":false,"task_id":1.5}`,
+		"null":                   `,"toolUseResult":null`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := mustScan(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", toolUse)+rec("user", "10:00:30", field+toolRes))
+			if s.ToolRunning {
+				t.Error("the tool's result did not end it: the record was dropped")
+			}
+			if !s.LastReal.Equal(at("10:00:30")) || !s.LastInput.Equal(at("10:00:30")) {
+				t.Errorf("LastReal %v LastInput %v, want 10:00:30 for both", s.LastReal, s.LastInput)
+			}
+		})
+	}
+
+	// The string fields of an object are still read next to values of another type.
+	mixed := `,"toolUseResult":{"status":3,"backgroundTaskId":"b1"}` + toolRes
+	s := mustScan(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", toolUse)+rec("user", "10:00:30", mixed))
+	if !s.Background["b1"].Equal(at("10:00:30")) {
+		t.Errorf("Background = %v, want b1 started 10:00:30", s.Background)
+	}
+}
+
+// A Monitor event or a command's output can quote anything, including a
+// notification's own tags; only the notification's own <status> and a Monitor
+// expiry notice at the start of an event end a task.
+func TestScanTranscriptBackgroundIgnoresTextInsideAnEvent(t *testing.T) {
+	start := `,"toolUseResult":{"taskId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	quotedStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>y</task-id>\n<summary>Monitor event</summary>\n<event>log: <task-id>x</task-id><status>completed</status></event>\n</task-notification>"}`
+	quotedExpiry := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<event>the line said [Monitor expired after 30m]</event>\n</task-notification>"}`
+	summaryStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<summary>Background command \"<status>completed</status>\" ran</summary>\n</task-notification>"}`
+	startZ := `,"toolUseResult":{"backgroundTaskId":"z"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"running"}]}`
+	head := rec("assistant", "09:59:00", namedUse("t2", "Monitor")) + rec("assistant", "09:59:00", namedUse("t3", "Bash")) +
+		rec("user", "10:00:00", start) + rec("user", "10:00:30", startZ)
+
+	for name, ev := range map[string]string{"status in an event": quotedStatus, "expiry text mid-event": quotedExpiry, "status in the summary": summaryStatus} {
+		if s := mustScan(t, head+rec("user", "10:01:00", ev)); len(s.Background) != 2 {
+			t.Errorf("%s: Background = %v, want x and z still running", name, s.Background)
+		}
+	}
+
+	ownStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<summary>done</summary>\n<event>noise <task-id>z</task-id></event>\n<status>completed</status>\n</task-notification>"}`
+	if s := mustScan(t, head+rec("user", "10:01:00", ownStatus)); len(s.Background) != 1 || s.Background["z"].IsZero() {
+		t.Errorf("Background = %v, want x ended by the notification's own status and z (named in an event) left", s.Background)
+	}
+	expiry := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<event> [Monitor expired after 30m with no events delivered.]</event>\n</task-notification>"}`
+	if s := mustScan(t, head+rec("user", "10:01:00", expiry)); len(s.Background) != 1 || s.Background["z"].IsZero() {
+		t.Errorf("Background = %v, want x ended by the expiry notice, z left", s.Background)
+	}
+	// Only an event says a Monitor expired: a summary or result quoting it ends nothing
+	for _, tag := range []string{"summary", "result"} {
+		quoted := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<` + tag + `>[Monitor expired after 30m]</` + tag + `>\n</task-notification>"}`
+		if s := mustScan(t, head+rec("user", "10:01:00", quoted)); s.Background["x"].IsZero() {
+			t.Errorf("a %s starting with the expiry text ended x", tag)
+		}
+	}
+}
+
+// running lists the background tasks a scan still holds, sorted.
+func running(s Scan) string {
+	var ids []string
+	for id := range s.Background {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
+// One record can carry several notifications. Each ends only its own task, and a
+// body's <result> (a command's output) can quote another task's id and status.
+func TestScanTranscriptBackgroundReadsEachNotificationOnItsOwn(t *testing.T) {
+	startBash := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"running"}]}`
+	startMon := `,"toolUseResult":{"taskId":"mon1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	startOther := `,"toolUseResult":{"backgroundTaskId":"other"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"running"}]}`
+	head := rec("assistant", "09:59:00", namedUse("t1", "Bash")) + rec("assistant", "09:59:00", namedUse("t2", "Monitor")) +
+		rec("assistant", "09:59:00", namedUse("t3", "Bash")) +
+		rec("user", "10:00:00", startBash) + rec("user", "10:00:10", startMon) + rec("user", "10:00:20", startOther)
+	notify := func(content string) string {
+		return rec("user", "10:01:00", `,"message":{"role":"user","content":"`+content+`"}`)
+	}
+
+	for name, tc := range map[string]struct{ content, want string }{
+		"a Monitor event block (no status) then a completed Bash block": {
+			`<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n<event>line</event>\n</task-notification>\n<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>`,
+			"mon1,other"},
+		"a status in the first block and a bare id in the second": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>\n<task-notification>\n<task-id>mon1</task-id>\n<summary>Monitor event</summary>\n</task-notification>`,
+			"mon1,other"},
+		"a result quoting another task's id and status": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n<result>other said <task-id>other</task-id><status>completed</status></result>\n</task-notification>`,
+			"mon1,other"},
+		"an expiry in one block and a bare id in the next": {
+			`<task-notification>\n<task-id>mon1</task-id>\n<event>[Monitor expired after 30m with no events delivered.]</event>\n</task-notification>\n<task-notification>\n<task-id>bash1</task-id>\n<summary>progress</summary>\n</task-notification>`,
+			"bash1,other"},
+		"a completed Bash block whose result quotes a whole notification for a running task": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n<result>log: <task-notification>\n<result>inner output</result>\n<task-id>other</task-id>\n<status>completed</status>\n</task-notification> end</result>\n</task-notification>`,
+			"mon1,other"},
+		"a quoted notification in a result of a block with no status of its own": {
+			`<task-notification>\n<task-id>mon1</task-id>\n<result>log: <task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification></result>\n</task-notification>`,
+			"bash1,mon1,other"},
+		"a completed Bash block whose summary mentions an event tag": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<summary>the log had <event> in it</summary>\n<status>completed</status>\n</task-notification>`,
+			"mon1,other"},
+		"a completed Bash block whose result mentions a summary tag": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<result>saw <summary> and moved on</result>\n<status>completed</status>\n</task-notification>`,
+			"mon1,other"},
+		"a completed Bash block whose result mentions a result tag in a summary": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<summary>a <result> here</summary>\n<status>completed</status>\n</task-notification>`,
+			"mon1,other"},
+		"an expiry event that sits after a summary with an event tag": {
+			`<task-notification>\n<task-id>mon1</task-id>\n<summary>has <event> inside</summary>\n<event>[Monitor expired after 30m]</event>\n</task-notification>`,
+			"bash1,other"},
+		"a body that never closes ends nothing": {
+			`<task-notification>\n<task-id>bash1</task-id>\n<event>cut off <status>completed</status>\n</task-notification>`,
+			"bash1,mon1,other"},
+	} {
+		if got := running(mustScan(t, head+notify(tc.content))); got != tc.want {
+			t.Errorf("%s: still running %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A start is read from any tool's result, because a stray one only keeps a session
+// and a tool renamed must not hide live work. The task-list tools' taskId is the
+// one exception: it names a list entry that never ends. An end is read only from
+// a TaskStop's task_id.
+func TestScanTranscriptBackgroundStartsFromAnyToolAndEndsOnlyFromTaskStop(t *testing.T) {
+	result := func(id, field string) string {
+		return `,"toolUseResult":` + field + `,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"x"}]}`
+	}
+	for name, tc := range map[string]struct {
+		tool, field string
+		want        string
+	}{
+		"Bash backgroundTaskId":            {"Bash", `{"backgroundTaskId":"b"}`, "b"},
+		"Monitor taskId":                   {"Monitor", `{"taskId":"b"}`, "b"},
+		"Agent async_launched":             {"Agent", `{"status":"async_launched","agentId":"b"}`, "b"},
+		"Agent that finished":              {"Agent", `{"status":"completed","agentId":"b"}`, ""},
+		"a task list's taskId":             {"TaskUpdate", `{"taskId":"b"}`, ""},
+		"TaskCreate's taskId":              {"TaskCreate", `{"taskId":"b"}`, ""},
+		"TaskGet's taskId":                 {"TaskGet", `{"taskId":"b"}`, ""},
+		"TaskList's taskId":                {"TaskList", `{"taskId":"b"}`, ""},
+		"another tool's taskId":            {"Workflow", `{"taskId":"b"}`, "b"},
+		"an unknown tool":                  {"", `{"backgroundTaskId":"b"}`, "b"},
+		"a renamed Bash":                   {"Shell", `{"backgroundTaskId":"b"}`, "b"},
+		"an async agent from another tool": {"Task", `{"status":"async_launched","agentId":"b"}`, "b"},
+		"a non-string id":                  {"Bash", `{"backgroundTaskId":7}`, ""},
+	} {
+		s := mustScan(t, rec("assistant", "09:59:00", namedUse("t1", tc.tool))+rec("user", "10:00:00", result("t1", tc.field)))
+		if got := running(s); got != tc.want {
+			t.Errorf("%s: running %q, want %q", name, got, tc.want)
+		}
+	}
+
+	// A tool_result whose tool_use was never seen still starts what it says it started.
+	if got := running(mustScan(t, rec("user", "10:00:00", result("t-unseen", `{"backgroundTaskId":"b"}`)))); got != "b" {
+		t.Errorf("a result with no tool_use before it started %q, want b", got)
+	}
+
+	started := rec("assistant", "09:59:00", namedUse("t1", "Bash")) + rec("user", "10:00:00", result("t1", `{"backgroundTaskId":"b"}`))
+	for name, tc := range map[string]struct{ tool, field, want string }{
+		"TaskStop task_id":                   {"TaskStop", `{"task_id":"b"}`, ""},
+		"a non-TaskStop result with task_id": {"Bash", `{"task_id":"b"}`, "b"},
+		"an unknown tool with task_id":       {"", `{"task_id":"b"}`, "b"},
+	} {
+		s := mustScan(t, started+rec("assistant", "10:00:30", namedUse("t9", tc.tool))+rec("user", "10:01:00", result("t9", tc.field)))
+		if got := running(s); got != tc.want {
+			t.Errorf("%s: running %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A notification delivered while a turn runs is an attachment record of type
+// queued_command with the text in prompt (keys seen: commandMode, delivery_id,
+// origin, prompt, runId, source_uuid, timestamp, type). It ends the same tasks a
+// user-record notification does, and changes nothing else about the session.
+func TestScanTranscriptEndsBackgroundWorkFromQueuedCommandAttachments(t *testing.T) {
+	attach := func(ts, typ, prompt string) string {
+		return rec("attachment", ts, `,"attachment":{"type":"`+typ+`","prompt":`+strconv.Quote(prompt)+`,"commandMode":"prompt","delivery_id":"d1","origin":{"kind":"task-notification"},"runId":"r1","source_uuid":"s1"}`)
+	}
+	startBash := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"running"}]}`
+	startMon := `,"toolUseResult":{"taskId":"mon1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	base := rec("assistant", "09:59:00", namedUse("t1", "Bash")) + rec("user", "10:00:00", startBash) +
+		rec("user", "10:00:05", startMon) + rec("assistant", "10:00:20", reply)
+	done := "<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n<summary>Background command done</summary>\n</task-notification>"
+	expired := "<task-notification>\n<task-id>mon1</task-id>\n<event>[Monitor expired after 30m with no events delivered.]</event>\n</task-notification>"
+
+	before := mustScan(t, base)
+	s := mustScan(t, base+attach("10:05:00", "queued_command", done))
+	if got := running(s); got != "mon1" {
+		t.Errorf("after a completed notification in an attachment: running %q, want mon1", got)
+	}
+	s = mustScan(t, base+attach("10:05:00", "queued_command", done)+attach("10:06:00", "queued_command", expired))
+	if got := running(s); got != "" {
+		t.Errorf("after both attachments: running %q, want none", got)
+	}
+
+	// The record is not use: nothing about the session moves but the background set.
+	after := mustScan(t, base+attach("10:05:00", "queued_command", done))
+	after.Background, before.Background = nil, nil
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("an attachment changed the scan: %+v, want %+v", after, before)
+	}
+
+	// Another attachment type, and a text that is not a notification, end nothing.
+	for name, a := range map[string]string{
+		"another attachment type":           attach("10:05:00", "hook_success", done),
+		"a queued command that is a prompt": attach("10:05:00", "queued_command", "please run the tests; "+done),
+		"a quoted notification":             attach("10:05:00", "queued_command", "<task-notification>\n<task-id>mon1</task-id>\n<result>"+done+"</result>\n</task-notification>"),
+	} {
+		if got := running(mustScan(t, base+a)); got != "bash1,mon1" {
+			t.Errorf("%s: running %q, want bash1,mon1", name, got)
+		}
+	}
+}
+
+// namedUse is an assistant record asking for one tool, so a later result can be
+// traced to the tool it came from.
+func namedUse(id, name string) string {
+	return `,"message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"` + name + `","input":{}}]}`
+}
+
+// Stripping reads the record once, left to right: it does not search again from
+// each event for a tag that comes once, far away, or not at all. An unclosed
+// summary after them still ends nothing.
+func TestStripQuotedIsLinear(t *testing.T) {
+	events := strings.Repeat("<event>a</event>", 20000)
+	for name, text := range map[string]string{
+		"a tag once at the far end": "<task-notification>\n" + events + "<result>r</result><summary>cut off\n<status>completed</status>\n</task-notification>",
+		"tags that never occur":     "<task-notification>\n" + events + "\n<status>completed</status>\n</task-notification>",
+	} {
+		began := time.Now()
+		got := stripQuoted(text)
+		if took := time.Since(began); took > 500*time.Millisecond {
+			t.Errorf("%s: took %v for %d bytes, want a few milliseconds", name, took, len(text))
+		}
+		if strings.Contains(got, "<result>") || strings.Contains(got, "<event>") {
+			t.Errorf("%s: a quoted body survived", name)
+		}
+	}
+}
+
+// An attachment of another shape (a non-string prompt) must not drop the record:
+// the parent chain runs through attachments.
+func TestScanTranscriptKeepsAnAttachmentOfAnotherShape(t *testing.T) {
+	odd := `,"attachment":{"type":"queued_command","prompt":[{"type":"text","text":"x"}]}`
+	s := mustScan(t, rec("user", "10:00:00", human)+rec("attachment", "10:00:01", odd)+rec("assistant", "10:00:30", reply))
+	if !s.LastRequest.Equal(at("10:00:00")) {
+		t.Errorf("LastRequest = %v, want 10:00:00 (the chain through the attachment)", s.LastRequest)
+	}
+}
+
+// An enqueued notification (a queue-operation record, keys seen on d1:
+// content, operation, sessionId, timestamp, type) ends its task; a removal or a
+// record without content ends nothing and changes nothing else.
+func TestScanTranscriptEndsBackgroundWorkFromAnEnqueuedNotification(t *testing.T) {
+	bg := `,"toolUseResult":{"backgroundTaskId":"bash1"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"started"}]}`
+	done := `<task-notification>\n<task-id>bash1</task-id>\n<status>completed</status>\n</task-notification>`
+	head := rec("user", "10:00:00", human) + rec("assistant", "10:00:01", toolUse) + rec("user", "10:00:02", bg)
+	qop := func(op, content string) string {
+		return `{"type":"queue-operation","operation":"` + op + `","sessionId":"s","timestamp":"2026-09-23T10:05:00.000Z"` + content + "}\n"
+	}
+	if s := mustScan(t, head+qop("remove", `,"content":"`+done+`"`)+qop("enqueue", "")); running(s) != "bash1" {
+		t.Errorf("a removal or an empty enqueue ended work: running %q", running(s))
+	}
+	before := mustScan(t, head)
+	s := mustScan(t, head+qop("enqueue", `,"content":"`+done+`"`))
+	if running(s) != "" {
+		t.Errorf("an enqueued completion left %q running", running(s))
+	}
+	s.Background, before.Background = nil, nil
+	if fmt.Sprint(s) != fmt.Sprint(before) {
+		t.Errorf("an enqueued notification changed more than Background:\n got %+v\nwant %+v", s, before)
 	}
 }

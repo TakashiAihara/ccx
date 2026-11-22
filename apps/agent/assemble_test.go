@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/collect"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/concern"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	"github.com/TakashiAihara/ccx/packages/core/config"
+	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
 // assembleConfig is a Config with collect and the heartbeat on and no hub, so
@@ -156,5 +162,137 @@ func TestAssembleCollectOffInConfigSaysNothing(t *testing.T) {
 	}
 	if line := startupLine(logs); !strings.Contains(line, " collect=false ") {
 		t.Errorf("startup line %q: want collect=false", line)
+	}
+}
+
+// Reaping runs inside the heartbeat concern: with it off the setting does
+// nothing, and the log says so rather than leaving reap=on silently idle.
+func TestAssembleSaysReapingNeedsTheHeartbeat(t *testing.T) {
+	for name, tc := range map[string]struct {
+		heartbeat bool
+		interval  time.Duration
+		say       bool
+	}{
+		"heartbeat concern off":   {heartbeat: false, interval: 50 * time.Minute, say: true},
+		"heartbeat interval is 0": {heartbeat: true, interval: 0, say: true},
+		"heartbeat concern is on": {heartbeat: true, interval: 50 * time.Minute, say: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval = tc.heartbeat, tc.interval
+			cfg.Reap = config.Reap{Enabled: true, Interval: time.Minute}
+			_, logs := runAssemble(t, cfg)
+			got := strings.Contains(logs, "reap on but the heartbeat concern is off: nothing will be reaped")
+			if got != tc.say {
+				t.Errorf("logs %q: said=%v, want %v", logs, got, tc.say)
+			}
+		})
+	}
+
+	cfg := assembleConfig(t, "box", "alice")
+	cfg.Concerns.Heartbeat = false
+	_, logs := runAssemble(t, cfg)
+	if strings.Contains(logs, "reap on but") {
+		t.Errorf("logs %q: said reap was on when it is off", logs)
+	}
+}
+
+// The reaper hands each stop to collect's spool when collect is on, and has
+// nowhere to hand it otherwise.
+func TestAssembleWiresTheReapRecordToCollect(t *testing.T) {
+	for name, collectOn := range map[string]bool{"collect on": true, "collect off": false} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.SocketPath = testsock.Path(t, "hook.sock")
+			cfg.Concerns.Collect = collectOn
+			concerns, err := assemble(cfg, func(string, ...any) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var h *heartbeat.Concern
+			for _, c := range concerns {
+				if hc, ok := c.(*heartbeat.Concern); ok {
+					h = hc
+				}
+			}
+			if h == nil {
+				t.Fatal("no heartbeat concern built")
+			}
+			if !collectOn {
+				if h.Record != nil {
+					t.Error("Record is set with collect off")
+				}
+				return
+			}
+			if h.Record == nil {
+				t.Fatal("Record is not set with collect on")
+			}
+			// Collect only takes a write while it runs and holds the spool.
+			var col concern.Concern
+			for _, c := range concerns {
+				if c.Name() == "collect" {
+					col = c
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { _ = col.Run(ctx); close(done) }()
+			t.Cleanup(func() { cancel(); <-done })
+			const payload = `{"session_id":"s","reaped":{"pid":7}}`
+			var recordErr error
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if recordErr = h.Record([]byte(payload)); recordErr == nil {
+					break
+				}
+			}
+			if recordErr != nil {
+				t.Fatal(recordErr)
+			}
+			spool, err := collect.OpenSpool(cfg.SpoolDir, &ccxv1.Origin{Machine: "box", User: "alice"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, err := spool.Oldest()
+			if err != nil || e == nil {
+				t.Fatalf("nothing was spooled: %v, %v", e, err)
+			}
+			if e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != payload {
+				t.Errorf("spooled event = producer %v payload %q, want CCX_AGENT_REAPED and the payload as given", e.Event.GetProducer(), e.Event.GetPayload())
+			}
+		})
+	}
+}
+
+func TestAssembleLogsWhyReapingIsOff(t *testing.T) {
+	cfg := assembleConfig(t, "box", "alice")
+	cfg.Reap = config.Reap{Err: fmt.Errorf("reap: interval soon: want a duration")}
+	_, logs := runAssemble(t, cfg)
+	if !strings.Contains(logs, "reap off: reap: interval soon: want a duration\n") {
+		t.Errorf("logs %q: want the reason reaping is off", logs)
+	}
+}
+
+// A session is expired only once keepalive has let go of it (maxIdle); with no
+// cap that never happens, and serve says so once at startup.
+func TestAssembleSaysReapingNeedsAHeartbeatMaxIdle(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reap    bool
+		maxIdle time.Duration
+		say     bool
+	}{
+		"reap on, maxIdle off":  {reap: true, maxIdle: 0, say: true},
+		"reap on, maxIdle set":  {reap: true, maxIdle: 12 * time.Hour},
+		"reap off, maxIdle off": {reap: false, maxIdle: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.Heartbeat.MaxIdle = tc.maxIdle
+			cfg.Reap = config.Reap{Enabled: tc.reap, Interval: time.Minute}
+			_, logs := runAssemble(t, cfg)
+			got := strings.Count(logs, "reap on but the heartbeat maxIdle is off: only sessions without keepalive will be reaped\n")
+			if want := map[bool]int{true: 1, false: 0}[tc.say]; got != want {
+				t.Errorf("logs %q: said %d times, want %d", logs, got, want)
+			}
+		})
 	}
 }

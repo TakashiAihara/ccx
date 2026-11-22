@@ -313,6 +313,21 @@ export function registerSessionState(session: Command): void {
   }
 
   session
+    .command("pin")
+    .description("Keep ccx-agent from reclaiming this session when it goes idle (docs/design/reap.md); --off to allow it again")
+    .argument("[session-id...]", MANY_IDS)
+    .option("--off", "clear the pin")
+    .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+    .action(async (ids: string[], o) => {
+      await writeEach(
+        ids,
+        Boolean(o.json),
+        (id, home) => writeDeclared(id, { pinned: !o.off }, home),
+        (id) => `pinned ${o.off ? "off" : "on"}  ${id}`,
+      );
+    });
+
+  session
     .command("heartbeat")
     .description("Keep this session's prompt cache warm or not, over ccx-agent's default (default clears the override)")
     .argument("<setting>", "on | off | default")

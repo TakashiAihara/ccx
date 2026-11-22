@@ -3,14 +3,14 @@
  * 「Session state is ccx's to hold」)。
  *
  * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
- * 宣言 (archived / label / task / role / heartbeat / metadata) は人か session が書く。archived は
+ * 宣言 (archived / pinned / label / task / role / heartbeat / metadata) は人か session が書く。archived は
  * Desktop App と同じ語で「一覧から畳む」宣言。「保存先にだけあり手元に無い」観測は remote
  * と呼び、語を分ける。top level は ccx が定義する鍵 (作用する / 形と列を決める)。metadata は利用者の語彙
- * (done / pinned 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
+ * (done / delete-on-end 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
  * 持たない」を置き換えた): ccx は OSS なので、どの marker を持つかを ccx が決めない。
  *
  * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` (利用者側の script が marker を
- * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` は空
+ * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` と `pinned` は空
  * ファイル、`label` はテキストで、auto-label hook も `ccx session label` で書く (claude-config#966 より
  * 前の hook は直接書いていた。それもそのまま読む)、`task` は
  * 新しいテキスト。metadata は `meta/<key>` の 1 key 1 ファイル (中身が値、空なら値なし)。
@@ -45,12 +45,14 @@ async function writeAtomic(path: string, content: string): Promise<void> {
 export const claudeHome = (env: NodeJS.ProcessEnv = process.env) =>
   env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
-export const FLAGS = ["archived"] as const;
+export const FLAGS = ["archived", "pinned"] as const;
 export type Flag = (typeof FLAGS)[number];
 
 /** 宣言された状態。無いものは false / 空文字 */
 export type DeclaredState = {
   archived: boolean;
+  /** ccx-agent が idle の回収 (docs/design/reap.md) から外す印 */
+  pinned: boolean;
   label: string;
   task: string;
   /** 役割 (worker / pm 等の自由文字列)。ccx は値に意味を持たない。宛先の指定に使う予定で、まだ ccx の中に読み手は無い (docs/design/session-state.md の Role) */
@@ -120,7 +122,7 @@ const asHeartbeat = (v: unknown): Heartbeat => (HEARTBEATS as readonly unknown[]
 
 export type Lifecycle = "running" | "ended" | "remote" | "unknown";
 
-const FLAG_FILE: Record<Flag, string> = { archived: "archived" };
+const FLAG_FILE: Record<Flag, string> = { archived: "archived", pinned: "pinned" };
 const TEXT_FILE = { label: "label", task: "task", role: "role", heartbeat: "heartbeat" } as const;
 
 /**
@@ -130,7 +132,7 @@ const TEXT_FILE = { label: "label", task: "task", role: "role", heartbeat: "hear
  */
 const DECLARED_FILE = ".ccx-declared";
 
-export const EMPTY_DECLARED: DeclaredState = { archived: false, label: "", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] };
+export const EMPTY_DECLARED: DeclaredState = { archived: false, pinned: false, label: "", task: "", role: "", heartbeat: "", metadata: {}, labelHistory: [] };
 
 export const sessionDir = (sessionId: string, home = claudeHome()) => join(home, "sessions", sessionId);
 
@@ -170,6 +172,7 @@ export function normalizeDeclared(raw: unknown): DeclaredState {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   return {
     archived: r.archived === true,
+    pinned: r.pinned === true,
     label: typeof r.label === "string" ? r.label : "",
     task: typeof r.task === "string" ? r.task : "",
     role: asRole(r.role),
@@ -264,8 +267,9 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
       return "";
     }
   };
-  const [archived, label, task, roleText, heartbeat, metadata, labelHistory] = await Promise.all([
+  const [archived, pinned, label, task, roleText, heartbeat, metadata, labelHistory] = await Promise.all([
     flag("archived"),
+    flag("pinned"),
     text(TEXT_FILE.label),
     text(TEXT_FILE.task),
     text(TEXT_FILE.role),
@@ -273,7 +277,7 @@ export async function readDeclared(sessionId: string, home = claudeHome()): Prom
     readMetadata(dir),
     readLabelHistory(dir),
   ]);
-  return { archived, label, task, role: asRole(roleText), heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
+  return { archived, pinned, label, task, role: asRole(roleText), heartbeat: asHeartbeat(heartbeat), metadata, labelHistory };
 }
 
 /**

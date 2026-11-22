@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -28,6 +29,9 @@ type Register struct {
 	// ClaudeHome is the session's CLAUDE_CONFIG_DIR, when it set one. serve runs
 	// under systemd with its own environment and would look in ~/.claude.
 	ClaudeHome string `json:"claudeHome,omitempty"`
+	// PID is the session's claude process (the channel's parent), as a decimal
+	// string. Older channels leave it out; such a session is never reclaimed.
+	PID string `json:"pid,omitempty"`
 }
 
 // sessionID is the shape Claude Code gives a session. Anything else is refused:
@@ -48,7 +52,22 @@ type Concern struct {
 	socketPath string
 	claudeHome string
 	cfg        config.Heartbeat
+	reap       config.Reap
 	log        func(string, ...any)
+
+	// Record, when set, is handed each stop's record to carry to the center.
+	// A failure is logged; the local record is written either way.
+	Record func(payload []byte) error
+
+	// procRoot and kill are what a stop reads and does; tests replace them.
+	procRoot string
+	kill     func(pid int) error
+	// beforeSignal runs after a stop's process tree is measured and before the
+	// checks that precede the signal; a test closes the window it leaves.
+	beforeSignal func()
+	// afterRecheck runs after the session's expiry is checked again and before the
+	// last check of its process.
+	afterRecheck func()
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
@@ -94,7 +113,7 @@ func New(cfg config.Config, log func(string, ...any)) *Concern {
 		h, _ := os.UserHomeDir()
 		home = filepath.Join(h, ".claude")
 	}
-	return &Concern{socketPath: cfg.ChannelSocketPath, claudeHome: home, cfg: cfg.Heartbeat, log: log}
+	return &Concern{socketPath: cfg.ChannelSocketPath, claudeHome: home, cfg: cfg.Heartbeat, reap: cfg.Reap, log: log}
 }
 
 func (c *Concern) Name() string { return "heartbeat" }
@@ -111,6 +130,13 @@ const maxUnixPath = 104
 // retry, so a serve that takes over from one that stopped brings the heartbeat
 // up too (#185); a reason repeated is logged once until it is up again.
 func (c *Concern) Run(ctx context.Context) error {
+	if c.reap.Enabled {
+		// Run does not return while a tick is still reading or signalling.
+		var loop sync.WaitGroup
+		loop.Add(1)
+		go func() { defer loop.Done(); c.reapLoop(ctx) }()
+		defer loop.Wait()
+	}
 	for {
 		err := c.run(ctx)
 		if ctx.Err() != nil {
@@ -238,6 +264,24 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 			case <-time.After(d):
 			}
 		},
+	}
+	// A session is only ever stopped through the pid it registered, and only
+	// while that pid is still the same `claude` process.
+	if c.reap.Enabled {
+		pid, err := strconv.Atoi(reg.PID)
+		if err != nil || pid <= 1 {
+			c.log("reap: session %s registered no usable pid (%q); it will not be reaped", reg.Session, reg.PID)
+		} else if boot, ok := bootID(c.procDir()); !ok {
+			// Checked first: without /proc (macOS) every pid would look like "not a claude".
+			c.log("reap: session %s: the host's boot id cannot be read; it will not be reaped", reg.Session)
+		} else if start, ok := claudeProc(c.procDir(), pid); !ok {
+			c.log("reap: session %s registered pid %d, which is not a claude process; it will not be reaped", reg.Session, pid)
+		} else {
+			h.pid, h.pidStart, h.boot = pid, start, boot
+			// A reconnect of a process that was already signalled starts out signalled,
+			// so keepMin does not count it as running.
+			h.reapedBefore()
+		}
 	}
 	c.mu.Lock()
 	if c.registered == nil {

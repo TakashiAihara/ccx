@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -677,6 +678,138 @@ func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) 
 	} {
 		if got := messageMeta(env(tc.env)); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestReap_DefaultsOffAndTheSources(t *testing.T) {
+	none := missingConfig(t)
+	c, err := load(env(map[string]string{"CCX_CONFIG": none}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Reap.Enabled || c.Reap.Interval != time.Minute || c.Reap.KeepMin != 0 || c.Reap.Err != nil {
+		t.Errorf("defaults = %+v, want off, 1m, 0", c.Reap)
+	}
+
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("[reap]\nenabled = true\ninterval = \"3m\"\nkeepMin = 2\n"), 0o644)
+	c, err = load(env(map[string]string{"CCX_CONFIG": p}), noGit, fixedHost("h"))
+	if err != nil || !c.Reap.Enabled || c.Reap.Interval != 3*time.Minute || c.Reap.KeepMin != 2 {
+		t.Errorf("file: err=%v %+v, want on, 3m, 2", err, c.Reap)
+	}
+
+	// Env wins over the file, and its values are trimmed.
+	c, _ = load(env(map[string]string{"CCX_CONFIG": p, "CCX_REAP": "off", "CCX_REAP_INTERVAL": " 11m\n", "CCX_REAP_KEEP_MIN": " 9 "}), noGit, fixedHost("h"))
+	if c.Reap.Enabled || c.Reap.Err != nil || c.Reap.Interval != 11*time.Minute || c.Reap.KeepMin != 9 {
+		t.Errorf("env over the file = %+v, want off, 11m, 9", c.Reap)
+	}
+
+	// git config is not a source for reap.
+	git := func(k string) string {
+		return map[string]string{"ccx.reap": "true", "ccx.reapInterval": "7m", "ccx.reapKeepMin": "5"}[k]
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": none}), git, fixedHost("h"))
+	if c.Reap.Enabled || c.Reap.Interval != time.Minute || c.Reap.KeepMin != 0 {
+		t.Errorf("git config reached reap: %+v, want the defaults (off, 1m, 0)", c.Reap)
+	}
+}
+
+// An unusable value turns reaping off with a reason and leaves the rest of the
+// config alone.
+func TestReap_UnusableValueTurnsItOffWithAReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		file string
+		want string
+	}{
+		"interval not a duration":    {env: map[string]string{"CCX_REAP_INTERVAL": "soon"}, want: "reap: interval soon"},
+		"interval zero":              {env: map[string]string{"CCX_REAP_INTERVAL": "0"}, want: "reap: interval 0"},
+		"interval negative":          {env: map[string]string{"CCX_REAP_INTERVAL": "-1m"}, want: "reap: interval -1m"},
+		"interval under the floor":   {env: map[string]string{"CCX_REAP_INTERVAL": "9s"}, want: "reap: interval 9s"},
+		"keepMin not a number":       {env: map[string]string{"CCX_REAP_KEEP_MIN": "two"}, want: "reap: keepMin two"},
+		"keepMin negative":           {env: map[string]string{"CCX_REAP_KEEP_MIN": "-1"}, want: "reap: keepMin -1"},
+		"file interval is a number":  {file: "[reap]\ninterval = 60\n", want: "reap: interval 60"},
+		"file keepMin is a string":   {file: "[reap]\nkeepMin = \"many\"\n", want: "reap: keepMin many"},
+		"file keepMin is fractional": {file: "[reap]\nkeepMin = 1.5\n", want: "reap: keepMin 1.5"},
+		"file enabled is a string":   {file: "[reap]\nenabled = \"yes\"\n", want: "reap: enabled yes"},
+		"file keepMin is \"2\"":      {file: "[reap]\nkeepMin = \"2\"\n", want: "reap: keepMin 2: want an integer"},
+		"file keepMin is 2.0":        {file: "[reap]\nkeepMin = 2.0\n", want: "reap: keepMin 2: want an integer"},
+		"file keepMin is empty":      {file: "[reap]\nkeepMin = \"\"\n", want: "reap: keepMin : want an integer"},
+		"file keepMin is a bool":     {file: "[reap]\nkeepMin = true\n", want: "reap: keepMin true: want an integer"},
+		"file interval is empty":     {file: "[reap]\ninterval = \"\"\n", want: "reap: interval is empty"},
+		"file interval is blank":     {file: "[reap]\ninterval = \"  \"\n", want: "reap: interval is empty"},
+		"file interval is a bool":    {file: "[reap]\ninterval = true\n", want: "reap: interval true: want a duration in a string"},
+		"env enabled is not a bool":  {env: map[string]string{"CCX_REAP": "maybe"}, want: "reap: enabled maybe: want true or false"},
+		"env enabled is a typo":      {env: map[string]string{"CCX_REAP": "ture"}, want: "reap: enabled ture"},
+	} {
+		e := map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_MACHINE": "m"}
+		for k, v := range tc.env {
+			e[k] = v
+		}
+		if tc.file != "" {
+			p := filepath.Join(t.TempDir(), "config.toml")
+			_ = os.WriteFile(p, []byte(tc.file), 0o644)
+			e["CCX_CONFIG"] = p
+			if !strings.Contains(tc.file, "enabled") {
+				e["CCX_REAP"] = "on"
+			} else {
+				delete(e, "CCX_REAP")
+			}
+		}
+		c, err := load(env(e), noGit, fixedHost("h"))
+		if err != nil || c.Reap.Enabled || c.Reap.Err == nil || !strings.Contains(c.Reap.Err.Error(), tc.want) ||
+			!c.Concerns.Collect || !c.Concerns.Heartbeat || c.Machine != "m" {
+			t.Errorf("%s: err=%v reap=%+v collect=%v heartbeat=%v machine=%q, want off with %q", name, err, c.Reap, c.Concerns.Collect, c.Concerns.Heartbeat, c.Machine, tc.want)
+		}
+	}
+}
+
+// Every bad value is reported, not only the last one found.
+func TestReap_AllReasonsAreKept(t *testing.T) {
+	c, err := load(env(map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_REAP_INTERVAL": "soon", "CCX_REAP_KEEP_MIN": "two"}), noGit, fixedHost("h"))
+	if err != nil || c.Reap.Enabled || c.Reap.Err == nil {
+		t.Fatalf("err=%v reap=%+v", err, c.Reap)
+	}
+	msg := c.Reap.Err.Error()
+	if !strings.Contains(msg, "reap: interval soon") || !strings.Contains(msg, "reap: keepMin two") {
+		t.Errorf("reason = %q, want both the interval and the keepMin", msg)
+	}
+}
+
+func TestReap_TenSecondsIsTheFloor(t *testing.T) {
+	c, _ := load(env(map[string]string{"CCX_CONFIG": missingConfig(t), "CCX_REAP": "on", "CCX_REAP_INTERVAL": "10s", "CCX_REAP_KEEP_MIN": "0"}), noGit, fixedHost("h"))
+	if !c.Reap.Enabled || c.Reap.Interval != 10*time.Second || c.Reap.KeepMin != 0 || c.Reap.Err != nil {
+		t.Errorf("10s and keepMin 0 = %+v, want accepted", c.Reap)
+	}
+}
+
+func TestReap_EnabledEnvOverFileAndABadFileValueSurvivesAnOverride(t *testing.T) {
+	file := func(body string) string {
+		p := filepath.Join(t.TempDir(), "config.toml")
+		_ = os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		file    string
+		enabled bool
+		failed  bool
+	}{
+		"env on over file false":                  {env: map[string]string{"CCX_REAP": "on"}, file: "[reap]\nenabled = false\n", enabled: true},
+		"env off over file true":                  {env: map[string]string{"CCX_REAP": "off"}, file: "[reap]\nenabled = true\n"},
+		"empty env falls to the file":             {env: map[string]string{"CCX_REAP": " "}, file: "[reap]\nenabled = true\n", enabled: true},
+		"bad file enabled under CCX_REAP=on":      {env: map[string]string{"CCX_REAP": "on"}, file: "[reap]\nenabled = \"yes\"\n", failed: true},
+		"bad file keepMin under an env keepMin":   {env: map[string]string{"CCX_REAP": "on", "CCX_REAP_KEEP_MIN": "1"}, file: "[reap]\nkeepMin = \"2\"\n", failed: true},
+		"bad file interval under an env interval": {env: map[string]string{"CCX_REAP": "on", "CCX_REAP_INTERVAL": "2m"}, file: "[reap]\ninterval = 5\n", failed: true},
+	} {
+		e := map[string]string{"CCX_CONFIG": file(tc.file)}
+		for k, v := range tc.env {
+			e[k] = v
+		}
+		c, err := load(env(e), noGit, fixedHost("h"))
+		if err != nil || c.Reap.Enabled != tc.enabled || (c.Reap.Err != nil) != tc.failed {
+			t.Errorf("%s: err=%v reap=%+v, want enabled=%v failed=%v", name, err, c.Reap, tc.enabled, tc.failed)
 		}
 	}
 }

@@ -264,6 +264,19 @@ func (s *Spool) Append(payload []byte) (*ccxv1.Event, error) {
 // AppendID envelopes a raw hook payload under the event's id and writes it to the
 // spool, returning the stored event. This is the only place seq is advanced.
 func (s *Spool) AppendID(id string, payload []byte) (*ccxv1.Event, error) {
+	// The producer is set from HOW the event arrived (via the hook path), never
+	// from what the payload contains, so this stays a COLLECT+CARRY assignment,
+	// not a CONSULT.
+	return s.appendAs(ccxv1.Producer_PRODUCER_CLAUDE_CODE_HOOK, id, payload)
+}
+
+// AppendProducer envelopes a payload the agent itself produced (not a hook's)
+// under a fresh id and the given producer.
+func (s *Spool) AppendProducer(producer ccxv1.Producer, payload []byte) (*ccxv1.Event, error) {
+	return s.appendAs(producer, "", payload)
+}
+
+func (s *Spool) appendAs(producer ccxv1.Producer, id string, payload []byte) (*ccxv1.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -273,11 +286,8 @@ func (s *Spool) AppendID(id string, payload []byte) (*ccxv1.Event, error) {
 		EventId:    s.eventID(id),
 		Seq:        s.seq,
 		ReceivedAt: timestamppb.New(s.now()),
-		// The only producer that exists in #90. It is set from HOW the event
-		// arrived (via the hook path), never from what the payload contains —
-		// so this stays a COLLECT+CARRY assignment, not a CONSULT.
-		Producer: ccxv1.Producer_PRODUCER_CLAUDE_CODE_HOOK,
-		Payload:  payload,
+		Producer:   producer,
+		Payload:    payload,
 	}
 
 	b, err := proto.Marshal(ev)

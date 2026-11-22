@@ -1,13 +1,17 @@
 package collect
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/testsock"
 	ccxv1 "github.com/TakashiAihara/ccx/packages/proto/gen/go/ccx/v1"
 )
 
@@ -332,5 +336,160 @@ func TestWriteIncoming_TempNameCarriesTheEvent(t *testing.T) {
 	}
 	if len(patterns) != 1 || patterns[0] != ".tmp-"+id+".raw-*" {
 		t.Errorf("temp patterns %q, want the event's name in it", patterns)
+	}
+}
+
+// An event the agent produced itself carries its own producer and a fresh id and
+// seq in the same queue; a hook's event keeps the hook producer.
+func TestAppendProducerKeepsItsProducerAndTheHookPathKeepsItsOwn(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	hook, err := s.Append([]byte("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reaped, err := s.AppendProducer(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hook.GetProducer() != ccxv1.Producer_PRODUCER_CLAUDE_CODE_HOOK {
+		t.Errorf("hook path producer = %v, want CLAUDE_CODE_HOOK", hook.GetProducer())
+	}
+	if reaped.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || reaped.GetSeq() != 2 || reaped.GetEventId() != "id-002" {
+		t.Errorf("reaped event = producer %v seq %d id %q, want REAPED, 2, id-002", reaped.GetProducer(), reaped.GetSeq(), reaped.GetEventId())
+	}
+	e, err := s.Oldest()
+	if err != nil || string(e.Event.GetPayload()) != "h" {
+		t.Fatalf("oldest = %v, %v, want the hook event first", e, err)
+	}
+	_ = s.Ack(e)
+	e, _ = s.Oldest()
+	if e == nil || e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != "r" {
+		t.Errorf("second event on disk = %v, want the reaped one with its payload", e)
+	}
+}
+
+func TestCollectAppendEventSpoolsWithTheGivenProducerAndWakesTheDrain(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	c := newCollect("", s, &stubForwarder{}, t.Logf)
+	// The forward loop is not run here, so its nudge stays visible; Run is what
+	// sets this in service.
+	c.holding = true
+	if len(c.loop.nudge) != 0 {
+		t.Fatal("the drain loop was already nudged before anything was spooled")
+	}
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte(`{"x":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.Oldest()
+	if err != nil || e == nil || e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != `{"x":1}` {
+		t.Errorf("spooled = %v, %v", e, err)
+	}
+	if len(c.loop.nudge) != 1 {
+		t.Error("the drain loop was not woken, so the event would wait for the idle poll")
+	}
+}
+
+// With no center configured there is no drain loop; the event is still spooled
+// while collect runs.
+func TestCollectAppendEventWithoutACenterStillSpools(t *testing.T) {
+	srv, _, spoolDir, cancel := startServer(t, nil)
+	defer cancel()
+	waitFor(t, 2*time.Second, func() bool { return srv.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r")) == nil })
+	s, err := OpenSpool(spoolDir, testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.Pending(); n != 1 {
+		t.Errorf("pending = %d, want 1", n)
+	}
+}
+
+// The spool belongs to whoever holds its lock: before Run has it and after Run has
+// let go, an append is refused and writes nothing.
+func TestCollectAppendEventRefusesWhileCollectIsNotRunning(t *testing.T) {
+	dir := t.TempDir()
+	sock := testsock.Path(t, "ccx-agent.sock")
+	spool, err := OpenSpool(dir+"/spool", testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCollect(sock, spool, nil, quietLog)
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("before")); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("before Run: err = %v, want ErrNotRunning", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("during")); err != nil {
+		t.Errorf("during Run: err = %v", err)
+	}
+	cancel()
+	<-done
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("after")); !errors.Is(err, ErrNotRunning) {
+		t.Errorf("after Run: err = %v, want ErrNotRunning", err)
+	}
+
+	e, err := spool.Oldest()
+	if err != nil || e == nil || string(e.Event.GetPayload()) != "during" {
+		t.Fatalf("oldest = %v, %v, want the one written during Run", e, err)
+	}
+	if n, _ := spool.Pending(); n != 1 {
+		t.Errorf("pending = %d, want only the one written during Run", n)
+	}
+}
+
+// AppendEvent is let in only after the startup drain of incoming/ has finished: an
+// event spooled meanwhile would take a seq among the drained ones. The fsync a
+// drained event is written with stands in for "during the drain"; it looks at the
+// flag AppendEvent reads rather than calling it, since the drain holds the spool.
+func TestCollectAppendEventWaitsForTheStartupDrain(t *testing.T) {
+	dir := t.TempDir()
+	sock := testsock.Path(t, "ccx-agent.sock")
+	spool, err := OpenSpool(dir+"/spool", testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spool.IncomingDir(), "0001.raw"), []byte(`{"hook":"Stop"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newCollect(sock, spool, nil, quietLog)
+
+	var mu sync.Mutex
+	var open []bool
+	realFsync := fsync
+	fsync = func(f *os.File) error {
+		c.holdMu.RLock()
+		held := c.holding
+		c.holdMu.RUnlock()
+		mu.Lock()
+		open = append(open, held)
+		mu.Unlock()
+		return realFsync(f)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done; fsync = realFsync })
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+
+	mu.Lock()
+	seen := append([]bool(nil), open...)
+	mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("the startup drain wrote nothing, so the window was never exercised")
+	}
+	for _, held := range seen {
+		if held {
+			t.Error("AppendEvent was let in while the startup drain was still writing")
+		}
+	}
+	// The probe takes holdMu.RLock; AppendEvent holds it too, and a read lock must
+	// not be taken twice on one goroutine. Put the real fsync back first.
+	fsync = realFsync
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("late")); err != nil {
+		t.Errorf("AppendEvent after the drain: %v", err)
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
@@ -37,10 +39,28 @@ type Heartbeat struct {
 	Now        func() time.Time
 	Sleep      func(context.Context, time.Duration)
 
-	file  string
-	mtime time.Time
-	size  int64
-	last  Scan
+	// pid is the session's claude process and pidStart its start time (clock
+	// ticks since boot), read when the channel registered; 0 when it was not
+	// one (the session is then never reaped).
+	pid      int
+	pidStart uint64
+	// boot is the host's boot id when it registered: with pid and pidStart it
+	// names the process across reboots.
+	boot string
+	// signalled: the reaper sent this process SIGTERM, or its reaped file says it
+	// did before this registration. The reaper's goroutine writes it and the
+	// keepMin count reads it under Concern.mu, so it is atomic.
+	signalled atomic.Bool
+	// pidNoted: the reaper has already said why it keeps this session because of
+	// its pid file. Only the reaper's goroutine touches it.
+	pidNoted bool
+
+	// readMu: read runs in the heartbeat's own loop and in the reaper.
+	readMu sync.Mutex
+	file   string
+	mtime  time.Time
+	size   int64
+	last   Scan
 	// shortTTL is what the last read said, to log only when it changes.
 	shortTTL bool
 
@@ -104,6 +124,22 @@ type Scan struct {
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
+	// Background is the background work started and not yet ended: task id ->
+	// when its start was recorded. A task outlives neither the process that
+	// started it nor a resume, so a reader keeps only those started since the
+	// current process did (BackgroundSince).
+	Background map[string]time.Time
+}
+
+// BackgroundSince: background work started after t (the session's process
+// start) has not ended.
+func (s Scan) BackgroundSince(t time.Time) bool {
+	for _, at := range s.Background {
+		if at.After(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // poll is how often a transcript is looked at while nothing is due: a session
@@ -255,6 +291,8 @@ func (h *Heartbeat) wanted() bool {
 
 // read scans the transcript, or returns the last scan if the file has not moved.
 func (h *Heartbeat) read() (Scan, bool) {
+	h.readMu.Lock()
+	defer h.readMu.Unlock()
 	if h.file == "" {
 		m, _ := filepath.Glob(filepath.Join(h.ClaudeHome, "projects", "*", h.SessionID+".jsonl"))
 		if len(m) == 0 {
@@ -289,11 +327,12 @@ func (h *Heartbeat) read() (Scan, bool) {
 // record carrying Marker to the next user prompt, other channel event or
 // cross-session message; nothing inside it counts as the session being used.
 func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
-	var s Scan
+	s := Scan{Background: map[string]time.Time{}}
 	inBeat := false
 	nodes := map[string]node{}
 	starts := map[string]time.Time{}    // assistant uuid -> its request's start
 	pending := map[string]bool{}        // tool_use ids with no result yet
+	toolNames := map[string]string{}    // tool_use id -> the tool's name
 	responses := map[string]time.Time{} // response (message) id -> its request's start
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
@@ -306,7 +345,18 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			Timestamp  time.Time `json:"timestamp"`
 			IsMeta     bool      `json:"isMeta"`
 			APIError   bool      `json:"isApiErrorMessage"`
-			Message    struct {
+			// An object for most tools, but a string (an error) or an array for
+			// others; a typed struct would make Unmarshal drop the whole record.
+			ToolResult json.RawMessage `json:"toolUseResult"`
+			// A notification delivered while a turn runs is not a user record but an
+			// attachment of type queued_command, its text in prompt. Raw for the same
+			// reason as toolUseResult: another attachment's shape must not drop the line.
+			Attachment json.RawMessage `json:"attachment"`
+			// A queue-operation record: Claude Code's own log of queued input, the
+			// notification text in the top-level content.
+			Operation    string          `json:"operation"`
+			QueueContent json.RawMessage `json:"content"`
+			Message      struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -325,6 +375,16 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 		switch rec.Type {
 		case "user":
+			resultIDs := toolIDs(rec.Message.Content, "tool_result", "tool_use_id")
+			// Only an end (TaskStop's task_id) needs to know which tool a result came
+			// from, told by the tool_use that asked for it. A record carries one
+			// tool_result (measured: none with more than one), so the first is its tool.
+			tool := ""
+			if len(resultIDs) > 0 {
+				tool = toolNames[resultIDs[0]]
+			}
+			tr := parseToolResult(rec.ToolResult, tool)
+			trackBackground(s.Background, tr.backgroundTaskID, tr.taskID, tr.agentID, tr.status, tr.stopped, rec.Message.Content, rec.Timestamp)
 			tag := channelTag(rec.Message.Content)
 			// A local command (/model and its output) is typed by a person but sends
 			// no request, so it is not a turn starting. It still counts as use below.
@@ -336,7 +396,7 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// Only a tool's own result, or an interrupt, ends a running tool: another
 			// record (a hook's, a channel's, a sibling tool's result) can land while
 			// it runs.
-			for _, id := range toolIDs(rec.Message.Content, "tool_result", "tool_use_id") {
+			for _, id := range resultIDs {
 				delete(pending, id)
 			}
 			if isInterrupt(rec.Message.Content) {
@@ -381,6 +441,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			for _, id := range toolIDs(rec.Message.Content, "tool_use", "id") {
 				pending[id] = true
 			}
+			for id, name := range toolUseNames(rec.Message.Content) {
+				toolNames[id] = name
+			}
 			s.ToolRunning = len(pending) > 0
 			s.LastRequest = start
 			if rec.UUID != "" {
@@ -391,6 +454,27 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
 				s.ShortTTL = cc.Long == 0
 			}
+		case "queue-operation":
+			// An enqueued notification ends its task even when the process ends before
+			// it is delivered (235 task ids on d1 were ended only here, 2026-11-22).
+			// Nothing else about the session changes.
+			var q string
+			if rec.Operation == "enqueue" && json.Unmarshal(rec.QueueContent, &q) == nil {
+				endNotified(s.Background, q)
+			}
+			continue
+		case "attachment":
+			// Only the end of background work is read from it. A queued_command can
+			// also carry a typed prompt, a channel event or a peer message; it is not
+			// counted as use (measured 2026-11-22: in no transcript was one the last use).
+			var a struct {
+				Type   string `json:"type"`
+				Prompt string `json:"prompt"`
+			}
+			if json.Unmarshal(rec.Attachment, &a) == nil && a.Type == "queued_command" {
+				endNotified(s.Background, a.Prompt)
+			}
+			continue
 		default:
 			continue
 		}
@@ -399,6 +483,221 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 	}
 	return s, sc.Err()
+}
+
+// toolResultFields are the toolUseResult fields background tracking reads.
+type toolResultFields struct {
+	backgroundTaskID, taskID, agentID, status, stopped string
+}
+
+// parseToolResult reads the fields background tracking uses from a toolUseResult.
+// The start fields (backgroundTaskId, taskId, agentId with its status) are read
+// whatever the tool: they only ever keep a session, and a start missed because a
+// tool was renamed would let a session with live work be stopped. The end field
+// (task_id) is read only from a TaskStop, since a stray one would end live work.
+// Only an object is decoded (most results are, and the rest are not worth an
+// allocation), and a value that is not a string is ignored.
+func parseToolResult(raw json.RawMessage, tool string) toolResultFields {
+	if len(raw) == 0 || raw[0] != '{' {
+		return toolResultFields{}
+	}
+	var o struct {
+		BackgroundTaskID json.RawMessage `json:"backgroundTaskId"`
+		TaskID           json.RawMessage `json:"taskId"`
+		AgentID          json.RawMessage `json:"agentId"`
+		Status           json.RawMessage `json:"status"`
+		Stopped          json.RawMessage `json:"task_id"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return toolResultFields{}
+	}
+	str := func(v json.RawMessage) string {
+		var s string
+		_ = json.Unmarshal(v, &s)
+		return s
+	}
+	f := toolResultFields{
+		backgroundTaskID: str(o.BackgroundTaskID),
+		agentID:          str(o.AgentID),
+		status:           str(o.Status),
+	}
+	// The task-list tools (Claude Code's TaskCreate / TaskGet / TaskUpdate / TaskList)
+	// also return a taskId, for a list entry that never ends: it is not background work.
+	switch tool {
+	case "TaskCreate", "TaskGet", "TaskUpdate", "TaskList":
+	default:
+		f.taskID = str(o.TaskID)
+	}
+	if tool == "TaskStop" {
+		f.stopped = str(o.Stopped)
+	}
+	return f
+}
+
+// toolUseNames is the name of each tool_use block in the content, by its id.
+func toolUseNames(content json.RawMessage) map[string]string {
+	var parts []struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return nil
+	}
+	var names map[string]string
+	for _, p := range parts {
+		if p.Type == "tool_use" && p.ID != "" {
+			if names == nil {
+				names = map[string]string{}
+			}
+			names[p.ID] = p.Name
+		}
+	}
+	return names
+}
+
+var (
+	taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+	// One record can carry several notifications; each is read on its own.
+	notificationBlock = regexp.MustCompile(`(?s)<task-notification>(.*?)</task-notification>`)
+)
+
+// monitorExpired stands in the text for an <event> that says its Monitor expired,
+// so the expiry stays attached to the notification it came in after the event's
+// body is gone. NUL does not occur in the text outside the bodies it replaces.
+const monitorExpired = "\x00monitor-expired\x00"
+
+// quotedTags are the notification parts that hold a command's output or a tool's
+// own words, which can quote anything: task ids, status tags, a whole notification.
+var quotedTags = [...]struct{ open, close string }{
+	{"<event>", "</event>"},
+	{"<summary>", "</summary>"},
+	{"<result>", "</result>"},
+}
+
+// finder is the next place a pattern occurs at or after a position, remembered:
+// positions only move forward, so what was found stays right until it is passed
+// and nothing is searched from the start again.
+type finder struct {
+	s, pat string
+	at     int
+	none   bool
+}
+
+func newFinder(s, pat string) *finder { return &finder{s: s, pat: pat, at: -1} }
+
+func (f *finder) next(from int) int {
+	if f.none {
+		return -1
+	}
+	if f.at >= from {
+		return f.at
+	}
+	i := strings.Index(f.s[from:], f.pat)
+	if i < 0 {
+		f.none = true
+		return -1
+	}
+	f.at = from + i
+	return f.at
+}
+
+// stripQuoted removes the quoted bodies of a notification record in one pass from
+// left to right. Whichever of <event>, <summary> and <result> opens first is
+// taken, and its body runs to its own closing tag, matched by depth against the
+// same tag only: another tag inside it, or a notification quoted whole with its own
+// <result>, is just content. An <event> that says its Monitor expired leaves a
+// marker. A body that never closes runs to the end and is dropped with it, which
+// ends no task and so keeps the session.
+//
+// A literal closing tag with no opening one inside a body is out of scope: it ends
+// the body early. Nothing is known to write one.
+func stripQuoted(s string) string {
+	var opens, closes [len(quotedTags)]*finder
+	for i, t := range quotedTags {
+		opens[i], closes[i] = newFinder(s, t.open), newFinder(s, t.close)
+	}
+	var out strings.Builder
+	pos := 0
+	for {
+		first, tag := -1, 0
+		for i := range quotedTags {
+			if at := opens[i].next(pos); at >= 0 && (first < 0 || at < first) {
+				first, tag = at, i
+			}
+		}
+		if first < 0 {
+			out.WriteString(s[pos:])
+			return out.String()
+		}
+		out.WriteString(s[pos:first])
+		open, closing := quotedTags[tag].open, quotedTags[tag].close
+		start := first + len(open)
+		depth, cur := 1, start
+		for depth > 0 {
+			c := closes[tag].next(cur)
+			if c < 0 {
+				return out.String()
+			}
+			if o := opens[tag].next(cur); o >= 0 && o < c {
+				depth++
+				cur = o + len(open)
+				continue
+			}
+			depth--
+			cur = c + len(closing)
+			if depth == 0 && tag == 0 && strings.HasPrefix(strings.TrimSpace(s[start:c]), "[Monitor expired") {
+				out.WriteString(monitorExpired)
+			}
+		}
+		pos = cur
+	}
+}
+
+// trackBackground records background work starting or ending in one user record.
+// A start is what a tool's result says it launched (a backgroundTaskId, a Monitor's
+// taskId, an async Agent's agentId), read from any tool's result: a start that is
+// not one only keeps a session, and a tool renamed must not hide live work. An end
+// is a TaskStop's task_id, which counts only from that tool, or a notification
+// (see endNotified).
+func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stopped string, content json.RawMessage, ts time.Time) {
+	for _, id := range []string{bash, monitor} {
+		if id != "" {
+			bg[id] = ts
+		}
+	}
+	if agent != "" && status == "async_launched" {
+		bg[agent] = ts
+	}
+	if stopped != "" {
+		delete(bg, stopped)
+	}
+	var s string
+	if json.Unmarshal(content, &s) == nil {
+		endNotified(bg, s)
+	}
+}
+
+// endNotified ends the background tasks a <task-notification> text reports done:
+// the text must start with it (as for channelTag), and each notification in it ends
+// only its own task ids, by its own <status> or by a Monitor's expiry (an event whose
+// text starts with "[Monitor expired"). A Monitor's other events end nothing, and
+// text quoted inside a body names no task. The same text arrives as a user record's
+// content, or, when delivered during a turn, as an attachment's prompt.
+func endNotified(bg map[string]time.Time, s string) {
+	if !strings.HasPrefix(s, "<task-notification>") {
+		return
+	}
+	s = stripQuoted(s)
+	for _, block := range notificationBlock.FindAllStringSubmatch(s, -1) {
+		body := block[1]
+		if !strings.Contains(body, "<status>") && !strings.Contains(body, monitorExpired) {
+			continue
+		}
+		for _, m := range taskIDs.FindAllStringSubmatch(body, -1) {
+			delete(bg, m[1])
+		}
+	}
 }
 
 // isLocalCommand is a slash command's echo or output, written as a user record

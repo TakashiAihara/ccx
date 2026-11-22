@@ -28,8 +28,8 @@ const (
 	Producer_PRODUCER_UNSPECIFIED Producer = 0
 	// `ccx-agent hook` の stdin JSON。中身は Claude Code のもので、ccx のものではない。
 	Producer_PRODUCER_CLAUDE_CODE_HOOK Producer = 1
-	// `ccx session mark / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
-	// `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
+	// `ccx session mark / pin / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
+	// `{"session_id": "...", "state": {"archived": bool, "pinned": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
 	// "metadata": {...}}, "rev": <ms>}`。label の履歴 (#169) は送らない (保存先の state.json だけが持つ)。
 	// 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
 	// session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。
@@ -51,6 +51,15 @@ const (
 	// (鮮度を agent の時計と center の時計で比べない)。ListEvents にも出ない。payload が読めなければバッチごと
 	// INVALID_ARGUMENT で断る (読めない一覧を「何も動いていない」として持たない)。
 	Producer_PRODUCER_CCX_AGENT_RUNNING Producer = 3
+	// ccx-agent が session の claude に SIGTERM を送ったときの記録 (docs/design/reap.md)。送れた時点で書き、終了は待たない (SIGTERM を無視した process にも 1 件残る)。payload は ccx 自身の
+	// JSON: `{"session_id": "...", "reaped": {"at": "<RFC3339 UTC>", "reason": "expired", "pid": <int>, "pssBytes": <int>, "start": <int>, "boot": "<boot id>"}}`。start は止めた process の起動時刻
+	// (boot からの clock tick)、boot はそのマシンの boot id (/proc/sys/kernel/random/boot_id)。pid と合わせて
+	// 1 つの process を指す (start だけでは再起動の後に同じ値が出る)。
+	// reaped の中身は、そのマシンの `~/.claude/sessions/<id>/reaped` に 1 行ずつ追記する JSON と同じ。止めた事実は
+	// そのマシンだけが知っているので、事実として運ぶ (ccx-agent の COLLECT)。1 回の停止につき 1 件で、events に積む
+	// (後から「なぜこの session は消えたか」を読む用途がある)。center に届かなければ spool で待ち、手元の記録は
+	// center の有無に関わらず書かれる。
+	Producer_PRODUCER_CCX_AGENT_REAPED Producer = 4
 )
 
 // Enum value maps for Producer.
@@ -60,12 +69,14 @@ var (
 		1: "PRODUCER_CLAUDE_CODE_HOOK",
 		2: "PRODUCER_CCX_SESSION_STATE",
 		3: "PRODUCER_CCX_AGENT_RUNNING",
+		4: "PRODUCER_CCX_AGENT_REAPED",
 	}
 	Producer_value = map[string]int32{
 		"PRODUCER_UNSPECIFIED":       0,
 		"PRODUCER_CLAUDE_CODE_HOOK":  1,
 		"PRODUCER_CCX_SESSION_STATE": 2,
 		"PRODUCER_CCX_AGENT_RUNNING": 3,
+		"PRODUCER_CCX_AGENT_REAPED":  4,
 	}
 )
 
@@ -384,12 +395,13 @@ const file_ccx_v1_ingest_proto_rawDesc = "" +
 	"\amachine\x18\x01 \x01(\tR\amachine\x12\x12\n" +
 	"\x04user\x18\x02 \x01(\tR\x04user\",\n" +
 	"\x0eIngestResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\rR\baccepted*\x83\x01\n" +
+	"\baccepted\x18\x01 \x01(\rR\baccepted*\xa2\x01\n" +
 	"\bProducer\x12\x18\n" +
 	"\x14PRODUCER_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19PRODUCER_CLAUDE_CODE_HOOK\x10\x01\x12\x1e\n" +
 	"\x1aPRODUCER_CCX_SESSION_STATE\x10\x02\x12\x1e\n" +
-	"\x1aPRODUCER_CCX_AGENT_RUNNING\x10\x032H\n" +
+	"\x1aPRODUCER_CCX_AGENT_RUNNING\x10\x03\x12\x1d\n" +
+	"\x19PRODUCER_CCX_AGENT_REAPED\x10\x042H\n" +
 	"\rIngestService\x127\n" +
 	"\x06Ingest\x12\x15.ccx.v1.IngestRequest\x1a\x16.ccx.v1.IngestResponseB\x93\x01\n" +
 	"\n" +

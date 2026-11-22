@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/ingest.proto.
  */
 export const file_ccx_v1_ingest: GenFile = /*@__PURE__*/
-  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qgwEKCFByb2R1Y2VyEhgKFFBST0RVQ0VSX1VOU1BFQ0lGSUVEEAASHQoZUFJPRFVDRVJfQ0xBVURFX0NPREVfSE9PSxABEh4KGlBST0RVQ0VSX0NDWF9TRVNTSU9OX1NUQVRFEAISHgoaUFJPRFVDRVJfQ0NYX0FHRU5UX1JVTk5JTkcQAzJICg1Jbmdlc3RTZXJ2aWNlEjcKBkluZ2VzdBIVLmNjeC52MS5Jbmdlc3RSZXF1ZXN0GhYuY2N4LnYxLkluZ2VzdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("ChNjY3gvdjEvaW5nZXN0LnByb3RvEgZjY3gudjEiLgoNSW5nZXN0UmVxdWVzdBIdCgZldmVudHMYASADKAsyDS5jY3gudjEuRXZlbnQirAEKBUV2ZW50Eh4KBm9yaWdpbhgBIAEoCzIOLmNjeC52MS5PcmlnaW4SEAoIZXZlbnRfaWQYAiABKAkSCwoDc2VxGAMgASgEEi8KC3JlY2VpdmVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIiCghwcm9kdWNlchgFIAEoDjIQLmNjeC52MS5Qcm9kdWNlchIPCgdwYXlsb2FkGAYgASgMIicKBk9yaWdpbhIPCgdtYWNoaW5lGAEgASgJEgwKBHVzZXIYAiABKAkiIgoOSW5nZXN0UmVzcG9uc2USEAoIYWNjZXB0ZWQYASABKA0qogEKCFByb2R1Y2VyEhgKFFBST0RVQ0VSX1VOU1BFQ0lGSUVEEAASHQoZUFJPRFVDRVJfQ0xBVURFX0NPREVfSE9PSxABEh4KGlBST0RVQ0VSX0NDWF9TRVNTSU9OX1NUQVRFEAISHgoaUFJPRFVDRVJfQ0NYX0FHRU5UX1JVTk5JTkcQAxIdChlQUk9EVUNFUl9DQ1hfQUdFTlRfUkVBUEVEEAQySAoNSW5nZXN0U2VydmljZRI3CgZJbmdlc3QSFS5jY3gudjEuSW5nZXN0UmVxdWVzdBoWLmNjeC52MS5Jbmdlc3RSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message ccx.v1.IngestRequest
@@ -184,8 +184,8 @@ export enum Producer {
   CLAUDE_CODE_HOOK = 1,
 
   /**
-   * `ccx session mark / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
-   * `{"session_id": "...", "state": {"archived": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
+   * `ccx session mark / pin / label / task / role / heartbeat / meta` が書いた宣言状態 (#127)。payload は ccx 自身の JSON:
+   * `{"session_id": "...", "state": {"archived": bool, "pinned": bool, "label": "...", "task": "...", "role": "...", "heartbeat": "...",
    * "metadata": {...}}, "rev": <ms>}`。label の履歴 (#169) は送らない (保存先の state.json だけが持つ)。
    * 全部の鍵を毎回持つ (差分ではない)。rev は送り手が送る直前の時刻で、同じ (machine, user,
    * session) の中で最新を決める (遅れて届いた古い写しを後の写しに勝たせない)。
@@ -215,6 +215,20 @@ export enum Producer {
    * @generated from enum value: PRODUCER_CCX_AGENT_RUNNING = 3;
    */
   CCX_AGENT_RUNNING = 3,
+
+  /**
+   * ccx-agent が session の claude に SIGTERM を送ったときの記録 (docs/design/reap.md)。送れた時点で書き、終了は待たない (SIGTERM を無視した process にも 1 件残る)。payload は ccx 自身の
+   * JSON: `{"session_id": "...", "reaped": {"at": "<RFC3339 UTC>", "reason": "expired", "pid": <int>, "pssBytes": <int>, "start": <int>, "boot": "<boot id>"}}`。start は止めた process の起動時刻
+   * (boot からの clock tick)、boot はそのマシンの boot id (/proc/sys/kernel/random/boot_id)。pid と合わせて
+   * 1 つの process を指す (start だけでは再起動の後に同じ値が出る)。
+   * reaped の中身は、そのマシンの `~/.claude/sessions/<id>/reaped` に 1 行ずつ追記する JSON と同じ。止めた事実は
+   * そのマシンだけが知っているので、事実として運ぶ (ccx-agent の COLLECT)。1 回の停止につき 1 件で、events に積む
+   * (後から「なぜこの session は消えたか」を読む用途がある)。center に届かなければ spool で待ち、手元の記録は
+   * center の有無に関わらず書かれる。
+   *
+   * @generated from enum value: PRODUCER_CCX_AGENT_REAPED = 4;
+   */
+  CCX_AGENT_REAPED = 4,
 }
 
 /**

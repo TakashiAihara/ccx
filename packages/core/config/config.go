@@ -71,6 +71,10 @@ type Config struct {
 	// itself (`ccx session heartbeat on|off`); the rest applies to all.
 	Heartbeat Heartbeat
 
+	// Reap is whether and how the agent stops sessions whose keepalive has let
+	// go (docs/design/reap.md). Off unless a person turns it on.
+	Reap Reap
+
 	// ChannelSocketPath is where each session's `ccx-agent channel` registers
 	// with serve. Apart from the hook socket: the hook wire is one frame and an
 	// ack, this one stays open for the life of the session.
@@ -142,6 +146,18 @@ type Heartbeat struct {
 	Err error
 }
 
+// Reap is the reaper's settings. It runs inside the heartbeat concern.
+type Reap struct {
+	Enabled bool
+	// Interval is both the tick and the spacing between stops: one session at most per tick.
+	Interval time.Duration
+	// KeepMin is how many sessions with a channel are always left running.
+	KeepMin int
+	// Err is why the settings could not be used. It turns reaping off and
+	// nothing else.
+	Err error
+}
+
 // Concerns is the on/off state of each of ccx-agent's jobs (ADR 0002). Collect
 // and Heartbeat are built; Carry and Persistence have their toggle here so they
 // slot in the same shape when built, and so a reader sees the full set.
@@ -185,6 +201,13 @@ type fileShape struct {
 		Interval string `toml:"interval"`
 		MaxIdle  string `toml:"maxIdle"`
 	} `toml:"heartbeat"`
+	// Untyped so a value of the wrong type is an unusable reap setting
+	// (Reap.Err), not a config file that fails to load.
+	Reap struct {
+		Enabled  any `toml:"enabled"`
+		Interval any `toml:"interval"`
+		KeepMin  any `toml:"keepMin"`
+	} `toml:"reap"`
 	// [transcript] is where in the center `ccx transcript` keeps transcripts
 	// (bucket, prefix). `live` is the switch that stops reading transcripts per
 	// hook, and it exists nowhere else (#120).
@@ -299,6 +322,8 @@ func load(
 		hbErr = err
 	}
 
+	reap := reapSettings(getenv, file.Reap.Enabled, file.Reap.Interval, file.Reap.KeepMin)
+
 	// The transcript store, resolved exactly as the CLI resolves it
 	// (packages/core/src/config.ts) — same defaults, same prefix normalisation.
 	// If ccx-agent appended to a different object than `ccx transcript` reads,
@@ -334,6 +359,7 @@ func load(
 			MaxIdle:  maxIdle,
 			Err:      hbErr,
 		},
+		Reap:              reap,
 		ChannelSocketPath: channelSocketPath(getenv, hook),
 		APISocketPath:     apiSocketPath(getenv, hook),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
@@ -366,6 +392,83 @@ func duration(v string, def time.Duration) (time.Duration, error) {
 		return 0, errors.New("heartbeat: " + v + ": want a duration like 50m, or off")
 	}
 	return d, nil
+}
+
+// minReapInterval is the floor of the reap tick: shorter would signal sessions
+// faster than their SessionEnd hooks can finish (docs/design/reap.md).
+const minReapInterval = 10 * time.Second
+
+// reapSettings resolves [reap] from env and the file only: git config is being
+// taken out of the resolution (kaneo ccx#24), so a new setting does not start
+// there. Any unusable value turns reaping off with every reason in Err; a typo
+// here must not stop anything else. A file value of the wrong type is unusable
+// whether or not an env value overrides it, and a CCX_REAP that is not a bool is
+// too: reaping signals processes, so a setting that cannot be read is off.
+func reapSettings(getenv func(string) string, fileEnabled, fileInterval, fileKeepMin any) Reap {
+	r := Reap{Interval: time.Minute}
+	var errs []error
+
+	interval := strings.TrimSpace(getenv("CCX_REAP_INTERVAL"))
+	switch v := fileInterval.(type) {
+	case nil:
+	case string:
+		if strings.TrimSpace(v) == "" {
+			errs = append(errs, errors.New("reap: interval is empty: want a duration like 1m"))
+		} else if interval == "" {
+			interval = strings.TrimSpace(v)
+		}
+	default:
+		errs = append(errs, fmt.Errorf("reap: interval %v: want a duration in a string, like \"1m\"", v))
+	}
+	if interval != "" {
+		d, err := time.ParseDuration(interval)
+		if err != nil || d < minReapInterval {
+			errs = append(errs, errors.New("reap: interval "+interval+": want a duration of at least "+minReapInterval.String()+", like 1m"))
+		} else {
+			r.Interval = d
+		}
+	}
+
+	keepMin := strings.TrimSpace(getenv("CCX_REAP_KEEP_MIN"))
+	switch v := fileKeepMin.(type) {
+	case nil:
+	case int64:
+		if keepMin == "" {
+			keepMin = strconv.FormatInt(v, 10)
+		}
+	default:
+		errs = append(errs, fmt.Errorf("reap: keepMin %v: want an integer", v))
+	}
+	if keepMin != "" {
+		n, err := strconv.Atoi(keepMin)
+		if err != nil || n < 0 {
+			errs = append(errs, errors.New("reap: keepMin "+keepMin+": want a count of 0 or more"))
+		} else {
+			r.KeepMin = n
+		}
+	}
+
+	enabled := false
+	if v := strings.TrimSpace(getenv("CCX_REAP")); v != "" {
+		if b, ok := parseBool(v); ok {
+			enabled = b
+		} else {
+			errs = append(errs, errors.New("reap: enabled "+v+": want true or false"))
+		}
+	}
+	switch v := fileEnabled.(type) {
+	case nil:
+	case bool:
+		if strings.TrimSpace(getenv("CCX_REAP")) == "" {
+			enabled = v
+		}
+	default:
+		errs = append(errs, fmt.Errorf("reap: enabled %v: want true or false", v))
+	}
+
+	r.Err = errors.Join(errs...)
+	r.Enabled = r.Err == nil && enabled
+	return r
 }
 
 // toggle resolves one on/off setting through the usual ladder
