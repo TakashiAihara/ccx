@@ -14,7 +14,10 @@ func noGit(string) string { return "" }
 
 // missingConfig is a config path that does not exist on any host: a fixed one
 // like /nonexistent can be a directory, and load then fails reading it.
-func missingConfig(t *testing.T) string { return filepath.Join(t.TempDir(), "config.toml") }
+func missingConfig(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "config.toml")
+}
 
 func fixedHost(name string) func() (string, error) {
 	return func() (string, error) { return name, nil }
