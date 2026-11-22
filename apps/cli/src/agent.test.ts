@@ -140,7 +140,7 @@ describe("agentStatus", () => {
     for (const id of ["a", "b"]) writeFileSync(join(spool, "dead", `00000000000000000001-${id}.pb`), "x");
 
     const p = Bun.spawn(["bun", "run", join(import.meta.dir, "index.ts"), "agent", "status"], {
-      env: { ...process.env, XDG_CONFIG_HOME: dir, CCX_CONFIG: join(dir, "none.toml"), CCX_HUB_URL: "", CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool },
+      env: { ...process.env, XDG_CONFIG_HOME: dir, CCX_CONFIG: join(dir, "none.toml"), CCX_HUB_URL: "", CCX_SOCKET: join(dir, "n.sock"), CCX_SPOOL: spool, CLAUDE_CONFIG_DIR: dir },
       stdout: "pipe",
       stderr: "pipe",
     });

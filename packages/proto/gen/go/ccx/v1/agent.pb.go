@@ -237,9 +237,11 @@ type HeartbeatStatus struct {
 	LastSentAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_sent_at,json=lastSentAt,proto3" json:"last_sent_at,omitempty"`
 	// 予定を入れない理由。"not_wanted" (打たない宣言 / archived / 宣言が無く agent の既定が off) /
 	// "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
-	// "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
-	// 空になるのは、予定がある (next_at が設定済み) か、どれにも当たらないとき: 打った heartbeat の
-	// 着地待ち、push の失敗、応答のある request がまだ無い、transcript を読めない、未登録。
+	// "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた) /
+	// "beat_pending" (打った heartbeat が transcript に届くのを待っている) / "push_failed" (push が失敗した。
+	// 次の見直しでもう一度打つ) / "no_request" (応答のある request がまだ無い) /
+	// "transcript_unreadable" (transcript が無い、または読めない)。
+	// 空になるのは、予定がある (next_at が設定済み) か、未登録のときだけ。
 	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
 	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
 	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event、別 session からの
@@ -248,8 +250,16 @@ type HeartbeatStatus struct {
 	// 戻らない (transcript から数える)。transcript を読めなかった回は直前の値のまま (起動後に一度も
 	// 読めていなければ 0)。next_at と同じく最大 1 分遅れる。未登録なら 0。
 	BeatsSinceReal uint32 `protobuf:"varint,10,opt,name=beats_since_real,json=beatsSinceReal,proto3" json:"beats_since_real,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// transcript に届いた最後の heartbeat の時刻 (#274)。届いたものが無ければ未設定。sent / last_sent_at と違い
+	// transcript から読むので、agent の再起動では消えない。transcript を読めなかった回は直前の値のまま。
+	// 未登録なら未設定。
+	LastBeatAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=last_beat_at,json=lastBeatAt,proto3" json:"last_beat_at,omitempty"`
+	// cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
+	// "5m" の間は heartbeat を打たない (idle_reason が "short_ttl")。transcript を読めなかった回は直前の値のまま。
+	// 未登録なら空。
+	CacheTtl      string `protobuf:"bytes,12,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatStatus) Reset() {
@@ -350,6 +360,20 @@ func (x *HeartbeatStatus) GetBeatsSinceReal() uint32 {
 		return x.BeatsSinceReal
 	}
 	return 0
+}
+
+func (x *HeartbeatStatus) GetLastBeatAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastBeatAt
+	}
+	return nil
+}
+
+func (x *HeartbeatStatus) GetCacheTtl() string {
+	if x != nil {
+		return x.CacheTtl
+	}
+	return ""
 }
 
 type CollectStatus struct {
@@ -466,7 +490,7 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\x18GetSessionStatusResponse\x120\n" +
 	"\bdeclared\x18\x01 \x01(\v2\x14.ccx.v1.SessionStateR\bdeclared\x125\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x17.ccx.v1.HeartbeatStatusR\theartbeat\x12/\n" +
-	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\xef\x02\n" +
+	"\acollect\x18\x03 \x01(\v2\x15.ccx.v1.CollectStatusR\acollect\"\xca\x03\n" +
 	"\x0fHeartbeatStatus\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1c\n" +
 	"\tlistening\x18\b \x01(\bR\tlistening\x12\x1a\n" +
@@ -482,7 +506,10 @@ const file_ccx_v1_agent_proto_rawDesc = "" +
 	"\vidle_reason\x18\t \x01(\tR\n" +
 	"idleReason\x12(\n" +
 	"\x10beats_since_real\x18\n" +
-	" \x01(\rR\x0ebeatsSinceReal\"\xb8\x02\n" +
+	" \x01(\rR\x0ebeatsSinceReal\x12<\n" +
+	"\flast_beat_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastBeatAt\x12\x1b\n" +
+	"\tcache_ttl\x18\f \x01(\tR\bcacheTtl\"\xb8\x02\n" +
 	"\rCollectStatus\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12+\n" +
 	"\x11center_configured\x18\x02 \x01(\bR\x10centerConfigured\x12\x18\n" +
@@ -524,22 +551,23 @@ var file_ccx_v1_agent_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),    // 7: google.protobuf.Timestamp
 }
 var file_ccx_v1_agent_proto_depIdxs = []int32{
-	6, // 0: ccx.v1.GetSessionStatusResponse.declared:type_name -> ccx.v1.SessionState
-	4, // 1: ccx.v1.GetSessionStatusResponse.heartbeat:type_name -> ccx.v1.HeartbeatStatus
-	5, // 2: ccx.v1.GetSessionStatusResponse.collect:type_name -> ccx.v1.CollectStatus
-	7, // 3: ccx.v1.HeartbeatStatus.next_at:type_name -> google.protobuf.Timestamp
-	7, // 4: ccx.v1.HeartbeatStatus.last_sent_at:type_name -> google.protobuf.Timestamp
-	7, // 5: ccx.v1.CollectStatus.last_forwarded_at:type_name -> google.protobuf.Timestamp
-	7, // 6: ccx.v1.CollectStatus.last_error_at:type_name -> google.protobuf.Timestamp
-	2, // 7: ccx.v1.AgentService.GetSessionStatus:input_type -> ccx.v1.GetSessionStatusRequest
-	0, // 8: ccx.v1.AgentService.Wake:input_type -> ccx.v1.WakeRequest
-	3, // 9: ccx.v1.AgentService.GetSessionStatus:output_type -> ccx.v1.GetSessionStatusResponse
-	1, // 10: ccx.v1.AgentService.Wake:output_type -> ccx.v1.WakeResponse
-	9, // [9:11] is the sub-list for method output_type
-	7, // [7:9] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	6,  // 0: ccx.v1.GetSessionStatusResponse.declared:type_name -> ccx.v1.SessionState
+	4,  // 1: ccx.v1.GetSessionStatusResponse.heartbeat:type_name -> ccx.v1.HeartbeatStatus
+	5,  // 2: ccx.v1.GetSessionStatusResponse.collect:type_name -> ccx.v1.CollectStatus
+	7,  // 3: ccx.v1.HeartbeatStatus.next_at:type_name -> google.protobuf.Timestamp
+	7,  // 4: ccx.v1.HeartbeatStatus.last_sent_at:type_name -> google.protobuf.Timestamp
+	7,  // 5: ccx.v1.HeartbeatStatus.last_beat_at:type_name -> google.protobuf.Timestamp
+	7,  // 6: ccx.v1.CollectStatus.last_forwarded_at:type_name -> google.protobuf.Timestamp
+	7,  // 7: ccx.v1.CollectStatus.last_error_at:type_name -> google.protobuf.Timestamp
+	2,  // 8: ccx.v1.AgentService.GetSessionStatus:input_type -> ccx.v1.GetSessionStatusRequest
+	0,  // 9: ccx.v1.AgentService.Wake:input_type -> ccx.v1.WakeRequest
+	3,  // 10: ccx.v1.AgentService.GetSessionStatus:output_type -> ccx.v1.GetSessionStatusResponse
+	1,  // 11: ccx.v1.AgentService.Wake:output_type -> ccx.v1.WakeResponse
+	10, // [10:12] is the sub-list for method output_type
+	8,  // [8:10] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_ccx_v1_agent_proto_init() }

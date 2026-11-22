@@ -266,7 +266,7 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	now := time.Now().UTC()
 	write(t, filepath.Join(home, "projects", "-cwd", sid+".jsonl"),
 		`{"type":"user","timestamp":"`+now.Add(-2*time.Minute).Format(time.RFC3339Nano)+`","message":{"content":"hi"}}`+"\n"+
-			`{"type":"assistant","timestamp":"`+now.Add(-110*time.Second).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n"+
+			`{"type":"assistant","timestamp":"`+now.Add(-110*time.Second).Format(time.RFC3339Nano)+`","message":{"content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":9}}}}`+"\n"+
 			`{"type":"user","isMeta":true,"timestamp":"`+now.Add(-90*time.Second).Format(time.RFC3339Nano)+`","message":{"content":"<channel source=\"ccx\" kind=\"heartbeat\">\nheartbeat\n</channel>"}}`+"\n"+
 			`{"type":"assistant","timestamp":"`+now.Add(-time.Minute).Format(time.RFC3339Nano)+`","message":{"content":[]}}`+"\n")
 	write(t, filepath.Join(home, "sessions", sid, "label"), "lbl\n")
@@ -355,6 +355,10 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 	}
 	if got := ask().Heartbeat; !got.GetRegistered() || got.GetBeatsSinceReal() != 1 || got.GetIdleReason() != "" {
 		t.Errorf("after the channel connected: %v, want registered, 1 beat since the prompt, no idle reason", got)
+	}
+	// The last beat that reached the transcript and the TTL the last cache write used (#274).
+	if got := ask().Heartbeat; got.GetLastBeatAt() == nil || got.GetLastBeatAt().AsTime().Sub(now.Add(-90*time.Second)).Abs() > time.Millisecond || got.GetCacheTtl() != "1h" {
+		t.Errorf("after the channel connected: last_beat_at = %v, cache_ttl = %q, want the beat 90s ago and 1h", got.GetLastBeatAt(), got.GetCacheTtl())
 	}
 	offConn, err := net.Dial("unix", cfg.ChannelSocketPath)
 	if err != nil {

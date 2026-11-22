@@ -358,7 +358,7 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: "", CCX_API_SOCKET: join(homeA, "no-agent.sock"), ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -422,7 +422,8 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
     // status: 保存先が無いので lifecycle は手元から (transcript あり = ended)。--json の形は mark と同じ鍵 + lifecycle
     const st = await run(["status", SID.slice(0, 8), "--json"]);
     expect(st.code).toBe(0);
-    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", "") });
+    // agent: no ccx-agent answers on the test's socket
+    expect(JSON.parse(st.out)).toEqual({ sessionId: SID, lifecycle: "ended", ...EMPTY_DECLARED, task: "kaneo ccx#1", labelHistory: h("scope｜step", ""), agent: null });
     const mark = await run(["mark", "archived", SID, "--json"]);
     expect(Object.keys(JSON.parse(mark.out))).toEqual(["sessionId", "archived", "pinned", "label", "task", "role", "heartbeat", "metadata", "labelHistory"]);
     expect((await run(["status", SID])).out).toMatch(/lifecycle\s+ended\n.*flags\s+archived/);
@@ -577,7 +578,7 @@ describe("ccx session with a center: marks are reported as events, and session l
   const cli = join(import.meta.dir, "index.ts");
   async function run(args: string[], env: Record<string, string> = {}) {
     const p = Bun.spawn(["bun", "run", cli, "session", ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_MACHINE: "host-a", ...env },
+      env: { ...process.env, CLAUDE_CONFIG_DIR: homeA, CCX_HUB_URL: `http://127.0.0.1:${server.port}`, CCX_MACHINE: "host-a", CCX_API_SOCKET: join(homeA, "no-agent.sock"), ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
