@@ -201,9 +201,11 @@ export async function openDuckDB(store: TranscriptStore, opts: OpenOptions = {})
 
 /**
  * Whether `sql` reads the table `name`: binding fails for want of it only when the query reads it as a table, not for a
- * path or a string literal holding the word. Binding runs nothing. A statement that fails to bind for another reason
- * may still read it — a table an earlier statement creates stops the binder first — so it counts as reading, as the word
- * did before. A query DuckDB cannot parse throws its parser error here
+ * path or a string literal holding the word. Binding runs nothing. Any Catalog Error counts as reading it, as the word
+ * did before: a table an earlier statement creates (not run yet) stops the binder before it reaches this one, and a
+ * qualified or quoted name, PREPARE, DESCRIBE and query() all report it as one. A Binder Error (a column, `EXECUTE p`
+ * before its PREPARE has run) comes after the tables are found, so the next statement is checked. A query DuckDB
+ * cannot parse throws its parser error here
  */
 async function references(c: DuckDBConnection, sql: string, name: string) {
   // Without the word the query cannot read the table, and the probe's bind costs a glob of the store (about 0.5 s on d1, 1433 transcripts)
@@ -212,9 +214,9 @@ async function references(c: DuckDBConnection, sql: string, name: string) {
   const statements = await c.extractStatements(sql);
   for (let i = 0; i < statements.count; i++) {
     try {
-      await statements.prepare(i);
-    } catch {
-      return true;
+      (await statements.prepare(i)).destroySync();
+    } catch (e) {
+      if (String(e).includes("Catalog Error")) return true;
     }
   }
   return false;
