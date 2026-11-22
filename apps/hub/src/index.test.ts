@@ -18,8 +18,9 @@ afterEach(() => {
 
 // 起動ログの `listening on http://<host>:<port>` から実際に bind したポートを読む。
 async function listeningPort(stderr: ReadableStream<Uint8Array>): Promise<number> {
-  // for await から return すると stream が cancel され、子の後の stderr 書き込みが EPIPE になりうる。
-  // reader の lock を外すだけにして pipe は開けておく
+  // for await から return すると stream が cancel され、子の後の stderr 書き込みが EPIPE になる。
+  // lock を外すだけでも、誰も読まない pipe が 64KB で埋まると子の書き込みが止まる。
+  // ポートを読んだ後も EOF まで裏で読み捨てる (#342)
   const reader = stderr.getReader();
   const decoder = new TextDecoder();
   let text = "";
@@ -30,7 +31,9 @@ async function listeningPort(stderr: ReadableStream<Uint8Array>): Promise<number
     // 数字の後ろの 1 文字まで待つ。チャンクが数字の途中で切れると桁が欠けるため
     const m = text.match(/listening on http:\/\/\S+:(\d+)\D/);
     if (m) {
-      reader.releaseLock();
+      void (async () => {
+        while (!(await reader.read()).done) {}
+      })().catch(() => {});
       return Number(m[1]);
     }
   }
@@ -68,6 +71,18 @@ test("ccx-center serve は起動したまま応答し続ける", async () => {
   await Bun.sleep(300);
   expect(proc.exitCode).toBeNull();
   expect(await fetch(url).then((r) => r.ok)).toBe(true);
+});
+
+test("ポートを読んだ後に stderr へ pipe の容量を超えて書いても子は止まらない", async () => {
+  // 1MB は pipe の容量 (64KB) を十分超える。読み捨てていなければ子は書き込みで止まり exit しない。
+  // 子を bun にすると書き込みが止まらず exit するので対照にならない (実測)
+  proc = Bun.spawn(
+    ["bash", "-c", `echo "listening on http://127.0.0.1:4242 " >&2; head -c 1048576 /dev/zero >&2`],
+    { stdout: "ignore", stderr: "pipe" },
+  );
+  expect(await listeningPort(proc.stderr as ReadableStream<Uint8Array>)).toBe(4242);
+  const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(3000).then(() => false)]);
+  expect(exited).toBe(true);
 });
 
 test("知らないコマンドは usage を出して exit 2", async () => {
