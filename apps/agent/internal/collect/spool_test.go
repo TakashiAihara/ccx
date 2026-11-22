@@ -334,3 +334,44 @@ func TestWriteIncoming_TempNameCarriesTheEvent(t *testing.T) {
 		t.Errorf("temp patterns %q, want the event's name in it", patterns)
 	}
 }
+
+// An event the agent produced itself carries its own producer and a fresh id and
+// seq in the same queue; a hook's event keeps the hook producer.
+func TestAppendProducerKeepsItsProducerAndTheHookPathKeepsItsOwn(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	hook, err := s.Append([]byte("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reaped, err := s.AppendProducer(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hook.GetProducer() != ccxv1.Producer_PRODUCER_CLAUDE_CODE_HOOK {
+		t.Errorf("hook path producer = %v, want CLAUDE_CODE_HOOK", hook.GetProducer())
+	}
+	if reaped.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || reaped.GetSeq() != 2 || reaped.GetEventId() != "id-002" {
+		t.Errorf("reaped event = producer %v seq %d id %q, want REAPED, 2, id-002", reaped.GetProducer(), reaped.GetSeq(), reaped.GetEventId())
+	}
+	e, err := s.Oldest()
+	if err != nil || string(e.Event.GetPayload()) != "h" {
+		t.Fatalf("oldest = %v, %v, want the hook event first", e, err)
+	}
+	_ = s.Ack(e)
+	e, _ = s.Oldest()
+	if e == nil || e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != "r" {
+		t.Errorf("second event on disk = %v, want the reaped one with its payload", e)
+	}
+}
+
+func TestCollectAppendEventSpoolsWithTheGivenProducer(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	c := newCollect("", s, nil, t.Logf)
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte(`{"x":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.Oldest()
+	if err != nil || e == nil || e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != `{"x":1}` {
+		t.Errorf("spooled = %v, %v", e, err)
+	}
+}

@@ -71,6 +71,10 @@ type Config struct {
 	// itself (`ccx session heartbeat on|off`); the rest applies to all.
 	Heartbeat Heartbeat
 
+	// Reap is whether and how the agent stops sessions whose keepalive has let
+	// go (docs/design/reap.md). Off unless a person turns it on.
+	Reap Reap
+
 	// ChannelSocketPath is where each session's `ccx-agent channel` registers
 	// with serve. Apart from the hook socket: the hook wire is one frame and an
 	// ack, this one stays open for the life of the session.
@@ -142,6 +146,18 @@ type Heartbeat struct {
 	Err error
 }
 
+// Reap is the reaper's settings. It runs inside the heartbeat concern.
+type Reap struct {
+	Enabled bool
+	// Interval is both the tick and the spacing between stops: one session at most per tick.
+	Interval time.Duration
+	// KeepMin is how many sessions with a channel are always left running.
+	KeepMin int
+	// Err is why the settings could not be used. It turns reaping off and
+	// nothing else.
+	Err error
+}
+
 // Concerns is the on/off state of each of ccx-agent's jobs (ADR 0002). Collect
 // and Heartbeat are built; Carry and Persistence have their toggle here so they
 // slot in the same shape when built, and so a reader sees the full set.
@@ -185,6 +201,13 @@ type fileShape struct {
 		Interval string `toml:"interval"`
 		MaxIdle  string `toml:"maxIdle"`
 	} `toml:"heartbeat"`
+	// Interval and KeepMin are untyped so a value of the wrong type is an
+	// unusable reap setting (Reap.Err), not a config file that fails to load.
+	Reap struct {
+		Enabled  *bool `toml:"enabled"`
+		Interval any   `toml:"interval"`
+		KeepMin  any   `toml:"keepMin"`
+	} `toml:"reap"`
 	// [transcript] is where in the center `ccx transcript` keeps transcripts
 	// (bucket, prefix). `live` is the switch that stops reading transcripts per
 	// hook, and it exists nowhere else (#120).
@@ -299,6 +322,8 @@ func load(
 		hbErr = err
 	}
 
+	reap := reapSettings(getenv, gitcfg, file.Reap.Enabled, file.Reap.Interval, file.Reap.KeepMin)
+
 	// The transcript store, resolved exactly as the CLI resolves it
 	// (packages/core/src/config.ts) — same defaults, same prefix normalisation.
 	// If ccx-agent appended to a different object than `ccx transcript` reads,
@@ -334,6 +359,7 @@ func load(
 			MaxIdle:  maxIdle,
 			Err:      hbErr,
 		},
+		Reap:              reap,
 		ChannelSocketPath: channelSocketPath(getenv, hook),
 		APISocketPath:     apiSocketPath(getenv, hook),
 		APIListen:         strings.TrimSpace(pick(getenv("CCX_API_LISTEN"), gitcfg("ccx.apiListen"), file.API.Listen)),
@@ -366,6 +392,36 @@ func duration(v string, def time.Duration) (time.Duration, error) {
 		return 0, errors.New("heartbeat: " + v + ": want a duration like 50m, or off")
 	}
 	return d, nil
+}
+
+// reapSettings resolves [reap]. An unusable interval or keepMin turns reaping
+// off with the reason in Err; a typo here must not stop anything else.
+func reapSettings(getenv func(string) string, gitcfg func(string) string, enabled *bool, fileInterval, fileKeepMin any) Reap {
+	r := Reap{Interval: time.Minute}
+	text := func(v any) string {
+		if v == nil {
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	if v := pick(getenv("CCX_REAP_INTERVAL"), gitcfg("ccx.reapInterval"), text(fileInterval)); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			r.Err = errors.New("reap: interval " + v + ": want a positive duration like 1m")
+		} else {
+			r.Interval = d
+		}
+	}
+	if v := pick(getenv("CCX_REAP_KEEP_MIN"), gitcfg("ccx.reapKeepMin"), text(fileKeepMin)); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			r.Err = errors.New("reap: keepMin " + v + ": want a count of 0 or more")
+		} else {
+			r.KeepMin = n
+		}
+	}
+	r.Enabled = r.Err == nil && toggle(getenv, gitcfg, "CCX_REAP", "ccx.reap", enabled, false)
+	return r
 }
 
 // toggle resolves one on/off setting through the usual ladder

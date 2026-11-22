@@ -38,10 +38,21 @@ type Heartbeat struct {
 	Now        func() time.Time
 	Sleep      func(context.Context, time.Duration)
 
-	file  string
-	mtime time.Time
-	size  int64
-	last  Scan
+	// pid is the session's claude process and pidStart its start time (clock
+	// ticks since boot), read when the channel registered; 0 when it was not
+	// one (the session is then never reaped).
+	pid      int
+	pidStart uint64
+	// signalled: the reaper sent this process SIGTERM. Only the reaper's one
+	// goroutine reads and writes it.
+	signalled bool
+
+	// readMu: read runs in the heartbeat's own loop and in the reaper.
+	readMu sync.Mutex
+	file   string
+	mtime  time.Time
+	size   int64
+	last   Scan
 	// shortTTL is what the last read said, to log only when it changes.
 	shortTTL bool
 
@@ -272,6 +283,8 @@ func (h *Heartbeat) wanted() bool {
 
 // read scans the transcript, or returns the last scan if the file has not moved.
 func (h *Heartbeat) read() (Scan, bool) {
+	h.readMu.Lock()
+	defer h.readMu.Unlock()
 	if h.file == "" {
 		m, _ := filepath.Glob(filepath.Join(h.ClaudeHome, "projects", "*", h.SessionID+".jsonl"))
 		if len(m) == 0 {

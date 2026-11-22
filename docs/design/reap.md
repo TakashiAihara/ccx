@@ -1,11 +1,10 @@
 # Reclaiming idle sessions once keepalive has let go
 
-Draft for #117 (kaneo ccx#98). Names marked *(proposed)* wait on the user's decision.
+Design for #117 (kaneo ccx#98). Names and scope decided by the user on 2026-11-22.
 
 ## To-Be
 
 - A session that keepalive has stopped beating, and whose prompt cache has expired, is stopped by `ccx-agent` with SIGTERM. Its transcript stays, so `claude --resume` brings it back; what it loses is only the memory it held.
-- When the host runs short of memory, the oldest such-or-idle sessions are stopped first, one at a time, until it is under the threshold again (the emergency brake).
 - Nothing is stopped silently: every reclaim leaves a record (when, why, how much memory came back) in serve's log and on the session itself.
 - Off by default. A person turns it on in ccx's config; ccx then carries out that policy. This answers #102's "ccx-agent does not choose which session to stop": the person chose the rule, the agent applies it.
 
@@ -19,15 +18,13 @@ Draft for #117 (kaneo ccx#98). Names marked *(proposed)* wait on the user's deci
 
 ```mermaid
 flowchart TD
-    T[tick, every reap.interval] --> P{memory over reap.pressure?}
-    P -- no --> E[candidates = expired sessions]
-    P -- yes --> I[candidates = sessions idle at least reap.pressureMinIdle]
-    E --> K
-    I --> K{for the oldest candidate: kept?}
-    K -- busy / background task / pinned / keep command says keep --> N[skip, next candidate]
-    K -- no --> M{would fewer than reap.keepMin remain?}
+    T[tick, every reap.interval] --> M{would fewer than reap.keepMin remain?}
     M -- yes --> X[stop the tick]
-    M -- no --> S[SIGTERM the session's claude, record it]
+    M -- no --> E[candidates = expired sessions, oldest last use first]
+    E --> K{next candidate: kept?}
+    K -- busy / background task / pinned / pid changed --> K
+    K -- none left --> X
+    K -- no --> S[SIGTERM the session's claude, record it]
     S --> X
 ```
 
@@ -36,27 +33,30 @@ flowchart TD
 - Not stopped:
   - a turn is running (`Scan.ToolRunning`, or input waiting for its response): the heartbeat's own test
   - a background task is alive: a `run_in_background` Bash, a Monitor or an async agent whose start is in the transcript after the current process started, with no `<task-notification>` for its tool-use id yet. Starts before the process started are dropped: a resume does not carry them (300 transcripts on d1, 2026-11-22: 4,298 starts, 2,948 notified; the rest are mostly from earlier processes)
-  - pinned *(proposed: top-level declared key `pinned`, `ccx session pin`)*
-  - a keep command says so *(proposed: `reap.keepCommand`)*: run with the session id and transcript path in env, exit 0 means keep. Workflow-specific reasons (an unanswered decision queue, unresolved review comments) live there, not in ccx
-- When `/proc/meminfo` cannot be read, the brake is off and only expiry applies.
-- Fail closed: an unreadable transcript, an unknown pid, or a keep command that fails to run (not exit 1) keeps the session.
+  - pinned: the top-level declared key `pinned` (`~/.claude/sessions/<id>/pinned`, set with `ccx session pin`; user decision 2026-11-22)
+- Not considered: a session waiting on a person's answer elsewhere (a review tool, a decision queue). The window is a person answering across the moment keepalive ends; little is lost and the case is rare (user decision 2026-11-22). Detecting it belongs to that tool (akapen#343), not to ccx.
+- Not built: a memory-pressure brake. Once keepalive reclaims sessions it is rarely needed, and it ties ccx to the host's memory accounting (user decision 2026-11-22).
+- Fail closed: an unreadable transcript or an unknown pid keeps the session.
 
 ## Record
 
 - serve's log: `reap: stopped <session> (<reason>, <MiB> freed, idle <dur>)`.
-- On the session *(proposed: `~/.claude/sessions/<id>/reaped`)*: one JSON line per reclaim, `{"at", "reason": "expired"|"pressure", "pid", "rssBytes"}`, so `ccx session ls` and a resume list can say why a session is gone.
+- On the session: `~/.claude/sessions/<id>/reaped`, one JSON line per reclaim, `{"at", "reason": "expired", "pid", "pssBytes"}`, so `ccx session ls` and a resume list can say why a session is gone.
+- At the center: the same record goes into collect's spool as an event with its own producer (as declared state does with `PRODUCER_CCX_SESSION_STATE`). Without a center, or while it is down, it waits in the spool; the local record is written either way (user decision 2026-11-22: works without a center, managed at the center).
 - Freed memory is the stopped process tree's PSS read just before the signal (`/proc/<pid>/smaps_rollup`), not a before/after of the host, which other sessions move.
 
-## Settings *(proposed names)*
+## Settings
 
 | What | config.toml `[reap]` | env | default |
 |---|---|---|---|
 | on/off | `enabled` | `CCX_REAP` | off |
 | spacing between reclaims, and tick | `interval` | `CCX_REAP_INTERVAL` | `1m` |
-| memory brake threshold (used %, `1 - MemAvailable/MemTotal`) | `pressure` | `CCX_REAP_PRESSURE` | `0` (off) |
-| idle time a session needs before the brake may take it | `pressureMinIdle` | `CCX_REAP_PRESSURE_MIN_IDLE` | `30m` |
 | sessions always left running | `keepMin` | `CCX_REAP_KEEP_MIN` | `0` |
-| keep command | `keepCommand` | `CCX_REAP_KEEP_COMMAND` | none |
+
+- git config keys are `ccx.reap`, `ccx.reapInterval` and `ccx.reapKeepMin`, resolved env, then git config, then `config.toml`, as the heartbeat's are.
+- An unusable value (an interval that is not a positive duration, a keepMin that is not a count of 0 or more) turns reaping off with the reason in serve's log; nothing else is affected.
+- The reaper runs inside the heartbeat concern: it needs that concern on, and the channel's registration.
+- Hosts without `/proc` (macOS) never reap: pid, start time and PSS are all read from it, and a session whose process cannot be checked is kept.
 
 ## Not in scope
 

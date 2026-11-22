@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -51,7 +52,16 @@ type Concern struct {
 	socketPath string
 	claudeHome string
 	cfg        config.Heartbeat
+	reap       config.Reap
 	log        func(string, ...any)
+
+	// Record, when set, is handed each stop's record to carry to the center.
+	// A failure is logged; the local record is written either way.
+	Record func(payload []byte) error
+
+	// procRoot and kill are what a stop reads and does; tests replace them.
+	procRoot string
+	kill     func(pid int) error
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
@@ -97,7 +107,7 @@ func New(cfg config.Config, log func(string, ...any)) *Concern {
 		h, _ := os.UserHomeDir()
 		home = filepath.Join(h, ".claude")
 	}
-	return &Concern{socketPath: cfg.ChannelSocketPath, claudeHome: home, cfg: cfg.Heartbeat, log: log}
+	return &Concern{socketPath: cfg.ChannelSocketPath, claudeHome: home, cfg: cfg.Heartbeat, reap: cfg.Reap, log: log}
 }
 
 func (c *Concern) Name() string { return "heartbeat" }
@@ -114,6 +124,9 @@ const maxUnixPath = 104
 // retry, so a serve that takes over from one that stopped brings the heartbeat
 // up too (#185); a reason repeated is logged once until it is up again.
 func (c *Concern) Run(ctx context.Context) error {
+	if c.reap.Enabled {
+		go c.reapLoop(ctx)
+	}
 	for {
 		err := c.run(ctx)
 		if ctx.Err() != nil {
@@ -241,6 +254,13 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 			case <-time.After(d):
 			}
 		},
+	}
+	// A session is only ever stopped through the pid it registered, and only
+	// while that pid is still the same `claude` process.
+	if pid, err := strconv.Atoi(reg.PID); c.reap.Enabled && err == nil && pid > 1 {
+		if start, ok := claudeProc(c.procDir(), pid); ok {
+			h.pid, h.pidStart = pid, start
+		}
 	}
 	c.mu.Lock()
 	if c.registered == nil {

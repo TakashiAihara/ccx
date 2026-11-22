@@ -9,7 +9,7 @@ it lives, and how it travels. (#127)
 | Kind | Values | Who writes it | Where it comes from |
 |---|---|---|---|
 | Observed | `running` / `ended` / `remote` / `unknown` | nobody — derived | a live pid (`~/.claude/sessions/<pid>.json`), a local transcript, a copy in the store |
-| Declared | `archived` (flag), `label` (free text), `task` (one external reference), `role` (free text), `heartbeat` (on / off override), `metadata` (the user's own key/value) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
+| Declared | `archived` (flag), `pinned` (flag), `label` (free text), `task` (one external reference), `role` (free text), `heartbeat` (on / off override), `metadata` (the user's own key/value) | a person or the session, through `ccx session` | files under `~/.claude/sessions/<id>/` |
 
 `remote` means "no transcript on this machine, a copy in the store": it is what `push` + `prune`
 leave behind, and it is never typed by hand. `unknown` is what ccx says when it cannot tell — no
@@ -21,14 +21,18 @@ session may still be on this machine, and a `remote` one need not be archived. W
 with it — fold it in a list, push and prune it, close it — stays on the methodology side;
 `ccx-agent` (#129) acts on it only as a flag it did not originate.
 
+`pinned` is the second flag: "do not reclaim this session when it goes idle", read by `ccx-agent`'s
+reaper (`reap.md`; user decision 2026-11-22). It was a user marker in `metadata`'s sense until ccx
+started acting on it, and was promoted by the rule below. An existing `meta/pinned` is not read
+(ccx never reads a metadata key); moving such marks to `ccx session pin` is the user's migration.
+
 There is no other flag on purpose. The top-level keys are the ones ccx defines — it acts on them
-(`archived`: `ccx-agent` and the `--archived` selectors; `heartbeat`: `ccx-agent`) or gives them a
+(`archived`: `ccx-agent` and the `--archived` selectors; `pinned`: `ccx-agent`'s reaper; `heartbeat`: `ccx-agent`) or gives them a
 fixed shape and a column (`label`, `task`, `role`).
 Everything else a workflow wants to hang on a session goes in `metadata` (#165, 2026-09-26,
 replacing #135's "the user's markers stay their own files"). ccx is a public tool, so which markers
-exist is the user's vocabulary, not ccx's: one person's `done` / `pinned` / `delete-on-end` are
-another's `reviewed` / `owner=alice`. ccx stores, carries and shows metadata and never reads a key;
-what `pinned` means (skip the reaper) stays in the user's hooks and scripts. A key that ccx later
+exist is the user's vocabulary, not ccx's: one person's `done` / `delete-on-end` are
+another's `reviewed` / `owner=alice`. ccx stores, carries and shows metadata and never reads a key. A key that ccx later
 wants to act on is promoted to the top level, not read out of `metadata`.
 
 ## Where it lives
@@ -39,6 +43,7 @@ Declared state is local first — a `ccx session mark` works with no center and 
 | Key | File | Form |
 |---|---|---|
 | `archived` | `~/.claude/sessions/<id>/archived` | empty file present = true |
+| `pinned` | `~/.claude/sessions/<id>/pinned` | empty file present = true |
 | `label` | `…/label` | one line of text |
 | `task` | `…/task` | one line of text, e.g. `kaneo ccx#1`, `owner/repo#123` |
 | `role` | `…/role` | one line of text, e.g. `worker`, `pm`; no newline, tab or other control character (`ccx session role` refuses one, and a file or a store copy holding one — or a file that is not UTF-8 — reads as no role; the rule and its test cases are shared by core, the center and `ccx-agent`: `packages/core/testdata/role-cases.json`) |
@@ -154,6 +159,7 @@ missing (`null`) is "the center / the store has not heard", not "no mark".
 | Verb | Does |
 |---|---|
 | `ccx session mark archived [id...] [--off]` | set or clear the flag; report the whole state to the center if one is configured. With several ids, one that fails is said on stderr, the rest are written, and the exit is 1; the center gets one report for the batch |
+| `ccx session pin [id] [--off]` | set or clear `pinned` (the same as `mark pinned`); without an id, this session; report as above |
 | `ccx session label <text> [id...]` | set the label; an empty string clears it; report as above |
 | `ccx session task <ref> [id...]` | set the task reference; an empty string clears it; report as above |
 | `ccx session role <role> [id...]` | set the role; an empty string clears it; report as above |
@@ -233,7 +239,7 @@ every machine's ccx before relying on it across machines.
 - removing `~/.claude/sessions/<id>/` when a transcript is pruned or deleted: the marks outlive the
   transcript on purpose (`archived` on a remote session is still a fact about it), and the directory
   also holds the hook's own files
-- the meaning of any metadata key: moving the user's `done` / `pinned` / `delete-on-end` markers
+- the meaning of any metadata key: moving the user's `done` / `delete-on-end` markers
   onto `ccx session meta`, and keeping what they do (reaper exclusion, delete on end), is the
   user's migration in claude-config, not ccx's
 - what `ccx-agent` (#129) reads: it runs on the machine, so the local files — `state.json` is for

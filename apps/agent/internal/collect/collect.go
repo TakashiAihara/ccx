@@ -88,6 +88,18 @@ func (s *Collect) Status() (Status, error) {
 // Name identifies the concern in logs and config (ADR 0002).
 func (s *Collect) Name() string { return "collect" }
 
+// AppendEvent spools a payload the agent produced itself and nudges the drain
+// loop, so it goes to the center like a hook's event does.
+func (s *Collect) AppendEvent(producer ccxv1.Producer, payload []byte) error {
+	if _, err := s.spool.AppendProducer(producer, payload); err != nil {
+		return err
+	}
+	if s.loop != nil {
+		s.loop.wake()
+	}
+	return nil
+}
+
 // Observe registers the one function that sees each spooled payload after it is
 // durable, so a session's transcript can be followed while the session runs
 // (#120). Set it before Run: it is called from the per-connection handler, so

@@ -680,3 +680,60 @@ func TestMessageMeta_EnvThenTheFileOnlyThenOn_AndABrokenFileIsOff(t *testing.T) 
 		}
 	}
 }
+
+func TestReap_DefaultsOffAndTheSources(t *testing.T) {
+	none := "/nonexistent/x.toml"
+	c, err := load(env(map[string]string{"CCX_CONFIG": none}), noGit, fixedHost("h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Reap.Enabled || c.Reap.Interval != time.Minute || c.Reap.KeepMin != 0 || c.Reap.Err != nil {
+		t.Errorf("defaults = %+v, want off, 1m, 0", c.Reap)
+	}
+
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("[reap]\nenabled = true\ninterval = \"3m\"\nkeepMin = 2\n"), 0o644)
+	c, err = load(env(map[string]string{"CCX_CONFIG": p}), noGit, fixedHost("h"))
+	if err != nil || !c.Reap.Enabled || c.Reap.Interval != 3*time.Minute || c.Reap.KeepMin != 2 {
+		t.Errorf("file: err=%v %+v, want on, 3m, 2", err, c.Reap)
+	}
+
+	git := func(k string) string {
+		return map[string]string{"ccx.reap": "false", "ccx.reapInterval": "7m", "ccx.reapKeepMin": "5"}[k]
+	}
+	c, _ = load(env(map[string]string{"CCX_CONFIG": p}), git, fixedHost("h"))
+	if c.Reap.Enabled || c.Reap.Interval != 7*time.Minute || c.Reap.KeepMin != 5 {
+		t.Errorf("git config over the file = %+v, want off, 7m, 5", c.Reap)
+	}
+
+	c, _ = load(env(map[string]string{"CCX_CONFIG": p, "CCX_REAP": "on", "CCX_REAP_INTERVAL": "11m", "CCX_REAP_KEEP_MIN": "9"}), git, fixedHost("h"))
+	if !c.Reap.Enabled || c.Reap.Interval != 11*time.Minute || c.Reap.KeepMin != 9 {
+		t.Errorf("env over git config = %+v, want on, 11m, 9", c.Reap)
+	}
+}
+
+// An unusable value turns reaping off with a reason and leaves the rest of the
+// config alone.
+func TestReap_UnusableValueTurnsItOffWithAReason(t *testing.T) {
+	for name, e := range map[string]map[string]string{
+		"interval not a duration": {"CCX_REAP_INTERVAL": "soon"},
+		"interval zero":           {"CCX_REAP_INTERVAL": "0"},
+		"interval negative":       {"CCX_REAP_INTERVAL": "-1m"},
+		"keepMin not a number":    {"CCX_REAP_KEEP_MIN": "two"},
+		"keepMin negative":        {"CCX_REAP_KEEP_MIN": "-1"},
+	} {
+		e["CCX_CONFIG"], e["CCX_REAP"], e["CCX_MACHINE"] = "/nonexistent/x.toml", "on", "m"
+		c, err := load(env(e), noGit, fixedHost("h"))
+		if err != nil || c.Reap.Enabled || c.Reap.Err == nil || !c.Concerns.Collect || !c.Concerns.Heartbeat || c.Machine != "m" {
+			t.Errorf("%s: err=%v reap=%+v collect=%v heartbeat=%v machine=%q", name, err, c.Reap, c.Concerns.Collect, c.Concerns.Heartbeat, c.Machine)
+		}
+	}
+
+	// A file value of the wrong type is the same, not a file that fails to load.
+	p := filepath.Join(t.TempDir(), "config.toml")
+	_ = os.WriteFile(p, []byte("[reap]\nenabled = true\nkeepMin = \"many\"\ninterval = 60\n"), 0o644)
+	c, err := load(env(map[string]string{"CCX_CONFIG": p, "CCX_MACHINE": "m"}), noGit, fixedHost("h"))
+	if err != nil || c.Reap.Enabled || c.Reap.Err == nil || c.Machine != "m" {
+		t.Errorf("wrong types in the file: err=%v reap=%+v machine=%q", err, c.Reap, c.Machine)
+	}
+}

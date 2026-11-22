@@ -153,6 +153,7 @@ transcripts and the store.
 ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
 ccx session mark archived --off <id>
 ccx session mark archived <id> <id> …   # mark, label, task and role take any number of ids; one that fails is said on stderr, the rest are written, exit 1
+ccx session pin               # keep ccx-agent from reclaiming this session when it goes idle; --off to allow it again
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
 ccx session role worker       # what the session is; free text, ccx gives it no meaning
@@ -165,7 +166,8 @@ ccx session status [id]       # lifecycle (running / ended / remote) + flags, la
 
 Observed: `running` (a live pid), `ended` (a transcript here, no pid), `remote` (no transcript
 here, a copy in the store), `unknown` (no transcript here and no store to ask). Declared:
-`archived` (folded away — the word the Claude Desktop app uses; the only flag, on purpose), a
+`archived` (folded away — the word the Claude Desktop app uses), `pinned` (never reclaimed by
+ccx-agent's idle reaper, `docs/design/reap.md`), a
 free-text `label`, one external `task` reference and a free-text `role`. `ccx session ls` and `ccx tr ls` show them;
 `ccx tr push` carries them as `state.json` next to the transcript and `ccx tr pull` sets them on a
 machine that holds none yet (marks already set there are never overwritten). With a center

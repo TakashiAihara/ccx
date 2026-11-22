@@ -161,6 +161,8 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 	msgs := &message.Service{Devin: message.NewDevin(), Machine: cfg.Machine, User: cfg.User, Log: logger}
 	srv := &api.Server{ClaudeHome: claudeHome(), Messages: msgs}
 	var wakers wakeAll
+	// What the reaper hands to collect's spool when collect is on.
+	var reapRecord func([]byte) error
 	// Messages to and from other machines (#138) go through the center. It keys
 	// them by machine and user, as resume does, so both are needed.
 	if config.IsHTTP(cfg.HubURL) && collect.CheckOrigin(cfg) == nil {
@@ -185,6 +187,9 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 		}
 		concerns = append(concerns, c)
 		srv.Collect = c
+		reapRecord = func(p []byte) error {
+			return c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, p)
+		}
 		// The live transcript (#120, docs/design/live-transcript.md) appends each
 		// running session's transcript.jsonl to the store through the center.
 		// collect hands it the hook payloads after the ack, so the hook's own path
@@ -220,8 +225,12 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 	if cfg.APIURLErr != nil {
 		logger("api url ignored: %v", cfg.APIURLErr)
 	}
+	if cfg.Reap.Err != nil {
+		logger("reap off: %v", cfg.Reap.Err)
+	}
 	if cfg.Concerns.Heartbeat && cfg.Heartbeat.Interval > 0 {
 		h := heartbeat.New(cfg, logger)
+		h.Record = reapRecord
 		concerns = append(concerns, h)
 		srv.Heartbeat = h
 		// The channel connections it holds are how a message reaches a Claude Code session (#138).
