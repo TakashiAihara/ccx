@@ -5,6 +5,7 @@ package hubauth
 
 import (
 	"context"
+	"net/http"
 
 	"connectrpc.com/connect"
 )
@@ -25,5 +26,18 @@ func bearer(token string) connect.UnaryInterceptorFunc {
 			req.Header().Set("Authorization", "Bearer "+token)
 			return next(ctx, req)
 		}
+	}
+}
+
+// Client returns the HTTP client every ccx-agent call to the center goes
+// through. It follows no redirect: Go keeps Authorization on a redirect to the
+// same hostname or a subdomain of it whatever the scheme and port, so an https
+// center answering with a redirect to http would get the token sent in cleartext
+// (#306). The center's RPCs never redirect, so a 3xx is returned as is and the
+// call fails instead. A fresh client each time, so no caller can loosen the
+// policy for the others.
+func Client() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }

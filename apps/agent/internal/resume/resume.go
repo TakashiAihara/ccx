@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,8 +61,8 @@ type connectCenter struct {
 // the resume requests.
 func NewCenter(hubURL, token string) Center {
 	return &connectCenter{
-		ingest: ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL, hubauth.Options(token)...),
-		resume: ccxv1connect.NewResumeServiceClient(http.DefaultClient, hubURL, hubauth.Options(token)...),
+		ingest: ccxv1connect.NewIngestServiceClient(hubauth.Client(), hubURL, hubauth.Options(token)...),
+		resume: ccxv1connect.NewResumeServiceClient(hubauth.Client(), hubURL, hubauth.Options(token)...),
 	}
 }
 

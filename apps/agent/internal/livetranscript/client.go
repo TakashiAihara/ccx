@@ -3,7 +3,6 @@ package livetranscript
 import (
 	"context"
 	"errors"
-	"net/http"
 
 	"connectrpc.com/connect"
 
@@ -28,7 +27,7 @@ type Client struct {
 // grows is the one `ccx transcript` reads.
 func NewClient(hubURL, token string, origin *ccxv1.Origin, bucket, prefix string) *Client {
 	return &Client{
-		svc:    ccxv1connect.NewTranscriptServiceClient(http.DefaultClient, hubURL, hubauth.Options(token)...),
+		svc:    ccxv1connect.NewTranscriptServiceClient(hubauth.Client(), hubURL, hubauth.Options(token)...),
 		origin: origin,
 		bucket: bucket,
 		prefix: prefix,
