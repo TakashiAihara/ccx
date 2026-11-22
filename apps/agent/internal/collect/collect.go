@@ -142,9 +142,6 @@ func (s *Collect) Run(ctx context.Context) error {
 		return err
 	}
 	defer lock.release()
-	s.holdMu.Lock()
-	s.holding = true
-	s.holdMu.Unlock()
 	// Registered after the release above, so it runs before it: no write follows
 	// the moment the lock is let go.
 	defer func() {
@@ -157,6 +154,11 @@ func (s *Collect) Run(ctx context.Context) error {
 	// enveloped into the main queue now, before we start forwarding, so they go
 	// out in front of anything that arrives after startup.
 	young := s.takeInIncoming("on startup")
+	// AppendEvent is let in only now: an event it spooled during the drain would
+	// take a seq between the drained ones and go out in front of them.
+	s.holdMu.Lock()
+	s.holding = true
+	s.holdMu.Unlock()
 	// Only the hook writes there and it writes .raw; anything else is left alone,
 	// so say so instead of ignoring it forever (#186).
 	if others, err := s.spool.OtherIncoming(); err != nil {

@@ -166,7 +166,7 @@ func TestReapStopsAnExpiredSession(t *testing.T) {
 	e.procEntry(103, "mcp", 100, 5000, -1) // unreadable: skipped
 	e.procEntry(200, "claude", 1, 5000, 4096)
 
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 
 	if fmt.Sprint(e.killed) != "[100]" {
 		t.Fatalf("signalled %v, want only 100", e.killed)
@@ -249,7 +249,7 @@ func TestReapExpiryConditionsOneByOne(t *testing.T) {
 			if tc.tweak != nil {
 				tc.tweak(h, e, id)
 			}
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if tc.reaped {
 				if fmt.Sprint(e.killed) != "[100]" || e.reapedFile(id) == "" {
 					t.Errorf("signalled %v, reaped file %q: want the session stopped", e.killed, e.reapedFile(id))
@@ -280,7 +280,7 @@ func TestReapSkipsAPidThatIsNotTheRegisteredClaude(t *testing.T) {
 			e.session(b, 300, goodStart, younger)
 			setup(e)
 			e.procEntry(300, "claude", 1, goodStart, 10)
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if fmt.Sprint(e.killed) != "[300]" || e.reapedFile(a) != "" || e.reapedFile(b) == "" {
 				t.Errorf("signalled %v, reaped a=%q b=%q: want only 300", e.killed, e.reapedFile(a), e.reapedFile(b))
 			}
@@ -294,7 +294,7 @@ func TestReapNeverActsWithoutAProcessTable(t *testing.T) {
 	e.session("00000000-0000-4000-8000-000000000001", 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	e.c.procRoot = filepath.Join(e.proc, "missing")
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if len(e.killed) != 0 {
 		t.Errorf("signalled %v with no /proc", e.killed)
 	}
@@ -303,7 +303,7 @@ func TestReapNeverActsWithoutAProcessTable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(e.proc, "stat"), []byte("cpu  1 2 3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if len(e.killed) != 0 {
 		t.Errorf("signalled %v with no btime", e.killed)
 	}
@@ -315,7 +315,7 @@ func TestReapIgnoresSessionsWithoutAPid(t *testing.T) {
 	e.session("00000000-0000-4000-8000-000000000001", 0, 0, answered("1", reapNow.Add(-3*time.Hour)))
 	e.session("00000000-0000-4000-8000-000000000002", 1, goodStart, answered("2", reapNow.Add(-3*time.Hour)))
 	e.procEntry(1, "claude", 0, goodStart, 10)
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if len(e.killed) != 0 {
 		t.Errorf("signalled %v", e.killed)
 	}
@@ -324,8 +324,8 @@ func TestReapIgnoresSessionsWithoutAPid(t *testing.T) {
 func TestReapKeepMin(t *testing.T) {
 	for _, tc := range []struct {
 		keepMin int
-		reaped  bool
-	}{{3, false}, {2, true}, {0, true}} {
+		signals int
+	}{{3, 0}, {2, 1}, {0, 1}} {
 		e := newReapEnv(t)
 		e.c.reap.KeepMin = tc.keepMin
 		// Three sessions with a channel, one of them expired.
@@ -334,9 +334,9 @@ func TestReapKeepMin(t *testing.T) {
 		for i, id := range []string{"00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"} {
 			e.session(id, 200+i, goodStart, answered(fmt.Sprint(i), reapNow.Add(-time.Minute)))
 		}
-		e.c.reapOnce(reapNow)
-		if got := len(e.killed) == 1; got != tc.reaped {
-			t.Errorf("keepMin %d with 3 sessions: signalled %v, want stopped=%v", tc.keepMin, e.killed, tc.reaped)
+		e.c.reapOnce(context.Background(), reapNow)
+		if len(e.killed) != tc.signals {
+			t.Errorf("keepMin %d with 3 sessions: signalled %v, want %d signal(s)", tc.keepMin, e.killed, tc.signals)
 		}
 	}
 }
@@ -353,14 +353,14 @@ func TestReapOldestFirstOnePerTick(t *testing.T) {
 		e.session(ids[pid], pid*100, goodStart, answered(fmt.Sprint(pid), reapNow.Add(-time.Duration(hours)*time.Hour)))
 		e.procEntry(pid*100, "claude", 1, goodStart, 10)
 	}
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if fmt.Sprint(e.killed) != "[200]" {
 		t.Fatalf("first tick signalled %v, want only the 9h one (200)", e.killed)
 	}
 	// The stopped session's channel closes in real life.
 	delete(e.c.registered, ids[2])
 	delete(e.c.channels, ids[2])
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if fmt.Sprint(e.killed) != "[200 100]" {
 		t.Errorf("after two ticks signalled %v, want 200 then 100 (the 7h one)", e.killed)
 	}
@@ -380,13 +380,13 @@ func TestReapSignalFailureSkipsThatSession(t *testing.T) {
 		}
 		return nil
 	}
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if fmt.Sprint(e.killed) != "[100 300]" || e.reapedFile(a) != "" || e.reapedFile(b) == "" {
 		t.Errorf("signalled %v, a=%q b=%q: want 100 tried and not recorded, then 300 stopped", e.killed, e.reapedFile(a), e.reapedFile(b))
 	}
 	// A signal that failed does not count as sent: the session is tried again.
 	e.c.kill = func(pid int) error { e.killed = append(e.killed, pid); return nil }
-	e.c.reapOnce(reapNow.Add(time.Minute))
+	e.c.reapOnce(context.Background(), reapNow.Add(time.Minute))
 	if fmt.Sprint(e.killed) != "[100 300 100]" || e.reapedFile(a) == "" {
 		t.Errorf("a minute later signalled %v, a=%q: want 100 tried again and recorded", e.killed, e.reapedFile(a))
 	}
@@ -406,7 +406,7 @@ func TestReapRecordFuncErrorDoesNotStopTheLocalWrite(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "reaped"), []byte(`{"earlier":true}`+"\n"), 0o600)
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 1024)
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	want := `{"earlier":true}` + "\n" + `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":1048576,"start":1000,"boot":"boot-A"}` + "\n"
 	if got := e.reapedFile(id); got != want {
 		t.Errorf("reaped file = %q, want %q", got, want)
@@ -423,7 +423,7 @@ func TestReapWithoutARecordFunc(t *testing.T) {
 	const id = "00000000-0000-4000-8000-000000000001"
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if fmt.Sprint(e.killed) != "[100]" || e.reapedFile(id) == "" {
 		t.Errorf("signalled %v, file %q", e.killed, e.reapedFile(id))
 	}
@@ -498,8 +498,8 @@ func TestReapSignalsASessionOnce(t *testing.T) {
 	id := "00000000-0000-4000-8000-000000000001"
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-13*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
-	e.c.reapOnce(reapNow)
-	e.c.reapOnce(reapNow.Add(time.Minute))
+	e.c.reapOnce(context.Background(), reapNow)
+	e.c.reapOnce(context.Background(), reapNow.Add(time.Minute))
 	if fmt.Sprint(e.killed) != "[100]" {
 		t.Errorf("signalled %v over two ticks, want 100 once", e.killed)
 	}
@@ -568,7 +568,7 @@ func TestReapCountsIdleFromTheProcessStart(t *testing.T) {
 			h := e.session("00000000-0000-4000-8000-000000000001", 100, start, old)
 			h.MaxIdle = tc.maxIdle
 			e.procEntry(100, "claude", 1, start, 10)
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if got := len(e.killed) == 1; got != tc.reaped {
 				t.Errorf("process started %v ago, maxIdle %v: signalled %v, want stopped=%v", tc.started, tc.maxIdle, e.killed, tc.reaped)
 			}
@@ -595,8 +595,8 @@ func TestReapNeedsThePidFileToNameTheSession(t *testing.T) {
 			e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 			e.procEntry(100, "claude", 1, goodStart, 10)
 			setup(e)
-			e.c.reapOnce(reapNow)
-			e.c.reapOnce(reapNow.Add(time.Minute))
+			e.c.reapOnce(context.Background(), reapNow)
+			e.c.reapOnce(context.Background(), reapNow.Add(time.Minute))
 			if len(e.killed) != 0 || e.reapedFile(id) != "" {
 				t.Errorf("signalled %v, reaped %q: want the session kept", e.killed, e.reapedFile(id))
 			}
@@ -614,7 +614,7 @@ func TestReapSaysWhichSessionThePidRunsNow(t *testing.T) {
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	e.pidFile(100, other)
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	want := fmt.Sprintf("reap: keeping %s: pid 100 now runs session %q", id, other)
 	if !strings.Contains(e.logText(), want) {
 		t.Errorf("log %q, want %q", e.logText(), want)
@@ -648,7 +648,7 @@ func TestReapDoesNotSignalAProcessItsFileSaysWasSignalled(t *testing.T) {
 			}
 			e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 			e.procEntry(100, "claude", 1, goodStart, 10)
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if got := len(e.killed) == 1; got != tc.reaped {
 				t.Errorf("signalled %v, want stopped=%v", e.killed, tc.reaped)
 			}
@@ -678,12 +678,12 @@ func TestReapKeepMinDoesNotCountASessionAlreadySignalled(t *testing.T) {
 			e.session(c, 400, goodStart, answered("3", reapNow.Add(-time.Minute)))
 			e.procEntry(400, "claude", 1, goodStart, 10)
 			mark(e, hb)
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if len(e.killed) != 0 {
 				t.Errorf("signalled %v: only a and c are left running, so keepMin 2 forbids a stop", e.killed)
 			}
 			e.c.reap.KeepMin = 1
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if fmt.Sprint(e.killed) != "[100]" {
 				t.Errorf("with keepMin 1 signalled %v, want only 100 (b is already on its way out)", e.killed)
 			}
@@ -711,7 +711,7 @@ func TestReapRechecksKeepMinRightBeforeTheSignal(t *testing.T) {
 		delete(e.c.channels, b)
 		e.c.mu.Unlock()
 	}
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 1 {
 		t.Fatalf("beforeSignal ran %d times, want 1: the window was never exercised", hooked)
 	}
@@ -730,7 +730,7 @@ func TestReapIgnoresAZombieClaude(t *testing.T) {
 		e.session(b, 300, goodStart, answered("2", reapNow.Add(-3*time.Hour)))
 		e.procEntryState(100, "claude", state, 1, goodStart, 10)
 		e.procEntry(300, "claude", 1, goodStart, 10)
-		e.c.reapOnce(reapNow)
+		e.c.reapOnce(context.Background(), reapNow)
 		if fmt.Sprint(e.killed) != "[300]" {
 			t.Errorf("state %s: signalled %v, want only 300", state, e.killed)
 		}
@@ -755,7 +755,7 @@ func TestReapVerifiesThePidAfterMeasuring(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	hooked := 0
 	e.c.beforeSignal = func() { hooked++; e.procEntry(100, "bash", 1, goodStart+5, 10) }
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 1 {
 		t.Fatalf("beforeSignal ran %d times, want 1", hooked)
 	}
@@ -874,8 +874,9 @@ func TestRunWaitsForTheReapLoop(t *testing.T) {
 	e.c.reap = config.Reap{Enabled: true, Interval: 20 * time.Millisecond}
 	e.c.socketPath = testsock.Path(t, "ch.sock")
 	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
 	e.c.kill = func(int) error {
-		close(entered)
+		enteredOnce.Do(func() { close(entered) })
 		<-release
 		return nil
 	}
@@ -883,6 +884,13 @@ func TestRunWaitsForTheReapLoop(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	// Registered before Run starts: a failure below cannot leave the kill blocked
+	// or Run running when the test's directories go.
+	t.Cleanup(func() {
+		cancel()
+		releaseOnce.Do(func() { close(release) })
+		<-done
+	})
 	go func() { _ = e.c.Run(ctx); close(done) }()
 	select {
 	case <-entered:
@@ -895,7 +903,7 @@ func TestRunWaitsForTheReapLoop(t *testing.T) {
 		t.Fatal("Run returned while the reap loop was still in a stop")
 	case <-time.After(300 * time.Millisecond):
 	}
-	close(release)
+	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -923,7 +931,7 @@ func TestReapSkipsACandidateThatUnregisteredDuringTheWalk(t *testing.T) {
 			e.c.mu.Unlock()
 		}
 	}
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 2 {
 		t.Fatalf("beforeSignal ran %d times, want 2 (once per candidate walked)", hooked)
 	}
@@ -942,8 +950,8 @@ func TestReapSignalsOnceEvenWhenTheRecordCannotBeWritten(t *testing.T) {
 	}
 	e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
-	e.c.reapOnce(reapNow)
-	e.c.reapOnce(reapNow.Add(time.Minute))
+	e.c.reapOnce(context.Background(), reapNow)
+	e.c.reapOnce(context.Background(), reapNow.Add(time.Minute))
 	if fmt.Sprint(e.killed) != "[100]" {
 		t.Errorf("signalled %v over two ticks, want 100 once", e.killed)
 	}
@@ -991,7 +999,7 @@ func TestReapRechecksTheSessionAfterTheWalk(t *testing.T) {
 			e.procEntry(100, "claude", 1, goodStart, 10)
 			hooked := 0
 			e.c.beforeSignal = func() { hooked++; tc.change(e) }
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if hooked != 1 {
 				t.Fatalf("beforeSignal ran %d times, want 1", hooked)
 			}
@@ -1012,7 +1020,7 @@ func TestReapDoesNotWalkProcForASessionItDoesNotOwn(t *testing.T) {
 	e.pidFile(100, "00000000-0000-4000-8000-0000000000ff")
 	hooked := 0
 	e.c.beforeSignal = func() { hooked++ }
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 0 || len(e.killed) != 0 {
 		t.Errorf("beforeSignal ran %d times (the walk happened), signalled %v: want neither", hooked, e.killed)
 	}
@@ -1068,7 +1076,7 @@ func TestReapLogsIdleFromTheSameBaselineAsTheExpiryTest(t *testing.T) {
 			h := e.session("00000000-0000-4000-8000-000000000001", 100, start, tc.transcript)
 			h.MaxIdle = tc.maxIdle
 			e.procEntry(100, "claude", 1, start, 10)
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if len(e.killed) != 1 || !strings.Contains(e.logText(), tc.want) {
 				t.Errorf("signalled %v, log %q, want a stop logged with %q", e.killed, e.logText(), tc.want)
 			}
@@ -1085,7 +1093,7 @@ func TestReapReadsThePidFileAfterTheExpiryRecheck(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	hooked := 0
 	e.c.afterRecheck = func() { hooked++; e.pidFile(100, "00000000-0000-4000-8000-0000000000ff") }
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 1 {
 		t.Fatalf("afterRecheck ran %d times, want 1", hooked)
 	}
@@ -1099,7 +1107,7 @@ func TestReapReadsThePidFileAfterTheExpiryRecheck(t *testing.T) {
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	hooked = 0
 	e.c.afterRecheck = func() { hooked++ }
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if hooked != 1 || fmt.Sprint(e.killed) != "[100]" {
 		t.Errorf("afterRecheck ran %d times, signalled %v, want once and 100", hooked, e.killed)
 	}
@@ -1139,7 +1147,7 @@ func TestReapBreaksTiesByID(t *testing.T) {
 	e.session(lo, 300, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
 	e.procEntry(100, "claude", 1, goodStart, 10)
 	e.procEntry(300, "claude", 1, goodStart, 10)
-	e.c.reapOnce(reapNow)
+	e.c.reapOnce(context.Background(), reapNow)
 	if fmt.Sprint(e.killed) != "[300]" {
 		t.Errorf("signalled %v, want the lower id's process (300) first", e.killed)
 	}
@@ -1203,7 +1211,7 @@ func TestReapOrdersByIdleSinceTheProcessStart(t *testing.T) {
 				h.MaxIdle = 30 * time.Minute
 				e.procEntry(s.pid, "claude", 1, start, 10)
 			}
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			for _, s := range tc.sessions {
 				e.c.mu.Lock()
 				if h := e.c.registered[s.id]; h.signalled.Load() {
@@ -1212,10 +1220,143 @@ func TestReapOrdersByIdleSinceTheProcessStart(t *testing.T) {
 				}
 				e.c.mu.Unlock()
 			}
-			e.c.reapOnce(reapNow)
+			e.c.reapOnce(context.Background(), reapNow)
 			if fmt.Sprint(e.killed) != tc.want {
 				t.Errorf("signalled %v over two ticks, want %s (longest idle since its process start first)", e.killed, tc.want)
 			}
 		})
+	}
+}
+
+// A flag that cannot be told from a missing one keeps the session: a pinned that
+// is a symlink to itself (ELOOP) stands for any unreadable path.
+func TestReapTreatsAnUnreadablePinnedPathAsPinned(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for name, tc := range map[string]struct {
+		setup  func(e *reapEnv)
+		reaped bool
+	}{
+		"no flag": {setup: func(*reapEnv) {}, reaped: true},
+		"the sessions directory is a file (ENOTDIR)": {setup: func(e *reapEnv) {
+			_ = os.WriteFile(filepath.Join(e.home, "sessions", id), nil, 0o600)
+		}, reaped: true},
+		"a loop (ELOOP)": {setup: func(e *reapEnv) {
+			_ = os.MkdirAll(filepath.Join(e.home, "sessions", id), 0o700)
+			_ = os.Symlink("pinned", filepath.Join(e.home, "sessions", id, "pinned"))
+		}},
+		"a name too long to stat (ENAMETOOLONG)": {setup: func(e *reapEnv) {
+			e.c.registered[id].ClaudeHome = filepath.Join(e.home, strings.Repeat("x", 300))
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+			e.procEntry(100, "claude", 1, goodStart, 10)
+			tc.setup(e)
+			e.c.reapOnce(context.Background(), reapNow)
+			if got := len(e.killed) == 1; got != tc.reaped {
+				t.Errorf("signalled %v, want stopped=%v", e.killed, tc.reaped)
+			}
+		})
+	}
+}
+
+// A last line cut short by a crash has no newline; the next record starts on a
+// line of its own and the cut one is skipped when the file is read back.
+func TestReapAppendsAfterATornLastLine(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	for name, existing := range map[string]string{
+		"a torn line":                      `{"at":"2023-11-1`,
+		"a complete line":                  `{"earlier":true}` + "\n",
+		"a torn line after a complete one": `{"earlier":true}` + "\n" + `{"pid":1`,
+		"no file":                          "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newReapEnv(t)
+			if existing != "" {
+				_ = os.MkdirAll(filepath.Join(e.home, "sessions", id), 0o700)
+				_ = os.WriteFile(filepath.Join(e.home, "sessions", id, "reaped"), []byte(existing), 0o600)
+			}
+			e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+			e.procEntry(100, "claude", 1, goodStart, 10)
+			e.c.reapOnce(context.Background(), reapNow)
+			rec := `{"at":"2023-11-16T02:00:00Z","reason":"expired","pid":100,"pssBytes":10240,"start":1000,"boot":"boot-A"}` + "\n"
+			want := existing + rec
+			if existing != "" && !strings.HasSuffix(existing, "\n") {
+				want = existing + "\n" + rec
+			}
+			if got := e.reapedFile(id); got != want {
+				t.Errorf("reaped file = %q, want %q", got, want)
+			}
+			// Read back: the torn line is skipped, the new one is found.
+			fresh := &Heartbeat{SessionID: id, ClaudeHome: e.home, pid: 100, pidStart: goodStart, boot: testBoot}
+			if !fresh.reapedBefore() {
+				t.Error("the new record was not found when the file was read back")
+			}
+		})
+	}
+}
+
+// The stop is not marked or sent once the context is cancelled, and once the
+// signal is out the record is finished whatever the context does.
+func TestReapStopsAtCancellationButFinishesARecordItStarted(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000001"
+	t.Run("cancelled during the walk", func(t *testing.T) {
+		e := newReapEnv(t)
+		e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+		e.procEntry(100, "claude", 1, goodStart, 10)
+		ctx, cancel := context.WithCancel(context.Background())
+		hooked := 0
+		e.c.beforeSignal = func() { hooked++; cancel() }
+		e.c.reapOnce(ctx, reapNow)
+		if hooked != 1 {
+			t.Fatalf("beforeSignal ran %d times, want 1", hooked)
+		}
+		if len(e.killed) != 0 || e.reapedFile(id) != "" || e.c.registered[id].signalled.Load() {
+			t.Errorf("signalled %v, reaped %q, marked %v: want nothing sent or marked", e.killed, e.reapedFile(id), e.c.registered[id].signalled.Load())
+		}
+	})
+	t.Run("cancelled by the signal", func(t *testing.T) {
+		e := newReapEnv(t)
+		e.session(id, 100, goodStart, answered("1", reapNow.Add(-3*time.Hour)))
+		e.procEntry(100, "claude", 1, goodStart, 10)
+		ctx, cancel := context.WithCancel(context.Background())
+		e.c.kill = func(pid int) error { e.killed = append(e.killed, pid); cancel(); return nil }
+		e.c.reapOnce(ctx, reapNow)
+		if fmt.Sprint(e.killed) != "[100]" || e.reapedFile(id) == "" || len(e.records) != 1 {
+			t.Errorf("signalled %v, reaped %q, sent %q: want the record finished after the signal", e.killed, e.reapedFile(id), e.records)
+		}
+	})
+}
+
+// With too few sessions left to stop one, a walk that found the candidate gone
+// still ends the tick: the next candidate is not tried against a count that no
+// longer holds.
+func TestReapKeepMinEndsTheTickEvenWhenTheCandidateWentAway(t *testing.T) {
+	e := newReapEnv(t)
+	const a, b, c = "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-00000000000c"
+	e.c.reap.KeepMin = 2
+	e.session(a, 100, goodStart, answered("1", reapNow.Add(-5*time.Hour)))
+	e.session(b, 300, goodStart, answered("2", reapNow.Add(-4*time.Hour)))
+	e.session(c, 400, goodStart, answered("3", reapNow.Add(-time.Minute)))
+	e.procEntry(100, "claude", 1, goodStart, 10)
+	e.procEntry(300, "claude", 1, goodStart, 10)
+	// During a's walk both a and c go away: two remain counted? no, one (b): below keepMin.
+	first, walks := true, 0
+	e.c.beforeSignal = func() {
+		walks++
+		if first {
+			first = false
+			e.c.mu.Lock()
+			for _, id := range []string{a, c} {
+				delete(e.c.registered, id)
+				delete(e.c.channels, id)
+			}
+			e.c.mu.Unlock()
+		}
+	}
+	e.c.reapOnce(context.Background(), reapNow)
+	if len(e.killed) != 0 || walks != 1 {
+		t.Errorf("signalled %v after %d walks: only b is left running, below keepMin 2, so the tick must end after the first walk", e.killed, walks)
 	}
 }

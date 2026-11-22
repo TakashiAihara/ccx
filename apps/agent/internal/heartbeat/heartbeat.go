@@ -348,7 +348,13 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// An object for most tools, but a string (an error) or an array for
 			// others; a typed struct would make Unmarshal drop the whole record.
 			ToolResult json.RawMessage `json:"toolUseResult"`
-			Message    struct {
+			// A notification delivered while a turn runs is not a user record but an
+			// attachment of type queued_command, its text in prompt.
+			Attachment struct {
+				Type   string `json:"type"`
+				Prompt string `json:"prompt"`
+			} `json:"attachment"`
+			Message struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -368,9 +374,9 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		switch rec.Type {
 		case "user":
 			resultIDs := toolIDs(rec.Message.Content, "tool_result", "tool_use_id")
-			// Which tool a toolUseResult came from is told by the tool_use that asked
-			// for it: an object shaped like a background start from another tool (a
-			// task list's {"taskId"}) is not one.
+			// Only an end (TaskStop's task_id) needs to know which tool a result came
+			// from, told by the tool_use that asked for it. A record carries one
+			// tool_result (measured: none with more than one), so the first is its tool.
 			tool := ""
 			if len(resultIDs) > 0 {
 				tool = toolNames[resultIDs[0]]
@@ -446,6 +452,13 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
 				s.ShortTTL = cc.Long == 0
 			}
+		case "attachment":
+			// Only the end of background work is read from it: the record is not use
+			// of the session and changes nothing else about it.
+			if rec.Attachment.Type == "queued_command" {
+				endNotified(s.Background, rec.Attachment.Prompt)
+			}
+			continue
 		default:
 			continue
 		}
@@ -461,11 +474,13 @@ type toolResultFields struct {
 	backgroundTaskID, taskID, agentID, status, stopped string
 }
 
-// parseToolResult reads the fields background tracking uses from a toolUseResult,
-// each only from the tool that writes it: a Bash's backgroundTaskId, a Monitor's
-// taskId, an Agent's agentId and status, a TaskStop's task_id. An unknown tool
-// yields nothing. Only an object is decoded (most results are, and the rest are
-// not worth an allocation), and a value that is not a string is ignored.
+// parseToolResult reads the fields background tracking uses from a toolUseResult.
+// The start fields (backgroundTaskId, taskId, agentId with its status) are read
+// whatever the tool: they only ever keep a session, and a start missed because a
+// tool was renamed would let a session with live work be stopped. The end field
+// (task_id) is read only from a TaskStop, since a stray one would end live work.
+// Only an object is decoded (most results are, and the rest are not worth an
+// allocation), and a value that is not a string is ignored.
 func parseToolResult(raw json.RawMessage, tool string) toolResultFields {
 	if len(raw) == 0 || raw[0] != '{' {
 		return toolResultFields{}
@@ -485,17 +500,16 @@ func parseToolResult(raw json.RawMessage, tool string) toolResultFields {
 		_ = json.Unmarshal(v, &s)
 		return s
 	}
-	switch tool {
-	case "Bash":
-		return toolResultFields{backgroundTaskID: str(o.BackgroundTaskID)}
-	case "Monitor":
-		return toolResultFields{taskID: str(o.TaskID)}
-	case "Agent":
-		return toolResultFields{agentID: str(o.AgentID), status: str(o.Status)}
-	case "TaskStop":
-		return toolResultFields{stopped: str(o.Stopped)}
+	f := toolResultFields{
+		backgroundTaskID: str(o.BackgroundTaskID),
+		taskID:           str(o.TaskID),
+		agentID:          str(o.AgentID),
+		status:           str(o.Status),
 	}
-	return toolResultFields{}
+	if tool == "TaskStop" {
+		f.stopped = str(o.Stopped)
+	}
+	return f
 }
 
 // toolUseNames is the name of each tool_use block in the content, by its id.
@@ -531,57 +545,99 @@ var (
 // body is gone. NUL does not occur in the text outside the bodies it replaces.
 const monitorExpired = "\x00monitor-expired\x00"
 
-// stripBodies replaces each outermost <tag>…</tag> span of s with what replace
-// returns for its body. Pairs of the same tag inside a body are matched by depth,
-// so a notification quoted whole inside a <result> (which has its own <result>)
-// is one body, not the end of the outer one. A body that never closes runs to the
-// end and is dropped with it: that ends no task, which keeps the session.
+// quotedTags are the notification parts that hold a command's output or a tool's
+// own words, which can quote anything: task ids, status tags, a whole notification.
+var quotedTags = [...]struct{ open, close string }{
+	{"<event>", "</event>"},
+	{"<summary>", "</summary>"},
+	{"<result>", "</result>"},
+}
+
+// finder is the next place a pattern occurs at or after a position, remembered:
+// positions only move forward, so what was found stays right until it is passed
+// and nothing is searched from the start again.
+type finder struct {
+	s, pat string
+	at     int
+	none   bool
+}
+
+func newFinder(s, pat string) *finder { return &finder{s: s, pat: pat, at: -1} }
+
+func (f *finder) next(from int) int {
+	if f.none {
+		return -1
+	}
+	if f.at >= from {
+		return f.at
+	}
+	i := strings.Index(f.s[from:], f.pat)
+	if i < 0 {
+		f.none = true
+		return -1
+	}
+	f.at = from + i
+	return f.at
+}
+
+// stripQuoted removes the quoted bodies of a notification record in one pass from
+// left to right. Whichever of <event>, <summary> and <result> opens first is
+// taken, and its body runs to its own closing tag, matched by depth against the
+// same tag only: another tag inside it, or a notification quoted whole with its own
+// <result>, is just content. An <event> that says its Monitor expired leaves a
+// marker. A body that never closes runs to the end and is dropped with it, which
+// ends no task and so keeps the session.
 //
-// A literal closing tag in a body that has no opening one is out of scope: it
-// ends the body early. Nothing is known to write one.
-func stripBodies(s, tag string, replace func(body string) string) string {
-	open, closing := "<"+tag+">", "</"+tag+">"
+// A literal closing tag with no opening one inside a body is out of scope: it ends
+// the body early. Nothing is known to write one.
+func stripQuoted(s string) string {
+	var opens, closes [len(quotedTags)]*finder
+	for i, t := range quotedTags {
+		opens[i], closes[i] = newFinder(s, t.open), newFinder(s, t.close)
+	}
 	var out strings.Builder
+	pos := 0
 	for {
-		i := strings.Index(s, open)
-		if i < 0 {
-			out.WriteString(s)
+		first, tag := -1, 0
+		for i := range quotedTags {
+			if at := opens[i].next(pos); at >= 0 && (first < 0 || at < first) {
+				first, tag = at, i
+			}
+		}
+		if first < 0 {
+			out.WriteString(s[pos:])
 			return out.String()
 		}
-		out.WriteString(s[:i])
-		s = s[i+len(open):]
-		depth, pos := 1, 0
+		out.WriteString(s[pos:first])
+		open, closing := quotedTags[tag].open, quotedTags[tag].close
+		start := first + len(open)
+		depth, cur := 1, start
 		for depth > 0 {
-			c := strings.Index(s[pos:], closing)
+			c := closes[tag].next(cur)
 			if c < 0 {
 				return out.String()
 			}
-			if o := strings.Index(s[pos:], open); o >= 0 && o < c {
+			if o := opens[tag].next(cur); o >= 0 && o < c {
 				depth++
-				pos += o + len(open)
+				cur = o + len(open)
 				continue
 			}
 			depth--
-			if depth == 0 {
-				out.WriteString(replace(s[:pos+c]))
-				s = s[pos+c+len(closing):]
-			} else {
-				pos += c + len(closing)
+			cur = c + len(closing)
+			if depth == 0 && tag == 0 && strings.HasPrefix(strings.TrimSpace(s[start:c]), "[Monitor expired") {
+				out.WriteString(monitorExpired)
 			}
 		}
+		pos = cur
 	}
 }
 
-func dropBody(string) string { return "" }
-
 // trackBackground records background work starting or ending in one user record.
-// Starts are what the tool result says it launched (a Bash's backgroundTaskId,
-// a Monitor's taskId, an async Agent's agentId). Ends are a TaskStop's task_id,
-// or a <task-notification> (the record must start with it, as for channelTag)
-// whose own <status> is present (not one inside an <event>, <summary> or
-// <result>), or a Monitor's expiry (an event whose text starts with
-// "[Monitor expired"). A notification ends only its own task ids: a Monitor's
-// other events end nothing, and text quoted inside a body names no task.
+// A start is what a tool's result says it launched (a backgroundTaskId, a Monitor's
+// taskId, an async Agent's agentId), read from any tool's result: a start that is
+// not one only keeps a session, and a tool renamed must not hide live work. An end
+// is a TaskStop's task_id, which counts only from that tool, or a notification
+// (see endNotified).
 func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stopped string, content json.RawMessage, ts time.Time) {
 	for _, id := range []string{bash, monitor} {
 		if id != "" {
@@ -595,20 +651,22 @@ func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stop
 		delete(bg, stopped)
 	}
 	var s string
-	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<task-notification>") {
+	if json.Unmarshal(content, &s) == nil {
+		endNotified(bg, s)
+	}
+}
+
+// endNotified ends the background tasks a <task-notification> text reports done:
+// the text must start with it (as for channelTag), and each notification in it ends
+// only its own task ids, by its own <status> or by a Monitor's expiry (an event whose
+// text starts with "[Monitor expired"). A Monitor's other events end nothing, and
+// text quoted inside a body names no task. The same text arrives as a user record's
+// content, or, when delivered during a turn, as an attachment's prompt.
+func endNotified(bg map[string]time.Time, s string) {
+	if !strings.HasPrefix(s, "<task-notification>") {
 		return
 	}
-	// The bodies go from the whole record first, so a notification quoted inside a
-	// <result> neither closes the outer block nor leaks its task ids. An event
-	// that says its Monitor expired leaves a marker in its place.
-	s = stripBodies(s, "event", func(body string) string {
-		if strings.HasPrefix(strings.TrimSpace(body), "[Monitor expired") {
-			return monitorExpired
-		}
-		return ""
-	})
-	s = stripBodies(s, "summary", dropBody)
-	s = stripBodies(s, "result", dropBody)
+	s = stripQuoted(s)
 	for _, block := range notificationBlock.FindAllStringSubmatch(s, -1) {
 		body := block[1]
 		if !strings.Contains(body, "<status>") && !strings.Contains(body, monitorExpired) {

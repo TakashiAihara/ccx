@@ -3,7 +3,9 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -171,7 +173,13 @@ func pssOf(root string, pid int) int64 {
 // as for archived).
 func (h *Heartbeat) pinned() bool {
 	fi, err := os.Stat(filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "pinned"))
-	return err == nil && !fi.IsDir()
+	if err == nil {
+		return !fi.IsDir()
+	}
+	// Only a flag that is not there means not pinned: a path that cannot be read
+	// (a permission, a loop, an I/O error) may hide one, and a reaper that cannot
+	// tell keeps the session.
+	return !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR)
 }
 
 // expired: keepalive has let go of the session and its cache is gone, and nothing
@@ -290,7 +298,7 @@ func (c *Concern) reapLoop(ctx context.Context) {
 			return
 		case <-time.After(c.reap.Interval):
 		}
-		c.reapOnce(time.Now())
+		c.reapOnce(ctx, time.Now())
 	}
 }
 
@@ -309,7 +317,7 @@ func (c *Concern) running() int {
 
 // reapOnce stops the oldest expired session, if there is one and more than
 // KeepMin would remain.
-func (c *Concern) reapOnce(now time.Time) {
+func (c *Concern) reapOnce(ctx context.Context, now time.Time) {
 	c.mu.Lock()
 	hs := make([]*Heartbeat, 0, len(c.registered))
 	for _, h := range c.registered {
@@ -387,14 +395,17 @@ func (c *Concern) reapOnce(now time.Time) {
 		// Re-counted under the lock: a session may have gone, or been signalled, since
 		// the count above. Marked signalled here so it stops counting at once; the
 		// signal itself is sent outside the lock.
+		// A shutdown that arrived during the walk stops here, before anything is marked
+		// or sent; once the signal is out the record is finished whatever the context.
 		c.mu.Lock()
 		still := c.registered[h.SessionID] == h
-		last := still && c.running()-1 < c.reap.KeepMin
-		if still && !last {
+		short := c.running()-1 < c.reap.KeepMin
+		stopped := ctx.Err() != nil
+		if still && !short && !stopped {
 			h.signalled.Store(true)
 		}
 		c.mu.Unlock()
-		if last {
+		if short || stopped {
 			return
 		}
 		if !still {
@@ -442,11 +453,20 @@ func appendLine(dir, name string, line []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "%s\n", line)
+	// A last line that was cut short (a crash mid-write) has no newline, and this
+	// line would be glued to it and lost with it.
+	prefix := ""
+	if fi, serr := f.Stat(); serr == nil && fi.Size() > 0 {
+		var last [1]byte
+		if _, rerr := f.ReadAt(last[:], fi.Size()-1); rerr == nil && last[0] != '\n' {
+			prefix = "\n"
+		}
+	}
+	_, err = fmt.Fprintf(f, "%s%s\n", prefix, line)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

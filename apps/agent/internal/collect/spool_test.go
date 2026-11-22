@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -436,5 +437,56 @@ func TestCollectAppendEventRefusesWhileCollectIsNotRunning(t *testing.T) {
 	}
 	if n, _ := spool.Pending(); n != 1 {
 		t.Errorf("pending = %d, want only the one written during Run", n)
+	}
+}
+
+// AppendEvent is let in only after the startup drain of incoming/ has finished: an
+// event spooled meanwhile would take a seq among the drained ones. The fsync a
+// drained event is written with stands in for "during the drain"; it looks at the
+// flag AppendEvent reads rather than calling it, since the drain holds the spool.
+func TestCollectAppendEventWaitsForTheStartupDrain(t *testing.T) {
+	dir := t.TempDir()
+	sock := testsock.Path(t, "ccx-agent.sock")
+	spool, err := OpenSpool(dir+"/spool", testOrigin())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spool.IncomingDir(), "0001.raw"), []byte(`{"hook":"Stop"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newCollect(sock, spool, nil, quietLog)
+
+	var mu sync.Mutex
+	var open []bool
+	realFsync := fsync
+	fsync = func(f *os.File) error {
+		c.holdMu.RLock()
+		held := c.holding
+		c.holdMu.RUnlock()
+		mu.Lock()
+		open = append(open, held)
+		mu.Unlock()
+		return realFsync(f)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done; fsync = realFsync })
+	waitFor(t, 2*time.Second, func() bool { return canDial(sock) })
+
+	mu.Lock()
+	seen := append([]bool(nil), open...)
+	mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("the startup drain wrote nothing, so the window was never exercised")
+	}
+	for _, held := range seen {
+		if held {
+			t.Error("AppendEvent was let in while the startup drain was still writing")
+		}
+	}
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("late")); err != nil {
+		t.Errorf("AppendEvent after the drain: %v", err)
 	}
 }
