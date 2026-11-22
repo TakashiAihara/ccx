@@ -239,9 +239,11 @@ type HeartbeatStatus struct {
 	// "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
 	// "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた) /
 	// "beat_pending" (打った heartbeat が transcript に届くのを待っている) / "push_failed" (push が失敗した。
-	// 次の見直しでもう一度打つ) / "no_request" (応答のある request がまだ無い) /
-	// "transcript_unreadable" (transcript が無い、または読めない)。
-	// 空になるのは、予定がある (next_at が設定済み) か、未登録のときだけ。
+	// 次の見直しでもう一度打つ) / "no_request" (応答のある request がまだ無い。最初のプロンプトの前で
+	// transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript はあるが読めない)。
+	// 空になるのは、予定がある (next_at が設定済み) か、未登録か、enabled が false のときだけ
+	// (理由の値を持たない古い agent も空を返す)。打った直後は次の見直し (最大 1 分) まで "beat_pending" に
+	// なるので、正常に回っている session でも約 50 分に 1 分はこの値を返す。
 	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
 	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
 	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event、別 session からの
@@ -255,7 +257,8 @@ type HeartbeatStatus struct {
 	// 未登録なら未設定。
 	LastBeatAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=last_beat_at,json=lastBeatAt,proto3" json:"last_beat_at,omitempty"`
 	// cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
-	// "5m" の間は heartbeat を打たない (idle_reason が "short_ttl")。transcript を読めなかった回は直前の値のまま。
+	// "5m" の間は heartbeat を打たない (idle_reason は、打たない宣言や応答待ちが先に当たらなければ "short_ttl")。
+	// transcript を読めなかった回は直前の値のまま。
 	// 未登録なら空。
 	CacheTtl      string `protobuf:"bytes,12,opt,name=cache_ttl,json=cacheTtl,proto3" json:"cache_ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields

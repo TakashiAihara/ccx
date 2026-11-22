@@ -96,10 +96,13 @@ archived, or no declaration with the machine's default off), `short_ttl` (the
 last request wrote a 5-minute cache; serve also logs when this starts and ends),
 `expired` (the cache is already gone), `turn_running`, `max_idle`,
 `beat_pending` (a pushed beat has not reached the transcript yet),
-`push_failed` (the push failed; the next look tries again), `no_request` (the
-transcript has no answered request yet), or `transcript_unreadable` (there is no
-transcript, or it could not be read). It is empty only when a heartbeat is
-scheduled or the session is not registered.
+`push_failed` (the push failed; the next look tries again), `no_request` (no
+answered request yet; a session before its first prompt has no transcript and
+reads this too), or `transcript_unreadable` (the transcript is there and could
+not be read). It is empty only when a heartbeat is scheduled, the session is not
+registered, or heartbeat is off in serve's config (`enabled` is false). A
+heartbeat just pushed reads `beat_pending` until serve next looks (up to a
+minute), so a healthy session shows it for about a minute in every interval.
 
 `beatsSinceReal` is how many heartbeats reached the transcript since its last
 real record (a person's prompt, another channel's event, a message from another

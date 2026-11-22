@@ -6,7 +6,7 @@ import { createFetchHandler } from "@connectrpc/connect/protocol";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { AgentService, HeartbeatStatusSchema, type GetSessionStatusRequest, type HeartbeatStatus } from "@ccx/proto/ccx/v1/agent_pb.ts";
 
@@ -18,6 +18,7 @@ afterEach(() => {
 });
 
 const SID = "0f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+const SID2 = "1f9a1b2c-3d4e-4f60-8a7b-9c0d1e2f3a4b";
 const NOW = Date.parse("2026-11-22T12:00:00Z");
 const ago = (min: number) => timestampFromDate(new Date(NOW - min * 60_000));
 
@@ -102,7 +103,20 @@ test("asks ccx-agent over the unix socket with the session's id and home; a sock
   expect(res?.collect?.pending).toBe(4);
 
   expect(await sessionAgentStatus(join(tmp("ccx-keepalive-none-"), "none.sock"), SID, "/home/x/.claude")).toBeUndefined();
+
+  // The agent takes a relative home as its own default: the CLI's relative CLAUDE_CONFIG_DIR goes absolute.
+  await sessionAgentStatus(socket, SID, "rel/.claude");
+  expect(got?.claudeHome).toBe(resolve("rel/.claude"));
 });
+
+test("an agent that accepts the connection and never answers is given up on, not waited for", async () => {
+  const socket = join(tmp("ccx-keepalive-wedged-"), "api.sock");
+  const server = Bun.serve({ unix: socket, fetch: () => new Promise<Response>(() => {}) });
+  cleanups.push(() => server.stop(true));
+  const started = Date.now();
+  expect(await sessionAgentStatus(socket, SID, "/home/x/.claude")).toBeUndefined();
+  expect(Date.now() - started).toBeLessThan(5000);
+}, 20_000);
 
 const cli = join(import.meta.dir, "index.ts");
 
@@ -116,19 +130,26 @@ async function run(args: string[], env: Record<string, string>) {
   return { out, err, code };
 }
 
-/** A Claude Code home where SID has a transcript and a pid file naming this (live) process: a running session. */
-function homeWithRunningSession(): string {
+/** A Claude Code home where each id has a transcript and a pid file naming a live process (this one, then its parent): running sessions. */
+function homeWithRunningSessions(...ids: string[]): string {
   const home = tmp("ccx-keepalive-home-");
   mkdirSync(join(home, "projects", "-w"), { recursive: true });
-  writeFileSync(join(home, "projects", "-w", `${SID}.jsonl`), `${JSON.stringify({ type: "user", cwd: "/w", message: "hi" })}\n`);
   mkdirSync(join(home, "sessions"), { recursive: true });
-  writeFileSync(join(home, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: SID }));
+  const pids = [process.pid, process.ppid];
+  ids.forEach((id, i) => {
+    writeFileSync(join(home, "projects", "-w", `${id}.jsonl`), `${JSON.stringify({ type: "user", cwd: "/w", message: "hi" })}\n`);
+    writeFileSync(join(home, "sessions", `${pids[i]}.json`), JSON.stringify({ pid: pids[i], sessionId: id }));
+  });
   return home;
 }
 
 test("ccx session status shows the keepalive line and carries the agent's answer in --json; with no agent it says unknown", async () => {
-  const home = homeWithRunningSession();
-  const socket = fakeAgent(() => ({ idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2 }));
+  const home = homeWithRunningSessions(SID);
+  let asked = 0;
+  const socket = fakeAgent(() => {
+    asked++;
+    return { idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2 };
+  });
   const env = { CLAUDE_CONFIG_DIR: home, CCX_API_SOCKET: socket };
 
   const shown = await run(["session", "status", SID], env);
@@ -139,18 +160,28 @@ test("ccx session status shows the keepalive line and carries the agent's answer
   expect(json.sessionId).toBe(SID);
   // Fields at their zero value are spelled out, as `ccx-agent status` does.
   expect(json.agent.heartbeat).toMatchObject({ registered: true, idleReason: "short_ttl", cacheTtl: "5m", beatsSinceReal: 2, sent: 0 });
-  expect(json.agent.collect).toMatchObject({ enabled: true, pending: 4 });
+  // collect is the machine's spool, not this session's: `ccx agent status` has it.
+  expect(Object.keys(json.agent)).toEqual(["heartbeat"]);
 
   const down = { CLAUDE_CONFIG_DIR: home, CCX_API_SOCKET: join(home, "none.sock") };
   const off = await run(["session", "status", SID], down);
   expect(off.code).toBe(0);
   expect(off.out).toMatch(/^keepalive\s+unknown \(ccx-agent is not answering\)$/m);
   expect(JSON.parse((await run(["session", "status", SID, "--json"], down)).out).agent).toBeNull();
+
+  // A session that is not running here has no keepalive on this machine: the agent is not asked.
+  rmSync(join(home, "sessions", `${process.pid}.json`));
+  asked = 0;
+  const ended = await run(["session", "status", SID], env);
+  expect(ended.out).toMatch(/^lifecycle\s+ended$/m);
+  expect(ended.out).toMatch(/^keepalive\s+-$/m);
+  expect(JSON.parse((await run(["session", "status", SID, "--json"], env)).out).agent).toBeNull();
+  expect(asked).toBe(0);
 });
 
 test("ccx agent status counts the running sessions' keepalive states on one line and lists them in --json", async () => {
-  const home = homeWithRunningSession();
-  const socket = fakeAgent(() => ({ idleReason: "short_ttl", cacheTtl: "5m" }));
+  const home = homeWithRunningSessions(SID, SID2);
+  const socket = fakeAgent((req) => (req.sessionId === SID ? { idleReason: "short_ttl", cacheTtl: "5m" } : { nextAt: ago(-20), cacheTtl: "1h" }));
   const hook = join(tmp("ccx-keepalive-hook-"), "ccx-agent.sock");
   const server = createServer().listen(hook);
   cleanups.push(() => server.close());
@@ -159,16 +190,21 @@ test("ccx agent status counts the running sessions' keepalive states on one line
   const shown = await run(["agent", "status"], env);
   expect(shown.code).toBe(0);
   expect(shown.out).toMatch(/^ccx-agent\s+running$/m);
-  expect(shown.out).toMatch(/^heartbeat\s+1 short_ttl$/m);
+  expect(shown.out).toMatch(/^keepalive\s+1 scheduled, 1 short_ttl$/m);
 
   const json = JSON.parse((await run(["agent", "status", "--json"], env)).out);
   expect(json.socketConnectable).toBe(true);
-  expect(json.sessions).toHaveLength(1);
-  expect(json.sessions[0].sessionId).toBe(SID);
+  // Each session carries its own answer, in id order.
+  expect(json.sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual([SID, SID2]);
   expect(json.sessions[0].heartbeat).toMatchObject({ registered: true, idleReason: "short_ttl", cacheTtl: "5m", sent: 0 });
+  expect(json.sessions[1].heartbeat).toMatchObject({ registered: true, idleReason: "", cacheTtl: "1h" });
+  expect(json.sessions[1].heartbeat.nextAt).toBeString();
 
   // The API socket not answering: the session is still listed, its heartbeat unknown.
   const down = { ...env, CCX_API_SOCKET: join(home, "none.sock") };
-  expect((await run(["agent", "status"], down)).out).toMatch(/^heartbeat\s+1 unknown$/m);
-  expect(JSON.parse((await run(["agent", "status", "--json"], down)).out).sessions).toEqual([{ sessionId: SID, heartbeat: null }]);
+  expect((await run(["agent", "status"], down)).out).toMatch(/^keepalive\s+2 unknown$/m);
+  expect(JSON.parse((await run(["agent", "status", "--json"], down)).out).sessions).toEqual([
+    { sessionId: SID, heartbeat: null },
+    { sessionId: SID2, heartbeat: null },
+  ]);
 });

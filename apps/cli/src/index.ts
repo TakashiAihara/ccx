@@ -43,7 +43,7 @@ import pkg from "../package.json" with { type: "json" };
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
-import { agentJson, keepaliveSummary, sessionAgentStatus } from "./keepalive.ts";
+import { heartbeatJson, keepaliveSummary, sessionAgentStatus } from "./keepalive.ts";
 import { pickRepodir } from "./pick.ts";
 import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
@@ -564,7 +564,7 @@ agent
     if (o.json) {
       console.log(
         JSON.stringify(
-          { ...st, sessions: ids.map((id, i) => ({ sessionId: id, heartbeat: agentJson(answers[i])?.heartbeat ?? null })) },
+          { ...st, sessions: ids.map((id, i) => ({ sessionId: id, heartbeat: heartbeatJson(answers[i]) })) },
           null,
           2,
         ),
@@ -579,7 +579,7 @@ agent
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
       ["dead", `${st.dead} refused by the center, set aside in ${join(st.spoolDir, "dead")} (not retried)`],
-      ["heartbeat", keepaliveSummary(answers.map((r) => r?.heartbeat))],
+      ["keepalive", keepaliveSummary(answers.map((r) => r?.heartbeat))],
       ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);

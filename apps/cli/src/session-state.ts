@@ -33,12 +33,12 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 
 import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
-import type { HeartbeatStatus } from "@ccx/proto/ccx/v1/agent_pb.ts";
+
 
 import { centerTransport, type Hub } from "./fleet.ts";
 
 import { table } from "./format.ts";
-import { agentJson, keepaliveLine, sessionAgentStatus } from "./keepalive.ts";
+import { heartbeatJson, keepaliveLine, sessionAgentStatus } from "./keepalive.ts";
 import { defaultApiSocketPath } from "./msg.ts";
 
 /**
@@ -257,7 +257,7 @@ export async function writeEach(
   if (cfg) await reportStates(cfg.hub, cfg.machine, written.map(({ id, s }) => ({ sessionId: id, state: s })));
 }
 
-const show = (id: string, lifecycle: Lifecycle, s: DeclaredState, heartbeat: HeartbeatStatus | undefined) =>
+const show = (id: string, lifecycle: Lifecycle, s: DeclaredState, keepalive: string) =>
   table([
     ["session", id],
     ["lifecycle", lifecycle],
@@ -269,7 +269,7 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState, heartbeat: Hea
     ["role", s.role || "-"],
     ["heartbeat", s.heartbeat || "default"],
     // heartbeat の行は宣言。こちらは ccx-agent が実際に何をしているか (#274)
-    ["keepalive", keepaliveLine(heartbeat)],
+    ["keepalive", keepalive],
     // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
     ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
   ]);
@@ -434,8 +434,10 @@ export function registerSessionState(session: Command): void {
       const hasTranscript = running.has(id) || (await hasLocalTranscript(id, home));
       const lifecycle = await lifecycleOf(id, running, hasTranscript, store);
       const s = await declaredFor(id, home, lifecycle, store);
-      const res = await sessionAgentStatus(defaultApiSocketPath(), id, home);
-      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s, agent: agentJson(res) }, null, 2));
-      else for (const line of show(id, lifecycle, s, res?.heartbeat)) console.log(line);
+      // Only a session running here can be kept alive by this machine's agent; for any other the agent has nothing to say
+      const live = lifecycle === "running";
+      const res = live ? await sessionAgentStatus(defaultApiSocketPath(), id, home) : undefined;
+      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s, agent: res ? { heartbeat: heartbeatJson(res) } : null }, null, 2));
+      else for (const line of show(id, lifecycle, s, live ? keepaliveLine(res?.heartbeat) : "-")) console.log(line);
     });
 }

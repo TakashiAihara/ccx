@@ -521,8 +521,25 @@ func TestStepWaitsForATranscript(t *testing.T) {
 	if wait := h.step(&sent); *pushes != 0 || wait != poll {
 		t.Errorf("no transcript: pushes=%d wait=%v", *pushes, wait)
 	}
-	if st := h.Stats(); st.IdleReason != IdleTranscriptUnreadable {
-		t.Errorf("no transcript: IdleReason = %q, want %q", st.IdleReason, IdleTranscriptUnreadable)
+	// A session before its first prompt has no transcript: not a fault.
+	if st := h.Stats(); st.IdleReason != IdleNoRequest {
+		t.Errorf("no transcript: IdleReason = %q, want %q", st.IdleReason, IdleNoRequest)
+	}
+
+	// A transcript that is there and cannot be read is one. A directory in its
+	// place opens and then fails to read.
+	u, upushes, _ := fixture(t, "", at("10:50:05"))
+	file := filepath.Join(u.ClaudeHome, "projects", "-some-cwd", "sid.jsonl")
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var usent time.Time
+	u.step(&usent)
+	if st := u.Stats(); *upushes != 0 || st.IdleReason != IdleTranscriptUnreadable {
+		t.Errorf("unreadable transcript: pushes=%d IdleReason = %q, want 0 and %q", *upushes, st.IdleReason, IdleTranscriptUnreadable)
 	}
 }
 
@@ -854,8 +871,8 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3.step(&sent3)
-	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleTranscriptUnreadable || !st.Next.IsZero() {
-		t.Errorf("after a failed read: %+v, want the last count 3, transcript_unreadable, no due time", st)
+	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleNoRequest || !st.Next.IsZero() {
+		t.Errorf("after a failed read: %+v, want the last count 3, no_request (the file is gone), no due time", st)
 	}
 }
 

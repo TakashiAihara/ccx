@@ -5,16 +5,12 @@
  * reads "unknown" — a missing or silent ccx-agent is not an error for either
  * command.
  */
-import { toJson, type JsonObject, type JsonValue } from "@bufbuild/protobuf";
+import { toJson, type JsonValue } from "@bufbuild/protobuf";
 import { timestampMs } from "@bufbuild/protobuf/wkt";
 import { createClient } from "@connectrpc/connect";
+import { resolve } from "node:path";
 
-import {
-  AgentService,
-  GetSessionStatusResponseSchema,
-  type GetSessionStatusResponse,
-  type HeartbeatStatus,
-} from "@ccx/proto/ccx/v1/agent_pb.ts";
+import { AgentService, HeartbeatStatusSchema, type GetSessionStatusResponse, type HeartbeatStatus } from "@ccx/proto/ccx/v1/agent_pb.ts";
 
 import { humanSince } from "./format.ts";
 import { unixTransport } from "./msg.ts";
@@ -31,7 +27,9 @@ export async function sessionAgentStatus(
 ): Promise<GetSessionStatusResponse | undefined> {
   try {
     const client = createClient(AgentService, unixTransport(socket));
-    return await client.getSessionStatus({ sessionId, claudeHome }, { signal: AbortSignal.timeout(2000) });
+    // The agent reads a relative home as its own default, so a relative CLAUDE_CONFIG_DIR goes absolute here.
+    // 2 s: the answer is a few file reads on this machine; an agent that accepts and never answers must not hang a status.
+    return await client.getSessionStatus({ sessionId, claudeHome: resolve(claudeHome) }, { signal: AbortSignal.timeout(2000) });
   } catch {
     return undefined;
   }
@@ -95,13 +93,7 @@ export function keepaliveSummary(hs: (HeartbeatStatus | undefined)[]): string {
   return states.map((s) => `${counts.get(s)} ${s}`).join(", ");
 }
 
-/**
- * The agent's answer as `--json` prints it: the response trimmed to the two
- * members these commands show, with implicit fields spelled out. null when
- * ccx-agent did not answer.
- */
-export function agentJson(res: GetSessionStatusResponse | undefined): { heartbeat?: JsonValue; collect?: JsonValue } | null {
-  if (res === undefined) return null;
-  const j = toJson(GetSessionStatusResponseSchema, res, { alwaysEmitImplicit: true }) as JsonObject;
-  return { heartbeat: j.heartbeat, collect: j.collect };
+/** The heartbeat part of the agent's answer as `--json` prints it, fields at their zero value spelled out; null with no answer. */
+export function heartbeatJson(res: GetSessionStatusResponse | undefined): JsonValue {
+  return res?.heartbeat ? toJson(HeartbeatStatusSchema, res.heartbeat, { alwaysEmitImplicit: true }) : null;
 }
