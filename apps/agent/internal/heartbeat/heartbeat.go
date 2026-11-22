@@ -349,12 +349,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// others; a typed struct would make Unmarshal drop the whole record.
 			ToolResult json.RawMessage `json:"toolUseResult"`
 			// A notification delivered while a turn runs is not a user record but an
-			// attachment of type queued_command, its text in prompt.
-			Attachment struct {
-				Type   string `json:"type"`
-				Prompt string `json:"prompt"`
-			} `json:"attachment"`
-			Message struct {
+			// attachment of type queued_command, its text in prompt. Raw for the same
+			// reason as toolUseResult: another attachment's shape must not drop the line.
+			Attachment json.RawMessage `json:"attachment"`
+			Message    struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -453,10 +451,15 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 				s.ShortTTL = cc.Long == 0
 			}
 		case "attachment":
-			// Only the end of background work is read from it: the record is not use
-			// of the session and changes nothing else about it.
-			if rec.Attachment.Type == "queued_command" {
-				endNotified(s.Background, rec.Attachment.Prompt)
+			// Only the end of background work is read from it. A queued_command can
+			// also carry a typed prompt, a channel event or a peer message; it is not
+			// counted as use (measured 2026-11-22: in no transcript was one the last use).
+			var a struct {
+				Type   string `json:"type"`
+				Prompt string `json:"prompt"`
+			}
+			if json.Unmarshal(rec.Attachment, &a) == nil && a.Type == "queued_command" {
+				endNotified(s.Background, a.Prompt)
 			}
 			continue
 		default:
@@ -502,9 +505,15 @@ func parseToolResult(raw json.RawMessage, tool string) toolResultFields {
 	}
 	f := toolResultFields{
 		backgroundTaskID: str(o.BackgroundTaskID),
-		taskID:           str(o.TaskID),
 		agentID:          str(o.AgentID),
 		status:           str(o.Status),
+	}
+	// The task-list tools (Claude Code's TaskCreate / TaskGet / TaskUpdate / TaskList)
+	// also return a taskId, for a list entry that never ends: it is not background work.
+	switch tool {
+	case "TaskCreate", "TaskGet", "TaskUpdate", "TaskList":
+	default:
+		f.taskID = str(o.TaskID)
 	}
 	if tool == "TaskStop" {
 		f.stopped = str(o.Stopped)

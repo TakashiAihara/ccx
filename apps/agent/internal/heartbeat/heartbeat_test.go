@@ -962,6 +962,13 @@ func TestScanTranscriptBackgroundIgnoresTextInsideAnEvent(t *testing.T) {
 	if s := mustScan(t, head+rec("user", "10:01:00", expiry)); len(s.Background) != 1 || s.Background["z"].IsZero() {
 		t.Errorf("Background = %v, want x ended by the expiry notice, z left", s.Background)
 	}
+	// Only an event says a Monitor expired: a summary or result quoting it ends nothing
+	for _, tag := range []string{"summary", "result"} {
+		quoted := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<` + tag + `>[Monitor expired after 30m]</` + tag + `>\n</task-notification>"}`
+		if s := mustScan(t, head+rec("user", "10:01:00", quoted)); s.Background["x"].IsZero() {
+			t.Errorf("a %s starting with the expiry text ended x", tag)
+		}
+	}
 }
 
 // running lists the background tasks a scan still holds, sorted.
@@ -1029,9 +1036,9 @@ func TestScanTranscriptBackgroundReadsEachNotificationOnItsOwn(t *testing.T) {
 }
 
 // A start is read from any tool's result, because a stray one only keeps a session
-// and a tool renamed must not hide live work (a task list's {"taskId"} starts
-// tracking too: measured none from a tool other than Monitor, so in practice this
-// never keeps a session wrongly). An end is read only from a TaskStop's task_id.
+// and a tool renamed must not hide live work. The task-list tools' taskId is the
+// one exception: it names a list entry that never ends. An end is read only from
+// a TaskStop's task_id.
 func TestScanTranscriptBackgroundStartsFromAnyToolAndEndsOnlyFromTaskStop(t *testing.T) {
 	result := func(id, field string) string {
 		return `,"toolUseResult":` + field + `,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"x"}]}`
@@ -1044,7 +1051,9 @@ func TestScanTranscriptBackgroundStartsFromAnyToolAndEndsOnlyFromTaskStop(t *tes
 		"Monitor taskId":                   {"Monitor", `{"taskId":"b"}`, "b"},
 		"Agent async_launched":             {"Agent", `{"status":"async_launched","agentId":"b"}`, "b"},
 		"Agent that finished":              {"Agent", `{"status":"completed","agentId":"b"}`, ""},
-		"a task list's taskId":             {"TaskUpdate", `{"taskId":"b"}`, "b"},
+		"a task list's taskId":             {"TaskUpdate", `{"taskId":"b"}`, ""},
+		"TaskCreate's taskId":              {"TaskCreate", `{"taskId":"b"}`, ""},
+		"another tool's taskId":            {"Workflow", `{"taskId":"b"}`, "b"},
 		"an unknown tool":                  {"", `{"backgroundTaskId":"b"}`, "b"},
 		"a renamed Bash":                   {"Shell", `{"backgroundTaskId":"b"}`, "b"},
 		"an async agent from another tool": {"Task", `{"status":"async_launched","agentId":"b"}`, "b"},
@@ -1141,5 +1150,15 @@ func TestStripQuotedIsLinear(t *testing.T) {
 		if strings.Contains(got, "<result>") || strings.Contains(got, "<event>") {
 			t.Errorf("%s: a quoted body survived", name)
 		}
+	}
+}
+
+// An attachment of another shape (a non-string prompt) must not drop the record:
+// the parent chain runs through attachments.
+func TestScanTranscriptKeepsAnAttachmentOfAnotherShape(t *testing.T) {
+	odd := `,"attachment":{"type":"queued_command","prompt":[{"type":"text","text":"x"}]}`
+	s := mustScan(t, rec("user", "10:00:00", human)+rec("attachment", "10:00:01", odd)+rec("assistant", "10:00:30", reply))
+	if !s.LastRequest.Equal(at("10:00:00")) {
+		t.Errorf("LastRequest = %v, want 10:00:00 (the chain through the attachment)", s.LastRequest)
 	}
 }
