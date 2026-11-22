@@ -741,7 +741,11 @@ func TestStepRecordsWhyNothingIsScheduled(t *testing.T) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, c.file), []byte("off\n"), 0o644); err != nil {
+			body := "" // archived is an empty file; only its existence counts
+			if c.file == "heartbeat" {
+				body = "off\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, c.file), []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -799,16 +803,43 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 	if n := mustScan(t, tr+rec("user", "13:20:05", beat)).BeatsSinceReal; n != 4 {
 		t.Errorf("an unanswered fourth beat: %d, want 4", n)
 	}
-	h, _, _ := fixture(t, tr, at("12:40:00"))
+	h, _, write := fixture(t, tr, at("12:40:00"))
 	var sent time.Time
 	h.step(&sent)
 	if n := h.Stats().BeatsSinceReal; n != 3 {
 		t.Errorf("Stats().BeatsSinceReal = %d, want 3", n)
 	}
-	// Declared off: no more beats, but the count is the transcript's and stays.
+	// Off by default: no more beats, but the count is the transcript's and stays.
 	h.Default = false
 	h.step(&sent)
 	if st := h.Stats(); st.IdleReason != IdleNotWanted || st.BeatsSinceReal != 3 {
-		t.Errorf("declared off: %+v, want not_wanted and still 3", st)
+		t.Errorf("off by default: %+v, want not_wanted and still 3", st)
+	}
+	// Still off, and the transcript moves: a prompt sets the count back to 0.
+	write(tr + rec("user", "12:41:00", human))
+	h.step(&sent)
+	if n := h.Stats().BeatsSinceReal; n != 0 {
+		t.Errorf("a prompt while off: %d, want 0", n)
+	}
+
+	// Off from the first step (a serve that starts with the session off).
+	h2, _, _ := fixture(t, tr, at("12:40:00"))
+	h2.Default = false
+	var sent2 time.Time
+	h2.step(&sent2)
+	if n := h2.Stats().BeatsSinceReal; n != 3 {
+		t.Errorf("off from the start: %d, want 3", n)
+	}
+
+	// A read that fails keeps the last count instead of showing 0.
+	h3, _, _ := fixture(t, tr, at("12:40:00"))
+	var sent3 time.Time
+	h3.step(&sent3)
+	if err := os.Remove(h3.file); err != nil {
+		t.Fatal(err)
+	}
+	h3.step(&sent3)
+	if n := h3.Stats().BeatsSinceReal; n != 3 {
+		t.Errorf("after a failed read: %d, want the last count 3", n)
 	}
 }

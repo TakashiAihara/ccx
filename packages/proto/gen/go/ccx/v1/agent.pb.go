@@ -235,16 +235,16 @@ type HeartbeatStatus struct {
 	// この登録 (channel の接続) の間に打った回数と、最後に打った時刻。
 	Sent       uint32                 `protobuf:"varint,6,opt,name=sent,proto3" json:"sent,omitempty"`
 	LastSentAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=last_sent_at,json=lastSentAt,proto3" json:"last_sent_at,omitempty"`
-	// 予定が無い (next_at が未設定) ときの理由。"not_wanted" (打たない宣言 / archived / 宣言が
-	// 無く agent の既定が off) / "short_ttl" (最後のリクエストが 5 分の cache を書いた) /
-	// "expired" (cache が既に切れた) / "turn_running" (turn の実行中) / "max_idle" (使われない
-	// まま max_idle を超えた)。どれにも当たらなければ空: 予定がある、打った heartbeat の着地待ち
-	// (/clear の後は着地しないまま続く)、打てなかった (push の失敗)、応答のある request がまだ
-	// 無い、transcript を読めない、未登録。値は agent が 1 分ごとに見直すので、最大 1 分遅れる。
+	// 予定を入れない理由。"not_wanted" (打たない宣言 / archived / 宣言が無く agent の既定が off) /
+	// "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
+	// "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
+	// 空になるのは、予定がある (next_at が設定済み) か、どれにも当たらないとき: 打った heartbeat の
+	// 着地待ち、push の失敗、応答のある request がまだ無い、transcript を読めない、未登録。
+	// next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
 	IdleReason string `protobuf:"bytes,9,opt,name=idle_reason,json=idleReason,proto3" json:"idle_reason,omitempty"`
 	// heartbeat 以外の最後の記録 (人のプロンプト、heartbeat 以外の channel の event) より後に
 	// transcript へ届いた heartbeat の数。プロンプトで 0 に戻る。sent と違い agent の再起動では
-	// 戻らない (transcript から数える)。未登録なら 0。
+	// 戻らない (transcript から数える)。transcript を読めなかった回は直前の値のまま。未登録なら 0。
 	BeatsSinceReal uint32 `protobuf:"varint,10,opt,name=beats_since_real,json=beatsSinceReal,proto3" json:"beats_since_real,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

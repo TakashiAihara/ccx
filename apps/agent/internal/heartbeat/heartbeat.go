@@ -55,8 +55,9 @@ type Stats struct {
 	LastSent time.Time
 	// IdleReason is why no heartbeat is scheduled (#274): one of the Idle*
 	// values, or "" when one is scheduled (Next is set) or none of them applies:
-	// a pushed beat waiting to land (which can last, after /clear), a failed push,
-	// no answered request yet, a transcript that could not be read.
+	// a pushed beat waiting to land, a failed push, no answered request yet, a
+	// transcript that could not be read. (The status API also answers "" for a
+	// session whose channel is not registered.)
 	IdleReason string
 	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read (#362).
 	BeatsSinceReal int
@@ -134,20 +135,27 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	var next time.Time
 	var reason string
 	var s Scan
+	var ok bool
 	defer func() {
 		h.mu.Lock()
-		h.stats.Next, h.stats.IdleReason, h.stats.BeatsSinceReal = next, reason, s.BeatsSinceReal
+		h.stats.Next, h.stats.IdleReason = next, reason
+		// A read that failed (no transcript, an I/O or scan error) says nothing
+		// about the count: keep the last one read rather than show 0.
+		if ok {
+			h.stats.BeatsSinceReal = s.BeatsSinceReal
+		}
 		h.mu.Unlock()
 	}()
 	if !h.wanted() {
 		// Declared off, or folded away. Looked at again each poll, so turning it
 		// back on takes effect within a minute. Still read: the count of beats is
-		// the transcript's history, not the declaration's, and must not drop to 0.
+		// the transcript's history, not the declaration's, and a declaration
+		// must not set it to 0.
 		reason = IdleNotWanted
-		s, _ = h.read()
+		s, ok = h.read()
 		return poll
 	}
-	s, ok := h.read()
+	s, ok = h.read()
 	if !ok || s.LastAssistant.IsZero() {
 		return poll // no request yet, so no cache to keep
 	}
@@ -157,7 +165,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		// be expired or idle after a 1-hour write, and a new session logs its first
 		// 5-minute write too (nothing was running before it).
 		if s.ShortTTL {
-			h.Log("ccx channel: heartbeat for %s: the last request wrote a 5-minute cache, no beats while that lasts", h.SessionID)
+			h.Log("ccx channel: heartbeat for %s: the last request wrote a 5-minute cache, no beats until one writes a 1-hour cache", h.SessionID)
 		} else {
 			h.Log("ccx channel: heartbeat for %s: the last request wrote a 1-hour cache again", h.SessionID)
 		}

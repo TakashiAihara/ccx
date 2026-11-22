@@ -94,14 +94,17 @@ When `nextAt` is null, `idleReason` usually says why: `not_wanted` (declared off
 archived, or no declaration with the machine's default off), `short_ttl` (the
 last request wrote a 5-minute cache; serve also logs when this starts and ends),
 `expired` (the cache is already gone), `turn_running`, or `max_idle`. It is empty
-when none of these applies: a heartbeat is scheduled, a pushed one has not landed
-(after `/clear` it never does), a push failed, the session has no answered
-request yet, its transcript could not be read, or it is not registered. Both are
-looked at again each minute, so they can be a minute behind.
-`beatsSinceReal` is how many heartbeats reached the
-transcript since its last real record (a person's prompt, another channel's
-event); unlike `sent`, it is counted from the transcript, so it goes back to 0 on
-a prompt and survives a serve restart.
+when a heartbeat is scheduled or none of these applies: a pushed one has not
+landed yet, a push failed, the session has no answered request yet, its
+transcript could not be read, or it is not registered.
+
+`beatsSinceReal` is how many heartbeats reached the transcript since its last
+real record (a person's prompt, another channel's event, a message from another
+session); unlike `sent`, it is counted from the transcript, so it goes back to 0
+on a prompt and survives a serve restart. A read that fails keeps the last count.
+
+`nextAt`, `idleReason` and `beatsSinceReal` are looked at again each minute, so
+they can be a minute behind.
 
 Connect unary is HTTP POST + JSON, so curl works too:
 
