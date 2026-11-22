@@ -719,24 +719,37 @@ func TestStepRecordsWhyNothingIsScheduled(t *testing.T) {
 		name    string
 		tr      string
 		now     string
-		off     bool
+		off     bool   // the machine's default is off
+		file    string // a declaration under sessions/<id>: "heartbeat" (off) or "archived"
 		maxIdle time.Duration
 		want    string
 	}{
-		{"scheduled", base, "10:30:05", false, 0, ""},
-		{"declared off", base, "10:30:05", true, 0, IdleNotWanted},
-		{"5-minute cache", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage5m), "10:30:05", false, 0, IdleShortTTL},
-		{"expired", base, "13:00:05", false, 0, IdleExpired},
-		{"turn running", base + rec("user", "10:30:00", human), "10:30:05", false, 0, IdleTurnRunning},
-		{"max idle", base, "10:30:05", false, 20 * time.Minute, IdleMaxIdle},
+		{"scheduled", base, "10:30:05", false, "", 0, ""},
+		{"off by default", base, "10:30:05", true, "", 0, IdleNotWanted},
+		{"declared off", base, "10:30:05", false, "heartbeat", 0, IdleNotWanted},
+		{"archived", base, "10:30:05", false, "archived", 0, IdleNotWanted},
+		{"5-minute cache", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage5m), "10:30:05", false, "", 0, IdleShortTTL},
+		{"expired", base, "13:00:05", false, "", 0, IdleExpired},
+		{"turn running", base + rec("user", "10:30:00", human), "10:30:05", false, "", 0, IdleTurnRunning},
+		{"max idle", base, "10:30:05", false, "", 20 * time.Minute, IdleMaxIdle},
 	} {
 		h, _, _ := fixture(t, c.tr, at(c.now))
 		h.MaxIdle = c.maxIdle
 		h.Default = !c.off
+		if c.file != "" {
+			dir := filepath.Join(h.ClaudeHome, "sessions", h.SessionID)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, c.file), []byte("off\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var sent time.Time
 		h.step(&sent)
-		if got := h.Stats().IdleReason; got != c.want {
-			t.Errorf("%s: IdleReason = %q, want %q", c.name, got, c.want)
+		// A reason and a due time never come together: a reason says why there is none.
+		if st := h.Stats(); st.IdleReason != c.want || st.Next.IsZero() != (c.want != "") {
+			t.Errorf("%s: IdleReason = %q, Next = %v, want %q and a due time only without a reason", c.name, st.IdleReason, st.Next, c.want)
 		}
 	}
 }
@@ -754,10 +767,14 @@ func TestStepLogsShortTTLChangesOnce(t *testing.T) {
 	var sent time.Time
 	h.step(&sent)
 	h.step(&sent)
-	write(tr + rec("user", "10:10:00", human) + rec("assistant", "10:10:05", usage(0, 9)))
+	tr += rec("user", "10:10:00", human) + rec("assistant", "10:10:05", usage(0, 9))
+	write(tr)
 	h.step(&sent)
-	if len(logs) != 2 || !strings.Contains(logs[0], "heartbeat paused") || !strings.Contains(logs[1], "heartbeat resumed") {
-		t.Errorf("logs = %q, want one pause then one resume", logs)
+	// Another fresh scan with the same TTL is not a change.
+	write(tr + rec("user", "10:20:00", human) + rec("assistant", "10:20:05", usage(0, 9)))
+	h.step(&sent)
+	if len(logs) != 2 || !strings.Contains(logs[0], "5-minute cache") || !strings.Contains(logs[1], "1-hour cache") {
+		t.Errorf("logs = %q, want one 5-minute line then one 1-hour line", logs)
 	}
 }
 
@@ -777,6 +794,10 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 	}
 	if n := mustScan(t, tr+rec("user", "12:40:00", otherChan)+rec("user", "13:30:05", beat)).BeatsSinceReal; n != 1 {
 		t.Errorf("a beat after another channel's event: %d, want 1", n)
+	}
+	// A beat counts once it is in the transcript, answered or not.
+	if n := mustScan(t, tr+rec("user", "13:20:05", beat)).BeatsSinceReal; n != 4 {
+		t.Errorf("an unanswered fourth beat: %d, want 4", n)
 	}
 	h, _, _ := fixture(t, tr, at("12:40:00"))
 	var sent time.Time

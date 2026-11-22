@@ -167,10 +167,12 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
   lastSentAt?: Timestamp | undefined;
 
   /**
-   * 予定が無い (next_at が未設定) ときの理由。"not_wanted" (打たない宣言 / archived) /
-   * "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
-   * "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
-   * 予定がある / 打った直後で着地待ち / transcript がまだ無い / 未登録のときは空。
+   * 予定が無い (next_at が未設定) ときの理由。"not_wanted" (打たない宣言 / archived / 宣言が
+   * 無く agent の既定が off) / "short_ttl" (最後のリクエストが 5 分の cache を書いた) /
+   * "expired" (cache が既に切れた) / "turn_running" (turn の実行中) / "max_idle" (使われない
+   * まま max_idle を超えた)。どれにも当たらなければ空: 予定がある、打った heartbeat の着地待ち
+   * (/clear の後は着地しないまま続く)、打てなかった (push の失敗)、応答のある request がまだ
+   * 無い、transcript を読めない、未登録。値は agent が 1 分ごとに見直すので、最大 1 分遅れる。
    *
    * @generated from field: string idle_reason = 9;
    */

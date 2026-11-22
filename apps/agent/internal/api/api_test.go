@@ -284,7 +284,7 @@ func TestGetSessionStatusOverUnixSocket(t *testing.T) {
 		SocketPath:        filepath.Join(work, "h.sock"),
 		ChannelSocketPath: filepath.Join(work, "c.sock"),
 		APISocketPath:     filepath.Join(work, "a.sock"),
-		Heartbeat:         config.Heartbeat{Interval: 50 * time.Minute},
+		Heartbeat:         config.Heartbeat{Interval: 50 * time.Minute, Default: true},
 	}
 	col, err := collect.New(cfg, t.Logf)
 	if err != nil {

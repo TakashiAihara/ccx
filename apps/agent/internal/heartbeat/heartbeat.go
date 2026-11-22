@@ -54,8 +54,9 @@ type Stats struct {
 	Sent     int
 	LastSent time.Time
 	// IdleReason is why no heartbeat is scheduled (#274): one of the Idle*
-	// values, or "" while one is scheduled, pushed and waiting to land, or the
-	// session has no transcript yet.
+	// values, or "" when one is scheduled (Next is set) or none of them applies:
+	// a pushed beat waiting to land (which can last, after /clear), a failed push,
+	// no answered request yet, a transcript that could not be read.
 	IdleReason string
 	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read (#362).
 	BeatsSinceReal int
@@ -152,10 +153,13 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	}
 	if s.ShortTTL != h.shortTTL {
 		// Logged on the change only: keepalive stopping here is silent otherwise (#274).
+		// Worded as what was seen, not as keepalive's state: the session can still
+		// be expired or idle after a 1-hour write, and a new session logs its first
+		// 5-minute write too (nothing was running before it).
 		if s.ShortTTL {
-			h.Log("ccx channel: heartbeat paused for %s: the last request wrote a 5-minute cache", h.SessionID)
+			h.Log("ccx channel: heartbeat for %s: the last request wrote a 5-minute cache, no beats while that lasts", h.SessionID)
 		} else {
-			h.Log("ccx channel: heartbeat resumed for %s: the cache is written for an hour again", h.SessionID)
+			h.Log("ccx channel: heartbeat for %s: the last request wrote a 1-hour cache again", h.SessionID)
 		}
 		h.shortTTL = s.ShortTTL
 	}
