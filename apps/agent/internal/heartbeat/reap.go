@@ -93,7 +93,7 @@ func bootTime(root string) (int64, bool) {
 	return 0, false
 }
 
-// shortcut: CLK_TCK is taken to be 100 (every mainstream Linux build), so
+// NOTE: CLK_TCK is taken to be 100 (every mainstream Linux build), so
 // starttime ticks are centiseconds; read it with sysconf if a host differs.
 const clkTck = 100
 
