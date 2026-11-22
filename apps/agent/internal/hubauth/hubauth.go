@@ -5,6 +5,7 @@ package hubauth
 
 import (
 	"context"
+	"net/http"
 
 	"connectrpc.com/connect"
 )
@@ -26,4 +27,13 @@ func bearer(token string) connect.UnaryInterceptorFunc {
 			return next(ctx, req)
 		}
 	}
+}
+
+// Client is the HTTP client every ccx-agent call to the center goes through. It
+// follows no redirect: Go keeps Authorization on a same-host redirect whatever
+// the scheme, so an https center answering with a redirect to http would get the
+// token sent in cleartext (#306). The center's RPCs never redirect, so a 3xx is
+// returned as is and the call fails instead.
+var Client = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }

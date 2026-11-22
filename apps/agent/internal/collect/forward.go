@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"net/http"
 	"sync"
 	"time"
 
@@ -48,7 +47,7 @@ func NewForwarder(hubURL, token string) Forwarder {
 		return nil
 	}
 	return &connectForwarder{
-		client:  ccxv1connect.NewIngestServiceClient(http.DefaultClient, hubURL, hubauth.Options(token)...),
+		client:  ccxv1connect.NewIngestServiceClient(hubauth.Client, hubURL, hubauth.Options(token)...),
 		timeout: defaultForwardTimeout,
 	}
 }
