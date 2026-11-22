@@ -37,6 +37,8 @@ import { IngestService, Producer } from "@ccx/proto/ccx/v1/ingest_pb.ts";
 import { centerTransport, type Hub } from "./fleet.ts";
 
 import { table } from "./format.ts";
+import { heartbeatJson, keepaliveLine, sessionAgentStatus } from "./keepalive.ts";
+import { defaultApiSocketPath } from "./msg.ts";
 
 /**
  * `ccx session mark / label / task / role / heartbeat / meta / status` — 宣言された状態をローカルに
@@ -254,7 +256,7 @@ export async function writeEach(
   if (cfg) await reportStates(cfg.hub, cfg.machine, written.map(({ id, s }) => ({ sessionId: id, state: s })));
 }
 
-const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
+const show = (id: string, lifecycle: Lifecycle, s: DeclaredState, keepalive: string) =>
   table([
     ["session", id],
     ["lifecycle", lifecycle],
@@ -265,6 +267,8 @@ const show = (id: string, lifecycle: Lifecycle, s: DeclaredState) =>
     ["task", s.task || "-"],
     ["role", s.role || "-"],
     ["heartbeat", s.heartbeat || "default"],
+    // heartbeat の行は宣言。こちらは ccx-agent が実際に何をしているか (#274)
+    ["keepalive", keepalive],
     // 値に区切り (, =) や改行があれば JSON の文字列で出す。1 行 1 項目の表を崩さない
     ["metadata", Object.entries(s.metadata).map(([k, v]) => (!v ? k : /[,=\s"]/.test(v) ? `${k}=${JSON.stringify(v)}` : `${k}=${v}`)).join(",") || "-"],
   ]);
@@ -429,7 +433,12 @@ export function registerSessionState(session: Command): void {
       const hasTranscript = running.has(id) || (await hasLocalTranscript(id, home));
       const lifecycle = await lifecycleOf(id, running, hasTranscript, store);
       const s = await declaredFor(id, home, lifecycle, store);
-      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s }, null, 2));
-      else for (const line of show(id, lifecycle, s)) console.log(line);
+      const res = await sessionAgentStatus(defaultApiSocketPath(), id, home);
+      // The agent knows a session by its channel, not by this home's pid files: one it still holds (a /clear left
+      // the old id registered, another CLAUDE_CONFIG_DIR) is shown even when it does not read as running here.
+      // "-" is only for a session neither running here nor registered: there is no keepalive to speak of.
+      const shown = lifecycle === "running" || res?.heartbeat?.registered;
+      if (o.json) console.log(JSON.stringify({ sessionId: id, lifecycle, ...s, agent: res ? { heartbeat: heartbeatJson(res) } : null }, null, 2));
+      else for (const line of show(id, lifecycle, s, shown ? keepaliveLine(res?.heartbeat) : "-")) console.log(line);
     });
 }

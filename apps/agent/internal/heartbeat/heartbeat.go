@@ -61,6 +61,8 @@ type Heartbeat struct {
 	mtime  time.Time
 	size   int64
 	last   Scan
+	// seen: a read has succeeded once, so a transcript that is missing later was lost, not never written.
+	seen bool
 	// shortTTL is what the last read said, to log only when it changes.
 	shortTTL bool
 
@@ -74,24 +76,33 @@ type Stats struct {
 	Sent     int
 	LastSent time.Time
 	// IdleReason is why no heartbeat is scheduled (#274): one of the Idle*
-	// values, or "" when one is scheduled (Next is set) or none of them applies:
-	// a pushed beat waiting to land, a failed push, no answered request yet, a
-	// transcript that could not be read. (The status API also answers "" for a
-	// session whose channel is not registered.)
+	// values, or "" when one is scheduled (Next is set) or step has not run yet.
+	// (The status API also answers "" for a session whose channel is not
+	// registered, and for every session when the heartbeat concern is off.)
 	IdleReason string
 	// BeatsSinceReal is Scan.BeatsSinceReal as of the last read that succeeded
 	// (#362); 0 until one has.
 	BeatsSinceReal int
+	// LastBeat is Scan.LastBeat as of the last read that succeeded (#274);
+	// zero until one has.
+	LastBeat time.Time
+	// CacheTTL is Scan.CacheTTL as of the last read that succeeded (#274);
+	// "" until one has.
+	CacheTTL string
 }
 
 // Why a heartbeat is not scheduled (Stats.IdleReason). These strings are the
 // status API's values.
 const (
-	IdleNotWanted   = "not_wanted"   // declared off, archived, or off by default
-	IdleShortTTL    = "short_ttl"    // the last request wrote a 5-minute cache
-	IdleExpired     = "expired"      // the cache is already gone
-	IdleTurnRunning = "turn_running" // a turn is running; a beat would queue behind it
-	IdleMaxIdle     = "max_idle"     // no real use for longer than MaxIdle
+	IdleNotWanted            = "not_wanted"            // declared off, archived, or off by default
+	IdleShortTTL             = "short_ttl"             // the last request wrote a 5-minute cache
+	IdleExpired              = "expired"               // the cache is already gone
+	IdleTurnRunning          = "turn_running"          // a turn is running; a beat would queue behind it
+	IdleMaxIdle              = "max_idle"              // no real use for longer than MaxIdle
+	IdleBeatPending          = "beat_pending"          // a beat was pushed and has not reached the transcript yet
+	IdlePushFailed           = "push_failed"           // the push failed; the next step tries again
+	IdleNoRequest            = "no_request"            // no answered request yet (a session before its first prompt has no transcript)
+	IdleTranscriptUnreadable = "transcript_unreadable" // the transcript could not be read, or was read before and is gone
 )
 
 // Stats is safe to call while Run is running.
@@ -124,6 +135,9 @@ type Scan struct {
 	// ShortTTL: the last request that wrote cache wrote it for 5 minutes only
 	// (API key, usage credits). A heartbeat 50 minutes later never lands in time.
 	ShortTTL bool
+	// CacheTTL is the TTL the last request that wrote cache used: "5m" or "1h".
+	// "" until a request wrote cache; a request that wrote none keeps the last.
+	CacheTTL string
 	// Background is the background work started and not yet ended: task id ->
 	// when its start was recorded. A task outlives neither the process that
 	// started it nor a resume, so a reader keeps only those started since the
@@ -177,9 +191,11 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		h.mu.Lock()
 		h.stats.Next, h.stats.IdleReason = next, reason
 		// A read that failed (no transcript, an I/O or scan error) says nothing
-		// about the count: keep the last one read rather than show 0.
+		// about the transcript: keep the last values read rather than zero them.
 		if ok {
 			h.stats.BeatsSinceReal = s.BeatsSinceReal
+			h.stats.LastBeat = s.LastBeat
+			h.stats.CacheTTL = s.CacheTTL
 		}
 		h.mu.Unlock()
 	}()
@@ -193,7 +209,17 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		return poll
 	}
 	s, ok = h.read()
-	if !ok || s.LastAssistant.IsZero() {
+	if !ok {
+		// No file is how every session starts. A file that fails to read, or one
+		// that was read before and is gone, is a fault.
+		reason = IdleNoRequest
+		if h.transcriptSeen() {
+			reason = IdleTranscriptUnreadable
+		}
+		return poll
+	}
+	if s.LastAssistant.IsZero() {
+		reason = IdleNoRequest
 		return poll // no request yet, so no cache to keep
 	}
 	if s.ShortTTL != h.shortTTL {
@@ -239,6 +265,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 			// or this is not its transcript any more (/clear starts a new id): never
 			// push a second one over it, or a stale channel beats forever. Real use
 			// after the push means the session is alive and the push was lost.
+			reason = IdleBeatPending
 			return poll
 		}
 		*sent = time.Time{}
@@ -259,6 +286,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 		return due.Sub(now)
 	}
 	if err := h.Push(); err != nil {
+		reason = IdlePushFailed
 		h.Log("ccx channel: heartbeat push failed: %v", err)
 		return poll
 	}
@@ -267,6 +295,7 @@ func (h *Heartbeat) step(sent *time.Time) time.Duration {
 	h.stats.Sent++
 	h.stats.LastSent = now
 	h.mu.Unlock()
+	reason = IdleBeatPending
 	return poll
 }
 
@@ -319,8 +348,16 @@ func (h *Heartbeat) read() (Scan, bool) {
 		h.Log("ccx channel: reading %s: %v", h.file, err)
 		return Scan{}, false
 	}
-	h.last, h.mtime, h.size = s, st.ModTime(), st.Size()
+	h.last, h.mtime, h.size, h.seen = s, st.ModTime(), st.Size(), true
 	return h.last, true
+}
+
+// transcriptSeen says whether the session's transcript file is known: the last
+// read found its path, or an earlier read succeeded.
+func (h *Heartbeat) transcriptSeen() bool {
+	h.readMu.Lock()
+	defer h.readMu.Unlock()
+	return h.file != "" || h.seen
 }
 
 // ScanTranscript walks the records in order. A heartbeat turn runs from a user
@@ -453,6 +490,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			// one that did.
 			if cc := rec.Message.Usage.CacheCreation; cc.Short+cc.Long > 0 {
 				s.ShortTTL = cc.Long == 0
+				s.CacheTTL = "5m"
+				if cc.Long > 0 {
+					s.CacheTTL = "1h"
+				}
 			}
 		case "queue-operation":
 			// An enqueued notification ends its task even when the process ends before

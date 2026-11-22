@@ -521,6 +521,43 @@ func TestStepWaitsForATranscript(t *testing.T) {
 	if wait := h.step(&sent); *pushes != 0 || wait != poll {
 		t.Errorf("no transcript: pushes=%d wait=%v", *pushes, wait)
 	}
+	// A session before its first prompt has no transcript: not a fault.
+	if st := h.Stats(); st.IdleReason != IdleNoRequest {
+		t.Errorf("no transcript: IdleReason = %q, want %q", st.IdleReason, IdleNoRequest)
+	}
+
+	// A transcript that is there and cannot be read is one. A directory in its
+	// place opens and then fails to read.
+	u, upushes, _ := fixture(t, "", at("10:50:05"))
+	file := filepath.Join(u.ClaudeHome, "projects", "-some-cwd", "sid.jsonl")
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var usent time.Time
+	u.step(&usent)
+	if st := u.Stats(); *upushes != 0 || st.IdleReason != IdleTranscriptUnreadable {
+		t.Errorf("unreadable transcript: pushes=%d IdleReason = %q, want 0 and %q", *upushes, st.IdleReason, IdleTranscriptUnreadable)
+	}
+
+	// A transcript read once whose stat then fails (here its directory became
+	// a file) is unreadable too: it was there.
+	s, _, _ := fixture(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", reply), at("10:30:05"))
+	var ssent time.Time
+	s.step(&ssent)
+	dir := filepath.Join(s.ClaudeHome, "projects", "-some-cwd")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.step(&ssent)
+	if st := s.Stats(); st.IdleReason != IdleTranscriptUnreadable {
+		t.Errorf("stat failing with ENOTDIR: IdleReason = %q, want %q", st.IdleReason, IdleTranscriptUnreadable)
+	}
 }
 
 // Run never sleeps past a poll, even with the next heartbeat 20 minutes away:
@@ -735,6 +772,7 @@ func TestStepRecordsWhyNothingIsScheduled(t *testing.T) {
 		{"expired", base, "13:00:05", false, "", 0, IdleExpired},
 		{"turn running", base + rec("user", "10:30:00", human), "10:30:05", false, "", 0, IdleTurnRunning},
 		{"max idle", base, "10:30:05", false, "", 20 * time.Minute, IdleMaxIdle},
+		{"no answered request", rec("user", "10:00:00", human), "10:30:05", false, "", 0, IdleNoRequest},
 	} {
 		h, _, _ := fixture(t, c.tr, at(c.now))
 		h.MaxIdle = c.maxIdle
@@ -850,8 +888,80 @@ func TestScanCountsBeatsSinceReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	h3.step(&sent3)
-	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != "" || !st.Next.IsZero() {
-		t.Errorf("after a failed read: %+v, want the last count 3, no reason, no due time", st)
+	if st := h3.Stats(); st.BeatsSinceReal != 3 || st.IdleReason != IdleTranscriptUnreadable || !st.Next.IsZero() {
+		t.Errorf("after a failed read: %+v, want the last count 3, transcript_unreadable (it was read before and is gone), no due time", st)
+	}
+}
+
+// A pushed beat that has not reached the transcript, and a push that failed,
+// each have their own reason (#274): neither is "nothing to say".
+func TestStepSaysABeatIsPendingOrItsPushFailed(t *testing.T) {
+	tr := rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply)
+	h, pushes, write := fixture(t, tr, at("10:50:05"))
+	var sent time.Time
+	h.step(&sent)
+	if st := h.Stats(); *pushes != 1 || st.IdleReason != IdleBeatPending || !st.Next.IsZero() {
+		t.Fatalf("right after the push: pushes=%d %+v, want 1 push, beat_pending, no due time", *pushes, st)
+	}
+	h.Now = func() time.Time { return at("10:55:00") }
+	h.step(&sent)
+	if st := h.Stats(); *pushes != 1 || st.IdleReason != IdleBeatPending {
+		t.Fatalf("still not in the transcript: pushes=%d %+v, want still 1 push and beat_pending", *pushes, st)
+	}
+	// Once it lands, the next one is scheduled and the reason goes away.
+	write(tr + rec("user", "10:50:06", beat) + rec("assistant", "10:50:08", reply))
+	h.Now = func() time.Time { return at("11:00:00") }
+	h.step(&sent)
+	if st := h.Stats(); st.IdleReason != "" || !st.Next.Equal(at("11:40:06")) {
+		t.Errorf("after it landed: %+v, want no reason and the next due at 11:40:06", st)
+	}
+
+	f, _, _ := fixture(t, tr, at("10:50:05"))
+	f.Push = func() error { return fmt.Errorf("channel gone") }
+	var fsent time.Time
+	f.step(&fsent)
+	if st := f.Stats(); st.IdleReason != IdlePushFailed || st.Sent != 0 || !st.Next.IsZero() {
+		t.Errorf("a failed push: %+v, want push_failed, none sent, no due time", st)
+	}
+}
+
+// The last beat that reached the transcript and the TTL of the last cache
+// write are in Stats (#274), read even when the session is not wanted, and
+// kept through a read that fails.
+func TestStepRecordsTheLastBeatAndTheCacheTTL(t *testing.T) {
+	usage := func(short, long int) string {
+		return fmt.Sprintf(`,"message":{"role":"assistant","content":[],"usage":{"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d}}}`, short, long)
+	}
+	landed := rec("user", "10:20:06", beat) + rec("assistant", "10:20:08", reply)
+	for _, c := range []struct {
+		name     string
+		tr       string
+		off      bool
+		wantBeat time.Time
+		wantTTL  string
+	}{
+		{"no cache written, no beat", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", reply), false, time.Time{}, ""},
+		{"1h, a beat landed", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(0, 9)) + landed, false, at("10:20:06"), "1h"},
+		{"5m, a beat landed", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(9, 0)) + landed, false, at("10:20:06"), "5m"},
+		{"a later request that wrote nothing keeps 5m", rec("user", "10:00:00", human) + rec("assistant", "10:00:01", usage(9, 0)) + rec("user", "10:00:03", human) + rec("assistant", "10:00:05", usage(0, 0)), false, time.Time{}, "5m"},
+		{"not wanted", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(0, 9)) + landed, true, at("10:20:06"), "1h"},
+		// A request that wrote both is not a 5-minute-only write: heartbeats go on (ShortTTL is false).
+		{"both written is 1h", rec("user", "10:00:00", human) + rec("assistant", "10:00:05", usage(5, 9)), false, time.Time{}, "1h"},
+	} {
+		h, _, _ := fixture(t, c.tr, at("10:30:05"))
+		h.Default = !c.off
+		var sent time.Time
+		h.step(&sent)
+		if st := h.Stats(); !st.LastBeat.Equal(c.wantBeat) || st.CacheTTL != c.wantTTL {
+			t.Errorf("%s: LastBeat = %v, CacheTTL = %q, want %v and %q", c.name, st.LastBeat, st.CacheTTL, c.wantBeat, c.wantTTL)
+		}
+		if err := os.Remove(h.file); err != nil {
+			t.Fatal(err)
+		}
+		h.step(&sent)
+		if st := h.Stats(); !st.LastBeat.Equal(c.wantBeat) || st.CacheTTL != c.wantTTL {
+			t.Errorf("%s, after a failed read: LastBeat = %v, CacheTTL = %q, want them kept (%v, %q)", c.name, st.LastBeat, st.CacheTTL, c.wantBeat, c.wantTTL)
+		}
 	}
 }
 

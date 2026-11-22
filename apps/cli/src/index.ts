@@ -43,12 +43,13 @@ import pkg from "../package.json" with { type: "json" };
 import { agentStatus } from "./agent.ts";
 import { fleetClient, NoCenterConfigured, unreachable } from "./fleet.ts";
 import { humanSince, parseLimit, shortId, table } from "./format.ts";
+import { heartbeatJson, keepaliveSummary, sessionAgentStatus } from "./keepalive.ts";
 import { pickRepodir } from "./pick.ts";
 import { registerResume } from "./resume.ts";
 import { declaredFor, lifecycleOf, registerSessionState } from "./session-state.ts";
 import { AmbiguousSession, showEvents } from "./session-show.ts";
 import { registerTranscript } from "./transcript.ts";
-import { registerMsg } from "./msg.ts";
+import { defaultApiSocketPath, registerMsg } from "./msg.ts";
 import { registerHooks } from "./hooks.ts";
 
 // release の build は scripts/build.ts --ccx-version で tag の版をここに焼き込む。それ以外
@@ -553,10 +554,21 @@ agent
   .option("--json", "print as JSON")
   .action(async (o) => {
     const cfg = await loadConfig();
-    const st = await agentStatus(cfg.hub?.url, process.env, cfg.hub?.token);
+    const home = claudeHome();
+    const [st, running] = await Promise.all([agentStatus(cfg.hub?.url, process.env, cfg.hub?.token), runningSessionIds(home)]);
+    // Each running session's keepalive as ccx-agent sees it; an agent that
+    // does not answer leaves every session "unknown", not an error (#274)
+    const ids = [...running].sort();
+    const answers = await Promise.all(ids.map((id) => sessionAgentStatus(defaultApiSocketPath(), id, home)));
 
     if (o.json) {
-      console.log(JSON.stringify(st, null, 2));
+      console.log(
+        JSON.stringify(
+          { ...st, sessions: ids.map((id, i) => ({ sessionId: id, heartbeat: heartbeatJson(answers[i]) })) },
+          null,
+          2,
+        ),
+      );
       return;
     }
 
@@ -567,6 +579,7 @@ agent
       ["spool", `${st.spooled} waiting to forward`],
       ["incoming", `${st.incoming} dropped by hooks, not yet taken in`],
       ["dead", `${st.dead} refused by the center, set aside in ${join(st.spoolDir, "dead")} (not retried)`],
+      ["keepalive", keepaliveSummary(answers.map((r) => r?.heartbeat))],
       ["center", st.hubUrl ?? "not configured (ccx-agent spools only)"],
     ];
     if (st.hubUrl) rows.push(["", st.hubReachable ? "reachable" : "not answering"]);

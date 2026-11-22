@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file ccx/v1/agent.proto.
  */
 export const file_ccx_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSINCgtXYWtlUmVxdWVzdCIOCgxXYWtlUmVzcG9uc2UiQgoXR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRITCgtjbGF1ZGVfaG9tZRgCIAEoCSKWAQoYR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEiYKCGRlY2xhcmVkGAEgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIqCgloZWFydGJlYXQYAiABKAsyFy5jY3gudjEuSGVhcnRiZWF0U3RhdHVzEiYKB2NvbGxlY3QYAyABKAsyFS5jY3gudjEuQ29sbGVjdFN0YXR1cyKHAgoPSGVhcnRiZWF0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSEQoJbGlzdGVuaW5nGAggASgIEhAKCGRlY2xhcmVkGAIgASgJEg4KBndhbnRlZBgDIAEoCBISCgpyZWdpc3RlcmVkGAQgASgIEisKB25leHRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNlbnQYBiABKA0SMAoMbGFzdF9zZW50X2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtpZGxlX3JlYXNvbhgJIAEoCRIYChBiZWF0c19zaW5jZV9yZWFsGAogASgNIt8BCg1Db2xsZWN0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSGQoRY2VudGVyX2NvbmZpZ3VyZWQYAiABKAgSDwoHcGVuZGluZxgDIAEoDRI1ChFsYXN0X2ZvcndhcmRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF9lcnJvcl9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKbGFzdF9lcnJvchgGIAEoCRITCgtzcG9vbF9lcnJvchgHIAEoCTKYAQoMQWdlbnRTZXJ2aWNlElUKEEdldFNlc3Npb25TdGF0dXMSHy5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QaIC5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEjEKBFdha2USEy5jY3gudjEuV2FrZVJlcXVlc3QaFC5jY3gudjEuV2FrZVJlc3BvbnNlYgZwcm90bzM", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
+  fileDesc("ChJjY3gvdjEvYWdlbnQucHJvdG8SBmNjeC52MSINCgtXYWtlUmVxdWVzdCIOCgxXYWtlUmVzcG9uc2UiQgoXR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRITCgtjbGF1ZGVfaG9tZRgCIAEoCSKWAQoYR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEiYKCGRlY2xhcmVkGAEgASgLMhQuY2N4LnYxLlNlc3Npb25TdGF0ZRIqCgloZWFydGJlYXQYAiABKAsyFy5jY3gudjEuSGVhcnRiZWF0U3RhdHVzEiYKB2NvbGxlY3QYAyABKAsyFS5jY3gudjEuQ29sbGVjdFN0YXR1cyLMAgoPSGVhcnRiZWF0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSEQoJbGlzdGVuaW5nGAggASgIEhAKCGRlY2xhcmVkGAIgASgJEg4KBndhbnRlZBgDIAEoCBISCgpyZWdpc3RlcmVkGAQgASgIEisKB25leHRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBHNlbnQYBiABKA0SMAoMbGFzdF9zZW50X2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBITCgtpZGxlX3JlYXNvbhgJIAEoCRIYChBiZWF0c19zaW5jZV9yZWFsGAogASgNEjAKDGxhc3RfYmVhdF9hdBgLIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEQoJY2FjaGVfdHRsGAwgASgJIt8BCg1Db2xsZWN0U3RhdHVzEg8KB2VuYWJsZWQYASABKAgSGQoRY2VudGVyX2NvbmZpZ3VyZWQYAiABKAgSDwoHcGVuZGluZxgDIAEoDRI1ChFsYXN0X2ZvcndhcmRlZF9hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMQoNbGFzdF9lcnJvcl9hdBgFIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKbGFzdF9lcnJvchgGIAEoCRITCgtzcG9vbF9lcnJvchgHIAEoCTKYAQoMQWdlbnRTZXJ2aWNlElUKEEdldFNlc3Npb25TdGF0dXMSHy5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1JlcXVlc3QaIC5jY3gudjEuR2V0U2Vzc2lvblN0YXR1c1Jlc3BvbnNlEjEKBFdha2USEy5jY3gudjEuV2FrZVJlcXVlc3QaFC5jY3gudjEuV2FrZVJlc3BvbnNlYgZwcm90bzM", [file_ccx_v1_fleet, file_google_protobuf_timestamp]);
 
 /**
  * 中身は無い。宛先は叩かれた agent 自身で、どの依頼かは ClaimResume が決める。
@@ -169,9 +169,14 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
   /**
    * 予定を入れない理由。"not_wanted" (打たない宣言 / archived / 宣言が無く agent の既定が off) /
    * "short_ttl" (最後のリクエストが 5 分の cache を書いた) / "expired" (cache が既に切れた) /
-   * "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた)。
-   * 空になるのは、予定がある (next_at が設定済み) か、どれにも当たらないとき: 打った heartbeat の
-   * 着地待ち、push の失敗、応答のある request がまだ無い、transcript を読めない、未登録。
+   * "turn_running" (turn の実行中) / "max_idle" (使われないまま max_idle を超えた) /
+   * "beat_pending" (打った heartbeat が transcript に届くのを待っている) / "push_failed" (push が失敗した。
+   * 次の見直しでもう一度打つ) / "no_request" (応答のある request がまだ無い。最初のプロンプトの前で
+   * transcript がまだ無い session もこれ) / "transcript_unreadable" (transcript を読めない。一度読めた後に
+   * 消えた場合を含む)。
+   * 空になるのは、予定がある (next_at が設定済み) か、未登録か、enabled が false のときだけ
+   * (理由の値を持たない古い agent と、登録直後で最初の見直しがまだの一瞬も空を返す)。打った直後は次の見直し (最大 1 分) まで "beat_pending" に
+   * なるので、正常に回っている session でも heartbeat の間隔ごとに最大 1 分はこの値を返す。
    * next_at と同じく agent が 1 分ごとに見直すので、最大 1 分遅れる。
    *
    * @generated from field: string idle_reason = 9;
@@ -188,6 +193,26 @@ export type HeartbeatStatus = Message<"ccx.v1.HeartbeatStatus"> & {
    * @generated from field: uint32 beats_since_real = 10;
    */
   beatsSinceReal: number;
+
+  /**
+   * transcript に届いた最後の heartbeat の時刻 (#274)。届いたものが無ければ未設定。sent / last_sent_at と違い
+   * transcript から読むので、agent の再起動では消えない。transcript を読めなかった回は直前の値のまま。
+   * 未登録なら未設定。
+   *
+   * @generated from field: google.protobuf.Timestamp last_beat_at = 11;
+   */
+  lastBeatAt?: Timestamp | undefined;
+
+  /**
+   * cache を書いた最後の request が書いた TTL: "5m" / "1h"。cache を書いた request がまだ無ければ空。
+   * "5m" の間は heartbeat を打たない (idle_reason は "short_ttl"。"not_wanted" / "transcript_unreadable" に
+   * 当たる session はそちらが先に出る)。
+   * transcript を読めなかった回は直前の値のまま。
+   * 未登録なら空。
+   *
+   * @generated from field: string cache_ttl = 12;
+   */
+  cacheTtl: string;
 };
 
 /**

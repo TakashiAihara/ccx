@@ -124,6 +124,7 @@ func (s *Server) GetSessionStatus(_ context.Context, req *connect.Request[ccxv1.
 		h.Enabled, h.Listening, h.Wanted, h.Registered, h.Sent = true, hb.Listening, hb.Wanted, hb.Registered, uint32(hb.Sent)
 		h.NextAt, h.LastSentAt = ts(hb.Next), ts(hb.LastSent)
 		h.IdleReason, h.BeatsSinceReal = hb.IdleReason, uint32(hb.BeatsSinceReal)
+		h.LastBeatAt, h.CacheTtl = ts(hb.LastBeat), hb.CacheTTL
 	}
 	if s.Collect != nil {
 		st, err := s.Collect.Status()
