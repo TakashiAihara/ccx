@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TakashiAihara/ccx/apps/agent/internal/heartbeat"
 	"github.com/TakashiAihara/ccx/packages/core/config"
 )
 
@@ -156,5 +157,70 @@ func TestAssembleCollectOffInConfigSaysNothing(t *testing.T) {
 	}
 	if line := startupLine(logs); !strings.Contains(line, " collect=false ") {
 		t.Errorf("startup line %q: want collect=false", line)
+	}
+}
+
+// Reaping runs inside the heartbeat concern: with it off the setting does
+// nothing, and the log says so rather than leaving reap=on silently idle.
+func TestAssembleSaysReapingNeedsTheHeartbeat(t *testing.T) {
+	for name, tc := range map[string]struct {
+		heartbeat bool
+		interval  time.Duration
+		say       bool
+	}{
+		"heartbeat concern off":   {heartbeat: false, interval: 50 * time.Minute, say: true},
+		"heartbeat interval is 0": {heartbeat: true, interval: 0, say: true},
+		"heartbeat concern is on": {heartbeat: true, interval: 50 * time.Minute, say: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.Concerns.Heartbeat, cfg.Heartbeat.Interval = tc.heartbeat, tc.interval
+			cfg.Reap = config.Reap{Enabled: true, Interval: time.Minute}
+			_, logs := runAssemble(t, cfg)
+			got := strings.Contains(logs, "reap on but the heartbeat concern is off: nothing will be reaped")
+			if got != tc.say {
+				t.Errorf("logs %q: said=%v, want %v", logs, got, tc.say)
+			}
+		})
+	}
+
+	cfg := assembleConfig(t, "box", "alice")
+	cfg.Concerns.Heartbeat = false
+	_, logs := runAssemble(t, cfg)
+	if strings.Contains(logs, "reap on but") {
+		t.Errorf("logs %q: said reap was on when it is off", logs)
+	}
+}
+
+// The reaper hands each stop to collect's spool when collect is on, and has
+// nowhere to hand it otherwise.
+func TestAssembleWiresTheReapRecordToCollect(t *testing.T) {
+	for name, collectOn := range map[string]bool{"collect on": true, "collect off": false} {
+		t.Run(name, func(t *testing.T) {
+			cfg := assembleConfig(t, "box", "alice")
+			cfg.Concerns.Collect = collectOn
+			concerns, err := assemble(cfg, func(string, ...any) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range concerns {
+				if h, ok := c.(*heartbeat.Concern); ok {
+					if (h.Record != nil) != collectOn {
+						t.Errorf("Record set = %v with collect=%v", h.Record != nil, collectOn)
+					}
+					return
+				}
+			}
+			t.Fatal("no heartbeat concern built")
+		})
+	}
+}
+
+func TestAssembleLogsWhyReapingIsOff(t *testing.T) {
+	cfg := assembleConfig(t, "box", "alice")
+	cfg.Reap = config.Reap{Err: fmt.Errorf("reap: interval soon: want a duration")}
+	_, logs := runAssemble(t, cfg)
+	if !strings.Contains(logs, "reap off: reap: interval soon: want a duration\n") {
+		t.Errorf("logs %q: want the reason reaping is off", logs)
 	}
 }

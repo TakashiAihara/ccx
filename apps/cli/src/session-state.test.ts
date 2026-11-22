@@ -431,10 +431,14 @@ describe("ccx session (the CLI itself, no center, no store)", () => {
   test("pin writes the flag ccx-agent reads before reclaiming, for an id, a prefix or this session", async () => {
     await seed(homeA, SID);
     // ccx-agent は同じ空ファイルの有無を読む (docs/design/reap.md)
-    expect((await run(["pin", SID.slice(0, 8)])).out).toBe(`pinned on  ${SID}\n`);
+    await seed(homeA, SID2);
+    const both = await run(["pin", SID.slice(0, 8), SID2]);
+    expect([both.code, both.err, both.out]).toEqual([0, "", `pinned on  ${SID}\npinned on  ${SID2}\n`]);
+    expect((await readDeclared(SID2, homeA)).pinned).toBe(true);
     expect(await Bun.file(join(homeA, "sessions", SID, "pinned")).text()).toBe("");
     expect((await run(["status", SID])).out).toMatch(/flags\s+pinned/);
-    expect((await run(["pin", "--off"], { CLAUDE_CODE_SESSION_ID: SID })).out).toBe(`pinned off  ${SID}\n`);
+    const off = await run(["pin", "--off"], { CLAUDE_CODE_SESSION_ID: SID });
+    expect([off.code, off.err, off.out]).toEqual([0, "", `pinned off  ${SID}\n`]);
     expect(await Bun.file(join(homeA, "sessions", SID, "pinned")).exists()).toBe(false);
   });
 

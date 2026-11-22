@@ -202,9 +202,9 @@ it simply has no center to forward to.
 | heartbeat for sessions with no declaration | `CCX_HEARTBEAT_DEFAULT` | `ccx.heartbeatDefault` | `[heartbeat] default` | off |
 | heartbeat interval | `CCX_HEARTBEAT_INTERVAL` | `ccx.heartbeatInterval` | `[heartbeat] interval` | `50m` |
 | heartbeat stops after no real use for | `CCX_HEARTBEAT_MAX_IDLE` | `ccx.heartbeatMaxIdle` | `[heartbeat] maxIdle` | `12h` (`off` = no cap) |
-| reap on/off (stop sessions keepalive has let go of; docs/design/reap.md) | `CCX_REAP` | `ccx.reap` | `[reap] enabled` | off |
-| reap tick, and the spacing between stops (one session at most per tick) | `CCX_REAP_INTERVAL` | `ccx.reapInterval` | `[reap] interval` | `1m` |
-| reap leaves this many sessions with a channel running | `CCX_REAP_KEEP_MIN` | `ccx.reapKeepMin` | `[reap] keepMin` | `0` |
+| reap on/off (stop sessions keepalive has let go of; needs the heartbeat concern; docs/design/reap.md) | `CCX_REAP` | — | `[reap] enabled` | off |
+| reap tick, and the spacing between stops (one session at most per tick; at least `10s`) | `CCX_REAP_INTERVAL` | — | `[reap] interval` | `1m` |
+| reap leaves this many running sessions (not counting ones already signalled) | `CCX_REAP_KEEP_MIN` | — | `[reap] keepMin` | `0` |
 | channel socket | `CCX_CHANNEL_SOCKET` | — | — | `ccx-channel.sock` next to the hook socket |
 | status API socket | `CCX_API_SOCKET` | — | — | `ccx-api.sock` next to the hook socket |
 | status API over TCP (`host:port`) | `CCX_API_LISTEN` | `ccx.apiListen` | `[api] listen` | off (needs the API token) |

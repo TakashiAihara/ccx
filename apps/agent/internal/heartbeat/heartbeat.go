@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TakashiAihara/ccx/apps/agent/internal/declared"
@@ -43,9 +44,13 @@ type Heartbeat struct {
 	// one (the session is then never reaped).
 	pid      int
 	pidStart uint64
-	// signalled: the reaper sent this process SIGTERM. Only the reaper's one
-	// goroutine reads and writes it.
-	signalled bool
+	// signalled: the reaper sent this process SIGTERM, or its reaped file says it
+	// did before this registration. The reaper's goroutine writes it and the
+	// keepMin count reads it under Concern.mu, so it is atomic.
+	signalled atomic.Bool
+	// pidNoted: the reaper has already said why it keeps this session because of
+	// its pid file. Only the reaper's goroutine touches it.
+	pidNoted bool
 
 	// readMu: read runs in the heartbeat's own loop and in the reaper.
 	readMu sync.Mutex
@@ -336,14 +341,10 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 			Timestamp  time.Time `json:"timestamp"`
 			IsMeta     bool      `json:"isMeta"`
 			APIError   bool      `json:"isApiErrorMessage"`
-			ToolResult struct {
-				BackgroundTaskID string `json:"backgroundTaskId"`
-				TaskID           string `json:"taskId"`
-				AgentID          string `json:"agentId"`
-				Status           string `json:"status"`
-				Stopped          string `json:"task_id"`
-			} `json:"toolUseResult"`
-			Message struct {
+			// An object for most tools, but a string (an error) or an array for
+			// others; a typed struct would make Unmarshal drop the whole record.
+			ToolResult json.RawMessage `json:"toolUseResult"`
+			Message    struct {
 				ID      string          `json:"id"`
 				Content json.RawMessage `json:"content"`
 				Usage   struct {
@@ -362,7 +363,8 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 		}
 		switch rec.Type {
 		case "user":
-			trackBackground(s.Background, rec.ToolResult.BackgroundTaskID, rec.ToolResult.TaskID, rec.ToolResult.AgentID, rec.ToolResult.Status, rec.ToolResult.Stopped, rec.Message.Content, rec.Timestamp)
+			tr := parseToolResult(rec.ToolResult)
+			trackBackground(s.Background, tr.backgroundTaskID, tr.taskID, tr.agentID, tr.status, tr.stopped, rec.Message.Content, rec.Timestamp)
 			tag := channelTag(rec.Message.Content)
 			// A local command (/model and its output) is typed by a person but sends
 			// no request, so it is not a turn starting. It still counts as use below.
@@ -439,15 +441,37 @@ func ScanTranscript(r interface{ Read([]byte) (int, error) }) (Scan, error) {
 	return s, sc.Err()
 }
 
-// taskIDs pulls the <task-id> values out of a notification.
-var taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+// toolResultFields are the toolUseResult fields background tracking reads.
+type toolResultFields struct {
+	backgroundTaskID, taskID, agentID, status, stopped string
+}
+
+// parseToolResult reads the fields from a toolUseResult that is an object and
+// ignores any value that is not a string; a string or array result has none.
+func parseToolResult(raw json.RawMessage) toolResultFields {
+	var o map[string]any
+	if json.Unmarshal(raw, &o) != nil {
+		return toolResultFields{}
+	}
+	str := func(k string) string { s, _ := o[k].(string); return s }
+	return toolResultFields{str("backgroundTaskId"), str("taskId"), str("agentId"), str("status"), str("task_id")}
+}
+
+var (
+	taskIDs = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+	// Text inside these is a command's output or a tool's own words, not the
+	// notification's structure: a Monitor event can quote anything.
+	notificationEvent   = regexp.MustCompile(`(?s)<event>(.*?)</event>`)
+	notificationSummary = regexp.MustCompile(`(?s)<summary>.*?</summary>`)
+)
 
 // trackBackground records background work starting or ending in one user record.
 // Starts are what the tool result says it launched (a Bash's backgroundTaskId,
 // a Monitor's taskId, an async Agent's agentId). Ends are a TaskStop's task_id,
 // or a <task-notification> (the record must start with it, as for channelTag)
-// that carries a <status> or a Monitor's expiry: a Monitor's events carry
-// neither and do not end it.
+// whose own <status> is present (not one inside an <event> or <summary>), or a
+// Monitor's expiry (an event whose text starts with "[Monitor expired"): a
+// Monitor's other events end nothing, and their text names no task.
 func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stopped string, content json.RawMessage, ts time.Time) {
 	for _, id := range []string{bash, monitor} {
 		if id != "" {
@@ -464,7 +488,14 @@ func trackBackground(bg map[string]time.Time, bash, monitor, agent, status, stop
 	if json.Unmarshal(content, &s) != nil || !strings.HasPrefix(s, "<task-notification>") {
 		return
 	}
-	if !strings.Contains(s, "<status>") && !strings.Contains(s, "[Monitor expired") {
+	expired := false
+	for _, m := range notificationEvent.FindAllStringSubmatch(s, -1) {
+		if strings.HasPrefix(strings.TrimSpace(m[1]), "[Monitor expired") {
+			expired = true
+		}
+	}
+	s = notificationSummary.ReplaceAllString(notificationEvent.ReplaceAllString(s, ""), "")
+	if !strings.Contains(s, "<status>") && !expired {
 		return
 	}
 	for _, m := range taskIDs.FindAllStringSubmatch(s, -1) {

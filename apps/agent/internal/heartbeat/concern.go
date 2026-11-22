@@ -62,6 +62,9 @@ type Concern struct {
 	// procRoot and kill are what a stop reads and does; tests replace them.
 	procRoot string
 	kill     func(pid int) error
+	// beforeSignal runs after a stop's process tree is measured and before the
+	// checks that precede the signal; a test closes the window it leaves.
+	beforeSignal func()
 
 	mu         sync.Mutex
 	registered map[string]*Heartbeat // session id -> its running heartbeat
@@ -125,7 +128,11 @@ const maxUnixPath = 104
 // up too (#185); a reason repeated is logged once until it is up again.
 func (c *Concern) Run(ctx context.Context) error {
 	if c.reap.Enabled {
-		go c.reapLoop(ctx)
+		// Run does not return while a tick is still reading or signalling.
+		var loop sync.WaitGroup
+		loop.Add(1)
+		go func() { defer loop.Done(); c.reapLoop(ctx) }()
+		defer loop.Wait()
 	}
 	for {
 		err := c.run(ctx)
@@ -257,8 +264,13 @@ func (c *Concern) serve(ctx context.Context, conn net.Conn) {
 	}
 	// A session is only ever stopped through the pid it registered, and only
 	// while that pid is still the same `claude` process.
-	if pid, err := strconv.Atoi(reg.PID); c.reap.Enabled && err == nil && pid > 1 {
-		if start, ok := claudeProc(c.procDir(), pid); ok {
+	if c.reap.Enabled {
+		pid, err := strconv.Atoi(reg.PID)
+		if err != nil || pid <= 1 {
+			c.log("reap: session %s registered no usable pid (%q); it will not be reaped", reg.Session, reg.PID)
+		} else if start, ok := claudeProc(c.procDir(), pid); !ok {
+			c.log("reap: session %s registered pid %d, which is not a claude process; it will not be reaped", reg.Session, pid)
+		} else {
 			h.pid, h.pidStart = pid, start
 		}
 	}

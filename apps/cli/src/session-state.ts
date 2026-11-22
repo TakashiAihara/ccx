@@ -315,16 +315,16 @@ export function registerSessionState(session: Command): void {
   session
     .command("pin")
     .description("Keep ccx-agent from reclaiming this session when it goes idle (docs/design/reap.md); --off to allow it again")
-    .argument("[session-id]", "full id or unique prefix (default: this session)")
+    .argument("[session-id...]", MANY_IDS)
     .option("--off", "clear the pin")
-    .option("--json", "print the resulting state as JSON")
-    .action(async (idOrPrefix: string | undefined, o) => {
-      const home = claudeHome();
-      const id = await target(idOrPrefix, home);
-      const s = await writeDeclared(id, { pinned: !o.off }, home);
-      if (o.json) console.log(JSON.stringify({ sessionId: id, ...s }, null, 2));
-      else console.log(`pinned ${s.pinned ? "on" : "off"}  ${id}`);
-      await reportAfterWrite(id, s);
+    .option("--json", "print the resulting state as JSON (an array when several ids are given)")
+    .action(async (ids: string[], o) => {
+      await writeEach(
+        ids,
+        Boolean(o.json),
+        (id, home) => writeDeclared(id, { pinned: !o.off }, home),
+        (id) => `pinned ${o.off ? "off" : "on"}  ${id}`,
+      );
     });
 
   session

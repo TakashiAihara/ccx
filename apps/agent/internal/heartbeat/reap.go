@@ -20,6 +20,9 @@ type reapRecord struct {
 	Reason   string `json:"reason"`
 	PID      int    `json:"pid"`
 	PSSBytes int64  `json:"pssBytes"`
+	// Start is the process's start time in clock ticks since boot: with PID it names
+	// one process, so a later registration can tell it was already signalled.
+	Start uint64 `json:"start"`
 }
 
 // procDir is where the process table is read from; tests point it at a fake.
@@ -40,6 +43,7 @@ func (c *Concern) signal(pid int) error {
 // procStat is what /proc/<pid>/stat says that a reaper needs.
 type procStat struct {
 	comm  string
+	state string
 	ppid  int
 	start uint64 // clock ticks since boot
 }
@@ -66,13 +70,14 @@ func readProcStat(root string, pid int) (procStat, bool) {
 	if err1 != nil || err2 != nil {
 		return procStat{}, false
 	}
-	return procStat{comm: s[i+1 : j], ppid: ppid, start: start}, true
+	return procStat{comm: s[i+1 : j], state: f[0], ppid: ppid, start: start}, true
 }
 
-// claudeProc is the process's start time when pid is a running `claude`.
+// claudeProc is the process's start time when pid is a running `claude`. A
+// zombie or dead one keeps its command name but is not running anything.
 func claudeProc(root string, pid int) (uint64, bool) {
 	st, ok := readProcStat(root, pid)
-	if !ok || st.comm != "claude" {
+	if !ok || st.comm != "claude" || strings.ContainsAny(st.state, "ZXx") {
 		return 0, false
 	}
 	return st.start, true
@@ -162,7 +167,8 @@ func (h *Heartbeat) pinned() bool {
 // expired: keepalive has let go of the session and its cache is gone, and nothing
 // is running in it. Every unknown keeps it (an unreadable transcript, a missing
 // answer). procStart is when its claude process started: background work from
-// before that died with the process.
+// before that died with the process, and a process that just started (a resume
+// of an old transcript) has not been left alone for any time yet.
 func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	if h.pinned() {
 		return Scan{}, false
@@ -171,12 +177,19 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 	if !ok || s.LastAssistant.IsZero() {
 		return Scan{}, false
 	}
-	if h.MaxIdle <= 0 || now.Sub(s.LastReal) <= h.MaxIdle {
+	idleSince := s.LastReal
+	if procStart.After(idleSince) {
+		idleSince = procStart
+	}
+	if h.MaxIdle <= 0 || now.Sub(idleSince) <= h.MaxIdle {
 		return Scan{}, false
 	}
 	last := s.LastRequest
 	if s.LastBeat.After(last) {
 		last = s.LastBeat
+	}
+	if procStart.After(last) {
+		last = procStart
 	}
 	if now.Sub(last) < cacheTTL {
 		return Scan{}, false
@@ -188,6 +201,63 @@ func (h *Heartbeat) expired(now, procStart time.Time) (Scan, bool) {
 		return Scan{}, false
 	}
 	return s, true
+}
+
+// reapedBefore: the session's reaped file already has a line for this very
+// process (pid and start time). A serve restart or a channel reconnect makes a new
+// Heartbeat, and a claude that ignored SIGTERM must not be signalled and recorded
+// again for it.
+func (h *Heartbeat) reapedBefore() bool {
+	if h.signalled.Load() {
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(h.ClaudeHome, "sessions", h.SessionID, "reaped"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		var r struct {
+			PID   int    `json:"pid"`
+			Start uint64 `json:"start"`
+		}
+		if json.Unmarshal([]byte(line), &r) == nil && r.PID == h.pid && r.Start == h.pidStart {
+			h.signalled.Store(true)
+			return true
+		}
+	}
+	return false
+}
+
+// ownsPID: the pid is still the claude that registered, and Claude Code's own
+// record of that process (`<home>/sessions/<pid>.json`) names this session. After
+// /clear the same process runs a new session id while its channel stays
+// registered under the old one, so the pid file is how the two are told apart.
+// Whether Claude Code rewrites sessionId there on /clear is not verified: if it
+// does not, a session cleared and idle is kept until its process ends, and if it
+// does, the old id stops matching here. Anything unreadable keeps the session.
+func (c *Concern) ownsPID(root string, h *Heartbeat) bool {
+	if start, ok := claudeProc(root, h.pid); !ok || start != h.pidStart {
+		return false
+	}
+	var d struct {
+		SessionID string `json:"sessionId"`
+	}
+	b, err := os.ReadFile(filepath.Join(h.ClaudeHome, "sessions", strconv.Itoa(h.pid)+".json"))
+	if err == nil {
+		err = json.Unmarshal(b, &d)
+	}
+	if err == nil && d.SessionID == h.SessionID {
+		return true
+	}
+	if !h.pidNoted {
+		h.pidNoted = true
+		if err != nil {
+			c.log("reap: keeping %s: its pid file for %d cannot be read: %v", h.SessionID, h.pid, err)
+		} else {
+			c.log("reap: keeping %s: pid %d now runs session %q", h.SessionID, h.pid, d.SessionID)
+		}
+	}
+	return false
 }
 
 // reapLoop stops at most one expired session per tick.
@@ -202,22 +272,40 @@ func (c *Concern) reapLoop(ctx context.Context) {
 	}
 }
 
+// running counts the sessions keepMin protects: registered (a channel is connected)
+// and not already signalled (one that was is on its way out, not a session left running).
+// The caller holds c.mu.
+func (c *Concern) running() int {
+	n := 0
+	for _, h := range c.registered {
+		if !h.signalled.Load() {
+			n++
+		}
+	}
+	return n
+}
+
 // reapOnce stops the oldest expired session, if there is one and more than
 // KeepMin would remain.
 func (c *Concern) reapOnce(now time.Time) {
 	c.mu.Lock()
-	if len(c.channels)-1 < c.reap.KeepMin {
-		c.mu.Unlock()
-		return
-	}
 	hs := make([]*Heartbeat, 0, len(c.registered))
 	for _, h := range c.registered {
-		// A claude that ignored SIGTERM is still registered: one signal and one record per process.
-		if h.pid > 1 && !h.signalled {
-			hs = append(hs, h)
-		}
+		hs = append(hs, h)
 	}
 	c.mu.Unlock()
+	// Reads the reaped files, so it is not done under the lock.
+	for _, h := range hs {
+		if h.pid > 1 {
+			h.reapedBefore()
+		}
+	}
+	c.mu.Lock()
+	short := c.running()-1 < c.reap.KeepMin
+	c.mu.Unlock()
+	if short {
+		return
+	}
 
 	root := c.procDir()
 	btime, ok := bootTime(root)
@@ -230,6 +318,9 @@ func (c *Concern) reapOnce(now time.Time) {
 	}
 	var cands []candidate
 	for _, h := range hs {
+		if h.pid <= 1 || h.signalled.Load() {
+			continue
+		}
 		if s, ok := h.expired(now, startWallClock(btime, h.pidStart)); ok {
 			cands = append(cands, candidate{h, s})
 		}
@@ -242,16 +333,36 @@ func (c *Concern) reapOnce(now time.Time) {
 	})
 	for _, cd := range cands {
 		h := cd.h
-		// The pid was read when the channel registered; a recycled one is another process.
-		if start, ok := claudeProc(root, h.pid); !ok || start != h.pidStart {
+		pss := treePSS(root, h.pid)
+		if c.beforeSignal != nil {
+			c.beforeSignal()
+		}
+		// Checked after the slow part, right before the signal, to keep the window
+		// in which the pid could be recycled small.
+		if !c.ownsPID(root, h) {
 			continue
 		}
-		pss := treePSS(root, h.pid)
+		// Re-counted under the lock: a session may have gone, or been signalled, since
+		// the count above. Marked signalled here so it stops counting at once; the
+		// signal itself is sent outside the lock.
+		c.mu.Lock()
+		still := c.registered[h.SessionID] == h
+		last := still && c.running()-1 < c.reap.KeepMin
+		if still && !last {
+			h.signalled.Store(true)
+		}
+		c.mu.Unlock()
+		if last {
+			return
+		}
+		if !still {
+			continue
+		}
 		if err := c.signal(h.pid); err != nil {
+			h.signalled.Store(false)
 			c.log("reap: signalling %s (pid %d): %v", h.SessionID, h.pid, err)
 			continue
 		}
-		h.signalled = true
 		c.record(h, cd.scan, now, pss)
 		return
 	}
@@ -261,7 +372,7 @@ func (c *Concern) reapOnce(now time.Time) {
 // not depend on the center; a failure of one is logged and does not stop the others.
 func (c *Concern) record(h *Heartbeat, s Scan, now time.Time, pss int64) {
 	c.log("reap: stopped %s (expired, %d MiB, idle %v)", h.SessionID, pss>>20, now.Sub(s.LastReal).Round(time.Second))
-	rec := reapRecord{At: now.UTC().Format(time.RFC3339), Reason: "expired", PID: h.pid, PSSBytes: pss}
+	rec := reapRecord{At: now.UTC().Format(time.RFC3339), Reason: "expired", PID: h.pid, PSSBytes: pss, Start: h.pidStart}
 	line, err := json.Marshal(rec)
 	if err != nil {
 		c.log("reap: encoding the record of %s: %v", h.SessionID, err)

@@ -3,14 +3,14 @@
  * 「Session state is ccx's to hold」)。
  *
  * 2 種類ある。観測 (running / ended / remote) は事実から導き、手では書かない。
- * 宣言 (archived / label / task / role / heartbeat / metadata) は人か session が書く。archived は
+ * 宣言 (archived / pinned / label / task / role / heartbeat / metadata) は人か session が書く。archived は
  * Desktop App と同じ語で「一覧から畳む」宣言。「保存先にだけあり手元に無い」観測は remote
  * と呼び、語を分ける。top level は ccx が定義する鍵 (作用する / 形と列を決める)。metadata は利用者の語彙
- * (done / pinned 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
+ * (done / delete-on-end 等) を ccx が意味を持たずに運ぶ入れ物 (#165、#135 の「利用者側の marker は
  * 持たない」を置き換えた): ccx は OSS なので、どの marker を持つかを ccx が決めない。
  *
  * 宣言のローカルの置き場所は `~/.claude/sessions/<id>/` (利用者側の script が marker を
- * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` は空
+ * 置いていた場所と同じ。Claude Code 自身は `<pid>.json` しか置かない)。`archived` と `pinned` は空
  * ファイル、`label` はテキストで、auto-label hook も `ccx session label` で書く (claude-config#966 より
  * 前の hook は直接書いていた。それもそのまま読む)、`task` は
  * 新しいテキスト。metadata は `meta/<key>` の 1 key 1 ファイル (中身が値、空なら値なし)。

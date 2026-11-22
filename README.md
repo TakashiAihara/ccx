@@ -153,7 +153,7 @@ transcripts and the store.
 ccx session mark archived     # this session (CLAUDE_CODE_SESSION_ID); or give an id / unique prefix
 ccx session mark archived --off <id>
 ccx session mark archived <id> <id> …   # mark, label, task and role take any number of ids; one that fails is said on stderr, the rest are written, exit 1
-ccx session pin               # keep ccx-agent from reclaiming this session when it goes idle; --off to allow it again
+ccx session pin [id...]       # keep ccx-agent from reclaiming this session when it goes idle; --off to allow it again
 ccx session label "scope｜step"
 ccx session task "kaneo ccx#1"
 ccx session role worker       # what the session is; free text, ccx gives it no meaning

@@ -235,6 +235,8 @@ func assemble(cfg config.Config, logger func(string, ...any)) ([]concern.Concern
 		srv.Heartbeat = h
 		// The channel connections it holds are how a message reaches a Claude Code session (#138).
 		msgs.Claude = message.NewClaude(h)
+	} else if cfg.Reap.Enabled {
+		logger("reap on but the heartbeat concern is off: nothing will be reaped")
 	}
 	// Not a toggle: it is how a person sees the rest. Its one write (MessageService)
 	// is served on the unix socket only.

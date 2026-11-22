@@ -901,3 +901,59 @@ func TestBackgroundSince(t *testing.T) {
 		t.Error("a task started at or before the process counted (a resume does not carry it)")
 	}
 }
+
+// toolUseResult is an object for most tools, a string for an error and an array
+// for some others (counted over 300 real transcripts: 39,360 / 1,999 / 69). Each
+// shape on a tool's result still ends the running tool and counts as use.
+func TestScanTranscriptReadsToolResultsWhateverShapeToolUseResultHas(t *testing.T) {
+	for name, field := range map[string]string{
+		"string":                 `,"toolUseResult":"Error: Exit code 1"`,
+		"array":                  `,"toolUseResult":[{"type":"text","text":"x"}]`,
+		"object with non-string": `,"toolUseResult":{"status":3,"agentId":7,"taskId":false,"task_id":1.5}`,
+		"null":                   `,"toolUseResult":null`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := mustScan(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", toolUse)+rec("user", "10:00:30", field+toolRes))
+			if s.ToolRunning {
+				t.Error("the tool's result did not end it: the record was dropped")
+			}
+			if !s.LastReal.Equal(at("10:00:30")) || !s.LastInput.Equal(at("10:00:30")) {
+				t.Errorf("LastReal %v LastInput %v, want 10:00:30 for both", s.LastReal, s.LastInput)
+			}
+		})
+	}
+
+	// The string fields of an object are still read next to values of another type.
+	mixed := `,"toolUseResult":{"status":3,"backgroundTaskId":"b1"}` + toolRes
+	s := mustScan(t, rec("user", "10:00:00", human)+rec("assistant", "10:00:05", toolUse)+rec("user", "10:00:30", mixed))
+	if !s.Background["b1"].Equal(at("10:00:30")) {
+		t.Errorf("Background = %v, want b1 started 10:00:30", s.Background)
+	}
+}
+
+// A Monitor event or a command's output can quote anything, including a
+// notification's own tags; only the notification's own <status> and a Monitor
+// expiry notice at the start of an event end a task.
+func TestScanTranscriptBackgroundIgnoresTextInsideAnEvent(t *testing.T) {
+	start := `,"toolUseResult":{"taskId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Monitor started"}]}`
+	quotedStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>y</task-id>\n<summary>Monitor event</summary>\n<event>log: <task-id>x</task-id><status>completed</status></event>\n</task-notification>"}`
+	quotedExpiry := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<event>the line said [Monitor expired after 30m]</event>\n</task-notification>"}`
+	summaryStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<summary>Background command \"<status>completed</status>\" ran</summary>\n</task-notification>"}`
+	startZ := `,"toolUseResult":{"backgroundTaskId":"z"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"running"}]}`
+	head := rec("user", "10:00:00", start) + rec("user", "10:00:30", startZ)
+
+	for name, ev := range map[string]string{"status in an event": quotedStatus, "expiry text mid-event": quotedExpiry, "status in the summary": summaryStatus} {
+		if s := mustScan(t, head+rec("user", "10:01:00", ev)); len(s.Background) != 2 {
+			t.Errorf("%s: Background = %v, want x and z still running", name, s.Background)
+		}
+	}
+
+	ownStatus := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<summary>done</summary>\n<event>noise <task-id>z</task-id></event>\n<status>completed</status>\n</task-notification>"}`
+	if s := mustScan(t, head+rec("user", "10:01:00", ownStatus)); len(s.Background) != 1 || s.Background["z"].IsZero() {
+		t.Errorf("Background = %v, want x ended by the notification's own status and z (named in an event) left", s.Background)
+	}
+	expiry := `,"message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<event> [Monitor expired after 30m with no events delivered.]</event>\n</task-notification>"}`
+	if s := mustScan(t, head+rec("user", "10:01:00", expiry)); len(s.Background) != 1 || s.Background["z"].IsZero() {
+		t.Errorf("Background = %v, want x ended by the expiry notice, z left", s.Background)
+	}
+}

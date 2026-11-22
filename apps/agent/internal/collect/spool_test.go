@@ -364,14 +364,32 @@ func TestAppendProducerKeepsItsProducerAndTheHookPathKeepsItsOwn(t *testing.T) {
 	}
 }
 
-func TestCollectAppendEventSpoolsWithTheGivenProducer(t *testing.T) {
+func TestCollectAppendEventSpoolsWithTheGivenProducerAndWakesTheDrain(t *testing.T) {
 	s := openTestSpool(t, t.TempDir())
-	c := newCollect("", s, nil, t.Logf)
+	c := newCollect("", s, &stubForwarder{}, t.Logf)
+	if len(c.loop.nudge) != 0 {
+		t.Fatal("the drain loop was already nudged before anything was spooled")
+	}
 	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte(`{"x":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	e, err := s.Oldest()
 	if err != nil || e == nil || e.Event.GetProducer() != ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED || string(e.Event.GetPayload()) != `{"x":1}` {
 		t.Errorf("spooled = %v, %v", e, err)
+	}
+	if len(c.loop.nudge) != 1 {
+		t.Error("the drain loop was not woken, so the event would wait for the idle poll")
+	}
+}
+
+// With no center configured there is no drain loop; the event is still spooled.
+func TestCollectAppendEventWithoutACenterStillSpools(t *testing.T) {
+	s := openTestSpool(t, t.TempDir())
+	c := newCollect("", s, nil, t.Logf)
+	if err := c.AppendEvent(ccxv1.Producer_PRODUCER_CCX_AGENT_REAPED, []byte("r")); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.Pending(); n != 1 {
+		t.Errorf("pending = %d, want 1", n)
 	}
 }

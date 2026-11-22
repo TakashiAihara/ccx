@@ -25,6 +25,9 @@ with it — fold it in a list, push and prune it, close it — stays on the meth
 reaper (`reap.md`; user decision 2026-11-22). It was a user marker in `metadata`'s sense until ccx
 started acting on it, and was promoted by the rule below. An existing `meta/pinned` is not read
 (ccx never reads a metadata key); moving such marks to `ccx session pin` is the user's migration.
+The center's fleet `SessionState` (`fleet.proto`) does not carry `pinned` (nor `heartbeat`): rows read from the
+center show it false. The reaper is local and reads the file on the machine it runs on, so nothing reads the pin
+from the center.
 
 There is no other flag on purpose. The top-level keys are the ones ccx defines — it acts on them
 (`archived`: `ccx-agent` and the `--archived` selectors; `pinned`: `ccx-agent`'s reaper; `heartbeat`: `ccx-agent`) or gives them a
@@ -159,7 +162,7 @@ missing (`null`) is "the center / the store has not heard", not "no mark".
 | Verb | Does |
 |---|---|
 | `ccx session mark archived [id...] [--off]` | set or clear the flag; report the whole state to the center if one is configured. With several ids, one that fails is said on stderr, the rest are written, and the exit is 1; the center gets one report for the batch |
-| `ccx session pin [id] [--off]` | set or clear `pinned` (the same as `mark pinned`); without an id, this session; report as above |
+| `ccx session pin [id...] [--off]` | set or clear `pinned` (the same as `mark pinned`); report as above |
 | `ccx session label <text> [id...]` | set the label; an empty string clears it; report as above |
 | `ccx session task <ref> [id...]` | set the task reference; an empty string clears it; report as above |
 | `ccx session role <role> [id...]` | set the role; an empty string clears it; report as above |
@@ -240,7 +243,7 @@ every machine's ccx before relying on it across machines.
   transcript on purpose (`archived` on a remote session is still a fact about it), and the directory
   also holds the hook's own files
 - the meaning of any metadata key: moving the user's `done` / `delete-on-end` markers
-  onto `ccx session meta`, and keeping what they do (reaper exclusion, delete on end), is the
+  onto `ccx session meta`, and keeping what they do (delete on end), is the
   user's migration in claude-config, not ccx's
 - what `ccx-agent` (#129) reads: it runs on the machine, so the local files — `state.json` is for
   another machine to read

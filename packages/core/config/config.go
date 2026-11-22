@@ -201,12 +201,12 @@ type fileShape struct {
 		Interval string `toml:"interval"`
 		MaxIdle  string `toml:"maxIdle"`
 	} `toml:"heartbeat"`
-	// Interval and KeepMin are untyped so a value of the wrong type is an
-	// unusable reap setting (Reap.Err), not a config file that fails to load.
+	// Untyped so a value of the wrong type is an unusable reap setting
+	// (Reap.Err), not a config file that fails to load.
 	Reap struct {
-		Enabled  *bool `toml:"enabled"`
-		Interval any   `toml:"interval"`
-		KeepMin  any   `toml:"keepMin"`
+		Enabled  any `toml:"enabled"`
+		Interval any `toml:"interval"`
+		KeepMin  any `toml:"keepMin"`
 	} `toml:"reap"`
 	// [transcript] is where in the center `ccx transcript` keeps transcripts
 	// (bucket, prefix). `live` is the switch that stops reading transcripts per
@@ -322,7 +322,7 @@ func load(
 		hbErr = err
 	}
 
-	reap := reapSettings(getenv, gitcfg, file.Reap.Enabled, file.Reap.Interval, file.Reap.KeepMin)
+	reap := reapSettings(getenv, file.Reap.Enabled, file.Reap.Interval, file.Reap.KeepMin)
 
 	// The transcript store, resolved exactly as the CLI resolves it
 	// (packages/core/src/config.ts) — same defaults, same prefix normalisation.
@@ -394,33 +394,49 @@ func duration(v string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// reapSettings resolves [reap]. An unusable interval or keepMin turns reaping
-// off with the reason in Err; a typo here must not stop anything else.
-func reapSettings(getenv func(string) string, gitcfg func(string) string, enabled *bool, fileInterval, fileKeepMin any) Reap {
+// minReapInterval is the floor of the reap tick: shorter would signal sessions
+// faster than their SessionEnd hooks can finish (docs/design/reap.md).
+const minReapInterval = 10 * time.Second
+
+// reapSettings resolves [reap] from env and the file only: git config is being
+// taken out of the resolution (kaneo ccx#24), so a new setting does not start
+// there. Any unusable value turns reaping off with every reason in Err; a typo
+// here must not stop anything else.
+func reapSettings(getenv func(string) string, fileEnabled, fileInterval, fileKeepMin any) Reap {
 	r := Reap{Interval: time.Minute}
+	var errs []error
 	text := func(v any) string {
 		if v == nil {
 			return ""
 		}
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
-	if v := pick(getenv("CCX_REAP_INTERVAL"), gitcfg("ccx.reapInterval"), text(fileInterval)); v != "" {
+	if v := pick(strings.TrimSpace(getenv("CCX_REAP_INTERVAL")), text(fileInterval)); v != "" {
 		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			r.Err = errors.New("reap: interval " + v + ": want a positive duration like 1m")
+		if err != nil || d < minReapInterval {
+			errs = append(errs, errors.New("reap: interval "+v+": want a duration of at least "+minReapInterval.String()+", like 1m"))
 		} else {
 			r.Interval = d
 		}
 	}
-	if v := pick(getenv("CCX_REAP_KEEP_MIN"), gitcfg("ccx.reapKeepMin"), text(fileKeepMin)); v != "" {
+	if v := pick(strings.TrimSpace(getenv("CCX_REAP_KEEP_MIN")), text(fileKeepMin)); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			r.Err = errors.New("reap: keepMin " + v + ": want a count of 0 or more")
+			errs = append(errs, errors.New("reap: keepMin "+v+": want a count of 0 or more"))
 		} else {
 			r.KeepMin = n
 		}
 	}
-	r.Enabled = r.Err == nil && toggle(getenv, gitcfg, "CCX_REAP", "ccx.reap", enabled, false)
+	var enabled *bool
+	switch b := fileEnabled.(type) {
+	case nil:
+	case bool:
+		enabled = &b
+	default:
+		errs = append(errs, fmt.Errorf("reap: enabled %v: want true or false", b))
+	}
+	r.Err = errors.Join(errs...)
+	r.Enabled = r.Err == nil && fileToggle(getenv, "CCX_REAP", enabled, false)
 	return r
 }
 
